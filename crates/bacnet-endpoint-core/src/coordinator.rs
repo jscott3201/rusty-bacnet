@@ -8,6 +8,23 @@ use bacnet_types::enums::ConfirmedServiceChoice;
 
 const INVOKE_ID_COUNT: usize = 256;
 
+/// The invoke IDs a node's pool keeps for its client role (#2617), the
+/// `requester` reserve an endpoint session with a client role passes to
+/// [`with_reserves`](OutboundTransactionCoordinator::with_reserves):
+/// [`LeaseOwner::Requester`] leases can always reach this many, whatever the
+/// server role holds. Half the pool, since a request refused an ID fails at
+/// once, where the server's work waits for one.
+pub const REQUESTER_RESERVE: usize = 128;
+
+/// The invoke IDs a node's pool keeps for its server role (#2617), the
+/// `notification` reserve an endpoint session with a server role passes to
+/// [`with_reserves`](OutboundTransactionCoordinator::with_reserves):
+/// [`LeaseOwner::Notification`] leases (confirmed notifications, Audit
+/// records and the requests a server's runs make) can always reach this
+/// many, whatever the client holds. A quarter of the pool; with both roles,
+/// the quarter neither keeps is shared.
+pub const NOTIFICATION_RESERVE: usize = 64;
+
 /// Stable peer identity used to correlate a received response.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum CanonicalPeer {
@@ -280,7 +297,9 @@ impl LeaseToken {
 /// Reservation failures that leave coordinator state unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReserveError {
-    /// All 256 device-wide invoke IDs are active.
+    /// No invoke ID this lease's owner may take is free: all 256 are active,
+    /// or the free ones are kept for the other owner's reserve
+    /// ([`OutboundTransactionCoordinator::with_reserves`]).
     Exhausted,
     /// The monotonic generation counter cannot advance without wrapping.
     GenerationExhausted,
@@ -314,6 +333,18 @@ impl fmt::Display for CoordinatorError {
 }
 
 impl std::error::Error for CoordinatorError {}
+
+/// What one [`LeaseOwner`] may lease, as
+/// [`OutboundTransactionCoordinator::room`] read it (#2617).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Room {
+    /// The invoke IDs it could take: free, and within all of the pool but
+    /// the other owner's reserve.
+    pub available: usize,
+    /// What is left of its own reserve: IDs the other owner can't take
+    /// first. `None` when the pool keeps it no reserve.
+    pub reserve_left: Option<usize>,
+}
 
 /// Result of exact-token completion, cancellation, or release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -403,17 +434,41 @@ struct CoordinatorState {
     last_released: Box<[Option<u64>]>,
     next_invoke_id: usize,
     last_generation: u64,
-    active_count: usize,
+    /// The leases each owner may still take, indexed by [`LeaseOwner`]:
+    /// its ceiling less what it holds. Counting down to the ceiling keeps the
+    /// reserve check to the one compare a lease needs (#2617).
+    room: [usize; 2],
+    /// The most each owner may hold at once: the pool less the other's
+    /// reserve.
+    ceiling: [usize; 2],
 }
 
 impl CoordinatorState {
-    fn new() -> Self {
+    fn new(ceiling: [usize; 2]) -> Self {
         Self {
             slots: vec![None; INVOKE_ID_COUNT].into_boxed_slice(),
             last_released: vec![None; INVOKE_ID_COUNT].into_boxed_slice(),
             next_invoke_id: 0,
             last_generation: 0,
-            active_count: 0,
+            room: ceiling,
+            ceiling,
+        }
+    }
+
+    /// The leases active, every owner's.
+    fn active(&self) -> usize {
+        (self.ceiling[0] - self.room[0]) + (self.ceiling[1] - self.room[1])
+    }
+
+    /// What `owner` could lease now.
+    fn room(&self, owner: LeaseOwner) -> Room {
+        let at = owner as usize;
+        // The other's ceiling is the pool less this owner's reserve.
+        let reserve = INVOKE_ID_COUNT - self.ceiling[1 - at];
+        let held = self.ceiling[at] - self.room[at];
+        Room {
+            available: self.room[at].min(INVOKE_ID_COUNT - self.active()),
+            reserve_left: (reserve > 0).then(|| reserve.saturating_sub(held)),
         }
     }
 
@@ -427,9 +482,10 @@ impl CoordinatorState {
         let index = usize::from(token.invoke_id);
         match self.slots[index].as_ref() {
             Some(active) if active.generation == token.generation => {
+                let owner = active.metadata.owner as usize;
                 self.slots[index] = None;
                 self.last_released[index] = Some(token.generation);
-                self.active_count -= 1;
+                self.room[owner] += 1;
                 ReleaseOutcome::Released
             }
             Some(_) => ReleaseOutcome::StaleToken,
@@ -445,7 +501,15 @@ impl CoordinatorState {
 ///
 /// Every method holds a synchronous mutex only while inspecting or updating
 /// bounded in-memory state. Callers never carry a coordinator lock across an
-/// await point.
+/// await point, and none takes another lock while holding it: it is the last
+/// lock in any order.
+///
+/// A coordinator made [`with_reserves`](Self::with_reserves) keeps part of
+/// its pool for each [`LeaseOwner`] (#2617): an owner may always hold up to
+/// its reserve, and beyond it borrows from what neither reserve keeps, so an
+/// owner under its reserve is never refused because of the other owner.
+/// [`new`](Self::new) keeps nothing back: either owner may take the whole
+/// pool.
 pub struct OutboundTransactionCoordinator {
     state: Mutex<CoordinatorState>,
     released: tokio::sync::Notify,
@@ -458,17 +522,69 @@ impl Default for OutboundTransactionCoordinator {
 }
 
 impl OutboundTransactionCoordinator {
-    /// Creates an empty coordinator with one global pool of 256 invoke IDs.
+    /// Creates an empty coordinator with one global pool of 256 invoke IDs,
+    /// any of which either owner may lease: a standalone client's or
+    /// server's, or a node's that runs one role.
     pub fn new() -> Self {
+        Self::with_reserves(0, 0)
+    }
+
+    /// Creates an empty coordinator whose pool of 256 invoke IDs a client
+    /// and a server role share (#2617): `requester` of them are kept for
+    /// [`LeaseOwner::Requester`] leases and `notification` for
+    /// [`LeaseOwner::Notification`] ones. Each owner may hold all of the pool
+    /// but the other's reserve, so the two always find their reserves free.
+    /// A node with both roles keeps [`REQUESTER_RESERVE`] and
+    /// [`NOTIFICATION_RESERVE`].
+    ///
+    /// # Panics
+    ///
+    /// When the two reserves together exceed 256.
+    ///
+    /// ```
+    /// use bacnet_endpoint_core::coordinator::{
+    ///     CanonicalPeer, LeaseMetadata, OutboundTransactionCoordinator, ReserveError,
+    /// };
+    /// use bacnet_types::enums::ConfirmedServiceChoice;
+    ///
+    /// let coordinator = OutboundTransactionCoordinator::with_reserves(200, 56);
+    /// let notification = || {
+    ///     LeaseMetadata::notification(
+    ///         CanonicalPeer::direct(&[1]),
+    ///         ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
+    ///     )
+    /// };
+    /// for _ in 0..56 {
+    ///     coordinator.reserve(notification()).unwrap();
+    /// }
+    /// // The other 200 are the client's.
+    /// assert_eq!(coordinator.reserve(notification()), Err(ReserveError::Exhausted));
+    /// ```
+    pub fn with_reserves(requester: usize, notification: usize) -> Self {
+        let kept = requester.checked_add(notification);
+        assert!(
+            kept.is_some_and(|kept| kept <= INVOKE_ID_COUNT),
+            "invoke-ID reserves {requester} and {notification} exceed the pool of {INVOKE_ID_COUNT}"
+        );
+        let mut ceiling = [0; 2];
+        ceiling[LeaseOwner::Requester as usize] = INVOKE_ID_COUNT - notification;
+        ceiling[LeaseOwner::Notification as usize] = INVOKE_ID_COUNT - requester;
         Self {
-            state: Mutex::new(CoordinatorState::new()),
+            state: Mutex::new(CoordinatorState::new(ceiling)),
             released: tokio::sync::Notify::new(),
         }
     }
 
-    /// Reserves one device-wide invoke ID and issues a new exact-generation token.
+    /// Reserves one device-wide invoke ID and issues a new exact-generation
+    /// token, or [`ReserveError::Exhausted`] when none is free that the
+    /// lease's owner may take ([`Self::with_reserves`]).
     pub fn reserve(&self, metadata: LeaseMetadata) -> Result<LeaseToken, ReserveError> {
         let mut state = self.state.lock().map_err(|_| ReserveError::StatePoisoned)?;
+        let owner = metadata.owner as usize;
+        // At its ceiling, the owner leaves the rest to the other's reserve.
+        if state.room[owner] == 0 {
+            return Err(ReserveError::Exhausted);
+        }
         let index = state.available_slot().ok_or(ReserveError::Exhausted)?;
         let generation = state
             .last_generation
@@ -486,7 +602,7 @@ impl OutboundTransactionCoordinator {
             metadata,
             terminal_claimed: false,
         });
-        state.active_count += 1;
+        state.room[owner] -= 1;
         Ok(token)
     }
 
@@ -646,7 +762,16 @@ impl OutboundTransactionCoordinator {
     pub fn active_count(&self) -> Result<usize, CoordinatorError> {
         self.state
             .lock()
-            .map(|state| state.active_count)
+            .map(|state| state.active())
+            .map_err(|_| CoordinatorError::StatePoisoned)
+    }
+
+    /// What a lease of `owner`'s could take now (#2617). Racing work may
+    /// take it first; [`Self::reserve`] decides.
+    pub fn room(&self, owner: LeaseOwner) -> Result<Room, CoordinatorError> {
+        self.state
+            .lock()
+            .map(|state| state.room(owner))
             .map_err(|_| CoordinatorError::StatePoisoned)
     }
 
@@ -667,6 +792,14 @@ impl OutboundTransactionCoordinator {
     #[doc(hidden)]
     pub fn released(&self) -> tokio::sync::futures::Notified<'_> {
         self.released.notified()
+    }
+
+    /// Wakes every [`Self::released`] wait, as a lease's end does, though
+    /// none ended: for an owner whose own rule held work back while IDs
+    /// were free, once the rule no longer does (#2617).
+    #[doc(hidden)]
+    pub fn wake_released(&self) {
+        self.released.notify_waiters();
     }
 }
 
@@ -764,3 +897,7 @@ mod tests;
 #[cfg(test)]
 #[path = "coordinator_peer_tests.rs"]
 mod peer_tests;
+
+#[cfg(test)]
+#[path = "coordinator_reserve_tests.rs"]
+mod reserve_tests;

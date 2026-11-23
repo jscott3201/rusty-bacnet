@@ -70,7 +70,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Ownership and limits
 
-The coordinator has one device-wide pool of 256 invoke IDs. Local generation
+The coordinator has one device-wide pool of 256 invoke IDs. Made with
+[`coordinator::OutboundTransactionCoordinator::with_reserves`], it keeps part
+of the pool for each lease owner: either may always hold up to its reserve,
+and beyond it borrows what the other's reserve doesn't keep, so the client
+role and the server role of one node never take each other's share. A node
+with both roles keeps [`coordinator::REQUESTER_RESERVE`] (128) and
+[`coordinator::NOTIFICATION_RESERVE`] (64);
+[`coordinator::OutboundTransactionCoordinator::new`] keeps nothing back.
+[`coordinator::OutboundTransactionCoordinator::room`] says what an owner
+could lease now. Local generation
 tokens distinguish successive leases for cleanup, but do not distinguish stale
 on-wire responses after invoke-ID reuse: the generation is not carried in the
 response. Admission does not release a lease; its owner must complete, cancel
