@@ -62,6 +62,9 @@ pub(super) trait Unconfirmed {
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Send `service` to `to` and check its answer: every typed confirmed
     /// call is this, through the request path every request takes.
+    ///
+    /// [`Self::call_with`] with no data attributes, its own copy so a typed
+    /// call's future holds no `None` for them.
     pub(super) async fn call<S: Confirmed>(
         &self,
         to: &(impl ToStation + ?Sized),
@@ -69,7 +72,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ) -> Result<S::Answer, Error> {
         let mut buf = BytesMut::new();
         service.encode_into(&mut buf)?;
-        let answer = to.confirmed(self, service.choice(), &buf).await?;
+        let answer = to.confirmed(self, service.choice(), &buf, None).await?;
+        service.answer(answer)
+    }
+
+    /// [`Self::call`], every frame of the request carrying `attributes`
+    /// (#2723).
+    pub(super) async fn call_with<S: Confirmed>(
+        &self,
+        to: &(impl ToStation + ?Sized),
+        service: S,
+        attributes: Attributes<'_>,
+    ) -> Result<S::Answer, Error> {
+        let mut buf = BytesMut::new();
+        service.encode_into(&mut buf)?;
+        let answer = to
+            .confirmed(self, service.choice(), &buf, attributes)
+            .await?;
         service.answer(answer)
     }
 

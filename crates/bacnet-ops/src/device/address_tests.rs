@@ -58,8 +58,35 @@ fn only_a_station_is_an_address() {
     assert!(DeviceAddress::new(0, &[]).is_err());
     assert!(DeviceAddress::new(0, &[0xFF]).is_err());
     // A remote 0xFF is that MS/TP network's broadcast: a write there would
-    // reach every station on it.
-    assert!(DeviceAddress::new(5, &[0xFF]).is_err());
+    // reach every station on it. So do the client's other remote broadcast
+    // and group forms (#2709), here or on another network: the all-ones
+    // VMAC, and six octets beginning with four of 0xFF, the B/IP limited
+    // broadcast at any port.
+    for network in [0, 5] {
+        for mac in [
+            &[0xFF][..],
+            &[0xFF; 3],
+            &[0xFF; 6],
+            &[0xFF, 0xFF, 0xFF, 0xFF, 0xBA, 0xC0],
+        ] {
+            let refused = DeviceAddress::new(network, mac).unwrap_err();
+            assert!(refused.ends_with(", not a station"), "{refused}");
+        }
+    }
+    // Two octets are LonTalk's, a remote network's only: a first octet of
+    // 0x00 is a broadcast, of 0xFF a group.
+    let refused = DeviceAddress::new(5, &[0x00, 0x05]).unwrap_err();
+    assert_eq!(
+        refused,
+        "MAC 0x0005 is a LonTalk broadcast (subnet 5), not a station"
+    );
+    assert!(DeviceAddress::new(5, &[0xFF, 0x07]).is_err());
+    assert!("5:0xFFFFFFFFFFFF".parse::<DeviceAddress>().is_err());
+    assert!("5:0xFFFFFFFFBAC0".parse::<DeviceAddress>().is_err());
+    // Other one-, two- and six-octet MACs are stations.
+    assert!(DeviceAddress::new(5, &[0x00]).is_ok());
+    assert!(DeviceAddress::new(5, &[0x01, 0x05]).is_ok());
+    assert!(DeviceAddress::new(5, &[0xFF, 0xFF, 0xFF, 0xFE, 0xBA, 0xC0]).is_ok());
     assert!(DeviceAddress::new(1, &[0; 19]).is_err());
     assert!(DeviceAddress::new(1, &[0; 18]).is_ok());
 }

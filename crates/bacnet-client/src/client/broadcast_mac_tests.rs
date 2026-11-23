@@ -5,8 +5,8 @@
 //! client refuses a confirmed request to one before any transaction state
 //! exists, including a routed target that names its own network and so
 //! goes local; an unconfirmed request still goes, and so does a routed
-//! request whose link DA is the broadcast MAC, since its DNET/DADR name one
-//! device.
+//! request whose link DA is the broadcast MAC because it names no router
+//! (#2723), since its DNET/DADR name one device.
 use crate::client::Station;
 use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_encoding::npdu::decode_npdu;
@@ -66,11 +66,24 @@ async fn a_confirmed_request_to_the_broadcast_mac_is_refused_before_any_state() 
     ));
 
     // A routed request names one device with its DNET/DADR, so its link DA
-    // may be the broadcast MAC; it goes out and its transaction times out
-    // unanswered.
-    let routed = client
+    // may be the broadcast MAC, but only in the form that names no router
+    // (#2722): it goes out and its transaction times out unanswered. Named
+    // as the router, the broadcast MAC is refused, unsent.
+    let refused = client
         .confirmed_request(
             &Station::routed(&BROADCAST, 5, &[7]),
+            ConfirmedServiceChoice::READ_PROPERTY,
+            &[0x0C],
+        )
+        .await;
+    assert!(
+        matches!(&refused, Err(Error::Encoding(message)) if message.contains("broadcast or group")),
+        "{refused:?}"
+    );
+    assert!(frames.try_recv().is_err());
+    let routed = client
+        .confirmed_request(
+            &Station::routed_via_local_broadcast(5, &[7]),
             ConfirmedServiceChoice::READ_PROPERTY,
             &[0x0C],
         )
@@ -81,6 +94,7 @@ async fn a_confirmed_request_to_the_broadcast_mac_is_refused_before_any_state() 
         "{routed:?}"
     );
     let request = decode_npdu(frames.try_recv().unwrap().npdu).unwrap();
+    assert_eq!(request.destination.unwrap().network, 5);
     assert!(matches!(
         decode_apdu(request.payload),
         Ok(Apdu::ConfirmedRequest(_))

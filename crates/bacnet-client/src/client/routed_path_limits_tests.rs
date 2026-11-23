@@ -75,6 +75,7 @@ async fn claimed_control_cannot_complete_reused_invoke_id_for_new_owner() {
         router_mac: &router,
         dest_network: 100,
         dest_mac: &dadr,
+        arcnet: false,
     };
     let _lease = limits.acquire(&router, 100).await.unwrap();
     let tsm_mac = target.transaction_peer().tsm_mac;
@@ -121,6 +122,7 @@ async fn a_learned_limit_is_never_below_the_conservative_floor() {
         router_mac: &router,
         dest_network: 100,
         dest_mac: &[3],
+        arcnet: false,
     };
     let lease = limits.acquire(&router, 100).await.unwrap();
     let tsm_mac = target.transaction_peer().tsm_mac;
@@ -160,6 +162,7 @@ async fn a_commit_after_a_change_or_a_reclaim_learns_nothing() {
         router_mac: &router,
         dest_network: 100,
         dest_mac: &[3],
+        arcnet: false,
     };
     let tsm_mac = target.transaction_peer().tsm_mac;
     let mut tsm = Tsm::new(TsmConfig::default());
@@ -335,6 +338,7 @@ async fn control_queued_before_activation_cannot_claim_the_new_generation() {
         router_mac: &router,
         dest_network: 100,
         dest_mac: &dadr,
+        arcnet: false,
     };
     let lease = limits.acquire(&router, 100).await.unwrap();
     let tsm_mac = target.transaction_peer().tsm_mac;

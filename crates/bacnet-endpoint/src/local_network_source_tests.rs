@@ -196,6 +196,46 @@ async fn source_routes_refuse_an_address_on_another_network_but_audit_a_routed_r
     }
 }
 
+/// A source-audited read made with data attributes, which the node runs in
+/// a task of its own, sends its request with them (#2723); its record, the
+/// node's own notification, carries none.
+#[tokio::test(start_paused = true)]
+async fn an_audited_read_takes_its_data_attributes_along() {
+    let mut endpoint = source(SessionRole::ClientOnly, true).await;
+    let attribute = bacnet_transport::port::DataAttribute {
+        option_type: 31,
+        must_understand: false,
+        data: vec![0x01, 0x02, 0x07],
+    };
+    let client = Arc::new(endpoint.session.client().unwrap());
+    let attributes = vec![attribute.clone()];
+    let read = tokio::spawn(async move {
+        client
+            .with_data_attributes(attributes)
+            .read_property(
+                &direct_read(),
+                analog(),
+                PropertyIdentifier::PRESENT_VALUE,
+                None,
+            )
+            .await
+    });
+    let sent = endpoint.next().await;
+    assert_eq!(sent.attributes, std::slice::from_ref(&attribute));
+    let npdu = decode_npdu(sent.npdu).unwrap();
+    let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
+        panic!("a confirmed request")
+    };
+    endpoint
+        .deliver_apdu(ack(&request, 5), mac(PEER), None)
+        .await;
+    assert!(bounded(read).await.unwrap().is_ok());
+    let audit = endpoint.next().await;
+    assert!(audit.attributes.is_empty());
+    assert_eq!(record(audit, SINK).invoke_id, Some(request.invoke_id));
+    endpoint.stop().await;
+}
+
 #[path = "local_network_recipient_tests.rs"]
 mod recipient;
 

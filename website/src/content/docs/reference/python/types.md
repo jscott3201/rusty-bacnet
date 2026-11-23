@@ -1419,8 +1419,8 @@ A station on another BACnet network (#2612), where `BACnetClient`'s
 `subscribe_cov_property`, `unsubscribe_cov_property` and
 `subscribe_cov_property_multiple` take an `address` (#2617, #2613,
 \#2588); the other typed calls take a local address only:
-`RoutedTarget(network, address, router=None)`, in that order. A
-`str` address always names a station on the local link.
+`RoutedTarget(network, address, router=None, *, arcnet=False)`, in
+that order. A `str` address always names a station on the local link.
 
 `network` is the station's network number, an `int` from 1 to 65534
 (ValueError outside it, OverflowError outside 0 to 65535, TypeError for
@@ -1432,8 +1432,17 @@ any B/IP network, local or not), `"bip6:N"` or `"bip6:0x..."` (a
 B/IPv6 VMAC), two or more hex octets `"aa:bb:..."`, or one octet in
 decimal as `"N"` or `"mstp:N"` (0 to 254), so
 `RoutedTarget(5, "10") == RoutedTarget(5, b"\x0a")`. The string forms
-refuse 255 (MS/TP's broadcast); `b"\xff"` is taken, a station on an
-ARCNET network, whose broadcast is 0. A `router` that is a broadcast
+refuse 255 (MS/TP's broadcast). A call raises BacnetError, before
+anything is sent or looked up, for an `address` that is a broadcast or
+a group on its network (#2709): `b"\xff"` (MS/TP's broadcast), two
+octets beginning `0x00` or `0xFF` (a LonTalk broadcast or group),
+three octets of `0xFF` (no device's VMAC), or six beginning with four
+(the B/IP limited broadcast at any port, an Ethernet group, BACnet/SC's
+broadcast). `arcnet=True` marks the network as ARCNET, whose
+broadcast is 0 and where 255 is a station: a call then goes to
+`b"\xff"` and refuses `b"\x00"`. It takes a one-octet address only
+(ValueError otherwise), and with no `router` the station is reached
+through its discovery-table row alone. A `router` that is a broadcast
 or group address on the local link raises BacnetError when a call is
 made, before anything is sent.
 
@@ -1465,6 +1474,7 @@ Properties:
 - `network: int`
 - `address: bytes`: The station's MAC on its network.
 - `router: bytes | None`: The router's MAC on the local link, or None for the route the client knows.
+- `arcnet: bool`: Whether the station's network is marked ARCNET: its `b"\xff"` is a station and `b"\x00"` the broadcast.
 
 ### RoutedTarget.__init__
 
@@ -1474,6 +1484,8 @@ def __init__(
     network: int,
     address: str | bytes,
     router: str | bytes | None = None,
+    *,
+    arcnet: bool = False,
 ) -> None
 ```
 

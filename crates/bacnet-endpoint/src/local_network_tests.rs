@@ -66,10 +66,11 @@ async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
 }
 
 /// One frame the session handed the link: its link MAC (empty for a link
-/// broadcast) and NPDU.
+/// broadcast), NPDU and data attributes.
 struct Sent {
     link: MacAddr,
     npdu: Bytes,
+    attributes: Vec<bacnet_transport::port::DataAttribute>,
 }
 
 /// A B/IP-shaped link that records every send and takes injected input. It
@@ -92,6 +93,7 @@ fn capture(
                 .try_send(Sent {
                     link: frame.mac,
                     npdu: frame.npdu,
+                    attributes: frame.attributes,
                 })
                 .expect("bounded send observation");
             async { Ok(()) }

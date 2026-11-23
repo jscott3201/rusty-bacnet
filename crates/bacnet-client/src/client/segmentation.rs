@@ -442,6 +442,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             remote_max_apdu,
             remote_max_segments,
             routed_forwarded_npci_len,
+            attributes,
             ..
         } = *limits;
         let transaction_peer = target.transaction_peer();
@@ -489,6 +490,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         };
 
         let owner = registration.owner.clone();
+        // The transaction keeps the request's data attributes, so each
+        // segment and the wait's sends carry them from there (#2723).
+        owner.set_data_attributes(attributes);
         if let Some(forwarded_npci_len) = routed_forwarded_npci_len {
             self.routed_path_limits.install_active(
                 target,

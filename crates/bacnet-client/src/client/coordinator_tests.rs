@@ -139,7 +139,9 @@ async fn client_uses_one_global_generation_safe_pool_across_direct_and_routed_pe
                     .await
             })
         } else {
-            let destination = index.to_be_bytes().to_vec();
+            // Two octets are LonTalk's: a first octet of 0x00 would be a
+            // broadcast there, which no confirmed request goes to (#2709).
+            let destination = (0x0100 | index).to_be_bytes().to_vec();
             tokio::spawn(async move {
                 request_client
                     .confirmed_request(

@@ -65,6 +65,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             network,
             mac_address: MacAddr::from_slice(mac),
         };
+        // A table query goes to one router, so a station named for a local
+        // broadcast is asked through the router found for it, as one named
+        // by its address alone is.
+        let station = match station {
+            Station::RoutedViaLocalBroadcast { network, mac, .. } => Station::remote(network, &mac),
+            station => station,
+        };
         let hop = match self.with_fixed_route(station) {
             Ok(Station::Routed { router, .. }) => router,
             Ok(Station::Local { mac }) => {
@@ -75,7 +82,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
             // A fixed route always names its next hop; were it ever not to,
             // no hop is known.
-            Ok(Station::Remote { .. }) => {
+            Ok(Station::Remote { .. } | Station::RoutedViaLocalBroadcast { .. }) => {
                 return Err(RoutingTableError::RouteUnresolved {
                     network,
                     candidates: 0,

@@ -254,7 +254,7 @@ async fn send_after(
     start: Instant,
     held_for: Duration,
 ) {
-    let _guard = pacer.wait(local(A)).await;
+    let _guard = pacer.turn(local(A)).await;
     sent.lock().unwrap().push(Instant::now() - start);
     tokio::time::sleep(held_for).await;
 }
@@ -276,7 +276,7 @@ async fn waiters_that_wake_late_together_still_go_an_interval_apart() {
     let pacer = Arc::new(RequestPacer::new(I));
     let start = Instant::now();
     let sent = StdMutex::new(vec![Duration::ZERO]);
-    let _out = pacer.wait(local(A)).await;
+    let _out = pacer.turn(local(A)).await;
     tokio::join!(
         send_after(&pacer, &sent, start, Duration::ZERO),
         send_after(&pacer, &sent, start, Duration::ZERO),
@@ -292,7 +292,7 @@ async fn waiters_released_together_go_an_interval_apart() {
     let pacer = Arc::new(RequestPacer::new(I));
     let start = Instant::now();
     let sent = StdMutex::new(Vec::new());
-    let first = pacer.wait(local(A)).await;
+    let first = pacer.turn(local(A)).await;
     let release = async {
         tokio::time::sleep(Duration::from_millis(10)).await;
         drop(first);
@@ -317,12 +317,53 @@ async fn waiters_released_together_go_an_interval_apart() {
 #[tokio::test(start_paused = true)]
 async fn a_waiter_given_up_leaves_nothing_behind() {
     let pacer = Arc::new(RequestPacer::new(I));
-    let _out = pacer.wait(local(A)).await;
+    let _out = pacer.turn(local(A)).await;
     let before = pacer.latest(&local(A));
-    let given_up = tokio::time::timeout(Duration::from_millis(10), pacer.wait(local(A))).await;
+    let given_up = tokio::time::timeout(Duration::from_millis(10), pacer.turn(local(A))).await;
     assert!(given_up.is_err());
     assert_eq!(pacer.latest(&local(A)), before);
     assert_eq!(pacer.remembered(), 1);
+}
+
+/// A request waiting for its turn ends at once when the client's tasks end
+/// (#2720), here because its link closed under it, with the error an open
+/// request cut off by a stop gets. It never went, so it claims no turn: the
+/// destination's latest request is still the one sent before.
+#[tokio::test(start_paused = true)]
+async fn a_waiting_request_ends_when_the_clients_tasks_end_and_claims_no_turn() {
+    let (transport, inbound) = TestTransport::inbound(4);
+    let sent = transport.sent();
+    let client = BACnetClient::generic_builder()
+        .transport(transport)
+        .apdu_timeout_ms(60_000)
+        .apdu_retries(0)
+        .min_request_interval_ms(300_000)
+        .build()
+        .await
+        .unwrap();
+    let start = Instant::now();
+    // Sent at once and given up: the next is due five minutes on.
+    let given_up = tokio::time::timeout(
+        Duration::from_millis(20),
+        client.confirmed_request(A, ConfirmedServiceChoice::WRITE_PROPERTY, &[0x0C]),
+    )
+    .await;
+    assert!(given_up.is_err());
+    let latest = client.pacer.latest(&local(A));
+    assert!(latest.is_some_and(|(_, finished)| finished.is_some()));
+    let waiting = client.confirmed_request(A, ConfirmedServiceChoice::WRITE_PROPERTY, &[0x0C]);
+    let link_closes = async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        drop(inbound);
+    };
+    let (ended, ()) = tokio::join!(waiting, link_closes);
+    assert!(
+        matches!(&ended, Err(Error::Encoding(message)) if message == "TSM response channel closed"),
+        "{ended:?}"
+    );
+    assert_eq!(Instant::now() - start, Duration::from_millis(1_020));
+    assert_eq!(sent.len(), 1, "the waiting request sent nothing");
+    assert_eq!(client.pacer.latest(&local(A)), latest);
 }
 
 /// Only the latest request's finish counts: an earlier one finishing late
@@ -331,12 +372,12 @@ async fn a_waiter_given_up_leaves_nothing_behind() {
 async fn an_earlier_finish_is_ignored() {
     let pacer = Arc::new(RequestPacer::new(I));
     let start = Instant::now();
-    let a = pacer.wait(local(A)).await; // out from 0
-    let b = pacer.wait(local(A)).await; // goes at 50, stays out
+    let a = pacer.turn(local(A)).await; // out from 0
+    let b = pacer.turn(local(A)).await; // goes at 50, stays out
     assert_eq!(Instant::now() - start, I);
     let (c, ()) = tokio::join!(
         async {
-            let _c = pacer.wait(local(A)).await; // due at 100
+            let _c = pacer.turn(local(A)).await; // due at 100
             Instant::now() - start
         },
         async {
@@ -367,10 +408,10 @@ async fn a_concurrent_request_waits_the_full_pause_after_a_slow_reply() {
 #[tokio::test(start_paused = true)]
 async fn at_the_cap_an_idle_destination_goes_before_a_busy_one() {
     let pacer = with_capacity(Duration::from_millis(100), 2);
-    let _a = pacer.wait(local(A)).await; // out: free at 100
+    let _a = pacer.turn(local(A)).await; // out: free at 100
     tokio::time::advance(Duration::from_millis(10)).await;
-    drop(pacer.wait(local(B)).await); // idle: free at 110
-    let _c = pacer.wait(local(C)).await;
+    drop(pacer.turn(local(B)).await); // idle: free at 110
+    let _c = pacer.turn(local(C)).await;
     assert!(pacer.latest(&local(A)).is_some() && pacer.latest(&local(C)).is_some());
     assert!(pacer.latest(&local(B)).is_none());
 }
@@ -380,10 +421,10 @@ async fn at_the_cap_an_idle_destination_goes_before_a_busy_one() {
 #[tokio::test(start_paused = true)]
 async fn a_stale_guard_leaves_a_destination_made_again_alone() {
     let pacer = with_capacity(I, 1);
-    let stale = pacer.wait(local(A)).await; // out
-    drop(pacer.wait(local(B)).await); // forgets A
+    let stale = pacer.turn(local(A)).await; // out
+    drop(pacer.turn(local(B)).await); // forgets A
     assert!(pacer.latest(&local(A)).is_none());
-    let _again = pacer.wait(local(A)).await; // forgets B; A made again
+    let _again = pacer.turn(local(A)).await; // forgets B; A made again
     let before = pacer.latest(&local(A));
     assert_eq!(before.map(|(_, finished)| finished), Some(None));
     drop(stale);
@@ -398,6 +439,7 @@ async fn the_pacer_forgets_idle_destinations_and_stays_bounded() {
         router_mac: B,
         dest_network: 5,
         dest_mac: A,
+        arcnet: false,
     });
     assert_ne!(routed, local(A));
 
@@ -407,17 +449,18 @@ async fn the_pacer_forgets_idle_destinations_and_stays_bounded() {
                 router_mac: B,
                 dest_network: 1,
                 dest_mac: &i.to_be_bytes(),
+                arcnet: false,
             })
         })
     };
     // Every destination still inside its interval: the cap holds anyway.
     for key in many(5_000) {
-        drop(pacer.wait(key).await);
+        drop(pacer.turn(key).await);
     }
     assert!(pacer.remembered() <= 4_096);
     // Once they have all been idle a whole interval, a new one sweeps them.
     tokio::time::advance(Duration::from_millis(10)).await;
-    drop(pacer.wait(routed).await);
+    drop(pacer.turn(routed).await);
     assert_eq!(pacer.remembered(), 1);
 }
 
