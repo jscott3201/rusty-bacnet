@@ -204,6 +204,33 @@ async fn command_write_to_a_device_bound_at_a_remote_broadcast_form_is_never_sen
     }
 }
 
+/// #2738: the same binding marked one station sends the WriteProperty at
+/// each form the mark lifts (ARCNET's station 255, a two-octet station
+/// starting `0x00` or `0xFF`), and none at a form it doesn't.
+#[tokio::test(start_paused = true)]
+async fn command_write_to_a_device_bound_marked_one_station() {
+    use super::event_recipient_route::broadcast_station_tests::{MARKED_FORMS, MARKED_STATIONS};
+    let marked = |mac: &[u8]| {
+        DeviceBinding::routed(device(9), 5, mac, PEER)
+            .unwrap()
+            .one_station()
+    };
+    for mac in MARKED_STATIONS {
+        let mut h = start(marked(mac)).await;
+        write_pv(&mut h, 1, 1).await.unwrap();
+        remote_write(&h).await;
+        h.server.stop().await.unwrap();
+    }
+    for mac in MARKED_FORMS {
+        let mut h = start(marked(mac)).await;
+        write_pv(&mut h, 1, 1).await.unwrap();
+        idle(&h, 1).await;
+        assert!(sent_writes(&h).is_empty(), "{mac:02X?}");
+        assert_eq!(db_flags(&h, 1).await, [false, true], "{mac:02X?}");
+        h.server.stop().await.unwrap();
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn command_writes_another_device_and_its_ack_marks_the_command_successful() {
     let mut h = start_local().await;

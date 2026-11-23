@@ -36,6 +36,8 @@ pub(crate) enum SourceRoute {
         network: u16,
         /// The station's MAC on that network.
         mac: MacAddr,
+        /// The binding marks the address one station (#2738).
+        one_station: bool,
     },
 }
 
@@ -45,19 +47,24 @@ impl SourceRoute {
     pub(crate) fn peer(&self) -> CanonicalPeer {
         match self {
             Self::Direct(mac) => CanonicalPeer::direct(mac),
-            Self::Routed { network, mac } => CanonicalPeer::routed(*network, mac),
+            Self::Routed { network, mac, .. } => CanonicalPeer::routed(*network, mac),
         }
     }
 
     /// The broadcast or group form a routed station's MAC is on its network
-    /// ([`bacnet_npdu::RemoteBroadcast`], #2732), if it is one: the router
-    /// there would hand a record sent to it to every station. A binding
-    /// can't say its network is ARCNET, so the one octet `0xFF` is taken as
-    /// the MS/TP broadcast. A MAC on the session's own link has none; the
-    /// link's unicast rule judges it.
+    /// ([`bacnet_npdu::RemoteBroadcast`], #2732), as the binding's
+    /// one-station mark has it (#2738), if it is one: the router there would
+    /// hand a record sent to it to every station. Unmarked, the one octet
+    /// `0xFF` is the MS/TP broadcast and two octets starting `0x00` or `0xFF`
+    /// a LonTalk broadcast or group; a binding marked one station reaches
+    /// ARCNET's station 255 and a gateway's two-octet virtual station. A MAC
+    /// on the session's own link has none; the link's unicast rule judges
+    /// it.
     pub(crate) fn broadcast_form(&self) -> Option<bacnet_npdu::RemoteBroadcast> {
         match self {
-            Self::Routed { mac, .. } => bacnet_npdu::RemoteBroadcast::of(mac, false),
+            Self::Routed {
+                mac, one_station, ..
+            } => bacnet_npdu::RemoteBroadcast::of(mac, *one_station),
             Self::Direct(_) => None,
         }
     }
@@ -195,7 +202,7 @@ impl SourceRouters {
         route: &SourceRoute,
     ) -> Option<(EndpointApduDestination, Hop)> {
         Some(match route {
-            SourceRoute::Routed { network, mac } if Some(*network) != self.local_network() => {
+            SourceRoute::Routed { network, mac, .. } if Some(*network) != self.local_network() => {
                 let router = self.routers.lock().unwrap().get(network).cloned().flatten();
                 match router {
                     Some(router) => (

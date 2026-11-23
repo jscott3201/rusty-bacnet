@@ -375,7 +375,8 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
     /// with no DNET and is answered from there, and one at a group address,
     /// the link's broadcast MAC or another, names no device, so it gives no
     /// route (#1493). Nor does one whose MAC on another network is a
-    /// broadcast or group form there (#2732): that binding is unusable, not
+    /// broadcast or group form there (#2732), as its one-station mark has
+    /// it (#2738): that binding is unusable, not
     /// missing, so it is [`RemoteRequestError::Unbound`] even when a Who-Is
     /// found it, and its warning names the address and the form.
     fn confirmed(

@@ -64,7 +64,7 @@ impl Address {
             network,
             station: station.to_vec(),
             router: router.map(<[u8]>::to_vec),
-            arcnet: target.get().is_arcnet(),
+            one_station: target.get().is_one_station(),
         }))
     }
 
@@ -75,19 +75,19 @@ impl Address {
 }
 
 /// A station on another network, the router to reach it by, if named, and
-/// whether its network is ARCNET.
+/// whether its address is marked one station.
 pub(super) struct Routed {
     network: u16,
     station: Vec<u8>,
     router: Option<Vec<u8>>,
-    arcnet: bool,
+    one_station: bool,
 }
 
 impl Routed {
     /// The path to the station on `client`'s link, for a confirmed call.
     /// The client's checks of a confirmed request that need no link come
-    /// first ([`Station::check_confirmed`]): a remote broadcast form, the
-    /// MS/TP `0xFF` unless `arcnet` (#2709), raises BacnetError before any
+    /// first ([`Station::check_confirmed`]): a remote broadcast form, as
+    /// `one_station` has them (#2709, #2738), raises BacnetError before any
     /// lookup, so it is never asked for or remembered as a miss. A named
     /// router that is a broadcast or group address on the local link is
     /// the client's to refuse, when the call is made (#2722).
@@ -97,9 +97,11 @@ impl Routed {
     /// one to its network (`device()`'s rule, up to two resolve waits);
     /// with none after that, BacnetLookupError, and a call soon after
     /// raises at once instead of asking again (bacnet-ops remembers the
-    /// miss). `lookups` keeps one lookup per station in flight. An ARCNET
-    /// station 255 has no address bacnet-ops takes, so with no router it
-    /// is reached through its row alone.
+    /// miss). `lookups` keeps one lookup per station in flight. A station
+    /// marked one station at a form bacnet-ops refuses as an address (the
+    /// one octet `0xFF`, two octets starting `0x00` or `0xFF`) has no
+    /// address it takes, so with no router it is reached through its row
+    /// alone.
     pub(super) async fn path(
         self,
         client: &OpsClient,
@@ -109,25 +111,36 @@ impl Routed {
             Some(router) => Station::routed(router, self.network, &self.station),
             None => Station::remote(self.network, &self.station),
         };
-        let named = if self.arcnet { named.arcnet() } else { named };
+        let named = if self.one_station {
+            named.one_station()
+        } else {
+            named
+        };
         named.check_confirmed().map_err(to_py_err)?;
         if self.router.is_some() {
             return Ok(named);
         }
         let core = client.low_level();
-        if self.arcnet && self.station == [0xFF] {
+        if self.one_station && bacnet_npdu::RemoteBroadcast::of(&self.station, false).is_some() {
+            let shown = format!(
+                "{}:0x{}",
+                self.network,
+                self.station
+                    .iter()
+                    .map(|octet| format!("{octet:02X}"))
+                    .collect::<String>()
+            );
             return match core.get_device_at(self.network, &self.station).await {
-                Some(row) => {
-                    Ok(Station::routed(&row.mac_address, self.network, &self.station).arcnet())
-                }
+                Some(row) => Ok(
+                    Station::routed(&row.mac_address, self.network, &self.station).one_station(),
+                ),
                 None => Err(crate::errors::lookup_error(
                     format!(
-                        "no route to ARCNET station 255 on network {}: the discovery table has \
-                         no row for it; name its router: RoutedTarget(..., router=..., \
-                         arcnet=True)",
-                        self.network
+                        "no route to {shown}, marked one station: the discovery table has no \
+                         row for it; name its router: RoutedTarget(..., router=..., \
+                         one_station=True)"
                     ),
-                    crate::errors::Lookup::unknown(format!("{}:0xFF", self.network)),
+                    crate::errors::Lookup::unknown(shown),
                 )),
             };
         }
@@ -198,7 +211,11 @@ impl Routed {
             )
         })?;
         let routed = Station::routed(&row.mac_address, self.network, &self.station);
-        Ok(if self.arcnet { routed.arcnet() } else { routed })
+        Ok(if self.one_station {
+            routed.one_station()
+        } else {
+            routed
+        })
     }
 }
 

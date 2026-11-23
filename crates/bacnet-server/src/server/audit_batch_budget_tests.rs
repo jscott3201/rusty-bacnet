@@ -35,6 +35,7 @@ fn record(status: &Arc<AuditReporterStatus>, charge: usize) -> QueuedAudit {
             local_target: Some(bacnet_types::MacAddr::from_slice(&[1])),
             remote: None,
             freshness: None,
+            one_station: false,
         }),
         max_apdu: 1476,
     };

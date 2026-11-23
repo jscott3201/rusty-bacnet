@@ -293,6 +293,7 @@ mod tests {
         let route = SourceRoute::Routed {
             network: 2,
             mac: MacAddr::from_slice(&[5]),
+            one_station: false,
         };
         let (destination, hop) = routers.destination(&route).unwrap();
         assert!(matches!(
@@ -331,6 +332,7 @@ mod tests {
                 .destination(&SourceRoute::Routed {
                     network: 7,
                     mac: MacAddr::from_slice(mac),
+                    one_station: false,
                 })
                 .map(|(destination, _)| destination)
         };

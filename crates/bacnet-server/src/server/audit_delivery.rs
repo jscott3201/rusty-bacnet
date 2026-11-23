@@ -74,7 +74,8 @@ pub(in crate::server) async fn deliver_global_broadcast<T: TransportPort + 'stat
 /// funnels through here or follows the same rule.
 ///
 /// A confirmed one whose recipient is a Device bound at a broadcast or group
-/// form on another network is not sent and not delivered (#2732): a
+/// form on another network, as the binding's one-station mark has it
+/// (#2738), is not sent and not delivered (#2732): a
 /// confirmed request goes to one station. Its reporter reads a
 /// communication failure, and the warning logged when the binding was
 /// configured says why ([`DeviceBindingTable::insert_configured`]). An

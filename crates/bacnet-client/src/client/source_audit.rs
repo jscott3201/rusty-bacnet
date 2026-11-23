@@ -358,14 +358,18 @@ impl Station {
                 router_mac,
                 dest_network,
                 dest_mac,
-                arcnet,
+                one_station,
             } => {
                 let station = if router_mac == super::station::VIA_LOCAL_BROADCAST {
                     Self::routed_via_local_broadcast(dest_network, dest_mac)
                 } else {
                     Self::routed(router_mac, dest_network, dest_mac)
                 };
-                if arcnet { station.arcnet() } else { station }
+                if one_station {
+                    station.one_station()
+                } else {
+                    station
+                }
             }
         }
     }

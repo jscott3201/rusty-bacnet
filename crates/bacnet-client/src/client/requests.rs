@@ -211,7 +211,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 }
             }
             // Still routed, so on another network: its MAC there must not
-            // spell that network's broadcast (#2709), and the router it goes
+            // spell that network's broadcast (#2709), as the station's
+            // one-station mark has it (#2738), and the router it goes
             // through must be one station on this link (#2722). The local
             // broadcast form names no router; its DNET and DADR name the
             // one station, so they are all it is checked by.
@@ -219,9 +220,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 router_mac,
                 dest_network,
                 dest_mac,
-                arcnet,
+                one_station,
             } => {
-                send_checks::check_remote_station(dest_network, dest_mac, arcnet)?;
+                send_checks::check_remote_station(dest_network, dest_mac, one_station)?;
                 send_checks::check_router(self.network.transport(), dest_network, router_mac)?;
             }
         }

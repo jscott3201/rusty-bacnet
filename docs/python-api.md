@@ -4701,8 +4701,9 @@ broadcast or group form there (`0xFF`, two octets starting `0x00` or `0xFF`,
 `0xFFFFFF`, six octets starting `FF:FF:FF:FF`) is taken, but gets unconfirmed
 notifications only: a confirmed one is skipped and counted in
 `confirmed_broadcast_recipient` (#2732). The form is read from the MAC alone,
-so an ARCNET station 255, or a gateway's virtual network that numbers stations
-with two octets starting `0x00` or `0xFF`, can't take confirmed ones.
+and a destination's address can't be marked one station (#2738), so an ARCNET
+station 255, or a gateway's virtual network that numbers stations with two
+octets starting `0x00` or `0xFF`, can't take confirmed ones here.
 `port_filter` serves Port_Filter as
 `(port_id, enabled)` pairs, one per network port; the server receives through
 Port_ID 0, and without `port_filter` the property is absent. Clients can still
@@ -7958,7 +7959,14 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
     learns from traffic back from there or from the router's
     I-Am-Router-To-Network; until then they go with the link's broadcast
     address. A failed delivery sets the Reporter's Reliability to
-    COMMUNICATION_FAILURE as a direct one does.
+    COMMUNICATION_FAILURE as a direct one does. A `RoutedTarget` with no
+    `router` names the same binding, and is the form that can mark the
+    address `one_station=True` (#2738): a Reporter sending confirmed
+    records has no route to a Device bound at `b"\xff"` or two octets
+    starting `0x00` or `0xFF` (the forms `RoutedTarget` lists) and reads
+    CONFIGURATION_ERROR, and marked one station it reaches those the mark
+    lifts. A `RoutedTarget` with a `router` raises ValueError: the session
+    learns the router.
 
   An address `audit_recipient` follows the same rule on each link, so an SC
   or MS/TP endpoint takes one too, unlike `BACnetServer`, whose address
@@ -8071,9 +8079,9 @@ address only.
 slave proxy), pass `router` from `discover_routers()`.** Without it each such
 station costs two Who-Is and their 3-second waits before the call fails; the
 remembered miss below only spares repeat calls.
-`RoutedTarget(network, address, router=None, *, arcnet=False)` takes its
-first three arguments in that order, positionally or by keyword, and
-`arcnet` by keyword only:
+`RoutedTarget(network, address, router=None, *, one_station=False)` takes
+its first three arguments in that order, positionally or by keyword, and
+`one_station` by keyword only:
 
 - `network`: the station's network number, an `int` from 1 to 65534.
 - `address`: the station's MAC on that network, 1 to 18 octets, as `bytes`
@@ -8087,8 +8095,8 @@ first three arguments in that order, positionally or by keyword, and
 - `router`: the next hop's address on the local link, in the same forms or
   as `bytes` (a routed `DiscoveredDevice`'s `mac_address`, or the `mac` of a
   router `BACnetClient.discover_routers()` found), or `None`.
-- `arcnet`: `True` marks the station's network as ARCNET, where 255 is a
-  station and 0 the broadcast. It takes a one-octet `address` only.
+- `one_station`: `True` marks the address one station on its network
+  (#2738), for the addresses below that are a station on some networks.
 
 A call refuses an `address` that is a broadcast or a group on its network
 with `BacnetError`, before anything is sent or looked up (#2709). The
@@ -8096,12 +8104,18 @@ client can't see the far network's link, so it goes by length: `b"\xff"`
 (MS/TP's broadcast), two octets beginning `0x00` or `0xFF` (a LonTalk
 broadcast or group), three octets of `0xFF` (no device's VMAC), and six
 beginning with four of `0xFF` (the B/IP limited broadcast at any port, an
-Ethernet group MAC, BACnet/SC's broadcast). For station 255 on an ARCNET
-network pass `arcnet=True`; `b"\x00"` is then refused instead. Without a
-`router`, an ARCNET station 255 is reached through its discovery-table row
-alone, so name its router when the client has heard no I-Am from it.
-Unconfirmed calls (`who_is` and `discover` with a `RoutedTarget` scope) are
-left alone.
+Ethernet group MAC, BACnet/SC's broadcast). Two of these are a station on
+some networks: ARCNET's station 255 is `b"\xff"`, and a gateway's virtual
+network may number its stations in two octets starting `0x00` or `0xFF`. For
+such a station pass `one_station=True`: a call then goes to `b"\xff"` and to
+two octets beginning `0x00` or `0xFF`, but not `b"\x00\x00"` or
+`b"\xff\xff"`; three and six octets are checked as unmarked. The mark only
+lifts, never refuses: `b"\x00"` goes marked or not, so an ARCNET network's
+broadcast there is not caught. The error for an unmarked address the mark would let through says
+so. Without a `router`, a marked station at one of those forms is reached
+through its discovery-table row alone, so name its router when the client
+has heard no I-Am from it. Unconfirmed calls (`who_is` and `discover` with a
+`RoutedTarget` scope) are left alone.
 
 ```python
 from rusty_bacnet import RoutedTarget
@@ -8143,7 +8157,7 @@ and `_to_device` forms, by its instance (#2588 brings a routed form to
 every service).
 
 `RoutedTarget` is frozen, compares and hashes by its network, octets and
-ARCNET mark however they were written, and copies and pickles. A bad value raises
+one-station mark however they were written, and copies and pickles. A bad value raises
 `ValueError`, a network outside 0 to 65535 `OverflowError`, a `bool` network
 or a type other than `str` or `bytes` `TypeError`, as does a call in another
 order, since `network` takes an `int`.

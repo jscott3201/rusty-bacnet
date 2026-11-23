@@ -184,6 +184,60 @@ async fn a_device_bound_at_a_remote_broadcast_form_gets_unconfirmed_records_only
     }
 }
 
+/// #2738: the same binding marked one station gives a confirmed reporter a
+/// route at each form the mark lifts, and its record goes there as a
+/// confirmed request through the router; at a form the mark doesn't lift it
+/// reads a configuration error and sends nothing, as unmarked.
+#[tokio::test(start_paused = true)]
+async fn a_device_bound_marked_one_station_gets_confirmed_records_where_the_mark_lifts() {
+    use crate::server::event_recipient_route::broadcast_station_tests::{
+        MARKED_FORMS, MARKED_STATIONS,
+    };
+    let recipient = oid(ObjectType::DEVICE, 20);
+    let lifted = MARKED_STATIONS.into_iter().map(|mac| (mac, true));
+    for (mac, routed) in lifted.chain(MARKED_FORMS.into_iter().map(|mac| (mac, false))) {
+        let mut reporter = reporter();
+        reporter.set_issue_confirmed_notifications(true).unwrap();
+        let binding = DeviceBinding::routed(recipient, 5, mac, LOGGER)
+            .unwrap()
+            .one_station();
+        let mut fixture = try_server(
+            reporter,
+            &[10],
+            Some(BACnetRecipient::Device(recipient)),
+            vec![binding],
+        )
+        .await
+        .expect("a Device recipient starts");
+        let expected = if routed {
+            Reliability::NO_FAULT_DETECTED
+        } else {
+            Reliability::CONFIGURATION_ERROR
+        };
+        assert_eq!(health(&fixture.server).await, expected, "{mac:02X?}");
+        assert!(matches!(
+            write_value(&fixture.server, None).await,
+            Apdu::SimpleAck(_)
+        ));
+        settle().await;
+        let sent = fixture.transport.sent.lock().unwrap().clone();
+        if routed {
+            let [wire] = sent.try_into().expect("one record");
+            let npdu = decode_npdu(wire).unwrap();
+            let to = npdu.destination.unwrap();
+            assert_eq!((to.network, to.mac_address.as_slice()), (5, mac));
+            assert!(matches!(
+                decode_apdu(npdu.payload).unwrap(),
+                Apdu::ConfirmedRequest(request)
+                    if request.service_choice == ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION
+            ));
+        } else {
+            assert!(sent.is_empty(), "{mac:02X?}");
+        }
+        fixture.server.stop().await.unwrap();
+    }
+}
+
 /// The copies of a record changing the recipient: each unicast as (its link
 /// MAC, confirmed), then each global broadcast as (`None`, confirmed).
 fn change_copies(fixture: &Fixture) -> Vec<(Option<Vec<u8>>, bool)> {
