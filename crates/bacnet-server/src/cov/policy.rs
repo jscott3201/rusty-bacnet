@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use bacnet_transport::warn_throttle::WarnThrottle;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Atomic storage for COV telemetry counters.
@@ -36,9 +37,11 @@ pub struct AtomicCovCounters {
     /// Total number of notifications throttled due to per-event fanout or byte budget.
     pub notifications_throttled_fanout: AtomicU64,
     /// Total number of confirmed notifications held back because their
-    /// peer already had its limit in flight: each waits, and goes with the
-    /// value then current once one of the peer's reports ends (#2671). A
-    /// subscription waits once, however often it is held back.
+    /// peer already had its limit in flight, each counted once: a
+    /// subscription held back at several changes counts several times but
+    /// waits once, and goes with the value then current once its peer has
+    /// room, which may take more than one of the peer's reports ending
+    /// (#2671).
     pub notifications_throttled_peer: AtomicU64,
     /// Total number of pending timestamped COV-multiple changes discarded while
     /// their reference stayed subscribed: evicted on overflow of the
@@ -65,12 +68,20 @@ pub struct AtomicCovCounters {
     /// server's API doesn't report these three. `queued` is `delivered`
     /// plus `dropped` plus those still waiting.
     pub(crate) owed_revisits_queued: AtomicU64,
-    /// Of those, handed to the fanout once room came back.
+    /// Of those, handed to the fanout once room came back, or sent by
+    /// another fanout that found room first.
     pub(crate) owed_revisits_delivered: AtomicU64,
     /// Of those, dropped while they waited: the subscription was
     /// cancelled, expired, removed or replaced (a replacement reports for
     /// itself), or the server stopped.
     pub(crate) owed_revisits_dropped: AtomicU64,
+    /// Confirmed notifications held back because the pool of in-flight
+    /// slots was full (#2671), each counted once, as
+    /// `notifications_throttled_peer` counts its own. Not in
+    /// [`CovCounters`] yet; the log line is throttled, so this is the count.
+    pub(crate) notifications_throttled_pool: AtomicU64,
+    /// The same for want of an invoke ID (#2661).
+    pub(crate) notifications_throttled_invoke_id: AtomicU64,
 }
 
 impl AtomicCovCounters {
@@ -154,6 +165,11 @@ pub struct CovInFlightTracker {
     /// back, what waits for one to end: references owed a look (#2661,
     /// #2671).
     ended: tokio::sync::Notify,
+    /// The warning for a confirmed report held back by the full pool, and
+    /// the one for a report held back for want of an invoke ID: both wait
+    /// and lose nothing, so each warns at most once an interval (#2671).
+    pool_warning: WarnThrottle,
+    id_warning: WarnThrottle,
 }
 
 /// RAII permit for an in-flight confirmed notification holding both a peer slot and a global permit.
@@ -203,6 +219,17 @@ impl CovInFlightTracker {
             tracker: Arc::clone(self),
             global_permit: Some(global_permit),
         })
+    }
+
+    /// The throttle on the warning for a report the full pool held back.
+    pub(crate) fn pool_warning(&self) -> &WarnThrottle {
+        &self.pool_warning
+    }
+
+    /// The throttle on the warning for a report held back for want of an
+    /// invoke ID.
+    pub(crate) fn id_warning(&self) -> &WarnThrottle {
+        &self.id_warning
     }
 
     /// Each peer's confirmed notifications in flight now.

@@ -12,7 +12,6 @@
 use super::cov_owed_id_room_tests::{av, peer, throttled, tracker};
 use super::cov_owed_id_tests::{owed, owed_counts, pv_of, subscribed_on};
 use super::cov_wire_test_support::*;
-use super::warn_spy::WarnSpy;
 use super::*;
 use bacnet_device_core::cov::{
     CovNotificationKind, CovPolicy, CovRecipient, CovSubscription, CovSubscriptionKey,
@@ -158,7 +157,7 @@ async fn another_peer_subscribed(h: &Harness) {
 }
 
 /// Hold `count` slots of the pool, for a peer the harness never answers.
-fn fill_pool(
+pub(super) fn fill_pool(
     h: &Harness,
     tracker: &Arc<crate::cov::CovInFlightTracker>,
     count: usize,
@@ -173,12 +172,12 @@ fn fill_pool(
         .collect()
 }
 
-/// Reports refused by the pool so far, as logged.
-fn pool_refusals(spy: &WarnSpy) -> usize {
-    spy.warnings()
-        .iter()
-        .filter(|warning| warning.message.starts_with("255 confirmed COV"))
-        .count()
+/// Reports the pool held back so far.
+fn pool_refusals(h: &Harness) -> u64 {
+    h.server
+        .cov_counters
+        .notifications_throttled_pool
+        .load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// A value that changes once while its subscriber's peer is at its limit is
@@ -213,7 +212,6 @@ async fn a_change_held_back_by_its_peers_limit_goes_once_a_report_of_the_peer_en
 /// peer, a change waits, untried, and is reported once one of them ends.
 #[tokio::test(start_paused = true)]
 async fn a_change_held_back_by_the_pool_goes_once_a_report_ends() {
-    let (spy, _guard) = WarnSpy::install();
     let mut h = limited(16).await;
     subscribed_on(&mut h, 1, av1()).await;
     let tracker = tracker(&h).await;
@@ -222,7 +220,7 @@ async fn a_change_held_back_by_the_pool_goes_once_a_report_ends() {
     h.settle().await;
     h.no_notification().await;
     assert_eq!(waiting(&h).await, [1]);
-    assert_eq!(pool_refusals(&spy), 1);
+    assert_eq!(pool_refusals(&h), 1);
 
     drop(pool.pop());
     assert_eq!(pv_of(&h.cov_notification().await), real(42.0));
@@ -231,7 +229,7 @@ async fn a_change_held_back_by_the_pool_goes_once_a_report_ends() {
     h.no_notification().await;
     assert_eq!(owed_counts(&h), (1, 1, 0));
     assert_eq!(
-        pool_refusals(&spy),
+        pool_refusals(&h),
         1,
         "nothing tried while the pool was full"
     );
@@ -306,7 +304,6 @@ async fn a_peer_at_its_limit_does_not_delay_another_peers_report() {
 /// peer's goes once its own report ends.
 #[tokio::test(start_paused = true)]
 async fn a_peer_at_its_limit_does_not_hold_the_pool_back_from_another() {
-    let (spy, _guard) = WarnSpy::install();
     let mut h = limited(1).await;
     subscribed_on(&mut h, 2, av1()).await;
     let out = peer_at_its_limit(&mut h).await;
@@ -318,7 +315,7 @@ async fn a_peer_at_its_limit_does_not_hold_the_pool_back_from_another() {
     h.settle().await;
     h.no_notification().await;
     assert_eq!(waiting(&h).await, [2, 3], "the full peer's first");
-    assert_eq!((throttled(&h), pool_refusals(&spy)), (1, 1));
+    assert_eq!((throttled(&h), pool_refusals(&h)), (1, 1));
 
     drop(pool.pop());
     let report = h.cov_notification().await;
@@ -415,6 +412,7 @@ async fn a_context_held_back_by_its_peers_limit_goes_once_a_report_ends() {
     h.settle().await;
     h.no_notification().await;
     assert_eq!(waiting(&h).await, [856]);
+    assert_eq!(throttled(&h), 2, "held back at each change, waiting once");
 
     h.ack_request(out).await;
     assert_eq!(pv_rows(&h.notification().await), vec![(real(43.0), None)]);

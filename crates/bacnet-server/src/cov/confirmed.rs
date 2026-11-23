@@ -5,10 +5,10 @@
 //! flight itself is plain state in the table; `flight.rs` has the policy.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use bacnet_device_core::cov::CovSubscriptionKey;
+use bacnet_device_core::cov::{CovSubscriptionKey, MultipleContextKey};
 use tokio::sync::Notify;
 use tokio::sync::futures::Notified;
 
@@ -62,6 +62,11 @@ pub(crate) struct CovRevisits {
     wake: Notify,
     /// Wakes the wait for room when a reference is owed a look.
     owed_wake: Notify,
+    /// How many references hold a place, waiting or being looked at,
+    /// stored under the lock after each change. A caller holding the
+    /// table's guard reads it to skip the lock while none does: every place
+    /// is made under a table guard, so a zero read there is never stale.
+    holding: AtomicUsize,
     counters: Arc<AtomicCovCounters>,
 }
 
@@ -175,6 +180,17 @@ impl CovRevisits {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Store how many references hold a place, under the lock.
+    fn publish(&self, pending: &Pending) {
+        self.holding
+            .store(pending.owed.places.len(), Ordering::Release);
+    }
+
+    /// Whether any reference may hold a place; see [`Self::holding`].
+    fn any_holding(&self) -> bool {
+        self.holding.load(Ordering::Acquire) != 0
+    }
+
     /// Queue references for evaluation and wake the drain.
     pub(crate) fn request(&self, keys: impl IntoIterator<Item = CovSubscriptionKey>) {
         let mut keys = keys.into_iter().peekable();
@@ -213,6 +229,7 @@ impl CovRevisits {
         for key in keys {
             added += usize::from(pending.owed.owe(key));
         }
+        self.publish(&pending);
         drop(pending);
         count(&self.counters.owed_revisits_queued, added);
         if added != 0 {
@@ -248,7 +265,51 @@ impl CovRevisits {
     /// it owed again, refused for want of room, wait in their old places;
     /// the rest leave. Whether any was owed again.
     pub(crate) fn looked(&self, keys: &[CovSubscriptionKey]) -> bool {
-        self.pending().owed.looked(keys)
+        let mut pending = self.pending();
+        let again = pending.owed.looked(keys);
+        self.publish(&pending);
+        again
+    }
+
+    /// Confirmed reports began for `keys` without their looks, a fresh
+    /// fanout or a follow-up having found room first: their waits end, and
+    /// each report's Ack owes its coordinate the next look (#2671). Without
+    /// this a stale place would spend a pass's room and could jump a later
+    /// waiter. Neither work nor the lock while no reference holds a place.
+    pub(crate) fn sent<'a>(&self, keys: impl IntoIterator<Item = &'a CovSubscriptionKey>) {
+        if !self.any_holding() {
+            return;
+        }
+        let mut pending = self.pending();
+        let left = keys
+            .into_iter()
+            .filter(|key| pending.owed.forget(key))
+            .count();
+        self.publish(&pending);
+        drop(pending);
+        count(&self.counters.owed_revisits_delivered, left);
+    }
+
+    /// [`Self::sent`] for every reference of `context`, whose report
+    /// began: one coordinate, so its Ack owes them all the next look. The
+    /// places are scanned, not the context's references listed, and only
+    /// while some reference holds one.
+    pub(crate) fn context_sent(&self, context: &MultipleContextKey) {
+        if !self.any_holding() {
+            return;
+        }
+        let mut pending = self.pending();
+        let keys: Vec<_> = pending
+            .owed
+            .places
+            .keys()
+            .filter(|key| key.multiple_context() == Some(context))
+            .cloned()
+            .collect();
+        let left = keys.iter().filter(|key| pending.owed.forget(key)).count();
+        self.publish(&pending);
+        drop(pending);
+        count(&self.counters.owed_revisits_delivered, left);
     }
 
     /// The references waiting for room, oldest first.
@@ -274,6 +335,7 @@ impl CovRevisits {
         let mut pending = self.pending();
         pending.now.remove(key);
         let dropped = pending.owed.forget(key);
+        self.publish(&pending);
         drop(pending);
         count(&self.counters.owed_revisits_dropped, usize::from(dropped));
     }
@@ -281,14 +343,16 @@ impl CovRevisits {
     /// Drop the waits for room of references a subscription just replaced:
     /// each reports for itself.
     pub(super) fn forget_owed<'a>(&self, keys: impl IntoIterator<Item = &'a CovSubscriptionKey>) {
-        let mut pending = self.pending();
-        if pending.owed.places.is_empty() {
+        // Every subscription comes here: no lock while none waits.
+        if !self.any_holding() {
             return;
         }
+        let mut pending = self.pending();
         let dropped = keys
             .into_iter()
             .filter(|key| pending.owed.forget(key))
             .count();
+        self.publish(&pending);
         drop(pending);
         count(&self.counters.owed_revisits_dropped, dropped);
     }
@@ -300,6 +364,7 @@ impl CovRevisits {
         pending.now.clear();
         let dropped = pending.owed.queue.len();
         pending.owed = Owed::default();
+        self.publish(&pending);
         drop(pending);
         count(&self.counters.owed_revisits_dropped, dropped);
     }

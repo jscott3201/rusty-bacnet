@@ -296,6 +296,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Err(Refusal::Other) => None,
                 }
             });
+            // A subscription that waited for room and found it here waits
+            // no more (#2671).
+            revisits.sent(
+                reports
+                    .iter()
+                    .filter(|(_, flight)| flight.is_some())
+                    .map(|(report, _)| subs[report.index].key()),
+            );
             (reports, revisits, tokio::time::Instant::now())
         };
 

@@ -80,9 +80,9 @@ pub(in crate::server) struct ConfirmedSend {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::server) enum Refusal {
     /// No room: the peer's in-flight limit, the pool of in-flight slots or
-    /// the invoke IDs, counted or logged. The report's references are owed
-    /// a look once there is room (#2661, #2671); the limits cap what is in
-    /// flight, and drop no change.
+    /// the invoke IDs, each counted and the last two logged, throttled. The
+    /// report's references are owed a look once there is room (#2661,
+    /// #2671); the limits cap what is in flight, and drop no change.
     NoRoom,
     /// A closed or broken pool, logged.
     Other,
@@ -119,8 +119,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .fetch_add(1, Ordering::Relaxed);
                 return Err(Refusal::NoRoom);
             }
+            // Routine now that the report waits and loses nothing: counted
+            // like the peer's limit, and warned at most once an interval.
             Err(InFlightAcquireError::GlobalPoolExhausted) => {
-                warn!(
+                counters
+                    .notifications_throttled_pool
+                    .fetch_add(1, Ordering::Relaxed);
+                warn_throttled!(
+                    in_flight_tracker.pool_warning(),
                     object = ?route.monitored_object_identifier,
                     "255 confirmed COV notifications in flight; {label} goes once one ends"
                 );
@@ -133,7 +139,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         {
             Ok(reservation) => reservation,
             Err(NotificationReserveError::Coordinator(ReserveError::Exhausted)) => {
-                warn!(
+                counters
+                    .notifications_throttled_invoke_id
+                    .fetch_add(1, Ordering::Relaxed);
+                warn_throttled!(
+                    in_flight_tracker.id_warning(),
                     object = ?route.monitored_object_identifier,
                     "No free invoke ID for confirmed {label}; it goes once one comes back"
                 );
@@ -222,6 +232,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 report.claim.take(),
                 std::mem::take(&mut report.deferred),
             );
+            // A context that waited for room and found it here waits no
+            // more (#2671).
+            if begun.is_ok()
+                && let Some(context) = report.route.key().multiple_context()
+            {
+                table.revisits().context_sent(context);
+            }
             (begun, Arc::clone(table.revisits()))
         };
         // The instant the table began the report, near enough: its deadline

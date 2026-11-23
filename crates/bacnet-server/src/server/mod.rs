@@ -679,6 +679,8 @@ mod cov_owed_id_tests;
 #[cfg(test)]
 mod cov_owed_limit_life_tests;
 #[cfg(test)]
+mod cov_owed_limit_room_tests;
+#[cfg(test)]
 mod cov_owed_limit_tests;
 #[cfg(test)]
 mod cov_quota_tests;

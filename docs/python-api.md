@@ -6801,7 +6801,7 @@ counters["timed_changes_dropped"]         # timestamped COV-multiple changes los
 | `notifications_unconfirmed` | Unconfirmed notifications sent |
 | `notification_bytes_sent` | APDU bytes of the notifications in `notifications_sent` |
 | `notifications_throttled_fanout` | Notifications not sent because the per-event count or byte budget ran out |
-| `notifications_throttled_peer` | Confirmed notifications held back because the peer had its limit in flight; each waits and goes, with the value then current, once one of the peer's reports ends |
+| `notifications_throttled_peer` | Each confirmed notification held back because the peer had its limit in flight (a subscription held back at several changes counts each time but waits once); it goes, with the value then current, once the peer has room, which may take more than one of its reports ending |
 | `timed_changes_dropped` | Timestamped COV-multiple changes discarded for good, in whole or in part, the running signal for a subscriber whose maximum APDU can't hold one timestamped value |
 | `untimed_references_oversized` | Each COV-multiple report that left out an untimestamped reference too large for one notification |
 
@@ -7755,7 +7755,7 @@ async with endpoint:
   come back and then goes, if its value still differs from what the
   subscriber last acknowledged (#2661). A report held back by the
   subscriber's in-flight limit or the server's pool of 255 waits the same
-  way, for one of its reports, or any report, to end (#2671).
+  way, until its reports, or any reports, end and leave it room (#2671).
 - **Callables.** A `mutation_policy` callable runs on Tokio's blocking pool
   while its request waits, so a slow one delays only its own request, as
   on a standalone server. The callables run with no lock held

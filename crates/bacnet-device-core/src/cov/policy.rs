@@ -204,10 +204,11 @@ pub struct CovCounters {
     /// Total number of notifications throttled due to per-event fanout or byte budget.
     pub notifications_throttled_fanout: u64,
     /// Total number of confirmed notifications a host held back because
-    /// their peer already had its limit in flight. The server's report
-    /// waits and goes, with the value then current, once one of the peer's
-    /// reports ends; a subscription waits once, however often it is held
-    /// back.
+    /// their peer already had its limit in flight, each counted once: a
+    /// subscription held back at several changes counts several times but
+    /// waits once. The server's report goes, with the value then current,
+    /// once the peer has room, which may take more than one of the peer's
+    /// reports ending.
     pub notifications_throttled_peer: u64,
     /// Total number of pending timestamped COV-multiple changes discarded while
     /// their reference stayed subscribed: evicted on overflow of the

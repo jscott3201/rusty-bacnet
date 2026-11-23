@@ -10225,14 +10225,19 @@ no room is not sent and the baselines stay, and its coordinate (the
 subscription, or every reference of the COV-multiple context, a split report's
 later parts included) waits for room, whichever of the three it lacked (#2661,
 #2671): the limits cap what is in flight and drop no change. While anything
-waits, the server looks again whenever an ID comes back or a confirmed COV
-notification in flight ends, and at no other time. Each pass takes, in the
+waits, the server looks again when a coordinate is newly owed a look, and
+otherwise only when what held the waiters back may be free again: an ID
+coming back, if none was free at the last look, or else a confirmed COV
+notification in flight ending. There is no timer. Each pass takes, in the
 order they were first refused, the waiting coordinates that have room now. A
 coordinate without room keeps its place and those behind it still go, so one
 subscriber whose notifications are all out holds back no other, in its own
-limit or in the pool. A waiting coordinate reserves nothing: a change of
-another subscription, or the follow-up after an Ack, may take freed room first,
-and the wait goes on to the next end. The usual fanout then reports from the
+limit or in the pool. A waiting coordinate reserves nothing: a fresh change of
+another subscription may take freed room first, and the wait goes on to the
+next end, so the order is bounded, not strict. The server's own follow-ups
+after an Ack come after the waiters, but get a turn after eight passes of
+waiters in a row. A coordinate whose report goes out by another fanout first
+leaves its place. The usual fanout then reports from the
 kept baselines, with the value current at the look: a value back at its
 baseline, or within its COV increment of it, sends nothing, and one that
 changed several times reports once. A coordinate waits once however often it
@@ -10246,7 +10251,10 @@ sends its own initial report (waiting in its turn, at the back, when it finds
 no room). Timestamped history refused with its report goes back to its
 references and leaves with the next report, once. `stop()` ends every wait.
 `CovCounters::notifications_throttled_peer` counts each report the per-peer
-limit held back; the pool and the invoke IDs log theirs. What still waits for
+limit held back, so a subscription held back at several changes counts each
+time but waits once. A report held back by the pool or for an invoke ID warns
+at most once every 10 seconds, with the count since the last warning. What
+still waits for
 its next fanout: a report past the fanout budget, and a look DCC drops, as it
 drops any fanout. The standard doesn't say what a server does when it cannot
 start a confirmed notification; this is local policy.
