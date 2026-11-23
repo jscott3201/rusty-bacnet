@@ -78,6 +78,7 @@ fn timed_endpoint(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -467,6 +468,7 @@ fn the_wrapper_builds_the_full_server_on_the_mstp_session() {
                 None,
                 None,
                 deny_all.then_some(policy.as_any()),
+                None,
                 None,
                 None,
                 None,

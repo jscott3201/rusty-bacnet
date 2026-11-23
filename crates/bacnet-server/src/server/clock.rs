@@ -59,6 +59,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// Start with the default system-UTC Device clock.
+    ///
+    /// The Staging plans due at start-up have written their targets by the
+    /// time it returns. Their event notifications may still be on their way
+    /// (a `stop()` at once drops those not yet sent), and it never waits on a
+    /// recipient for them, a silent one included. Their COV fanout has run
+    /// by then only when they made no event notification; otherwise it
+    /// follows the notifications, waiting for them at most the APDU timeout
+    /// (#2573).
     pub async fn start(
         config: ServerConfig,
         db: ObjectDatabase,
@@ -67,7 +75,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         Self::start_with_clock(config, db, transport, ClockConfig::default()).await
     }
 
-    /// Start with a validated Device clock configuration.
+    /// Start with a validated Device clock configuration. Start-up Staging
+    /// plans go as for [`Self::start`].
     pub async fn start_with_clock(
         config: ServerConfig,
         db: ObjectDatabase,
@@ -78,6 +87,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// Start without a Device wall clock or time-synchronization execution.
+    /// Start-up Staging plans go as for [`Self::start`].
     pub async fn start_clockless(
         config: ServerConfig,
         db: ObjectDatabase,
@@ -235,19 +245,27 @@ impl super::ScServerBuilder {
 /// The zone the clock starts in: `zone`, with each half a peer wrote that
 /// the local Device's storage keeps over it while peers may write the zone
 /// (#2395). With the opt-in off a half held is left unapplied, in storage,
-/// and named in a warning.
+/// and named in a warning. With it on, a Device without storage gets a
+/// warning that a written zone won't outlast the server (#2730).
 pub(super) fn start_zone(
     db: &mut ObjectDatabase,
     zone: ClockConfig,
     writable: bool,
 ) -> ClockConfig {
-    let written = db
+    let device = db
         .local_device()
         .identifier()
         .and_then(|device| db.get_mut(&device))
         .and_then(|device| device.device_authority_internal())
-        .map(|device| device.written_zone())
-        .unwrap_or_default();
+        .map(|device| (device.written_zone(), device.has_storage()));
+    let written = device.map(|(written, _)| written).unwrap_or_default();
+    if writable && device.is_some_and(|(_, stored)| !stored) {
+        tracing::warn!(
+            "Peers may write the Device's zone, but the Device has no storage: a written \
+             UTC_Offset or Daylight_Savings_Status lasts until the server stops \
+             (device_storage_path keeps it)"
+        );
+    }
     if written.is_empty() {
         return zone;
     }

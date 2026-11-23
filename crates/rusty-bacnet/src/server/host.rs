@@ -225,6 +225,7 @@ impl super::BACnetServer {
             time_sync_policy: server::TimeSyncPolicy::default(),
             clock_zone: server::ClockConfig::default(),
             clock_zone_writable: false,
+            device_storage: None,
             audit_notification_sink: None,
             audit_reporters: None,
             audit_recipient: std::sync::Mutex::new(None),

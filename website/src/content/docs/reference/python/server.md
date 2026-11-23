@@ -131,6 +131,7 @@ def __init__(
     utc_offset_minutes: int = 0,
     daylight_savings: bool = False,
     clock_zone_writable: bool = False,
+    device_storage_path: Optional[str] = None,
     share_port_by_address: bool = False,
     share_wildcard_port: bool = False,
     segmentation_supported: Segmentation = Segmentation.SEGMENTED_BOTH,
@@ -227,9 +228,27 @@ WritePropertyMultiple of either moves the clock as
 `set_clock_zone` does, and an Audit Reporter monitoring the Device
 reports it like any write. UTC\_Offset takes a multiple of 15 within
 -1440..=1440 (else VALUE\_OUT\_OF\_RANGE), Daylight\_Savings\_Status a
-BOOLEAN. The Device has no storage here, so a written zone lasts
-until `set_clock_zone`, which is newer, or `stop()`; the next
-`start()` uses the constructor's zone.
+BOOLEAN. Without `device_storage_path` a written zone lasts until
+`set_clock_zone`, which is newer, or `stop()`; the next
+`start()` uses the constructor's zone. With it, the written half
+is kept and wins over the constructor's zone at the next start.
+
+`device_storage_path` (keyword-only, default None): the file in
+which the Device keeps what peers write to it (#2730): a written
+Description, and with `clock_zone_writable` a written UTC\_Offset
+and Daylight\_Savings\_Status. Each such write is saved before it is
+answered, and the next server started on the same path serves it
+again. Without it the writes are answered and served until
+`stop()`, then lost. The Device has no Tags row. A relative path
+is resolved against the current directory here. A missing file or
+directory starts with nothing kept; `start()` raises BacnetError,
+naming the path, for a file it can't read or load (damaged, from a
+newer release, or another Device's, which names both Devices: remove
+or move it, or give each instance its own path), and leaves the file
+alone. A write whose save fails is refused with DEVICE /
+OPERATIONAL\_PROBLEM. One server at a time per path; an empty path
+raises BacnetError, as an object's `storage_path` does. The full
+rules are in docs/rust-api.md, "The Device's storage".
 
 `bbmd` / `foreign_device` (at most one, else ValueError): run
 the device as a BBMD (B/IP only), or register it with a BBMD on
@@ -2783,7 +2802,10 @@ recipient windows and new timestamps follow at their next look at
 the clock; timestamps already recorded stay. A request sees the old
 pair or the new, never one of each. Both properties stay read-only
 to a peer unless the constructor's `clock_zone_writable` is True;
-a peer's write then moves the clock the same way.
+a peer's write then moves the clock the same way. With
+`device_storage_path` too, this change, newer, drops a half a peer
+wrote from the file first; a save that fails raises and changes
+nothing.
 
 An offset outside that range or off the 15-minute grid raises
 ValueError when called, and an int past 16 bits OverflowError;

@@ -82,6 +82,12 @@ impl DeviceAuthority<'_> {
     pub fn written_zone(&self) -> crate::object_profile::WrittenZone {
         self.0.written_zone()
     }
+    /// Whether the Device was built with storage
+    /// ([`with_tags_persistence`](DeviceObject::with_tags_persistence)),
+    /// which keeps what a peer writes to it across a restart (#2730).
+    pub fn has_storage(&self) -> bool {
+        self.0.profile.has_storage()
+    }
     /// Stage the drop of the kept zone halves for the host's own zone
     /// change (#2395), to save off the database guard.
     #[cfg(all(feature = "zone-writes", feature = "durable-writes"))]

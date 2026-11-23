@@ -4257,8 +4257,24 @@ server = BACnetServer(
     utc_offset_minutes=0,        # keyword-only; the Device's UTC_Offset at start, minutes west of UTC
     daylight_savings=False,      # keyword-only; its Daylight_Savings_Status at start; see set_clock_zone
     clock_zone_writable=False,   # keyword-only; let peers write UTC_Offset and Daylight_Savings_Status
+    device_storage_path=None,    # keyword-only; the file that keeps what peers write to the Device
 )
 ```
+
+`device_storage_path` (a `str`) is the file in which the Device keeps what a
+peer writes to it (#2730): a written Description and, with
+`clock_zone_writable`, a written UTC_Offset and Daylight_Savings_Status. Each
+such write is saved before it is answered, and the next server started on
+the same path serves it again. Without it the writes are answered and served
+until `stop()`, then lost. A relative path is resolved against the current
+directory at construction. A file `start()` can't read or load raises
+`BacnetError` before the registrations are taken, naming the path (another
+Device's file names both Devices: remove or move it, or give each instance
+its own path), and a write whose save fails is refused with DEVICE /
+OPERATIONAL_PROBLEM. An empty path raises `BacnetError` at construction, as
+an object's `storage_path` does. `BipEndpoint`, `ScEndpoint` and
+`MstpEndpoint` take the same keyword. [The Device's
+storage](rust-api.md#the-devices-storage-2730) has the full rules.
 
 `segmentation_supported` accepts `Segmentation.NO_SEGMENTATION`, `SEGMENTED_TRANSMIT`, `SEGMENTED_RECEIVE` or
 `SEGMENTED_BOTH`, the default, as for the Rust server and the endpoints (#2617);
@@ -6808,10 +6824,12 @@ await server.set_clock_zone(300, True)
   WritePropertyMultiple of either then moves the clock the same way, and an
   Audit Reporter monitoring the Device reports it. UTC_Offset takes a
   multiple of 15 within -1440 to 1440, else VALUE_OUT_OF_RANGE, and
-  Daylight_Savings_Status a BOOLEAN. The Python server's Device has no
-  storage, so a written zone lasts until this method, which is newer,
-  changes it, or until `stop()`; the next `start()` begins in the
-  constructor's zone.
+  Daylight_Savings_Status a BOOLEAN. Without `device_storage_path` a
+  written zone lasts until this method, which is newer, changes it, or
+  until `stop()`; the next `start()` begins in the constructor's zone. With
+  it, the written half is kept and wins over the constructor's zone at the
+  next start, until this method, newer, drops it from the file (a save that
+  fails raises and changes nothing).
 
 An offset outside that range or off the 15-minute grid raises `ValueError`
 when the method is called, and an int that doesn't fit 16 bits
@@ -6993,10 +7011,10 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `recipient_list_unavailable` | Transitions sent nowhere because reading the class's Recipient_List failed |
 | `recipient_list_invalid` | Transitions sent nowhere because the Recipient_List did not decode as a whole (no decodable prefix is used) |
 | `recipient_list_too_long` | Transitions sent nowhere because a custom class served more than 32 destinations |
-| `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired, and a targeted Who-Is drew no I-Am within the APDU timeout, each notification that waited for it counted once (or none could go out, within a minute of one that drew nothing); also a confirmed notification ended at an attempt because the observed binding had expired by then |
+| `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired, and a targeted Who-Is drew no I-Am within the APDU timeout, each notification that waited for it counted once (or none could go out, within a minute of one that drew nothing); also a confirmed notification ended at a retry because the observed binding had expired by then (one that waited for its invoke ID reads the binding again first, and is looked for if it lapsed, #2569) |
 | `recipient_unroutable` | Matched recipients skipped because they can't be routed as written: a Device identifier that isn't a Device (or a binding unusable on this link), or a MAC on network 65535 |
 | `confirmed_broadcast_recipient` | Matched recipients skipped because they ask for confirmed notifications at a broadcast address, or another group address such as a multicast one, which only unconfirmed requests may use (Clause 6.3); also an address or Device binding on another network at a broadcast or group form there, such as `5:0xFF` or six octets starting `FF:FF:FF:FF` (#2732) |
-| `confirmed_waited_for_invoke_id` | Confirmed notifications that found every invoke ID in use and waited for one, once each; none is dropped for want of an ID, and only its destination's lane waits (#2537) |
+| `confirmed_waited_for_invoke_id` | Confirmed notifications that found every invoke ID in use and waited for one, or found others already waiting and queued behind them even with an ID free, once each; none is dropped for want of an ID, only its destination's lane waits (#2537), and the waiters get IDs in the order they began to wait (#2563) |
 | `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
 | `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |
 | `unconfirmed_send_failed` | Unconfirmed notifications the transport refused to send, once per destination; the other destinations are still served |
@@ -7815,6 +7833,10 @@ async with endpoint:
 - **The other server keywords.** `cov_policy` is read as `BACnetServer`'s;
   `on_reinitialize`, `after_reinitialize` and `reinit_password` are its
   keywords of the same names (see [ReinitializeDevice](#reinitializedevice));
+  `device_storage_path` keeps what peers write to the endpoint's Device, a
+  written Description, across a restart, as `BACnetServer`'s keyword of the
+  same name does (#2730; a peer writes only under a `mutation_policy` that
+  lets it);
   `read_work_limit` is its `rpm_max_result_elements` (see
   [Endpoint Groups and the read work limit](#endpoint-groups-and-the-read-work-limit)).
   Confirmed notifications time out and retry as the endpoint's

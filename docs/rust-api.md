@@ -5459,7 +5459,9 @@ writes in the same file, with the same rules:
 - Notification Class, Notification Forwarder and Access Rights, through
   their `with_persistence`;
 - Device and the two lighting outputs (Lighting Output, Binary Lighting
-  Output), in their Tags storage, through `with_tags_persistence`;
+  Output), in their Tags storage, through `with_tags_persistence`; the
+  Device a builder or an endpoint session builds through
+  `device_storage_path` ([The Device's storage](#the-devices-storage-2730));
 - Color and Color Temperature, with Present_Value and a written default,
   through `with_output_persistence`;
 - the Audit Log, in the snapshot its `AuditLogPersistence` commits, beside
@@ -12335,8 +12337,9 @@ on the wire, refused with WRITE_ACCESS_DENIED as before.
   file back to the version without them) and applies its zone in full. A
   save that fails is returned and changes nothing, clock and storage alike.
   A peer's later write wins again. `DeviceObject::written_zone()` shows what
-  is kept. A Device without storage, the builders' own among them, keeps a
-  written zone until the server stops or the host changes it.
+  is kept. A Device without storage keeps a written zone until the server
+  stops or the host changes it; the builders give theirs storage with
+  `device_storage_path` ([The Device's storage](#the-devices-storage-2730)).
 - With the opt-in off a half the file holds is left there and not applied:
   the configured zone runs, the server logs a warning at start naming the
   half, and later saves of Tags or a Description keep it, so the file keeps
@@ -12357,6 +12360,73 @@ on the wire, refused with WRITE_ACCESS_DENIED as before.
   `bacnet-device-core` (on with `std`) carries this path. A firmware image
   built without it keeps both properties read-only and leaves the path out
   of its flash; a Tags file holding a written half still loads, unapplied.
+
+### The Device's storage (#2730)
+
+The Device keeps what a peer writes to it in the storage it is built with:
+a written Description (#2364) and, with `clock_zone_writable`, a written
+UTC_Offset and Daylight_Savings_Status (#2395). With storage, each such
+write is saved before it is answered, and the next server built on the same
+storage serves it again. **Without storage, the write is still answered and
+served, but only until the server stops**: the next start serves what the
+Device was configured with (maintainer decision, 2026-11-23). This section
+is where the docs state that; the rest point here. A server whose peers may
+write the zone (`clock_zone_writable`) and whose Device has no storage logs
+one warning at start saying a written zone lasts until the server stops.
+
+A Device gets its storage in one of these ways:
+
+- one the application builds: `DeviceObject::with_tags_persistence(config,
+  storage)` with any `TagsPersistence` (`FileTagsPersistence` for a file),
+  in the database it gives the server. Only such a Device can have a Tags
+  row (`set_profile`), whose writes the storage keeps too;
+- the one a server builder builds from its identity when given no
+  database: `device_storage_path(path)` on `generic_builder()`,
+  `bip_builder()` and `sc_builder()` (`ServerConfig::device_storage_path`).
+  It has no Tags row, so a peer's Tags write is refused with
+  UNKNOWN_PROPERTY either way;
+- the one an endpoint session builds: `EndpointSession::with_device_storage_path`,
+  or `device_storage_path` on the B/IP, SC and MS/TP endpoint builders. The
+  session's server builder takes no path of its own, and a peer writes only
+  through a server whose policy lets it: the read-only server lets none;
+- in Python, the `device_storage_path` keyword of `BACnetServer`,
+  `BipEndpoint`, `ScEndpoint` and `MstpEndpoint`;
+- `bacnet_objects::device_identity::build_database_with_tags_persistence`
+  builds the stock database around a Device on given storage, as
+  `build_database_with_extra` builds it without.
+
+A relative path is resolved against the current directory when the builder,
+the session or the Python constructor is given it, so a later change of
+directory doesn't move the saves. A path is refused where nothing builds a
+Device a server serves from it: beside a `database` the builder or session
+was given (that Device brings its own storage), in the `ServerConfig`
+passed to `BACnetServer::start`, on a `SessionRole::ClientOnly` session,
+which runs no server, and by an endpoint builder's `build_transport`. An
+empty path fails the build (in Python, the constructor raises
+`BacnetError`, as an object's `storage_path` does).
+
+The file is a `FileTagsPersistence` (`RBNTAG01` to `RBNTAG03`; see
+[Persisted snapshot formats](#persisted-snapshot-formats-2047)):
+
+- A missing file, or missing directories, starts the Device with nothing
+  kept; the first save creates them.
+- Each save writes `<path>.tmp`, synchronizes it and renames it over the
+  file, so a failed save leaves the previous file whole.
+- A file that can't be read, is damaged, was saved for another Device or by
+  a newer release fails the build (in Python, `start()` raises
+  `BacnetError` before it takes the registrations), with an error that
+  names the path and the reason. The file is left as it is.
+  `FileTagsPersistence` names its path in every error it returns.
+- A file saved for another Device, as when the Device instance changes and
+  the path stays, is refused naming the Device it belongs to and the one
+  starting. To go on, remove or move the file (what it kept is lost to the
+  new Device), or give each Device instance a path of its own.
+- A peer's write whose save fails is refused with DEVICE /
+  OPERATIONAL_PROBLEM, and the value served before stays. The failed save
+  is also logged as a warning ("Failed to save object Tags") whose error
+  names the path. A host's `set_clock_zone` or `clear_written_description`
+  whose save fails returns the error and changes nothing.
+- Nothing coordinates two servers on one path: give each its own.
 
 ### Confirmed notifications under DeviceCommunicationControl
 
@@ -12618,7 +12688,20 @@ task per destination, so one destination's notifications go out in commit
 order whichever task committed them, and a destination that stalls holds up
 only its own lane (#2537). A confirmed one holds its lane until its first
 attempt is handed off, and, with every invoke ID in use, until one comes back,
-counted once in `confirmed_waited_for_invoke_id`. A Device recipient the
+counted once in `confirmed_waited_for_invoke_id`. The lanes waiting for an
+ID get one in the order they began to wait, one arriving while others wait
+queuing behind them, and counted, even with an ID free (#2563). Other work
+of the server that doesn't wait (a COV report, an Audit record, a run's
+request) may take a freed ID first, but once it has, the next free ID is
+kept for the oldest waiter: until that waiter takes it, a Command or Channel
+run's request fails, an Audit record is dropped or kept for a retry, and a
+COV report is owed a look, as when no ID is free. A known limit, tracked on
+#2617: a node's client role leases from the node's pool apart from this
+order, so while that pool is full a client that keeps leasing can take each
+freed ID ahead of the waiters. A Device recipient's
+binding is read again once its ID comes: a binding refreshed meanwhile still
+takes the notification, and one that lapsed or moved is looked for as at a
+first send, the ID given back while it is (#2569). A Device recipient the
 server holds no binding for holds its lane the same way while its device is
 looked for (below). `lane_full`, `lanes_entries_full` and `lanes_full` count
 notifications dropped, the newest, at 64 entries waiting behind the one a
@@ -12626,7 +12709,10 @@ destination's lane is sending, 1,024 across the lanes and 256 destinations.
 A change's COV notifications wait for its event notifications to be handed
 off (#889) for at most the APDU timeout (`cov_retry_timeout_ms`), a wait for
 a Device recipient's I-Am included; `cov_wait_expired` counts the changes for
-which they went out at that limit instead. The intrinsic-reporting sweep
+which they went out at that limit instead. Staging plans due at start-up are
+written before `start()` returns, but their notifications, and the COV fanout
+that waits for them, go on afterwards, so `start()` never waits for a
+recipient, a silent device included (#2573). The intrinsic-reporting sweep
 doesn't wait itself: each pass's COV fanout goes in sweep order, within the
 APDU timeout of that pass's commit. A sweep's COV report carries the object's
 state when it goes. When a pass's notifications go in time, an object that a
@@ -12663,9 +12749,9 @@ fixes them, and the warning logged with each skip gives the finer reason:
   counts here once; one that can't be looked for within the minute after a
   fruitless Who-Is counts here at once. Observing the device's I-Am again,
   or configuring a binding, clears it. A confirmed notification whose
-  observed binding expires before an attempt (a retry, or a first one that
-  waited for its invoke ID) ends there, its invoke ID freed, and counts here,
-  not in `confirmed_unanswered` (#1371).
+  observed binding expires before a retry ends there, its invoke ID freed,
+  and counts here, not in `confirmed_unanswered` (#1371); one whose binding
+  lapsed while it waited for its invoke ID is looked for first (#2569).
 - `recipient_unroutable`: the entry can't be routed as written. Its Device
   identifier names an object that isn't a Device (or its binding is unusable on
   this link), or its address puts a MAC on network 65535.
@@ -14228,7 +14314,9 @@ builder's settings as given (policies, budgets, handlers, COV policy, device
 bindings, clock zone). The session owns it: `server()` borrows it while the
 session runs, and is `None` before start, after stop and for a session
 without a server role. The session hands it its database (`with_database`,
-or a stock one built from the identity). The session must have a
+or a stock one built from the identity, whose Device keeps what peers write
+to it in the file `with_device_storage_path` names; see [The Device's
+storage](#the-devices-storage-2730)). The session must have a
 `DeviceIdentity`: the node is one device on its address, with one set of
 device settings, and a server role without one is refused at start.
 
@@ -14390,8 +14478,9 @@ session.stop().await?; // stops the server, then the link
   correct and start again: `with_server` on a session with no server role (a
   full client there answers every request itself); a server role without a
   Device identity; a builder with a transport, a database
-  (give it to the session) or a `registered_network_port` (name it on the
-  session); a builder identity, `cov_retry_timeout_ms` or
+  (give it to the session), a `registered_network_port` or a
+  `device_storage_path` (name either on the session); a Device storage path
+  beside the session's own database; a builder identity, `cov_retry_timeout_ms` or
   `notification_retries`, or a database Device's largest APDU or APDU timing,
   that differs from the node's (a Device that declares the object model's
   default timing is given the node's); a builder setting a server's start

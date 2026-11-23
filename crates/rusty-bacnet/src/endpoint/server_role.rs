@@ -39,6 +39,9 @@ pub(crate) struct ServerKeywords {
     time_sync: TimeSyncPolicy,
     /// `on_reinitialize`, `after_reinitialize` and `reinit_password`.
     reinitialize: EndpointReinitialize,
+    /// `device_storage_path`: the file the Device keeps what peers write to
+    /// it in (#2730), opened at construction.
+    device_storage: Option<bacnet_objects::object_profile::FileTagsPersistence>,
 }
 
 impl ServerKeywords {
@@ -73,7 +76,23 @@ impl ServerKeywords {
                 },
             },
             reinitialize,
+            device_storage: None,
         })
+    }
+
+    /// These keywords with `device_storage_path` (#2730), read as
+    /// `BACnetServer`'s keyword of the same name is.
+    pub(crate) fn with_device_storage_path(mut self, path: Option<String>) -> PyResult<Self> {
+        self.device_storage = crate::object_options::device_storage(path)?;
+        Ok(self)
+    }
+
+    /// The file the Device each start builds keeps what peers write to it
+    /// in, if any.
+    pub(crate) fn device_storage(
+        &self,
+    ) -> Option<&bacnet_objects::object_profile::FileTagsPersistence> {
+        self.device_storage.as_ref()
     }
 
     /// Whether the server's policy decides every mutation, as the session
