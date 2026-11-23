@@ -451,3 +451,83 @@ fn unsupported_transport_display_names_both_data_links() {
         "operation requires BACnet/IP; this transport is MS/TP"
     );
 }
+
+/// A network reject names the router in its link's own address form, the
+/// network, and the reason by name beside its number; a reason the
+/// standard doesn't name by its number alone (#2724).
+#[test]
+fn network_reject_display_names_router_network_and_reason() {
+    use bacnet_npdu::{Mac, RejectMessageReason as R};
+    let bip = Mac::from_array([192, 168, 1, 20, 0xBA, 0xC0]);
+    let cases = [
+        (
+            bip,
+            Some(DataLink::Bip),
+            R::NOT_DIRECTLY_CONNECTED,
+            "Reject-Message-To-Network from router 192.168.1.20:47808: no route to network 7 \
+             (not-directly-connected, reason 1)",
+        ),
+        // A loopback or unnamed link writes six octets as B/IP does.
+        (
+            bip,
+            None,
+            R::ADDRESSING_ERROR,
+            "Reject-Message-To-Network from router 192.168.1.20:47808: an address length it \
+             found invalid, for network 7 (addressing-error, reason 6)",
+        ),
+        (
+            bip,
+            Some(DataLink::Sc),
+            R::OTHER,
+            "Reject-Message-To-Network from router c0:a8:01:14:ba:c0: the message for network 7 \
+             was refused (other, reason 0)",
+        ),
+        (
+            Mac::from_array([5]),
+            Some(DataLink::Mstp),
+            R::from_raw(5),
+            "Reject-Message-To-Network from router mstp:5: a security refusal for network 7 \
+             (reason 5)",
+        ),
+        (
+            Mac::from_array([0x00, 0x04, 0xD2]),
+            Some(DataLink::Bip6),
+            R::ROUTER_BUSY,
+            "Reject-Message-To-Network from router bip6:0x0004D2: busy for network 7 \
+             (router-busy, reason 2)",
+        ),
+        (
+            Mac::from_array([0x00, 0x04, 0xD2]),
+            Some(DataLink::Bip),
+            R::from_raw(200),
+            "Reject-Message-To-Network from router 00:04:d2: the message for network 7 was \
+             refused (reason 200)",
+        ),
+    ];
+    for (router, link, reason, text) in cases {
+        let reject = NetworkReject::new(router, link, 7, reason);
+        assert_eq!(Error::NetworkRejected(reject).to_string(), text);
+        assert_eq!(reject.to_string(), text);
+    }
+}
+
+/// Each reason's COMMUNICATION code, as an audit record's Result carries it.
+#[test]
+fn network_reject_error_codes_follow_the_reason() {
+    use bacnet_npdu::{Mac, RejectMessageReason as R};
+    let code = |reason| NetworkReject::new(Mac::from_array([1]), None, 7, reason).error_code();
+    assert_eq!(
+        code(R::NOT_DIRECTLY_CONNECTED),
+        ErrorCode::NOT_ROUTER_TO_DNET
+    );
+    assert_eq!(code(R::ROUTER_BUSY), ErrorCode::ROUTER_BUSY);
+    assert_eq!(
+        code(R::UNKNOWN_MESSAGE_TYPE),
+        ErrorCode::UNKNOWN_NETWORK_MESSAGE
+    );
+    assert_eq!(code(R::MESSAGE_TOO_LONG), ErrorCode::MESSAGE_TOO_LONG);
+    assert_eq!(code(R::from_raw(5)), ErrorCode::SECURITY_ERROR);
+    assert_eq!(code(R::ADDRESSING_ERROR), ErrorCode::ADDRESSING_ERROR);
+    assert_eq!(code(R::OTHER), ErrorCode::OTHER);
+    assert_eq!(code(R::from_raw(9)), ErrorCode::OTHER);
+}

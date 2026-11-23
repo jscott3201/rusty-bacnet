@@ -300,8 +300,8 @@ if let Error::Structured { detail, .. } = &e {
     assert_eq!(**detail, ErrorDetail::FirstFailedElementNumber(2));
 }
 
-// Other variants: Timeout, RoutedPathTooLong, RoutedPathCapacityExceeded,
-// UnsupportedTransport, Encoding, etc.
+// Other variants: Timeout, RoutedPathTooLong, NetworkRejected,
+// RoutedPathCapacityExceeded, UnsupportedTransport, Encoding, etc.
 ```
 
 `RemoteError` has three arms, one per PDU: `Error { class, code }`,
@@ -369,6 +369,17 @@ endpoint's data link cannot carry, such as a BBMD request through an
 
 `Error::RoutedPathTooLong { dnet }` identifies the destination network from a
 matching network-layer rejection; it does not claim an exact supported length.
+`Error::NetworkRejected(NetworkReject)` is a routed request the router it went
+through refused at the network layer, its reason one that ends a request at
+once (#2724): `NetworkReject` holds the router's MAC (`router`, a
+`bacnet_npdu::Mac`), the client's `link`, the `network` and the `reason` (a
+`bacnet_npdu::RejectMessageReason`). Its text names the router in the link's
+own form (`10.0.0.1:47808`, `mstp:5`, `bip6:0x0004D2`, hex on BACnet/SC), the
+network and the reason by name and number, such as "Reject-Message-To-Network
+from router mstp:2: no route to network 7 (not-directly-connected, reason
+1)"; `router()` writes the router alone and `error_code()` gives the
+COMMUNICATION code Clause 18 pairs with the reason (`NOT_ROUTER_TO_DNET` for
+reason 1), which a source audit record carries.
 `Error::RoutedPathCapacityExceeded { capacity }` reports that all bounded path
 state is protected by a held/waiting gate or configured/learned evidence, so a
 new path was rejected before transaction registration or frame emission.
@@ -9943,6 +9954,36 @@ the wrong request (#2651):
 - Network controls observed at ingress before a request becomes active are
   discarded using a monotonic ingress sequence.
 
+A reject for any other reason is tied to the active request by the same rules,
+the router and network of the path and the ingress sequence, without the size
+rules; while an answered request's frames may still draw a reject none is
+taken, since nothing says which frame it is for (#2724). What it does depends
+on its reason:
+
+| Reason | The request |
+| --- | --- |
+| 0 other, 1 no route to the network, 5 (a security refusal in earlier revisions), 6 an address length the router found invalid, and any reason 135-2020 doesn't define | ends at once as `Error::NetworkRejected`; no retry goes |
+| 2 the router is busy for the network | runs on: its retries go at the APDU timeout, the pace the router's flow control asks for |
+| 3 an unknown network message type | runs on: the reason answers a network message, never a request |
+| 4 too long | `Error::RoutedPathTooLong`, as above |
+
+A request refused after one frame frees its path at once; after several (a
+retry, or segments) the path is held for the APDU timeout times the attempt
+count, as for a reason 4. A reject changes no route: the next request to the
+network goes through the same router, the one its discovery-table row names,
+and fails at once the same way while that router has no route; once the
+router has one again, the next request goes through. A `bacnet_ops` handle
+that follows a device instance asks where the device went after one, as
+after a timeout, and an I-Am heard through another router moves the row
+there. A request by local broadcast (`Station::routed_via_local_broadcast`)
+takes no path, so no reject ends it: any router on the link may hear it, and
+one router's refusal says nothing of another's. A station that can send from
+the router's link address and names the network of a request in flight can
+end that request early, as it could with a forged Abort; it can't end a
+request through another router, to another network, or one not yet sent,
+and changes no route or limit (a request it ends after several frames holds
+its path, as a timeout would).
+
 All of this covers the client's own confirmed requests on the path. Other
 traffic to the same network sits outside it, as before: the client's
 unconfirmed requests, the replies and notifications of a node's server
@@ -12735,8 +12776,10 @@ Every call fails with `OpsError` (`#[non_exhaustive]`): `Parse { what,
 input, reason }` for text that names nothing this client can address,
 `UnknownDevice { target }` (also a B/IPv6 node that doesn't say its VMAC),
 `Ambiguous { instance, candidates }` (the addresses as `DeviceAddress`),
-`Unreachable { device, source }` for a timeout or a link failure (a
-transaction state machine's TSM_TIMEOUT abort included), `Refused { device,
+`Unreachable { device, source }` for a timeout, a link failure (a
+transaction state machine's TSM_TIMEOUT abort included) or a router's
+network reject (`Error::NetworkRejected`, after which a following `Device`
+looks for its device again as after a timeout), `Refused { device,
 error, detail }` for the device's Error, Reject or Abort (`detail` holds a
 structured Error PDU's extra fields), `Paging(PagingFault)` for a device
 that breaks a paged read's rules (a GetEventInformation answer naming an
@@ -13320,6 +13363,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Structured { class, code, detail }` | Remote error whose Clause 21 body adds fields (ChangeList-Error, CreateObject-Error, WritePropertyMultiple-Error and others): `detail` is the boxed `ErrorDetail` |
 | `Error::Timeout(duration)` | APDU retry exhausted |
 | `Error::RoutedPathTooLong { dnet }` | Router rejected the active message as too long for DNET |
+| `Error::NetworkRejected(NetworkReject)` | The router a routed request went through refused it, sending back a Reject-Message-To-Network (no route, an addressing error, other); names the router in the link's form, the network and the reason |
 | `Error::RoutedPathCapacityExceeded { capacity }` | No routed-path entry can be allocated without discarding protected safety state |
 | `Error::UnsupportedTransport { required, actual }` | The client's data link cannot carry the operation (a BBMD helper on a non-B/IP transport) |
 | `Error::Decoding(DecodeError)` | Malformed received data, with its offset and `DecodingKind` |

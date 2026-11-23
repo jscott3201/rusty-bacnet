@@ -1,6 +1,8 @@
 use super::*;
+use crate::tsm::CompletionOutcome;
 use bacnet_encoding::npdu::Npdu;
 use bacnet_network::layer::ReceivedNetworkControl;
+use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bytes::Bytes;
@@ -96,11 +98,11 @@ async fn claimed_control_cannot_complete_reused_invoke_id_for_new_owner() {
         ConfirmedServiceChoice::READ_PROPERTY,
     );
     assert_eq!(
-        tsm.complete_network_path_too_long_for_owner(
+        tsm.complete_network_refusal_for_owner(
             &claimed.tsm_mac,
             claimed.invoke_id,
             &claimed.owner,
-            100,
+            TsmResponse::NetworkPathTooLong { dnet: 100 },
         ),
         CompletionOutcome::NoTransaction
     );
@@ -360,7 +362,7 @@ async fn control_queued_before_activation_cannot_claim_the_new_generation() {
     assert!(limits.authorize_attempt(target, &tsm_mac, 9, &registration.owner, 300));
 
     limits
-        .handle_network_control(&tsm, reason_4_control(&router, 100, 5))
+        .handle_network_control(&tsm, reason_4_control(&router, 100, 5), None)
         .await;
     assert!(
         tsm.lock()
@@ -369,7 +371,7 @@ async fn control_queued_before_activation_cannot_claim_the_new_generation() {
     assert!(registration.response.try_recv().is_err());
 
     limits
-        .handle_network_control(&tsm, reason_4_control(&router, 100, 6))
+        .handle_network_control(&tsm, reason_4_control(&router, 100, 6), None)
         .await;
     assert!(matches!(
         registration.response.await.unwrap(),

@@ -651,8 +651,9 @@ other. A request from network 5 for one device on network 7 draws the router's
 Reject-Message-To-Network, reason 1, naming network 7 (Clause 6.6.3.5): the
 same answer a router with no route gives. A client sees it as a
 `reject_message_to_network` report from `network_reports()`, and its request
-ends unanswered, as a `BacnetAbortError` with reason `TSM_TIMEOUT`. A
-broadcast is dropped without an answer.
+fails at once with `BacnetNetworkRejectError` (#2724): `reason` 1, `network`
+7 and `router`, the router's address. A broadcast is dropped without an
+answer.
 
 Isolation limits transit between isolated ports, by design. It is no trust
 level for a port and no access control: a Reject-Message-To-Network or a
@@ -7083,7 +7084,7 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetLogNotAdvancingError` | A paged log read can't advance: the device answered from before the record asked for, or with none its counts say it holds. `requested` and `returned` (`None` when it sent none) name the sequence numbers |
 | `BacnetBvlcNakError` | A BBMD refused a management request (`read_bdt` and its siblings) with a BVLC-Result NAK; `result_code` holds its code |
 | `BacnetBvlcUnexpectedResponseError` | A management request was answered by a BVLC message it doesn't take; `expected` and `got` hold the function codes |
-| `BacnetNetworkRejectError` | A router answered `routing_table()` with a Reject-Message-To-Network; `reason` holds its reason octet and `network` the network it named. Silence is `BacnetTimeoutError` |
+| `BacnetNetworkRejectError` | A router sent back a Reject-Message-To-Network refusing a routed request (#2724), for reason 1 (no route to the network), 6 (an address length it found invalid), 0 (other), 5 or one the standard doesn't define, or a `routing_table()` query. `reason` holds the reason octet, `network` the network it named and `router` the router's address in the link's form (`"10.0.0.1:47808"`, `"mstp:5"`; `None` for `routing_table()`). Nothing reached the device. A busy router (reason 2) leaves a request to its retries. Silence is `BacnetTimeoutError` |
 | `BacnetLookupError` | No device could be placed for the name a call gave: no address claims the instance and none answered a Who-Is for it, or no router is known for a routed address's network. Also a `LookupError`. `target` is the name as given, `instance` the instance it holds (None for an address) and `candidates` empty. The typed `_from_device` calls raise it for an instance the table doesn't hold |
 | `BacnetPagingError` | A device broke a rule of a paged read (it named an object twice, or said more remain with no new object); `service` and `object_id` say where. No call pages yet |
 | `BacnetAmbiguousDeviceError` | A `BacnetLookupError`. A call named a device by instance and two or more addresses claim it; nothing was sent. `instance` is the instance and `candidates` lists each claimant as `(network, mac)`, network 0 the local one |

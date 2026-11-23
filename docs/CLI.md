@@ -237,6 +237,23 @@ fewer. When the command timed out after such a reject, `hint` (a `Hint:` line
 in a table) names the flag to set for each path that drew one; otherwise it is
 `null`.
 
+<a id="network-rejects"></a>**Network rejects.** A router that won't pass a
+request on toward its network for another reason ends the command at once,
+with no retry, and the error names the router in the link's own form, the
+network and the reason by name and number (#2724):
+
+```text
+Reject-Message-To-Network from router 192.168.1.20:47808: no route to network 5 (not-directly-connected, reason 1)
+```
+
+That is reason 1 (no route), 6 (an address length the router found invalid),
+0 (other), 5, or a reason the standard doesn't define. A busy router (reason
+2) leaves the request to its retries, which then time out as usual if it
+stays busy. The TUI's browser shows the same text under a failed read, and
+MCP's reads return it as a `network-reject` error. Nothing reached the
+device, and the next request to that network goes through the same router
+again.
+
 **B/IPv6 targets are VMACs.** A B/IPv6 node is addressed by its 3-octet VMAC,
 not its IPv6 address (Clause U.1.3), and a device's VMAC is its device instance
 (Clause H.7.2), so `bip6:1234` reaches device 1234 without discovery. The CLI

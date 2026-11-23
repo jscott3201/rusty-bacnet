@@ -26,9 +26,11 @@ use crate::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
 
 mod decode;
 mod encode;
+mod network_reject;
 mod remote;
 pub use decode::{DecodeError, DecodingKind, RangeError};
 pub use encode::{EncodeError, SegmentationError};
+pub use network_reject::NetworkReject;
 #[cfg(feature = "alloc")]
 use remote::ProtocolText;
 pub use remote::RemoteError;
@@ -165,6 +167,18 @@ pub enum Error {
         /// Destination network rejected by the router.
         dnet: u16,
     },
+
+    /// A router the request went through refused it at the network layer
+    /// by sending back a Reject-Message-To-Network (Clause 6.4.4), so no device
+    /// answered (#2724). The client ends a routed confirmed request this
+    /// way at once for reason 1 (no route to the network), 6 (an address
+    /// length the router found invalid), 0 (other), 5 (a security refusal
+    /// in earlier revisions) and any reason the standard doesn't define.
+    /// A busy router (reason 2) leaves the request to its retries, reason 3
+    /// answers a network message and never a request, and reason 4 is
+    /// [`Error::RoutedPathTooLong`].
+    #[error("{0}")]
+    NetworkRejected(NetworkReject),
 
     /// The client cannot safely allocate state for another routed path.
     #[error("routed path state capacity of {capacity} entries is exhausted")]

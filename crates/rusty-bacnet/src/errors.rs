@@ -186,6 +186,20 @@ pub fn to_py_err(err: Error) -> PyErr {
                 .collect();
             lookup_error(err.to_string(), Lookup::ambiguous(instance, candidates))
         }
+        // A router on the way refused a routed request at the network
+        // layer (#2724): its reason octet, the network it named and the
+        // router in the link's own address form.
+        Error::NetworkRejected(reject) => {
+            let py_err = BacnetNetworkRejectError::new_err(reject.to_string());
+            let _ = crate::py_async::attach(|py| {
+                let value = py_err.value(py);
+                let _ = value.setattr("reason", reject.reason.to_raw());
+                let _ = value.setattr("network", reject.network);
+                let _ = value.setattr("router", reject.router().to_string());
+                Ok(())
+            });
+            py_err
+        }
         // No row for the device a request named (#2561).
         Error::UnknownDevice { ref device } => {
             lookup_error(err.to_string(), Lookup::unknown(device.clone()))
@@ -237,8 +251,9 @@ pub(crate) fn bvlc_exchange_err(err: BvlcExchangeError) -> PyErr {
 
 /// What `routing_table()` raises: silence is `BacnetTimeoutError`, a router's
 /// Reject-Message-To-Network is `BacnetNetworkRejectError` with its `reason`
-/// octet and `network`, and a failure to send is what [`to_py_err`] makes of
-/// it. A refusal and silence never share a class (#2612).
+/// octet and `network` (its `router` stays `None`), and a failure to send is
+/// what [`to_py_err`] makes of it. A refusal and silence never share a class
+/// (#2612).
 pub(crate) fn routing_table_err(err: bacnet_client::client::RoutingTableError) -> PyErr {
     use bacnet_client::client::RoutingTableError;
     match err {
@@ -471,6 +486,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let network_reject = m.py().get_type::<BacnetNetworkRejectError>();
     network_reject.setattr("reason", m.py().None())?;
     network_reject.setattr("network", m.py().None())?;
+    network_reject.setattr("router", m.py().None())?;
     m.add("BacnetNetworkRejectError", network_reject)?;
     lookup::register(m)
 }

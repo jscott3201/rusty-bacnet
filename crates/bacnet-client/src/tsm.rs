@@ -78,6 +78,9 @@ pub enum TsmResponse {
         /// Destination network named by the network-layer rejection.
         dnet: u16,
     },
+    /// The router the request went through refused it at the network
+    /// layer for another reason that ends a request at once (#2724).
+    NetworkRejected(bacnet_types::error::NetworkReject),
 }
 
 impl TsmResponse {

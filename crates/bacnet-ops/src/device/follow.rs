@@ -139,11 +139,11 @@ impl<T: TransportPort + 'static> Device<T> {
     }
 
     /// Where to send a request once more after `result` at `at`: for a
-    /// following handle whose request timed out, or found no route to a
-    /// routed address its row has left (nothing was sent then), where its
-    /// instance went ([`Client::relocate`]); `None` to keep `result`. A
-    /// local transport failure says nothing of the device, and a pinned
-    /// handle never moves.
+    /// following handle whose request timed out or was refused by a router
+    /// on the way (#2724), or found no route to a routed address its row
+    /// has left (nothing was sent then), where its instance went
+    /// ([`Client::relocate`]); `None` to keep `result`. A local transport
+    /// failure says nothing of the device, and a pinned handle never moves.
     ///
     /// # Errors
     ///
@@ -161,10 +161,13 @@ impl<T: TransportPort + 'static> Device<T> {
         else {
             return Ok(None);
         };
-        // A timeout may ask where the device went; no route goes by the
-        // discovery table alone.
+        // A timeout, or a router that won't pass the request on, may ask
+        // where the device went: an I-Am heard through another router moves
+        // its row there. No route goes by the discovery table alone.
         let wait = match result {
-            Err(error) if timed_out(error) => self.client.resolve_wait(),
+            Err(error) if timed_out(error) || matches!(error, Error::NetworkRejected(_)) => {
+                self.client.resolve_wait()
+            }
             Err(Error::UnknownDevice { .. }) => None,
             _ => return Ok(None),
         };

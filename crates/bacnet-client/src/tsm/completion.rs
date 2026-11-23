@@ -54,19 +54,21 @@ impl Tsm {
         )
     }
 
-    pub(crate) fn complete_network_path_too_long_for_owner(
+    /// End the transaction with a router's refusal: `response` is
+    /// [`TsmResponse::NetworkPathTooLong`] or [`TsmResponse::NetworkRejected`].
+    pub(crate) fn complete_network_refusal_for_owner(
         &mut self,
         source_mac: &[u8],
         invoke_id: u8,
         owner: &TransactionOwner,
-        dnet: u16,
+        response: TsmResponse,
     ) -> CompletionOutcome {
         self.complete_transaction_inner(
             source_mac,
             invoke_id,
             Some(owner),
             None,
-            TsmResponse::NetworkPathTooLong { dnet },
+            response,
             PendingRelease::Complete,
         )
     }

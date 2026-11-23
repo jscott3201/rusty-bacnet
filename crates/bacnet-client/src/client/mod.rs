@@ -248,6 +248,7 @@ pub(crate) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, 
         } => Err(Error::with_detail(class, code, detail)),
         TsmResponse::Remote { error, .. } => Err(Error::Remote(error)),
         TsmResponse::NetworkPathTooLong { dnet } => Err(Error::RoutedPathTooLong { dnet }),
+        TsmResponse::NetworkRejected(reject) => Err(Error::NetworkRejected(reject)),
     }
 }
 

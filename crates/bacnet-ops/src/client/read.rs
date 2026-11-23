@@ -122,13 +122,15 @@ pub fn rpm_failure(error: &Error) -> RpmFailure {
 }
 
 /// True when `error`, a low-level client's error such as a [`Halt`]
-/// holds, says the device, or the way to it, isn't answering: a timeout or
-/// a transport failure. Reading on would only time out again. Only a
-/// timeout makes a following handle look for its device elsewhere
+/// holds, says the device, or the way to it, isn't answering: a timeout, a
+/// transport failure, or a router on the way that refused the request at
+/// the network layer ([`Error::NetworkRejected`], #2724). Reading on would
+/// only fail the same way. A timeout or a router's refusal makes a
+/// following handle look for its device elsewhere
 /// ([`Device`](crate::Device)). The high-level calls' errors say it with
 /// [`OpsError::unreachable`](crate::OpsError::unreachable).
 pub fn unreachable(error: &Error) -> bool {
-    timed_out(error) || matches!(error, Error::Transport(_))
+    timed_out(error) || matches!(error, Error::Transport(_) | Error::NetworkRejected(_))
 }
 
 /// True when `error` is the client's or the link's own failure of a

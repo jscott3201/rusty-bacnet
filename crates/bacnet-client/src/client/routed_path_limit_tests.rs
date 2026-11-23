@@ -127,7 +127,7 @@ pub(super) async fn inject_apdu(
         .unwrap();
 }
 
-async fn inject_control(
+pub(super) async fn inject_control(
     inbound: &mpsc::Sender<ReceivedNpdu>,
     immediate_source: &[u8],
     message_type: NetworkMessageType,
