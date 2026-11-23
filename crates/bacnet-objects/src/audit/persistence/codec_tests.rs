@@ -48,6 +48,7 @@ fn snapshot() -> AuditLogSnapshot {
         total_record_count: 2,
         records: vec![status_record(1), status_record(2)],
         completed_receipts: vec![CompletedAuditReceipt::new(vec![1, 2, 3], 1_000).unwrap()],
+        description: None,
     }
 }
 

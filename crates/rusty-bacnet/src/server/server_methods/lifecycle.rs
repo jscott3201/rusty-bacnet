@@ -146,6 +146,7 @@ impl BACnetServer {
         let router = self.router.clone();
         let time_sync_policy = self.time_sync_policy.clone();
         let clock_zone = self.clock_zone;
+        let clock_zone_writable = self.clock_zone_writable;
 
         let objects: Vec<Box<dyn BACnetObject + Send>> = pending.drain(..).collect();
         // Taken under the pending lock, with the forwarders they belong to.
@@ -301,6 +302,7 @@ impl BACnetServer {
                 .cov_policy(cov_policy)
                 .time_sync_policy(time_sync_policy)
                 .clock_zone(clock_zone)
+                .clock_zone_writable(clock_zone_writable)
                 .transport(transport);
             if let Some(sink) = audit_notification_sink {
                 builder = builder.audit_notification_sink(sink.object_id);

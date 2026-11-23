@@ -163,6 +163,9 @@ pub struct BACnetServer {
     /// The zone the Device clock starts in (`utc_offset_minutes`,
     /// `daylight_savings`).
     clock_zone: server::ClockConfig,
+    /// Whether a peer may write the Device's UTC_Offset and
+    /// Daylight_Savings_Status (`clock_zone_writable`, #2395).
+    clock_zone_writable: bool,
     audit_notification_sink: Option<AuditNotificationSink>,
     audit_reporters: Option<server::AuditReportersConfig>,
     audit_recipient: std::sync::Mutex<Option<bacnet_types::constructed::BACnetRecipient>>,

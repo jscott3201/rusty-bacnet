@@ -77,6 +77,28 @@ impl DeviceAuthority<'_> {
     pub fn provision_audit_recipient(&mut self, recipient: BACnetRecipient) -> Result<(), Error> {
         self.0.provision_audit_recipient(recipient)
     }
+    /// The zone halves a peer wrote that the Device's storage keeps
+    /// (#2395), for the server to put over the zone it gives its clock.
+    pub fn written_zone(&self) -> crate::object_profile::WrittenZone {
+        self.0.written_zone()
+    }
+    /// Stage the drop of the kept zone halves for the host's own zone
+    /// change (#2395), to save off the database guard.
+    #[cfg(all(feature = "zone-writes", feature = "durable-writes"))]
+    pub fn stage_zone_reset(&mut self) -> crate::durable::StageStep {
+        self.0.profile.stage_zone_reset()
+    }
+    /// Drop the kept zone halves: take the staged save, or save in place.
+    /// A failed save keeps them and returns storage's error.
+    #[cfg(feature = "zone-writes")]
+    pub fn reset_written_zone(&mut self) -> Result<(), Error> {
+        self.0.profile.reset_written_zone()
+    }
+    /// Let go of a staged zone reset its caller no longer takes.
+    #[cfg(feature = "durable-writes")]
+    pub fn release_staged(&mut self, staged: &crate::durable::SaveWait) {
+        crate::durable::DurableWrites::release_staged_write(&mut self.0.profile, staged);
+    }
     pub fn provisioned_audit_recipient(&self) -> Option<&BACnetRecipient> {
         self.0.recipient.value.as_ref()
     }

@@ -263,6 +263,7 @@ fn audit_log_buffer_reports_unsigned64_sequence_numbers_across_wrap() {
             })
             .collect(),
         completed_receipts: Vec::new(),
+        description: None,
     };
     let persistence = Arc::new(MemoryPersistence(Mutex::new(Some(snapshot))));
     let log = AuditLogObject::new(INSTANCE, "AL-5", 4, persistence).unwrap();

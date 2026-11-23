@@ -238,6 +238,7 @@ fn saved_overrides_require_provisioning_in_every_value_mode() {
                 Some(TagsSnapshot {
                     tags: Some(vec![]),
                     description: None,
+                    zone: Default::default(),
                 }),
             ] {
                 let store = Arc::new(Memory::default());

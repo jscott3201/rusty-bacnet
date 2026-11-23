@@ -27,11 +27,18 @@ pub(in crate::server) struct MonotonicClocks {
 }
 
 /// Install wall and monotonic clocks before the database becomes shared.
+/// The wall clock starts in `clock_config`, with each zone half the local
+/// Device's storage keeps over it while `zone_writable`, and takes a peer's
+/// write of the zone when `zone_writable` (#2395).
 pub(super) fn install_database_clocks(
     db: &mut ObjectDatabase,
     clock_config: Option<ClockConfig>,
+    zone_writable: bool,
 ) -> (Option<Arc<ServerClock>>, MonotonicClocks) {
-    let clock = clock_config.map(|config| Arc::new(ServerClock::new(config)));
+    let clock = clock_config.map(|config| {
+        let config = super::clock::start_zone(db, config, zone_writable);
+        Arc::new(ServerClock::new(config).taking_zone_writes(zone_writable))
+    });
     let reader = clock
         .as_ref()
         .map(|clock| Arc::clone(clock) as Arc<dyn bacnet_objects::clock::ClockReader>);

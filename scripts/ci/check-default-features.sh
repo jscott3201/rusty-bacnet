@@ -71,7 +71,7 @@ done
 echo "==> bacnet-objects (no_std with alloc, capability features off$label)"
 cargo_for clippy -p bacnet-objects --all-targets --no-default-features --features alloc --locked -- -D warnings
 cargo_for doc -p bacnet-objects --no-default-features --features alloc --no-deps --locked --document-private-items
-for features in alloc,durable-writes alloc,event-reporting; do
+for features in alloc,durable-writes alloc,event-reporting alloc,zone-writes; do
   echo "==> bacnet-objects (no_std, features: $features$label)"
   cargo_for clippy -p bacnet-objects --all-targets --no-default-features --features "$features" --locked -- -D warnings
 done
@@ -112,6 +112,10 @@ cargo_for doc -p bacnet-device-core --no-default-features --features alloc,event
 # Its Event Enrollment pass and algorithms (#2319) with alloc, which `std`
 # turns on (with event-reporting beneath them), tests included: a doc link
 # into `event::enrollment`, or out of it, fails here.
+echo "==> bacnet-device-core (no_std with alloc and zone-writes$label)"
+cargo_for clippy -p bacnet-device-core --all-targets --no-default-features --features alloc,zone-writes --locked -- -D warnings
+cargo_for doc -p bacnet-device-core --no-default-features --features alloc,zone-writes --no-deps --locked --document-private-items
+
 echo "==> bacnet-device-core (no_std with alloc and event-enrollment$label)"
 cargo_for clippy -p bacnet-device-core --all-targets --no-default-features --features alloc,event-enrollment --locked -- -D warnings
 cargo_for doc -p bacnet-device-core --no-default-features --features alloc,event-enrollment --no-deps --locked --document-private-items

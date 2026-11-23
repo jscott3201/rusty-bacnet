@@ -254,4 +254,20 @@ pub const FORMATS: &[Format] = &[
         sample: samples::written_levels_load_control,
         kind: Kind::LoadControl,
     },
+    // The Audit Log's schema version 4, with a written Description
+    // (#2407). Last for the same reason.
+    Format {
+        name: "described_audit_log",
+        two_slot: true,
+        sample: samples::described_audit_log,
+        kind: Kind::AuditLog,
+    },
+    // The Tags format's version 3, on a Device with a written zone and
+    // Description (#2395). Last for the same reason.
+    Format {
+        name: "zoned_tags",
+        two_slot: false,
+        sample: samples::zoned_tags,
+        kind: Kind::DeviceTags,
+    },
 ];

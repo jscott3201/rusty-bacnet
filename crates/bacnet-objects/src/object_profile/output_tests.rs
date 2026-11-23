@@ -175,6 +175,7 @@ fn output_saved_overrides_need_provisioning_and_invalid_replacement_preserves_st
             Some(TagsSnapshot {
                 tags: Some(vec![]),
                 description: None,
+                zone: Default::default(),
             }),
         ] {
             let store = Arc::new(Memory::default());

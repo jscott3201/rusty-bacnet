@@ -22,6 +22,7 @@ fn write_v1_fixture(storage: &FileAuditLogPersistence, record: BACnetAuditLogRec
                 record,
             }],
             completed_receipts: vec![],
+            description: None,
         })
         .unwrap();
     let path = &storage.slot_paths()[1];

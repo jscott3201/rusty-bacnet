@@ -429,6 +429,7 @@ fn tags_step_pieces_at_the_cap() {
     let snapshot = TagsSnapshot {
         tags: Some(all.clone()),
         description: None,
+        zone: Default::default(),
     };
     let rounds = 1_000u32;
     let started = Instant::now();

@@ -103,6 +103,9 @@ enum Kind {
     NotificationClass,
     Tags,
     DescribedTags,
+    /// The Tags format on a Device, which keeps a written zone there too
+    /// (#2395).
+    DeviceTags,
     Color,
     ColorTemperature,
     AccessRights,
@@ -251,6 +254,13 @@ impl Format {
                     LightingOutputObject::with_tags_persistence(1, "LO", store).map(drop)
                 })
             }
+            Kind::DeviceTags => check_file(medium, oid(ObjectType::DEVICE), M::tags, |store| {
+                let config = bacnet_objects::device::DeviceConfig {
+                    identity: bacnet_objects::DeviceIdentity::new(1, 0)?,
+                    ..Default::default()
+                };
+                bacnet_objects::device::DeviceObject::with_tags_persistence(config, store).map(drop)
+            }),
             Kind::Color => check_file(medium, oid(ObjectType::COLOR), M::color, |store| {
                 ColorObject::new(1, "CLR")?
                     .with_output_persistence(store)

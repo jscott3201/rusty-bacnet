@@ -25,7 +25,9 @@ use bacnet_objects::notification_class::{
 use bacnet_objects::notification_forwarder::{
     FileNotificationForwarderPersistence, ForwarderSnapshot, NotificationForwarderPersistence,
 };
-use bacnet_objects::object_profile::{FileTagsPersistence, TagsPersistence, TagsSnapshot};
+use bacnet_objects::object_profile::{
+    FileTagsPersistence, TagsPersistence, TagsSnapshot, WrittenZone,
+};
 use bacnet_objects::write_config::{
     AlgorithmWriteConfig, ChannelMembers, ChannelWriteConfig, FileWriteConfigPersistence,
     ReportingWriteConfig, TimerStateChange, TimerWriteConfig, WriteConfigPersistence,
@@ -67,6 +69,16 @@ pub fn audit_log(base: &Path) {
     FileAuditLogPersistence::new(base)
         .unwrap()
         .commit(&audit_snapshot())
+        .expect("the sample commits");
+}
+
+/// An Audit Log with a written Description: schema version 4 (#2407).
+pub fn described_audit_log(base: &Path) {
+    let mut snapshot = audit_snapshot();
+    snapshot.description = Some("Lobby".into());
+    FileAuditLogPersistence::new(base)
+        .unwrap()
+        .commit(&snapshot)
         .expect("the sample commits");
 }
 
@@ -160,19 +172,38 @@ pub fn described_tags(path: &Path) {
     save_tags(path, ObjectType::LIGHTING_OUTPUT, Some("Lobby"));
 }
 
+/// A Device's Tags with a written zone and Description: `RBNTAG03`
+/// (#2395).
+pub fn zoned_tags(path: &Path) {
+    let mut snapshot = tags_snapshot(Some("Lobby"));
+    snapshot.zone = WrittenZone {
+        utc_offset: Some(-570),
+        daylight_savings_status: Some(true),
+    };
+    FileTagsPersistence::new(path)
+        .unwrap()
+        .save(oid(ObjectType::DEVICE), &snapshot)
+        .expect("the sample saves");
+}
+
 fn save_tags(path: &Path, kind: ObjectType, description: Option<&str>) {
-    let snapshot = TagsSnapshot {
+    let snapshot = tags_snapshot(description);
+    FileTagsPersistence::new(path)
+        .unwrap()
+        .save(oid(kind), &snapshot)
+        .expect("the sample saves");
+}
+
+fn tags_snapshot(description: Option<&str>) -> TagsSnapshot {
+    TagsSnapshot {
         tags: Some(vec![
             BACnetNameValue::semantic("exhaust"),
             BACnetNameValue::valued("floor", PropertyValue::Unsigned(3)),
             BACnetNameValue::valued("gain", PropertyValue::Real(0.5)),
         ]),
         description: description.map(Into::into),
-    };
-    FileTagsPersistence::new(path)
-        .unwrap()
-        .save(oid(kind), &snapshot)
-        .expect("the sample saves");
+        zone: Default::default(),
+    }
 }
 
 pub fn color(path: &Path) {
@@ -702,6 +733,7 @@ fn audit_snapshot() -> AuditLogSnapshot {
         completed_receipts: vec![
             CompletedAuditReceipt::new(vec![1, 2, 3], 1_700_000_000_000).expect("a short key"),
         ],
+        description: None,
     }
 }
 

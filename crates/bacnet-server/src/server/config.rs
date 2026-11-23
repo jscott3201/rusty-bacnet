@@ -209,6 +209,16 @@ pub struct ServerConfig {
     /// [`ObjectTypeRegistry::register`] for which types it takes and how a
     /// constructor must behave: it runs with the database write-locked.
     pub object_types: ObjectTypeRegistry,
+    /// Whether a peer may write the Device's UTC_Offset and
+    /// Daylight_Savings_Status (#2395). Off by default: both are then
+    /// read-only on the wire, as Clause 12.11 permits. On, a write moves
+    /// the Device clock as
+    /// [`set_clock_zone`](super::BACnetServer::set_clock_zone) does, and
+    /// is audited like any other write. Off, a half a peer wrote that the
+    /// Device's Tags storage still holds is left there unapplied, with a
+    /// warning at start. A clockless server has neither property, so this
+    /// changes nothing there.
+    pub clock_zone_writable: bool,
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -269,6 +279,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("cov_policy", &self.cov_policy)
             .field("request_admission_policy", &self.request_admission_policy)
             .field("object_types", &self.object_types)
+            .field("clock_zone_writable", &self.clock_zone_writable)
             .finish()
     }
 }
@@ -344,6 +355,7 @@ impl Default for ServerConfig {
             cov_policy: CovPolicy::default(),
             request_admission_policy: RequestAdmissionPolicy::default(),
             object_types: ObjectTypeRegistry::default(),
+            clock_zone_writable: false,
         }
     }
 }
