@@ -1,15 +1,18 @@
 //! Actual multiport activity belongs to the admitted native session.
 use super::application::{Application, Slots};
-use super::config::PortConfig;
+use super::config::{PortConfig, RouterSettings};
+use super::counters::Snapshot;
 use super::lifecycle::Session;
 use super::records::{PyRouterPortInfo, PyRouterRoute};
-use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, RouterStopError};
+use bacnet_network::router::{BACnetRouter, RouterPort, RouterStopError};
 use bacnet_network::router_table::Reachability;
 use bacnet_types::error::Error;
 
 pub(super) struct NativeSession {
     configs: Vec<PortConfig>,
     application: Application,
+    /// The router's own options, applied at each start (#2725).
+    settings: RouterSettings,
     pub router: Option<BACnetRouter>,
     /// The application ports this start made, until their stacks take them.
     pub slots: Slots,
@@ -21,14 +24,20 @@ impl NativeSession {
         Self {
             configs: Vec::new(),
             application: Application::None,
+            settings: RouterSettings::default(),
             router: Some(router),
             slots: Slots::default(),
         }
     }
-    pub fn new(configs: Vec<PortConfig>, application: Application) -> Self {
+    pub fn new(
+        configs: Vec<PortConfig>,
+        application: Application,
+        settings: RouterSettings,
+    ) -> Self {
         Self {
             configs,
             application,
+            settings,
             router: None,
             slots: Slots::default(),
         }
@@ -45,6 +54,10 @@ impl NativeSession {
                 mac: port.local_mac().to_vec(),
             })
             .collect()
+    }
+    /// The engine's counts and the wire-control decisions now (#2725).
+    pub fn counters(&self) -> Snapshot {
+        Snapshot::of(self.router.as_ref().unwrap())
     }
     pub fn routes(&self) -> Vec<PyRouterRoute> {
         let router = self.router.as_ref().unwrap();
@@ -80,7 +93,7 @@ impl Session for NativeSession {
                 RouterPort::new(config.transport(), config.network_number).isolated(config.isolated)
             })
             .collect();
-        let started = BACnetRouter::start(ports, RouterOptions::new()).await?;
+        let started = BACnetRouter::start(ports, self.settings.router_options()).await?;
         // The network-control receiver stays internal: none was asked for.
         let (router, slots) = Slots::split(self.application, started);
         self.router = Some(router);

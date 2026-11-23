@@ -1,6 +1,6 @@
 //! A successful startup result lost in asyncio only closes its own generation.
 use super::application::Application;
-use super::config::PortConfig;
+use super::config::{PortConfig, RouterSettings};
 use super::lifecycle::{Lifecycle, StartError};
 use super::session::NativeSession;
 use crate::py_async::{PutBack, Via};
@@ -32,11 +32,14 @@ impl Publication {
         reenter: bool,
         configs: Vec<PortConfig>,
         application: Application,
+        settings: RouterSettings,
     ) -> Result<(), StartError<bacnet_types::error::Error, bacnet_network::router::RouterStopError>>
     {
         let receipt = self
             .owner
-            .start(reenter, move || NativeSession::new(configs, application))
+            .start(reenter, move || {
+                NativeSession::new(configs, application, settings)
+            })
             .await?;
         receipt.publish(|generation| self.arm(generation));
         Ok(())

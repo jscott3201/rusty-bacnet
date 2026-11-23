@@ -14,10 +14,11 @@
 //!   one network or to all of them. The port reads the destination, the
 //!   APDU, the priority and the expecting-reply bit back out of it, and the
 //!   router's table picks the route and the next hop. The link MAC the
-//!   stack sends to plays no part, so `router_mac` arguments are ignored. An
-//!   NPDU with no DNET, which would be a local send on a link the
-//!   application lacks, and network messages, which are the router's own
-//!   business, are refused.
+//!   stack sends to plays no part, so `router_mac` arguments are ignored. A
+//!   local broadcast, with no DNET, goes to each of the router's directly
+//!   attached networks, since the application is on all of them (#2601).
+//!   A unicast with no DNET names a MAC on no one network and is refused,
+//!   and so are network messages, which are the router's own business.
 //! - **Answers** to the confirmed requests the stack received go back
 //!   through each request's saved reply plan instead
 //!   ([`application_replies`](super::application_replies)): from the
@@ -53,7 +54,7 @@ use super::application_feed::{Feed, outbound, slot};
 use super::application_replies::Plan;
 use super::application_transactions::Side;
 use super::dispatch::{Outputs, Shared};
-use super::originate::{OriginateFailure, originate};
+use super::originate::{OriginateFailure, originate, originate_attached};
 use super::{BACnetRouter, LocalApduReceiver, StartedRouter};
 
 /// Room for the network header in front of an APDU: what B/IP leaves
@@ -72,8 +73,18 @@ const NPCI_ROOM: u16 = (MAX_NPDU - 1476) as u16;
 /// A remote device is addressed by its network and MAC, as a routed device
 /// (with any MAC as the router's; the table picks the next hop), whether its
 /// network is directly attached or not. A device's reply carries its network
-/// and MAC as its source either way. The port has no local network, so a
-/// send with no DNET, such as a local broadcast, is refused with
+/// and MAC as its source either way.
+///
+/// The port has no one network of its own: it is on each of the router's
+/// networks ([`TransportPort::attached_networks`]). So a local broadcast,
+/// an NPDU with no DNET sent with [`TransportPort::send_broadcast`], goes
+/// to every one of them (#2601): once to each port's network, which the
+/// router sends there as that link's broadcast and passes no further, as
+/// a local broadcast on a one-link node reaches its own network alone.
+/// Isolated ports ([`RouterPort::isolated`](super::RouterPort::isolated))
+/// are included. A port that refuses its copy fails the send, but the
+/// other copies still go, as for a global broadcast. A unicast with no
+/// DNET, whose MAC names a station on no one network, is refused with
 /// [`Error::Encoding`], and so is a network message.
 ///
 /// The stack's answers to confirmed requests it receives, such as the
@@ -310,9 +321,10 @@ impl RouterApplicationPort {
         self
     }
 
-    /// Send the NPDU a stack above wrote: an answer through its request's
-    /// saved plan, anything else originated.
-    async fn send(&self, npdu: &[u8]) -> Result<(), Error> {
+    /// Send the NPDU a stack above wrote, as a `broadcast` or not: an answer
+    /// through its request's saved plan, a local broadcast to each attached
+    /// network, anything else originated.
+    async fn send(&self, npdu: &[u8], broadcast: bool) -> Result<(), Error> {
         if self.stopped.load(std::sync::atomic::Ordering::Acquire) {
             return Err(bacnet_transport::port::stopped());
         }
@@ -326,11 +338,15 @@ impl RouterApplicationPort {
             ));
         }
         let Some(destination) = npdu.destination else {
-            return Err(Error::Encoding(
-                "the router's application has no network of its own: address a device by \
-                 its network, or broadcast to one network or to all"
-                    .into(),
-            ));
+            if !broadcast {
+                return Err(Error::Encoding(
+                    "the router's application is on each of the router's networks, so a \
+                     link MAC alone names no one station: address the device by its network"
+                        .into(),
+                ));
+            }
+            return originate_attached(&self.outputs, &self.shared, &npdu, self.source)
+                .map_err(failure_error);
         };
         let replies = &self.feed.replies[slot(self.side)];
         match replies.plan_for(destination, npdu.payload) {
@@ -442,11 +458,18 @@ impl TransportPort for RouterApplicationPort {
     }
 
     async fn send_unicast(&self, npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        self.send(npdu).await
+        self.send(npdu, false).await
     }
 
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.send(npdu).await
+        self.send(npdu, true).await
+    }
+
+    /// The router's networks, one per port in port order, isolated ports
+    /// included: where a local broadcast goes, and where a local answer
+    /// comes from (#2601).
+    fn attached_networks(&self) -> &[u16] {
+        &self.shared.networks
     }
 
     fn local_mac(&self) -> &[u8] {
@@ -531,3 +554,7 @@ mod tests;
 #[cfg(test)]
 #[path = "application_reassembly_tests.rs"]
 mod reassembly_tests;
+
+#[cfg(test)]
+#[path = "application_local_tests.rs"]
+mod local_tests;

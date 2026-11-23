@@ -243,12 +243,15 @@ async fn discovery_projects_claims_by_canonical_station_and_instance() {
 /// The one rule for which answers a scope covers, a Who-Is's and a
 /// Who-Has's alike: a network named by this client's own number takes the
 /// local stations; a local scope takes no routed station, and takes one
-/// reported with the client's own network number, which is local.
+/// reported with the client's own network number, which is local. On a
+/// router's application (no number of its own, networks 1 and 5), a local
+/// scope takes a station on either network and no other (#2601).
 #[test]
 fn a_scope_covers_stations_by_where_they_are() {
     let local = at(2);
     let routed = super::DeviceAddress::new(9, &[7]).unwrap();
     let own_routed = super::DeviceAddress::new(5, &mac(2)).unwrap();
+    let on_one = super::DeviceAddress::new(1, &mac(3)).unwrap();
     for (scope, own, address, covered) in [
         (Scope::Network(5), Some(5), &local, true),
         (Scope::Network(5), None, &local, false),
@@ -269,9 +272,24 @@ fn a_scope_covers_stations_by_where_they_are() {
         (Scope::Global, None, &routed, true),
     ] {
         assert_eq!(
-            scope.covers(address, own),
+            scope.covers(address, own, own.as_slice()),
             covered,
             "{scope:?} {own:?} {address}"
+        );
+    }
+    let router_app = [1, 5];
+    for (scope, address, covered) in [
+        (Scope::Local, &on_one, true),
+        (Scope::Local, &own_routed, true),
+        (Scope::Local, &routed, false),
+        (Scope::Network(1), &on_one, true),
+        (Scope::Network(1), &own_routed, false),
+        (Scope::Global, &routed, true),
+    ] {
+        assert_eq!(
+            scope.covers(address, None, &router_app),
+            covered,
+            "{scope:?} on a router application: {address}"
         );
     }
 }

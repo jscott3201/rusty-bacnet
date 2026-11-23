@@ -31,7 +31,7 @@ The server, its policies and counters, and the BACnet/SC hub.
 
 Owned B/IP routing between numbered networks.
 
-[`BACnetRouter`](/rusty-bacnet/reference/python/router/#bacnetrouter), [`BipRouterPort`](/rusty-bacnet/reference/python/router/#biprouterport), [`RouterPortInfo`](/rusty-bacnet/reference/python/router/#routerportinfo), [`RouterRoute`](/rusty-bacnet/reference/python/router/#routerroute), [`RouterCleanupFailure`](/rusty-bacnet/reference/python/router/#routercleanupfailure)
+[`BACnetRouter`](/rusty-bacnet/reference/python/router/#bacnetrouter), [`BipRouterPort`](/rusty-bacnet/reference/python/router/#biprouterport), [`RouterPortInfo`](/rusty-bacnet/reference/python/router/#routerportinfo), [`RouterRoute`](/rusty-bacnet/reference/python/router/#routerroute), [`RouterCleanupFailure`](/rusty-bacnet/reference/python/router/#routercleanupfailure), [`RouterControlTotals`](/rusty-bacnet/reference/python/router/#routercontroltotals), [`RouterControlCounters`](/rusty-bacnet/reference/python/router/#routercontrolcounters), [`RouterCounters`](/rusty-bacnet/reference/python/router/#routercounters)
 
 ## [Shared endpoints](/rusty-bacnet/reference/python/endpoints/)
 

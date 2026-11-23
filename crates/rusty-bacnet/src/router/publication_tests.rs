@@ -1,5 +1,5 @@
 use super::super::application::Application;
-use super::super::config::PortConfig;
+use super::super::config::{PortConfig, RouterSettings};
 use super::*;
 use bacnet_transport::bip::BipMode;
 use tokio::sync::oneshot;
@@ -18,6 +18,7 @@ async fn started() -> (Lifecycle<NativeSession>, u64) {
                     isolated: false,
                 }],
                 Application::None,
+                RouterSettings::default(),
             )
         })
         .await
@@ -79,7 +80,12 @@ async fn unread_start_and_context_entry_clean_before_publication_is_armed() {
             mode: BipMode::Normal,
             isolated: false,
         }];
-        let mut start = Box::pin(publication.start(reenter, configs, Application::None));
+        let mut start = Box::pin(publication.start(
+            reenter,
+            configs,
+            Application::None,
+            RouterSettings::default(),
+        ));
         std::future::poll_fn(|cx| {
             assert!(start.as_mut().poll(cx).is_pending());
             std::task::Poll::Ready(())
@@ -122,6 +128,7 @@ async fn successful_receipt_transfer_arms_the_guard_and_keeps_delivered_owner() 
                     isolated: false,
                 }],
                 Application::None,
+                RouterSettings::default(),
             )
             .await
             .unwrap();

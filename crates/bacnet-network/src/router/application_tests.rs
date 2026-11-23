@@ -152,7 +152,7 @@ async fn refusals_keep_their_reason() {
     let (mut router, apdus, mut peers) = start(2).await;
     let port = router.application_port(apdus);
 
-    // No DNET: a local send, on a link the application lacks.
+    // No DNET: a unicast to a MAC on no one of the router's networks.
     let local = [&[1, 0x04][..], &READ_PROPERTY].concat();
     assert!(matches!(
         port.send_unicast(&local, &[5]).await,

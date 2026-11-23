@@ -366,6 +366,9 @@ mod resolve_scope_tests;
 mod routed_tests;
 
 #[cfg(test)]
+mod router_app_tests;
+
+#[cfg(test)]
 pub(crate) mod test_bus;
 
 #[cfg(test)]

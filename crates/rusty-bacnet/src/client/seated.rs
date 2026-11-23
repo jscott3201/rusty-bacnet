@@ -55,7 +55,7 @@ impl BACnetClient {
             router: None,
             min_request_interval_ms: 0,
             write_policy: bacnet_ops::WritePolicy::default(),
-            resolve_scope: None,
+            resolve_scope: bacnet_ops::ResolveScope::Local,
         }
     }
 

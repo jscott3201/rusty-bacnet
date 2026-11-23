@@ -178,7 +178,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let deadline = tokio::time::Instant::now() + wait;
         let from_scope = |reply: &ReceivedIHave| {
             let network = reply.source_network.as_ref().map(|from| from.network);
-            scope.answered_from(network, self.network_number())
+            scope.answered_from(network, &self.local_networks())
         };
         Ok(collect_answers(&mut rx, deadline, &object, range, from_scope).await)
     }

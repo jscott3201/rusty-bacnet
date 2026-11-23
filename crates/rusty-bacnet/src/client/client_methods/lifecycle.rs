@@ -89,8 +89,7 @@ impl BACnetClient {
         write_policy: Option<PyRef<'_, crate::high_level::PyWritePolicy>>,
         resolve_scope: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
-        let resolve_scope =
-            crate::high_level::resolve_scope_arg(resolve_scope.as_ref(), transport)?;
+        let resolve_scope = crate::high_level::resolve_scope_arg(resolve_scope.as_ref())?;
         let router = crate::router::application::stack_router(
             transport,
             router,

@@ -79,13 +79,7 @@ impl Core {
 
 /// The handle `named` names on `client`.
 async fn make(client: OpsClient, named: &Named) -> PyResult<OpsDevice> {
-    // A router's application given no resolve scope asks nowhere.
-    let asks = client.resolve_scope() != bacnet_ops::ResolveScope::Local
-        || !matches!(
-            client.low_level().transport(),
-            crate::app_transport::AppTransport::Router(_)
-        );
-    super::device(&client, named, asks).await
+    super::device(&client, named).await
 }
 
 /// One device, as a `BACnetClient` reaches it: what `await

@@ -73,6 +73,10 @@ impl TransportPort for AppTransport {
         self.link()?.data_link()
     }
 
+    fn attached_networks(&self) -> &[u16] {
+        each!(self, t => t.attached_networks())
+    }
+
     fn bip_transport(&self) -> Option<&BipTransport> {
         self.link()?.bip_transport()
     }

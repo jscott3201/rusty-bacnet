@@ -165,17 +165,19 @@ impl Scope {
 
 impl Scope {
     /// Whether `reply` came from where this scope's Who-Has went (#2596),
-    /// `own` being the client's network number once known: every answer
-    /// for a global one; for a local one, an answer from this network (no
-    /// SNET, or SNET `own`); for a remote network, an answer from it (SNET
-    /// that network, or none when it is `own`); for a directed one, an
-    /// answer from that station. An I-Have from elsewhere during the wait,
-    /// unasked or another's answer, is no answer to this search.
-    fn answered_by(&self, reply: &ReceivedIHave, own: Option<u16>) -> bool {
+    /// `own` being the client's network number once known and `local` the
+    /// networks its local broadcast reaches: every answer for a global
+    /// one; for a local one, an answer from this network (no SNET, or an
+    /// SNET in `local`, which on a router's application is each of the
+    /// router's networks, #2601); for a remote network, an answer from it
+    /// (SNET that network, or none when it is `own`); for a directed one,
+    /// an answer from that station. An I-Have from elsewhere during the
+    /// wait, unasked or another's answer, is no answer to this search.
+    fn answered_by(&self, reply: &ReceivedIHave, own: Option<u16>, local: &[u16]) -> bool {
         // One rule for a Who-Is's answers and a Who-Has's: where the
         // reply came from, as the discovery table keys a device.
         match source(reply, own) {
-            Some(from) => self.covers(&from, own),
+            Some(from) => self.covers(&from, own, local),
             // A source that names no one station is in no scope but all.
             None => matches!(self, Self::Global),
         }
@@ -224,7 +226,8 @@ pub(crate) async fn replies<T: TransportPort + 'static>(
     let mut stations = HashSet::new();
     let keep = |reply: &ReceivedIHave| {
         let own = client.network_number();
-        scope.answered_by(reply, own) && stations.insert(station_key(reply, own))
+        scope.answered_by(reply, own, &client.local_networks())
+            && stations.insert(station_key(reply, own))
     };
     let mut heard = collect_answers(&mut rx, deadline, object, range, keep).await;
     // A routed copy heard before the number was learned, and the local
