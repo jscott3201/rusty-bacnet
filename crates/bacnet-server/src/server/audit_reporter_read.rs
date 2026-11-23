@@ -47,8 +47,12 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         let selected_reporter = self.select(Some(target), target.object_type())?;
         let reporter = &selected_reporter.configuration;
         let device = crate::local_device::initiating_device(&self.config.device);
-        let route = recipient(db, device)
-            .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
+        let route = recipient(db, device).and_then(|value| {
+            self.transactions
+                .audit_routes
+                .get()?
+                .resolve_for(&value, reporter.confirmed)
+        });
         let status = Arc::clone(&selected_reporter.status);
         status.set_configured(route.is_some());
         // Reuse the existing local property classification: Present_Value is

@@ -179,8 +179,9 @@ impl AuditRoutes {
     /// and every route's next hop passes the link's group check
     /// ([`RecipientRoute::into_unicast`]). The route serves unconfirmed
     /// notifications too, so a Device bound at a broadcast or group form on
-    /// another network keeps it; a confirmed notification is refused at
-    /// delivery ([`ConfirmedRecipientRoute::broadcast_station`], #2732).
+    /// another network keeps it here; a reporter that sends confirmed ones
+    /// takes [`Self::resolve_for`], and delivery refuses a confirmed one
+    /// there too ([`ConfirmedRecipientRoute::broadcast_station`], #2732).
     pub(super) fn resolve(
         &self,
         recipient: &BACnetRecipient,
@@ -214,6 +215,19 @@ impl AuditRoutes {
             }
         };
         route.into_unicast(is_group).ok().map(Arc::new)
+    }
+
+    /// [`Self::resolve`] for a reporter that sends `confirmed` notifications:
+    /// a confirmed one has no route to a Device bound at a broadcast or group
+    /// form on another network (#2732), so its reporter reads a configuration
+    /// error, as for a binding at a group address of the link (#1493).
+    pub(super) fn resolve_for(
+        &self,
+        recipient: &BACnetRecipient,
+        confirmed: bool,
+    ) -> Option<Arc<ConfirmedRecipientRoute>> {
+        self.resolve(recipient)
+            .filter(|route| route.serves(confirmed))
     }
 
     /// Whether `recipient` is an Address on a network numbered 1 to 65534

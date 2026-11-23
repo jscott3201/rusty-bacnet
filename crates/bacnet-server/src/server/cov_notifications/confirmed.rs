@@ -89,8 +89,9 @@ pub(in crate::server) enum Refusal {
     Other,
     /// The subscriber's address on its network is a broadcast or group
     /// form there (#2732), counted and logged, throttled. Its baseline
-    /// stays, so each change it would report is refused again; an
-    /// unconfirmed subscription at the same address is still served.
+    /// stays, so every later fanout that finds the value away from it is
+    /// refused and counted again; an unconfirmed subscription at the same
+    /// address is still served.
     NotOneStation,
 }
 
@@ -130,7 +131,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .confirmed_broadcast_subscriber
                 .fetch_add(1, Ordering::Relaxed);
             warn_throttled!(
-                ctx.notification_transactions.broadcast_station_warning,
+                in_flight_tracker.broadcast_warning(),
                 object = ?route.monitored_object_identifier,
                 subscriber = %station,
                 "Confirmed {label} not sent: its subscriber is at a broadcast or group address \

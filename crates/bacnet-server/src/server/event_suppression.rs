@@ -213,6 +213,9 @@ pub(crate) struct EventSuppressions {
     /// The throttle on the warning for a notification that reached the
     /// forwarding cap, one per server (#1950).
     pub(crate) cap_warning: bacnet_transport::warn_throttle::WarnThrottle,
+    /// The throttle on the warning for a confirmed recipient at a broadcast
+    /// or group form on another network (#2732), one per server.
+    pub(crate) broadcast_warning: bacnet_transport::warn_throttle::WarnThrottle,
 }
 
 impl EventSuppressions {

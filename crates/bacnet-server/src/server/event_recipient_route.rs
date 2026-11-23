@@ -131,6 +131,13 @@ impl ConfirmedRecipientRoute {
         let (network, mac, _) = self.remote.as_ref()?;
         BroadcastStation::of(*network, mac)
     }
+
+    /// Whether a notification, `confirmed` or not, may take this route: an
+    /// unconfirmed one always, a confirmed one unless its station is at a
+    /// broadcast or group form ([`Self::broadcast_station`]).
+    pub(super) fn serves(&self, confirmed: bool) -> bool {
+        !confirmed || self.broadcast_station().is_none()
+    }
 }
 
 impl RecipientRoute {

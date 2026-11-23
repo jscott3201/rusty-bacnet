@@ -4693,7 +4693,14 @@ tuples raise `ValueError`, an integer outside its field's type
 `OverflowError`, other wrong types `TypeError`), and the object's own
 `add_destination` decides what the list holds, as it does for a client's
 write: more than 32 destinations, or an address MAC longer than 18 octets,
-raises `BacnetProtocolError`. `port_filter` serves Port_Filter as
+raises `BacnetProtocolError`. A destination on another network whose MAC is a
+broadcast or group form there (`0xFF`, two octets starting `0x00` or `0xFF`,
+`0xFFFFFF`, six octets starting `FF:FF:FF:FF`) is taken, but gets unconfirmed
+notifications only: a confirmed one is skipped and counted in
+`confirmed_broadcast_recipient` (#2732). The form is read from the MAC alone,
+so an ARCNET station 255, or a gateway's virtual network that numbers stations
+with two octets starting `0x00` or `0xFF`, can't take confirmed ones.
+`port_filter` serves Port_Filter as
 `(port_id, enabled)` pairs, one per network port; the server receives through
 Port_ID 0, and without `port_filter` the property is absent. Clients can still
 change both lists over the network, within the limits Port_Filter's writes

@@ -4176,6 +4176,8 @@ group address themselves. The server refuses one for the confirmed requests
 it starts itself, to event recipients, Channel and Command targets, audit
 recipients and bound devices, and binds no device to one (#1493); its replies
 and COV notifications go to the source a request came from.
+`is_broadcast_mac` keeps its narrower meaning, this link's own broadcast,
+which routing relies on.
 
 The server also starts no confirmed request to a station on another network
 whose MAC there is a broadcast or group form, which the router delivering it
@@ -4183,19 +4185,30 @@ would hand to every station there (#2732): the one octet `0xFF`, two octets
 starting `0x00` or `0xFF`, three octets of `0xFF`, or six starting
 `FF:FF:FF:FF` (`bacnet_npdu::RemoteBroadcast`, the client's check from #2709).
 That covers an Address recipient, a Device binding, configured or observed
-from an I-Am, the parent of an Audit Log that forwards, and a COV subscriber
-relayed from such an address. An unconfirmed request to the same address
-still goes, as before. A recipient or binding can't say its network is
-ARCNET, as a client's `Station::arcnet()` target can, so ARCNET station 255
-gets unconfirmed requests only. Nothing legitimate is lost: a confirmed
-request names one station, and a router hands one to a broadcast form to all
-of them. Such an address is taken where it is written (a Recipient_List, a
-`DeviceBinding::routed`, which logs a warning when configured) and skipped
-where a confirmed request would be sent, as a confirmed recipient at a
-broadcast address already was; the counters below say where each skip
-counts.
-`is_broadcast_mac` keeps its narrower meaning, this link's own broadcast,
-which routing relies on.
+from an I-Am, the parent of an Audit Log that forwards, a COV subscriber
+relayed from such an address, and an endpoint session's source Audit
+recipient bound behind a router. An unconfirmed request to the same address
+still goes, as before. Such an address is taken where it is written (a
+Recipient_List, a `DeviceBinding::routed`, which logs a warning when
+configured) and skipped where a confirmed request would be sent, as a
+confirmed recipient at a broadcast address already was; the counters below
+say where each skip counts. An Audit Reporter that sends confirmed
+notifications reads CONFIGURATION_ERROR while its recipient is bound so.
+
+The forms are read from the MAC alone, since the far network's link is
+unknown here, and a recipient, a binding or a subscriber's address can't say
+which link that is, as a client's `Station::arcnet()` target can. Two kinds of
+real station are caught by that:
+
+- ARCNET station 255. A one-octet `0xFF`, written as a recipient or binding,
+  or taken from a source (a COV subscriber, a binding observed from an
+  I-Am), is read as the MS/TP broadcast, so that station gets unconfirmed
+  notifications only.
+- A two-octet address starting `0x00` or `0xFF` is read as a LonTalk
+  broadcast or group, so a gateway's virtual network that numbers its
+  stations that way can't be a confirmed recipient.
+
+There is no opt-in for either yet.
 
 A reply goes back to the link-layer MAC its request came from, so a
 confirmed request from a group address would get its answer, any segment

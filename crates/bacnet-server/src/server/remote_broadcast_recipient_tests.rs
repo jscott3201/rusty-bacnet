@@ -20,13 +20,13 @@ use super::test_transport::{BIP_LOCAL_MAC, SendLog, TestTransport};
 use super::*;
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::constructed::decode_event_notification;
-use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
+use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::notification_forwarder::NotificationForwarderObject;
-use bacnet_services::cov::SubscribeCOVRequest;
-use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 
+#[path = "remote_broadcast_cov_tests.rs"]
+mod cov;
 #[path = "remote_broadcast_router_app_tests.rs"]
 mod router_app;
 
@@ -235,171 +235,5 @@ async fn a_forwarded_confirmed_copy_to_a_remote_broadcast_form_is_skipped() {
             "{form:02X?}"
         );
         assert_eq!(forwarding.counters(), counted(1), "{form:02X?}");
-    }
-}
-
-/// A SubscribeCOV for AV-1 relayed by [`ROUTER`] from `source`, process
-/// `process`, confirmed or not.
-fn routed_subscribe(source: &[u8], process: u32, confirmed: bool) -> ReceivedNpdu {
-    let mut body = BytesMut::new();
-    SubscribeCOVRequest {
-        subscriber_process_identifier: process,
-        monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
-        issue_confirmed_notifications: Some(confirmed),
-        lifetime: Some(300),
-    }
-    .encode(&mut body)
-    .unwrap();
-    let mut apdu = BytesMut::new();
-    encode_apdu(
-        &mut apdu,
-        &Apdu::ConfirmedRequest(ConfirmedRequestPdu {
-            segmented: false,
-            more_follows: false,
-            segmented_response_accepted: false,
-            max_segments: None,
-            max_apdu_length: 1476,
-            invoke_id: u8::try_from(process).unwrap(),
-            sequence_number: None,
-            proposed_window_size: None,
-            service_choice: ConfirmedServiceChoice::SUBSCRIBE_COV,
-            service_request: body.freeze(),
-        }),
-    )
-    .unwrap();
-    let mut npdu = BytesMut::new();
-    encode_npdu(
-        &mut npdu,
-        &Npdu {
-            expecting_reply: true,
-            source: Some(NpduAddress {
-                network: NETWORK,
-                mac_address: MacAddr::from_slice(source),
-            }),
-            payload: apdu.freeze(),
-            ..Npdu::default()
-        },
-    )
-    .unwrap();
-    ReceivedNpdu {
-        direct_response: None,
-        npdu: npdu.freeze(),
-        source_mac: MacAddr::from_slice(&ROUTER),
-        link_layer_group: false,
-        data_attributes: Vec::new(),
-        provenance: TransportProvenance::unverified(),
-        reply_tx: None,
-    }
-}
-
-/// The COV notifications on `log`, as (process, confirmed, DADR).
-fn cov_notifications(log: &SendLog) -> Vec<(u32, bool, Vec<u8>)> {
-    let mut sent: Vec<_> = log
-        .unicasts()
-        .into_iter()
-        .filter_map(|frame| {
-            let dadr = frame.decode_npdu().destination?.mac_address.to_vec();
-            let (confirmed, data) = match frame.apdu() {
-                Apdu::ConfirmedRequest(request)
-                    if request.service_choice
-                        == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION =>
-                {
-                    (true, request.service_request)
-                }
-                Apdu::UnconfirmedRequest(request)
-                    if request.service_choice
-                        == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION =>
-                {
-                    (false, request.service_request)
-                }
-                _ => return None,
-            };
-            let request = COVNotificationRequest::decode(&data).unwrap();
-            Some((request.subscriber_process_identifier, confirmed, dadr))
-        })
-        .collect();
-    sent.sort();
-    sent
-}
-
-/// A COV subscription comes from a request's SNET and SADR, which no router
-/// writes as a broadcast, but a crafted or misrelayed request can: the
-/// server takes it, and gives it unconfirmed notifications only. Each
-/// confirmed one refused counts once; a confirmed subscriber at a station
-/// on the same network is served.
-#[tokio::test(start_paused = true)]
-async fn a_cov_subscriber_at_a_remote_broadcast_form_gets_no_confirmed_notification() {
-    let identity = bacnet_objects::DeviceIdentity::new(856, 0).unwrap();
-    for form in FORMS {
-        let mut db = ObjectDatabase::new();
-        db.add(Box::new(
-            bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {
-                identity: identity.clone(),
-                ..Default::default()
-            })
-            .unwrap(),
-        ))
-        .unwrap();
-        db.add(Box::new(
-            bacnet_objects::analog::AnalogValueObject::new(
-                1,
-                "AV-1",
-                bacnet_types::enums::EngineeringUnits::DEGREES_CELSIUS,
-            )
-            .unwrap(),
-        ))
-        .unwrap();
-        let (tx, rx) = mpsc::channel(8);
-        let link = TestTransport::builder()
-            .local_mac(&BIP_LOCAL_MAC)
-            .broadcast_mac(LITERAL_BROADCAST_MAC)
-            .inbound(rx)
-            .build();
-        let log = link.sent();
-        let config = ServerConfig {
-            device: identity.clone(),
-            ..ServerConfig::default()
-        };
-        let mut server = BACnetServer::start(config, db, link).await.unwrap();
-        for request in [
-            routed_subscribe(form, 1, true),
-            routed_subscribe(form, 2, false),
-            routed_subscribe(&STATION, 3, true),
-        ] {
-            tx.send(request).await.unwrap();
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        // Each subscription's first notification: none to process 1.
-        assert_eq!(
-            cov_notifications(&log),
-            [(2, false, form.to_vec()), (3, true, STATION.to_vec())],
-            "{form:02X?}"
-        );
-        let refused = || {
-            let counters = Arc::clone(server.cov_table.try_read().unwrap().counters());
-            counters
-                .confirmed_broadcast_subscriber
-                .load(Ordering::Relaxed)
-        };
-        assert_eq!(refused(), 1, "{form:02X?}");
-        // A change is refused again, and counted again.
-        log.take();
-        server
-            .write_local(
-                &ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
-                PropertyIdentifier::PRESENT_VALUE,
-                None,
-                PropertyValue::Real(40.0),
-                Some(8),
-                crate::LocalCommandSource::ServerDevice,
-            )
-            .await
-            .unwrap();
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        let sent = cov_notifications(&log);
-        assert!(sent.iter().all(|(process, ..)| *process != 1), "{sent:?}");
-        assert!(sent.contains(&(2, false, form.to_vec())), "{sent:?}");
-        assert_eq!(refused(), 2, "{form:02X?}");
-        server.stop().await.unwrap();
     }
 }

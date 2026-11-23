@@ -137,10 +137,10 @@ async fn an_address_recipient_at_a_group_address_is_refused() {
 }
 
 /// #2732: a Device recipient bound through a router at a broadcast or group
-/// form on its network keeps its route, which serves both kinds: an
-/// unconfirmed reporter's record still goes there through the router, and a
-/// confirmed reporter's is never sent, which the reporter reads as a
-/// communication failure.
+/// form on its network keeps its route for an unconfirmed reporter, whose
+/// record still goes there through the router. A confirmed reporter has no
+/// route to it: it reads a configuration error from the start, as for a
+/// binding at a group address of the link (#1493), and sends nothing.
 #[tokio::test(start_paused = true)]
 async fn a_device_bound_at_a_remote_broadcast_form_gets_unconfirmed_records_only() {
     let recipient = oid(ObjectType::DEVICE, 20);
@@ -158,31 +158,118 @@ async fn a_device_bound_at_a_remote_broadcast_form_gets_unconfirmed_records_only
             )
             .await
             .expect("a Device recipient starts");
+            let case = format!("{form:02X?}, confirmed {confirmed}");
+            let expected = if confirmed {
+                Reliability::CONFIGURATION_ERROR
+            } else {
+                Reliability::NO_FAULT_DETECTED
+            };
+            assert_eq!(health(&fixture.server).await, expected, "{case}");
             assert!(matches!(
                 write_value(&fixture.server, None).await,
                 Apdu::SimpleAck(_)
             ));
             settle().await;
-            let case = format!("{form:02X?}, confirmed {confirmed}");
             if confirmed {
                 assert!(fixture.transport.sent.lock().unwrap().is_empty(), "{case}");
-                assert_eq!(
-                    health(&fixture.server).await,
-                    Reliability::COMMUNICATION_FAILURE,
-                    "{case}"
-                );
             } else {
                 assert_eq!(notifications(&fixture.transport.sent).len(), 1, "{case}");
                 let wire = fixture.transport.sent.lock().unwrap()[0].clone();
                 let to = decode_npdu(wire).unwrap().destination.unwrap();
                 assert_eq!((to.network, to.mac_address.as_slice()), (5, form), "{case}");
-                assert_eq!(
-                    health(&fixture.server).await,
-                    Reliability::NO_FAULT_DETECTED,
-                    "{case}"
-                );
             }
+            assert_eq!(health(&fixture.server).await, expected, "{case}");
             fixture.server.stop().await.unwrap();
         }
     }
+}
+
+/// The copies of a record changing the recipient: each unicast as (its link
+/// MAC, confirmed), then each global broadcast as (`None`, confirmed).
+fn change_copies(fixture: &Fixture) -> Vec<(Option<Vec<u8>>, bool)> {
+    let read = |bytes: &Bytes| {
+        let npdu = decode_npdu(bytes.clone()).unwrap();
+        match decode_apdu(npdu.payload).unwrap() {
+            Apdu::ConfirmedRequest(request) => {
+                assert_eq!(
+                    request.service_choice,
+                    ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION
+                );
+                true
+            }
+            Apdu::UnconfirmedRequest(request) => {
+                assert_eq!(
+                    request.service_choice,
+                    UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION
+                );
+                assert_eq!(npdu.destination.map(|to| to.network), Some(0xFFFF));
+                false
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    };
+    let macs = std::mem::take(&mut *fixture.transport.destinations.lock().unwrap());
+    let sent = std::mem::take(&mut *fixture.transport.sent.lock().unwrap());
+    let broadcasts = std::mem::take(&mut *fixture.transport.broadcasts.lock().unwrap());
+    macs.into_iter()
+        .zip(sent)
+        .map(|(mac, bytes)| (Some(mac), read(&bytes)))
+        .chain(broadcasts.iter().map(|bytes| (None, read(bytes))))
+        .collect()
+}
+
+/// #2732, Clause 12.11.66: a confirmed reporter's record of a recipient
+/// change goes to both recipients or by global broadcast. A recipient at a
+/// broadcast or group form on its network has no route for it, so, as for
+/// an old recipient with no route, an unconfirmed global broadcast stands in
+/// for its copy, whichever side of the change it is on.
+#[tokio::test(start_paused = true)]
+async fn a_recipient_change_broadcasts_for_a_side_at_a_remote_broadcast_form() {
+    let bad = oid(ObjectType::DEVICE, 20);
+    let good = oid(ObjectType::DEVICE, 21);
+    let mut reporter = reporter();
+    reporter.set_issue_confirmed_notifications(true).unwrap();
+    let mut capture = AuditCapture::default();
+    capture.record_broadcasts = true;
+    let mut fixture = try_servers_config(
+        vec![reporter],
+        &[10],
+        Some(BACnetRecipient::Device(bad)),
+        vec![
+            DeviceBinding::routed(bad, 5, [0xFF], LOGGER).unwrap(),
+            DeviceBinding::local(good, NEW_LOGGER).unwrap(),
+        ],
+        true,
+        1476,
+        capture,
+    )
+    .await
+    .expect("a Device recipient starts");
+    // Away from the broadcast form, then back to it: each time the other
+    // side gets its confirmed copy and the broadcast form's goes by global
+    // broadcast.
+    for to in [good, bad] {
+        let mut bytes = BytesMut::new();
+        bacnet_encoding::constructed::encode_recipient(&mut bytes, &BACnetRecipient::Device(to))
+            .unwrap();
+        fixture
+            .server
+            .write_local(
+                &oid(ObjectType::DEVICE, 10),
+                PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
+                None,
+                PropertyValue::ApplicationData(bytes.to_vec()),
+                None,
+                crate::LocalCommandSource::ServerDevice,
+            )
+            .await
+            .expect("the change is taken");
+        settle().await;
+        assert_eq!(
+            change_copies(&fixture),
+            [(Some(NEW_LOGGER.to_vec()), true), (None, false)],
+            "to {to}"
+        );
+    }
+    fixture.server.stop().await.unwrap();
 }

@@ -82,13 +82,16 @@ pub struct AtomicCovCounters {
     pub(crate) notifications_throttled_pool: AtomicU64,
     /// The same for want of an invoke ID (#2661).
     pub(crate) notifications_throttled_invoke_id: AtomicU64,
-    /// Confirmed notifications not sent because their subscriber, relayed
-    /// from another network, is at a broadcast or group form there (the
-    /// one octet `0xFF`, two octets starting `0x00` or `0xFF`, three of
-    /// `0xFF`, or six starting `FF:FF:FF:FF`; #2732), one per report the
-    /// subscription would have had. Its unconfirmed notifications aren't
-    /// held back. Not in [`CovCounters`] yet; the warning is throttled, so
-    /// this is the count.
+    /// Confirmed reports refused because their subscriber, relayed from
+    /// another network, is at a broadcast or group form there (the one
+    /// octet `0xFF`, two octets starting `0x00` or `0xFF`, three of `0xFF`,
+    /// or six starting `FF:FF:FF:FF`; #2732): one per fanout that would
+    /// have sent the subscription a confirmed report. Its baseline never
+    /// moves, so once its value leaves the baseline every later fanout
+    /// counts again, a forced one (the initial report, a renewal) included.
+    /// Its unconfirmed notifications aren't held back. Not in
+    /// [`CovCounters`] yet; the warning is throttled, so this is the
+    /// count.
     pub(crate) confirmed_broadcast_subscriber: AtomicU64,
 }
 
@@ -178,6 +181,9 @@ pub struct CovInFlightTracker {
     /// and lose nothing, so each warns at most once an interval (#2671).
     pool_warning: WarnThrottle,
     id_warning: WarnThrottle,
+    /// The warning for a confirmed report refused because its subscriber is
+    /// at a broadcast or group form on another network (#2732).
+    broadcast_warning: WarnThrottle,
 }
 
 /// RAII permit for an in-flight confirmed notification holding both a peer slot and a global permit.
@@ -238,6 +244,12 @@ impl CovInFlightTracker {
     /// invoke ID.
     pub(crate) fn id_warning(&self) -> &WarnThrottle {
         &self.id_warning
+    }
+
+    /// The throttle on the warning for a confirmed report refused because
+    /// its subscriber is at a broadcast or group form (#2732).
+    pub(crate) fn broadcast_warning(&self) -> &WarnThrottle {
+        &self.broadcast_warning
     }
 
     /// Each peer's confirmed notifications in flight now.

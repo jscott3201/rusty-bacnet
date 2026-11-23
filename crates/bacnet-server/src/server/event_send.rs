@@ -223,7 +223,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Err(ConfirmedRouteRefusal::RemoteBroadcast(station)) => {
                     suppressions.record(EventSuppression::ConfirmedBroadcastRecipient);
                     warn_throttled!(
-                        notification_transactions.broadcast_station_warning,
+                        suppressions.broadcast_warning,
                         notification_class,
                         recipient = %station,
                         "Recipient requests confirmed notifications at a broadcast or group \

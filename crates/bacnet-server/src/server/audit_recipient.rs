@@ -101,13 +101,10 @@ pub(super) fn validate(
         // Set here, at prepare and finish, only. A local network number learned
         // later can make a routed binding at the link broadcast MAC unusable
         // (`RecipientRoute::localize`): notifications then find no route, but
-        // this flag keeps its startup value.
-        db.get(selected)
-            .unwrap()
-            .audit_reporter()
-            .unwrap()
-            .status_internal()
-            .set_configured(route.is_some());
+        // this flag keeps its startup value. A confirmed reporter has no route
+        // to a station at a broadcast or group form on another network (#2732).
+        let confirmed = status.configuration().confirmed;
+        status.set_configured(route.as_ref().is_some_and(|route| route.serves(confirmed)));
     }
     Ok(())
 }
@@ -203,9 +200,10 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
     /// changed with it, so each Reporter's CONFIGURATION_ERROR follows the
     /// route in force now, not at the next audited operation (#1460).
     pub(super) fn number_changed(&self) {
-        let configured = self.current_route().is_some();
+        let route = self.current_route();
         for (_, status) in self.association.reporters() {
-            status.set_configured(configured);
+            let confirmed = status.configuration().confirmed;
+            status.set_configured(route.as_ref().is_some_and(|route| route.serves(confirmed)));
         }
     }
 
@@ -297,16 +295,25 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
                     .prepare_context(next, reporter.auditing_failure_epoch().is_some())?;
                 contexts.push((Arc::clone(reporter), next, context));
             }
-            // Clause 12.11.66: the change's record reaches both recipients,
-            // or goes by global broadcast. With no route to the old one, the
-            // new recipient gets its copy and an unconfirmed global
-            // broadcast (`None`) stands in for the old one's.
-            let targets = match old_route {
-                Some(old_route) => [Some(old_route), Some(new_route)],
-                None => [Some(new_route), None],
-            };
             let task = status.commit_recipient_change(|confirmed, token| {
-                let mut attempts = Vec::with_capacity(2);
+                // Clause 12.11.66: the change's record reaches both
+                // recipients, or goes by global broadcast. Each recipient with
+                // a route gets its copy, and with no route to one of them an
+                // unconfirmed global broadcast (`None`) stands in for its
+                // copy. A confirmed copy has no route to a station at a
+                // broadcast or group form on another network (#2732).
+                let routes: Vec<_> = [old_route, Some(new_route)]
+                    .into_iter()
+                    .map(|route| route.filter(|route| route.serves(confirmed)))
+                    .collect();
+                let stand_in = routes.iter().any(Option::is_none);
+                let targets: Vec<_> = routes
+                    .into_iter()
+                    .flatten()
+                    .map(Some)
+                    .chain(stand_in.then_some(None))
+                    .collect();
+                let mut attempts = Vec::with_capacity(targets.len());
                 for target in targets {
                     let permit = self.transactions.try_admit_audit().map_err(|_| denied())?;
                     let reservation = match &target {
