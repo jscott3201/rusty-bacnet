@@ -339,6 +339,12 @@ pub struct Tsm {
 }
 
 impl Tsm {
+    /// The segment timeout this client's transfers use, which a table of
+    /// segmented requests takes when it opens (#2646).
+    pub(crate) fn segment_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.config.apdu_segment_timeout_ms)
+    }
+
     /// Create a transaction state machine with the given timing and retry configuration.
     pub fn new(config: TsmConfig) -> Self {
         Self {

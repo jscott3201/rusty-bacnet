@@ -679,6 +679,9 @@ pub struct BACnetClient<T: TransportPort = AnyTransport> {
     /// See [`Self::group_source_request_drops`].
     group_source_request_drops: Arc<std::sync::atomic::AtomicU64>,
     pacer: Arc<pacing::RequestPacer>,
+    /// Whether `config.segmentation` receives segments, settled at start,
+    /// so a request's header copies a bool, as it did before the enum.
+    receives_segments: bool,
 }
 
 impl BACnetClient<BipTransport> {

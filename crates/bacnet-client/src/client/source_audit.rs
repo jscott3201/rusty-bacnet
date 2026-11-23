@@ -346,6 +346,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             routed_path_limits: Arc::clone(&self.routed_path_limits),
             group_source_request_drops: Arc::clone(&self.group_source_request_drops),
             pacer: Arc::new(pacer),
+            receives_segments: self.receives_segments,
         };
         (runner, invoke_id)
     }

@@ -17,13 +17,18 @@
 //! and shares with a timer task, both under a blocking lock no `.await`
 //! holds: the dispatch task feeds it segments and a requester's Aborts, and
 //! the timer task ends what has gone silent or stalled. Nothing of it is on
-//! the path of an unsegmented APDU: the dispatch task reaches it only from
-//! the branches a segmented request and a requester's Abort take, and the
-//! timer is a task of its own, so the dispatch loop polls no timer for it
-//! (#1978 item 8). The table and its timer end with the dispatch task: on
+//! the path of an unsegmented APDU: the dispatch loop gives a segmented
+//! request and a requester's Abort turns of their own, out of line, before
+//! `dispatch_apdu`, whose code is left as it was without them (an earlier
+//! shape that grew it cost every answer about 15 instructions); the loop
+//! holds one pointer, empty until the first transfer; and the timer is a
+//! task of its own, so the loop polls no timer for it (#1978 item 8). The
+//! table and its timer end with the dispatch task: on
 //! [`BACnetClient::stop`], on a drop, and when the node a seated client runs
 //! on stops.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Weak;
 
 use bacnet_endpoint_core::segmented_request::{Opening, Receipt, Segment, SegmentedRequests};
@@ -32,46 +37,13 @@ use tokio::sync::Notify;
 
 use super::*;
 
-/// The dispatch task's reassembly state: the segmented answers to the
-/// client's own requests, and the segmented requests it answers.
-pub(super) struct ReceiveState {
-    /// Segmented Complex-ACKs under reassembly, by peer, invoke ID and
-    /// provenance.
-    pub(super) responses: HashMap<SegKey, SegmentedReceiveState>,
-    /// Segmented requests the client executes.
-    pub(super) requests: RequestTransfers,
-}
-
-impl ReceiveState {
-    /// Empty state for a client whose segment timeout is `segment_timeout`
-    /// and that keeps at most `max_segments` segments of one request.
-    pub(super) fn new(
-        segment_timeout: Duration,
-        max_segments: usize,
-        #[cfg(test)] hook: Arc<RequestTransfersHook>,
-    ) -> Self {
-        Self {
-            responses: HashMap::new(),
-            requests: RequestTransfers {
-                segment_timeout,
-                max_segments,
-                active: None,
-                #[cfg(test)]
-                hook,
-            },
-        }
-    }
-}
-
-/// The segmented requests the client executes, opened on the first one.
+/// The segmented requests the client answers: nothing until the first one,
+/// then one pointer to the table and its timer. The dispatch loop holds it
+/// beside the segmented answers' map, and reaches it only from the turns a
+/// segmented request and a requester's Abort take, ahead of
+/// `dispatch_apdu`, which keeps the shape it has without them.
 pub(super) struct RequestTransfers {
-    /// The client's segment timeout: four of them without a segment end a
-    /// transfer.
-    segment_timeout: Duration,
-    /// The most segments one request may take: the count the client
-    /// states in its requests, at most 256.
-    max_segments: usize,
-    active: Option<Active>,
+    active: Option<Box<Active>>,
     #[cfg(test)]
     hook: Arc<RequestTransfersHook>,
 }
@@ -96,26 +68,22 @@ impl Drop for AbortOnDrop {
 }
 
 impl RequestTransfers {
-    /// End the transfer a requester's Abort names (Clause 5.4.5.2), if one
-    /// is open.
-    pub(super) fn abort(
-        &self,
-        source_mac: &[u8],
-        source_network: Option<&NpduAddress>,
-        invoke_id: u8,
-        provenance: TransportProvenance,
-    ) {
-        if let Some(active) = &self.active {
-            active
-                .table
-                .lock()
-                .abort(source_mac, source_network, invoke_id, provenance);
+    /// None yet.
+    pub(super) fn new(#[cfg(test)] hook: Arc<RequestTransfersHook>) -> Self {
+        Self {
+            active: None,
+            #[cfg(test)]
+            hook,
         }
     }
 
     /// The table, opened with its timer on first use.
-    fn open<T: TransportPort + 'static>(&mut self, network: &Arc<NetworkLayer<T>>) -> &Active {
-        let (segment_timeout, max_segments) = (self.segment_timeout, self.max_segments);
+    fn open<T: TransportPort + 'static>(
+        &mut self,
+        network: &Arc<NetworkLayer<T>>,
+        segment_timeout: Duration,
+        max_segments: usize,
+    ) -> &Active {
         #[cfg(test)]
         let hook = &self.hook;
         self.active.get_or_insert_with(|| {
@@ -131,34 +99,37 @@ impl RequestTransfers {
                 Arc::downgrade(&table),
                 Arc::clone(&wake),
             ));
-            Active {
+            Box::new(Active {
                 table,
                 wake,
                 _timer: AbortOnDrop(timer),
-            }
+            })
         })
     }
 }
 
-/// What executing a reassembled request needs, borrowed from the dispatch
+/// What answering a segmented request needs, borrowed from the dispatch
 /// task.
 pub(super) struct RequestSegmentContext<'a, T: TransportPort + 'static> {
     pub(super) network: &'a Arc<NetworkLayer<T>>,
+    /// The client's transactions, whose segment timeout a new table takes.
+    pub(super) tsm: &'a Arc<SyncMutex<Tsm>>,
     pub(super) cov_tx: &'a broadcast::Sender<COVEvent>,
     pub(super) event_tx: &'a broadcast::Sender<ReceivedEventNotification>,
     pub(super) policy: &'a ConfirmedCOVNotificationAckPolicy,
     pub(super) decode_warning: &'a WarnThrottle,
     pub(super) response_warning: &'a WarnThrottle,
-    /// Whether the client receives segments.
-    pub(super) receives: bool,
+    /// Whether the client receives segments, and how many of one request
+    /// it keeps.
+    pub(super) limits: ResponseLimits,
 }
 
 /// One segment, where it came from and its reply path.
-pub(super) struct RequestSegment<'a> {
-    pub(super) source_mac: &'a [u8],
-    pub(super) source_network: &'a Option<NpduAddress>,
-    pub(super) reply: InboundReply,
-    pub(super) request: ConfirmedRequestPdu,
+struct RequestSegment<'a> {
+    source_mac: &'a [u8],
+    source_network: &'a Option<NpduAddress>,
+    reply: InboundReply,
+    request: ConfirmedRequestPdu,
 }
 
 /// Now, on tokio's clock, so a paused test steps the timers.
@@ -167,9 +138,68 @@ fn now() -> std::time::Instant {
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// Take one segment of a confirmed request (see the [module
-    /// docs](self)).
-    pub(super) async fn receive_request_segment(
+    /// A requester's Abort (server bit clear) ends the reassembly of its
+    /// request, if one is open (Clause 5.4.5.2), and draws nothing back.
+    /// The dispatch loop's own turn for it, ahead of `dispatch_apdu`, which
+    /// only logs such an Abort.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn requester_abort(
+        transfers: &RequestTransfers,
+        received: &bacnet_network::layer::ReceivedApdu,
+        abort: &AbortPdu,
+    ) {
+        debug!(
+            invoke_id = abort.invoke_id,
+            "Abort PDU with server=FALSE ends its request's reassembly"
+        );
+        if let Some(active) = &transfers.active {
+            active.table.lock().abort(
+                &received.source_mac,
+                received.source_network.as_ref(),
+                abort.invoke_id,
+                received.provenance.clone(),
+            );
+        }
+    }
+
+    /// The dispatch loop's turn for one segment of a confirmed request
+    /// (see the [module docs](self)), ahead of `dispatch_apdu`. One
+    /// addressed to a group is ignored, as an unsegmented one is.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn segmented_request<'a>(
+        context: RequestSegmentContext<'a, T>,
+        transfers: &'a mut RequestTransfers,
+        received: bacnet_network::layer::ReceivedApdu,
+        request: ConfirmedRequestPdu,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            if received.is_group {
+                debug!(
+                    invoke_id = request.invoke_id,
+                    service = request.service_choice.to_raw(),
+                    "Ignoring group-addressed ConfirmedRequest"
+                );
+                return;
+            }
+            let reply = InboundReply::new(received.response_route(), received.reply_tx);
+            Self::receive_request_segment(
+                context,
+                transfers,
+                RequestSegment {
+                    source_mac: &received.source_mac,
+                    source_network: &received.source_network,
+                    reply,
+                    request,
+                },
+            )
+            .await;
+        })
+    }
+
+    /// Take one segment of a confirmed request.
+    async fn receive_request_segment(
         context: RequestSegmentContext<'_, T>,
         transfers: &mut RequestTransfers,
         segment: RequestSegment<'_>,
@@ -182,7 +212,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         } = segment;
         let network = context.network;
         let invoke_id = request.invoke_id;
-        if !context.receives {
+        if !context.limits.segmented_response_accepted {
             Self::send_server_abort(
                 network,
                 source_mac,
@@ -194,7 +224,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await;
             return;
         }
-        let active = transfers.open(network);
+        let segment_timeout = context.tsm.lock().segment_timeout();
+        let active = transfers.open(
+            network,
+            segment_timeout,
+            context.limits.max_reassembly_segments,
+        );
         let receipt = {
             let mut table = active.table.lock();
             let was_empty = table.is_empty();
@@ -278,7 +313,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 );
                 // Its answer goes back the way its first segment came.
                 let answer = InboundReply::new(route, None);
-                if dispatch::is_confirmed_cov_notification(request.service_choice) {
+                if request.service_choice == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION
+                    || request.service_choice
+                        == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE
+                {
                     Self::receive_confirmed_cov_notification(
                         network,
                         context.cov_tx,
@@ -290,7 +328,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         context.decode_warning,
                     )
                     .await;
-                } else if dispatch::is_confirmed_event_notification(request.service_choice) {
+                } else if request.service_choice
+                    == ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION
+                {
                     Self::receive_confirmed_event_notification(
                         network,
                         context.event_tx,
