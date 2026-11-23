@@ -14,6 +14,15 @@ impl PendingObject {
         }
     }
 
+    /// The checks a registration passes before it is built: a point's
+    /// (#2711); a Group and an Audit Reporter check as they build.
+    pub(super) fn check(&self) -> PyResult<()> {
+        match self {
+            Self::Point(point) => point.check(),
+            Self::Group { .. } | Self::AuditReporter { .. } => Ok(()),
+        }
+    }
+
     /// Builds the object, the same way at registration and at each start.
     /// A point builds as `BACnetServer` builds it, without storage (#2711).
     pub(crate) fn build(&self) -> PyResult<Box<dyn BACnetObject>> {

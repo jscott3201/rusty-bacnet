@@ -20,7 +20,7 @@ use pyo3::{PyErr, PyResult};
 
 use crate::errors::to_py_err;
 use crate::group_members;
-use crate::points::{Point, Storage, check_identifier, check_unique};
+use crate::point_registration::{Registration, Storage, admit};
 use crate::types::{PyReadAccessSpec, PySegmentation};
 
 /// Parse an IPv4 string at construction time (ValueError before bind).
@@ -208,11 +208,11 @@ pub(crate) fn build_database(
 /// `Clone` so a failed/cancelled start restores the exact registration set
 /// for retry. Built into boxes at start time; the `add_*` call builds one
 /// first, so a bad registration fails there. A point is the shape
-/// `BACnetServer` registers and builds too (#2711, [`crate::points`]).
+/// `BACnetServer` registers and builds too (#2711, [`crate::point_registration`]).
 #[derive(Clone, Debug)]
 pub(crate) enum PendingObject {
     /// One of the nine point builders' registrations.
-    Point(Point),
+    Point(Registration),
     Group {
         instance: u32,
         name: String,
@@ -231,35 +231,33 @@ pub(crate) enum PendingObject {
 
 mod pending_build;
 
-/// Validate the fresh object before admission, then check the entire identity
-/// and pending set under the same lock that seals registrations at startup.
-/// A point passes the checks `BACnetServer` makes of it (#2711).
+/// Admit a registration under the same lock that seals registrations at
+/// startup, against the Device, its declared Network Ports and the pending
+/// set, then keep it. Every kind passes through [`admit`], so a point is
+/// checked as `BACnetServer` checks it, in the same order (#2711). The
+/// object built here only proves the registration; start builds it again.
 pub(super) fn register_pending<S>(
     lifecycle: &super::lifecycle::Lifecycle<S, PendingObject>,
     identity: &DeviceIdentity,
     candidate: PendingObject,
 ) -> PyResult<()> {
-    let (kind, instance, _) = candidate.identity();
-    check_identifier(kind, instance)?;
-    candidate.build()?;
+    let ports: Vec<(u32, String)> = identity
+        .network_ports()
+        .iter()
+        .map(|port| (port.instance, port.object_name()))
+        .collect();
     lifecycle
         .with_open_registrations(|objects| {
-            let (_, _, name) = candidate.identity();
-            let ports: Vec<(u32, String)> = identity
-                .network_ports()
-                .iter()
-                .map(|port| (port.instance, port.object_name()))
-                .collect();
             let device = (ObjectType::DEVICE, identity.instance(), identity.name());
             let ports = ports
                 .iter()
                 .map(|(instance, name)| (ObjectType::NETWORK_PORT, *instance, name.as_str()));
             let kept = objects.iter().map(PendingObject::identity);
-            check_unique(
-                kind,
-                instance,
-                name,
+            admit(
+                candidate.identity(),
                 std::iter::once(device).chain(ports).chain(kept),
+                || candidate.check(),
+                || candidate.build(),
             )?;
             objects.push(candidate);
             Ok(())

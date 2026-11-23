@@ -174,9 +174,11 @@ fn remove_list_element_malformed_tail_errors_without_partial_commit() {
 
 #[test]
 fn add_list_element_over_cap_returns_the_clause_15_1_error() {
-    // Fill to MAX_ALARM_VALUES (1024) so any new element trips the cap. An
-    // object has at most 1024 states (#2711), so state 1 is listed twice to
-    // leave state 1024 free; each value is in range (#1429).
+    // Fill to MAX_ALARM_VALUES (1024) so any new element trips the cap. That
+    // cap equals MAX_NUMBER_OF_STATES, the most states an object may have
+    // (#2711), so a full list of distinct states leaves no state to add: the
+    // cap is reached only through a repeated entry. State 1 is listed twice
+    // to leave state 1024 free; each value is in range (#1429).
     let held: Vec<u32> = (1..=1023).chain([1]).collect();
     let (mut db, oid) = msi_db_with_states(1024, held.clone());
     // Unsigned 1024 (0x22 0x04 0x00) is not in the list. Clause 15.1 names

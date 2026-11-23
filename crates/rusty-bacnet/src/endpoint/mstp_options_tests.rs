@@ -16,14 +16,14 @@ use bytes::BytesMut;
 use super::lifecycle_tests::TestSerial;
 use super::*;
 use crate::mstp_py::{ECHO_GRACE_WITHOUT_ECHO_ERROR, ZERO_ECHO_GRACE_ERROR};
-use crate::points::{Point, PointKind};
+use crate::point_registration::{Registration, RegistrationKind};
 
 /// Analog Input 1, named `name`, reading 0.0.
 fn analog_input(name: &str) -> PendingObject {
-    PendingObject::Point(Point::new(
+    PendingObject::Point(Registration::new(
         1,
         name,
-        PointKind::AnalogInput {
+        RegistrationKind::AnalogInput {
             units: 62,
             present_value: 0.0,
         },

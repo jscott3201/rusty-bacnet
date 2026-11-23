@@ -3,11 +3,11 @@
 use super::*;
 use pyo3::Python;
 
-fn analog_input(instance: u32, name: &str, present_value: f32) -> Point {
-    Point::new(
+fn analog_input(instance: u32, name: &str, present_value: f32) -> Registration {
+    Registration::new(
         instance,
         name,
-        PointKind::AnalogInput {
+        RegistrationKind::AnalogInput {
             units: 62,
             present_value,
         },
@@ -86,4 +86,69 @@ fn an_analog_input_value_must_be_finite() {
             .unwrap(),
         bacnet_types::primitives::PropertyValue::Real(21.5)
     );
+}
+
+/// `admit` checks in one order, whatever else is wrong: the identifier,
+/// then uniqueness, then the checks made without building, and builds only
+/// once all pass.
+#[test]
+fn admit_reports_the_first_fault_in_one_order() {
+    Python::initialize();
+    let taken = [(ObjectType::DEVICE, 9, "Host")];
+    let refused = || -> PyResult<()> { Err(PyValueError::new_err("pure check")) };
+    let steps = std::cell::RefCell::new(Vec::new());
+    let run = |(instance, name): (u32, &str), check_passes: bool| {
+        steps.borrow_mut().clear();
+        admit(
+            (ObjectType::ANALOG_INPUT, instance, name),
+            taken,
+            || {
+                steps.borrow_mut().push("check");
+                if check_passes { Ok(()) } else { refused() }
+            },
+            || {
+                steps.borrow_mut().push("build");
+                Ok(())
+            },
+        )
+        .map_err(|error| refusal(error).1)
+    };
+    // Reserved instance, a taken name and a failing check: the instance.
+    let first = run((4_194_303, "Host"), false).unwrap_err();
+    assert!(first.contains("4194303"), "{first}");
+    assert!(steps.borrow().is_empty());
+    // A taken name and a failing check: the name.
+    assert_eq!(
+        run((1, "Host"), false).unwrap_err(),
+        "ValueError: duplicate object name: Host"
+    );
+    assert!(steps.borrow().is_empty());
+    // A failing check alone stops before the build.
+    assert_eq!(
+        run((1, "Fresh"), false).unwrap_err(),
+        "ValueError: pure check"
+    );
+    assert_eq!(*steps.borrow(), ["check"]);
+    run((1, "Fresh"), true).unwrap();
+    assert_eq!(*steps.borrow(), ["check", "build"]);
+}
+
+/// A profile the object would refuse is refused by `check`, before any
+/// build, with the error `set_profile` would give.
+#[test]
+fn a_profile_is_checked_before_the_build() {
+    Python::initialize();
+    let mut registration = analog_input(1, "AI", 1.0);
+    registration.check().unwrap();
+    registration.profile = Some(ObjectProfile {
+        profile_name: Some("room".into()),
+        ..ObjectProfile::default()
+    });
+    let error = registration.check().unwrap_err();
+    Python::attach(|py| {
+        assert!(
+            error.is_instance_of::<crate::errors::BacnetProtocolError>(py),
+            "{error}"
+        );
+    });
 }

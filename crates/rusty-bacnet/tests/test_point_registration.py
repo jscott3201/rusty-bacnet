@@ -61,7 +61,25 @@ class SameChecksTests(unittest.TestCase):
         *[(f"{kind} with {states} states", lambda o, k=kind, n=states: register(o, k, 8, "N", n))
           for kind in KINDS if kind.startswith("multistate")
           for states in (0, 1025, 4_000_000_000)],
+        # Two faults in one call: each surface reports the same one first.
+        ("a taken name and a NaN", lambda o: o.add_analog_input(5, "Kept", 62, math.nan)),
+        ("the reserved instance and a taken name",
+         lambda o: o.add_binary_value(4194303, "Kept")),
+        ("a taken identifier and a refused profile",
+         lambda o: o.add_analog_input(1, "Other", profile_name="room")),
+        ("a refused profile and a NaN",
+         lambda o: o.add_analog_input(5, "Bad", 62, math.nan, profile_name="room")),
+        ("a refused profile and too many states",
+         lambda o: o.add_multistate_input(5, "Bad", 1025, profile_name="room")),
     ]
+    # The error each two-fault call must give: the first in admit's order.
+    FIRST = {
+        "a taken name and a NaN": (ValueError, "duplicate object name"),
+        "the reserved instance and a taken name": (rb.BacnetError, "4194303"),
+        "a taken identifier and a refused profile": (ValueError, "duplicate object identifier"),
+        "a refused profile and a NaN": (rb.BacnetProtocolError, ""),
+        "a refused profile and too many states": (rb.BacnetProtocolError, ""),
+    }
 
     def test_every_surface_refuses_the_same_registrations_alike(self):
         results = {}
@@ -75,6 +93,14 @@ class SameChecksTests(unittest.TestCase):
             with self.subTest(case=case):
                 self.assertIsNotNone(by_owner["server"], by_owner)
                 self.assertEqual(len(set(by_owner.values())), 1, by_owner)
+                if case in self.FIRST:
+                    error, text = self.FIRST[case]
+                    kind, message = by_owner["server"]
+                    self.assertTrue(issubclass(kind, error), by_owner)
+                    self.assertIn(text, message)
+        # A profile refusal is the profile's, not a range error of the count.
+        kind, message = results["a refused profile and too many states"]["server"]
+        self.assertNotIn("1024", message)
 
     def test_the_refusals_name_what_was_wrong(self):
         for label, owner in owners().items():
@@ -117,6 +143,42 @@ class SameChecksTests(unittest.TestCase):
             with self.assertRaisesRegex(rb.BacnetError, "no valid header"):
                 owner.add_analog_value(2, "Fresh", storage_path=str(path))
             self.assertEqual(owner._pending_registration_count(), 1)
+
+
+class RefusedClearingRegistrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_refused_profile_leaves_a_kept_file_as_it_was(self):
+        # A registration that would clear the file, refused for its profile:
+        # the check comes before storage attaches, so nothing is cleared.
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "av-1")
+            oid = rb.ObjectIdentifier(O.ANALOG_VALUE, 1)
+            first = server()
+            first.add_analog_value(1, "AV", storage_path=path)
+            await first.start()
+            try:
+                await first.write_property_local(
+                    oid, P.DESCRIPTION, rb.PropertyValue.character_string("Lobby"),
+                    source_object=None)
+            finally:
+                await first.stop()
+            kept = Path(path).read_bytes()
+            second = server()
+            with self.assertRaises(rb.BacnetProtocolError) as raised:
+                second.add_analog_value(1, "AV", storage_path=path,
+                                        clear_written_reporting=True, profile_name="room")
+            self.assertEqual(raised.exception.error_code,
+                             rb.ErrorCode.VALUE_OUT_OF_RANGE.to_raw())
+            self.assertEqual(Path(path).read_bytes(), kept)
+            self.assertEqual(second._pending_registration_count(), 0)
+            # The same call with a good profile clears it.
+            second.add_analog_value(1, "AV", storage_path=path,
+                                    clear_written_reporting=True, profile_name="555-room")
+            await second.start()
+            try:
+                description = await second.read_property(oid, P.DESCRIPTION)
+                self.assertEqual(description.value, "")
+            finally:
+                await second.stop()
 
 
 class ServerStartTests(unittest.IsolatedAsyncioTestCase):

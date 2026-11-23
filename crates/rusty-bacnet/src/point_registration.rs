@@ -1,15 +1,22 @@
 //! The one registration path of the nine point builders (#2711):
 //! `BACnetServer` and the three endpoints read their `add_analog_input` ...
-//! `add_multistate_value` arguments into a [`Point`], check it with the same
-//! calls ([`check_identifier`] and [`check_unique`]) and build it with
-//! [`Point::build`].
+//! `add_multistate_value` arguments into a [`Registration`] and pass it to
+//! [`admit`], which makes every check in one order on both surfaces before
+//! [`Registration::build`] builds it.
 //!
 //! The two surfaces differ only in when they build. `BACnetServer` builds
 //! once, with its `storage_path` keywords ([`Storage`]), and keeps the
 //! object until start. An endpoint builds once to check the registration,
-//! keeps the [`Point`], and builds it again from it on each start attempt,
-//! so a failed or cancelled start leaves every registration for the next.
-//! A `Point` is plain data, so that rebuild needs no closure or trait.
+//! keeps the [`Registration`], and builds it again from it on each start
+//! attempt, so a failed or cancelled start leaves every registration for
+//! the next. A `Registration` is plain data, so that rebuild needs no
+//! closure or trait.
+//!
+//! `bacnet_objects::points` (#2445) describes points too, for a device
+//! built from a point list, but it has no room for what these builders
+//! take: Polarity, the event algorithm parameters, the profile rows, the
+//! Audit policy, Value_Source tracking and storage. So the binding keeps
+//! its own type.
 
 use bacnet_objects::audit::ObjectAuditPolicy;
 use bacnet_objects::object_profile::ObjectProfile;
@@ -29,10 +36,10 @@ mod tests;
 
 /// One point registration: what its builder call gave, parsed.
 #[derive(Clone, Debug)]
-pub(crate) struct Point {
+pub(crate) struct Registration {
     pub(crate) instance: u32,
     pub(crate) name: String,
-    pub(crate) kind: PointKind,
+    pub(crate) kind: RegistrationKind,
     /// The `tags`, `profile_location` and `profile_name` keywords (#1553,
     /// #1867).
     pub(crate) profile: Option<ObjectProfile>,
@@ -48,7 +55,7 @@ pub(crate) struct Point {
 /// sets Present_Value, checked as a local input is, so an Analog Input's
 /// NaN or infinity is refused. `None` keeps the type's default.
 #[derive(Clone, Debug)]
-pub(crate) enum PointKind {
+pub(crate) enum RegistrationKind {
     AnalogInput {
         units: u32,
         present_value: f32,
@@ -136,12 +143,12 @@ impl Storage<'_> {
     };
 }
 
-impl Point {
+impl Registration {
     /// The registration one builder call describes.
     pub(crate) fn new(
         instance: u32,
         name: &str,
-        kind: PointKind,
+        kind: RegistrationKind,
         profile: Option<ObjectProfile>,
         parameters: AlgorithmKeywords,
     ) -> Self {
@@ -157,15 +164,15 @@ impl Point {
     /// The object type this point builds.
     pub(crate) fn object_type(&self) -> ObjectType {
         match self.kind {
-            PointKind::AnalogInput { .. } => ObjectType::ANALOG_INPUT,
-            PointKind::AnalogOutput { .. } => ObjectType::ANALOG_OUTPUT,
-            PointKind::AnalogValue { .. } => ObjectType::ANALOG_VALUE,
-            PointKind::BinaryInput { .. } => ObjectType::BINARY_INPUT,
-            PointKind::BinaryOutput { .. } => ObjectType::BINARY_OUTPUT,
-            PointKind::BinaryValue { .. } => ObjectType::BINARY_VALUE,
-            PointKind::MultiStateInput { .. } => ObjectType::MULTI_STATE_INPUT,
-            PointKind::MultiStateOutput { .. } => ObjectType::MULTI_STATE_OUTPUT,
-            PointKind::MultiStateValue { .. } => ObjectType::MULTI_STATE_VALUE,
+            RegistrationKind::AnalogInput { .. } => ObjectType::ANALOG_INPUT,
+            RegistrationKind::AnalogOutput { .. } => ObjectType::ANALOG_OUTPUT,
+            RegistrationKind::AnalogValue { .. } => ObjectType::ANALOG_VALUE,
+            RegistrationKind::BinaryInput { .. } => ObjectType::BINARY_INPUT,
+            RegistrationKind::BinaryOutput { .. } => ObjectType::BINARY_OUTPUT,
+            RegistrationKind::BinaryValue { .. } => ObjectType::BINARY_VALUE,
+            RegistrationKind::MultiStateInput { .. } => ObjectType::MULTI_STATE_INPUT,
+            RegistrationKind::MultiStateOutput { .. } => ObjectType::MULTI_STATE_OUTPUT,
+            RegistrationKind::MultiStateValue { .. } => ObjectType::MULTI_STATE_VALUE,
         }
     }
 
@@ -173,6 +180,37 @@ impl Point {
     pub(crate) fn identity(&self) -> (ObjectType, u32, &str) {
         (self.object_type(), self.instance, &self.name)
     }
+
+    /// The checks a build would make after storage attaches, made first:
+    /// the profile rows, which the object provisions last and refuses only
+    /// as [`ObjectProfile::check`] does. Every other refusal happens in the
+    /// build before storage attaches (see `build`), so once this passes, a
+    /// refused registration has touched no `storage_path` file.
+    pub(crate) fn check(&self) -> PyResult<()> {
+        match &self.profile {
+            Some(profile) => profile.check().map_err(to_py_err),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Admit one registration, in the order both surfaces check it (#2711):
+/// an instance an object may have ([`check_identifier`]), an identifier
+/// and a name no object in `taken` has ([`check_unique`]), the checks
+/// `check` makes without building, then `build`. Each surface calls it
+/// under the lock that its start seals, after refusing a call that comes
+/// too late, and keeps what `build` gives back or the registration itself.
+/// So one call with two faults raises the same error on either surface.
+pub(crate) fn admit<'a, T>(
+    (object_type, instance, name): (ObjectType, u32, &str),
+    taken: impl IntoIterator<Item = (ObjectType, u32, &'a str)>,
+    check: impl FnOnce() -> PyResult<()>,
+    build: impl FnOnce() -> PyResult<T>,
+) -> PyResult<T> {
+    check_identifier(object_type, instance)?;
+    check_unique(object_type, instance, name, taken)?;
+    check()?;
+    build()
 }
 
 /// Refuse an instance no object may have: past 4194303, or 4194303

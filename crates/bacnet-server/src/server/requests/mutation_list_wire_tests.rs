@@ -48,6 +48,9 @@ fn alarm_values(elements: &[u8]) -> Bytes {
 /// object may have (1024, #2711) whose Alarm_Values holds `count` values:
 /// 100 to 1024 in turn, again from 100 once those run out, so every value
 /// is in range (#1429), 100 and 101 are present and 7 and 8 are not.
+/// MAX_ALARM_VALUES equals MAX_NUMBER_OF_STATES, so a list at that cap with
+/// a state still free to add holds repeated entries: the only way the cap
+/// tests reach it.
 pub(super) async fn fill_msi_alarm_values(fixture: &Fixture, count: usize) {
     let states = bacnet_objects::multistate::MAX_NUMBER_OF_STATES;
     let mut msi = bacnet_objects::multistate::MultiStateInputObject::new(1, "msi", states).unwrap();

@@ -8,25 +8,24 @@
 //! policy.
 //!
 //! The nine builders register through the endpoints' path (#2711): each
-//! reads its arguments into a [`Point`], which [`BACnetServer::register_point`]
-//! checks as an endpoint checks it and builds with the same code.
+//! reads its arguments into a [`Registration`], which
+//! [`BACnetServer::register_point`] admits as an endpoint admits it and
+//! builds with the same code.
 use super::super::*;
 use crate::algorithm_keywords::AlgorithmKeywords;
 use crate::object_options::{object_profile, present_value_access};
-use crate::points::{Point, PointKind, Storage, check_unique, value_keywords};
+use crate::point_registration::{Registration, RegistrationKind, Storage, admit, value_keywords};
 use crate::types::PyBitString;
 use bacnet_types::enums::{ObjectType, Polarity};
 
 impl BACnetServer {
-    /// Keep `point`, built once with `storage`, for start (#2711). It
-    /// passes the endpoints' checks first: an instance an object may have,
-    /// then no identifier or name the Device or a registration already
-    /// has, each refused before the build, so a refused registration has
-    /// touched no storage file and leaves the others as they were. The
-    /// build then makes the object's own checks.
-    fn register_point(&self, point: Point, storage: Storage<'_>) -> PyResult<()> {
-        let (kind, instance, name) = point.identity();
-        crate::points::check_identifier(kind, instance)?;
+    /// Keep `point`, built once with `storage`, for start (#2711), once
+    /// [`admit`] has checked it as an endpoint checks it, against the
+    /// Device and the registrations so far. Every check comes before the
+    /// object is built, or inside the build before storage attaches, so a
+    /// refused registration has touched no storage file and leaves the
+    /// others as they were.
+    fn register_point(&self, point: Registration, storage: Storage<'_>) -> PyResult<()> {
         let mut pending = self.lock_pending()?;
         self.check_takes_objects()?;
         let device = (
@@ -42,8 +41,12 @@ impl BACnetServer {
                 object.object_name(),
             )
         });
-        check_unique(kind, instance, name, std::iter::once(device).chain(kept))?;
-        let object = point.build(storage)?;
+        let object = admit(
+            point.identity(),
+            std::iter::once(device).chain(kept),
+            || point.check(),
+            || point.build(storage),
+        )?;
         pending.push(object);
         Ok(())
     }
@@ -134,10 +137,10 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let point = Point::new(
+        let point = Registration::new(
             instance,
             name,
-            PointKind::AnalogInput {
+            RegistrationKind::AnalogInput {
                 units,
                 present_value,
             },
@@ -181,10 +184,10 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let point = Point::new(
+        let point = Registration::new(
             instance,
             name,
-            PointKind::AnalogOutput {
+            RegistrationKind::AnalogOutput {
                 units,
                 present_value: None,
             },
@@ -230,10 +233,10 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let point = Point::new(
+        let point = Registration::new(
             instance,
             name,
-            PointKind::BinaryInput {
+            RegistrationKind::BinaryInput {
                 polarity: Polarity::from_raw(polarity),
                 present_value: None,
             },
@@ -271,10 +274,10 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let point = Point::new(
+        let point = Registration::new(
             instance,
             name,
-            PointKind::BinaryOutput {
+            RegistrationKind::BinaryOutput {
                 polarity: Polarity::from_raw(polarity),
                 present_value: None,
             },
@@ -308,10 +311,10 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let point = Point::new(
+        let point = Registration::new(
             instance,
             name,
-            PointKind::MultiStateInput {
+            RegistrationKind::MultiStateInput {
                 number_of_states,
                 present_value: None,
             },
@@ -344,10 +347,10 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let point = Point::new(
+        let point = Registration::new(
             instance,
             name,
-            PointKind::MultiStateOutput {
+            RegistrationKind::MultiStateOutput {
                 number_of_states,
                 present_value: None,
             },
@@ -386,10 +389,10 @@ impl BACnetServer {
         clear_written_reporting: bool,
     ) -> PyResult<()> {
         let access = self::present_value_access(present_value_access, value_source_tracking)?;
-        let point = Point::new(
+        let point = Registration::new(
             instance,
             name,
-            PointKind::MultiStateValue {
+            RegistrationKind::MultiStateValue {
                 number_of_states,
                 access,
                 value_source_tracking,
@@ -450,10 +453,10 @@ impl BACnetServer {
             auditable_operations,
             audit_priority_filter,
         )?;
-        let point = Point::new(
+        let point = Registration::new(
             instance,
             name,
-            PointKind::AnalogValue {
+            RegistrationKind::AnalogValue {
                 units,
                 value,
                 present_value: None,
@@ -509,10 +512,10 @@ impl BACnetServer {
             auditable_operations,
             audit_priority_filter,
         )?;
-        let point = Point::new(
+        let point = Registration::new(
             instance,
             name,
-            PointKind::BinaryValue {
+            RegistrationKind::BinaryValue {
                 value,
                 present_value: None,
             },

@@ -4275,10 +4275,13 @@ Async BACnet server that hosts objects and responds to remote requests.
 object may have it (Clause 12.1.1), so the constructor raises `ValueError` for
 it or anything larger (#2171). The nine analog, binary and multi-state
 builders check each registration at the call, as the endpoints' builders do
-(see [Point registration checks](#point-registration-checks)). For the other
-builders, an added object the database won't take raises `ValueError` at
-`start()`: "duplicate object name" for a name already held, "object refused"
-for any other reason, such as an object at instance 4194303.
+(see [Point registration checks](#point-registration-checks)). The other
+builders check less at the call. An object they add under an identifier
+already registered replaces the earlier one silently, the last one winning.
+An object the database won't take raises `ValueError` at `start()`:
+"duplicate object name" for a name another object holds, the Device's
+included, and "object refused" for any other reason, such as an object at
+instance 4194303.
 
 ### Constructor
 
@@ -4387,27 +4390,30 @@ server.add_multistate_value(instance=1, name="Season", number_of_states=4)
 
 These nine builders, on `BACnetServer` and on each endpoint, read their
 arguments into one registration and check it with the same code (#2711).
-The checks run at the call, before anything is kept:
+The checks run at the call, before anything is kept, in this order, so a
+call with two faults raises the same error on every surface:
 
-- An instance of 4194303 or more raises `BacnetError`: no object may have
-  4194303 (#2171).
-- An object identifier or a name the Device or an earlier registration
-  already has raises `ValueError` ("duplicate object identifier" or
-  "duplicate object name"). On an endpoint its declared Network Ports
-  count too.
-- A value the object refuses raises from the builder as the object refuses
-  it: a NaN or infinite Analog Input `present_value` is
-  `BacnetProtocolError` VALUE_OUT_OF_RANGE, as are the parameter keywords'
-  refusals below.
-- A multi-state builder takes 1 to 1024 states, the same cap a peer's
-  CreateObject or State_Text write meets; another count raises
-  `BacnetError`.
+1. An instance of 4194303 or more raises `BacnetError`: no object may have
+   4194303 (#2171).
+2. An object identifier or a name the Device or an earlier registration
+   already has raises `ValueError` ("duplicate object identifier" or
+   "duplicate object name"). On an endpoint its declared Network Ports
+   count too.
+3. A profile keyword the object would refuse (`tags`,
+   `profile_location`, `profile_name`) raises `BacnetProtocolError`.
+4. A value the object refuses raises from the builder as the object refuses
+   it: a NaN or infinite Analog Input `present_value` is
+   `BacnetProtocolError` VALUE_OUT_OF_RANGE, as are the parameter keywords'
+   refusals below. A multi-state builder takes 1 to 1024 states, the same
+   cap a peer's CreateObject or State_Text write meets; another count
+   raises `BacnetError`.
 
 A refused registration keeps nothing and leaves the earlier ones for
 start. On `BACnetServer` it also leaves any `storage_path` file alone,
-since the checks come before the object is built. The other
-`BACnetServer` builders still leave a duplicate name or identifier to
-`start()`.
+`clear_written_reporting=True` included: every check comes before storage
+attaches. Until #2711 these builders, like the other `BACnetServer`
+builders still, took a repeated identifier as a silent replacement of the
+earlier registration and found a duplicate name only at `start()`.
 
 #### Keeping written reporting settings
 

@@ -1,10 +1,13 @@
-//! Build a [`Point`], the same way for `BACnetServer` and the endpoints.
+//! Build a [`Registration`], the same way for `BACnetServer` and the endpoints.
 //!
 //! Inside the build that [`keep_reporting`] runs, so before storage
 //! attaches: the object, its Value keywords, its initial value and its
-//! parameter keywords. A value a peer wrote and the file kept is then
-//! served over a keyword's, and a clearing start builds again on the
-//! cleared file. The profile rows come last, as they always have.
+//! parameter keywords; each refusal there leaves the file untouched. A
+//! value a peer wrote and the file kept is then served over a keyword's,
+//! and a clearing start builds again on the cleared file. The profile
+//! rows come last, as they always have; [`Registration::check`] has
+//! checked them before the build, so they can't be refused after a
+//! clearing start has cleared the file (#2711).
 
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
@@ -19,7 +22,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 use pyo3::PyResult;
 
-use super::{Point, PointKind, Storage};
+use super::{Registration, RegistrationKind, Storage};
 use crate::object_options::{apply_profile, keep_reporting};
 
 /// Present_Value set as a local input: refused as the object refuses a
@@ -29,7 +32,7 @@ fn local_input(object: &mut impl LocalInput, value: PropertyValue) -> Result<(),
     object.apply_local_input(LocalInputValue::present_value(value))
 }
 
-impl Point {
+impl Registration {
     /// Build the object, with `storage` attached when it names a file.
     /// Every check the object makes raises here: BacnetError or
     /// BacnetProtocolError, as the object refuses.
@@ -44,7 +47,7 @@ impl Point {
         let instance = *instance;
         let name = name.as_str();
         match kind {
-            PointKind::AnalogInput {
+            RegistrationKind::AnalogInput {
                 units,
                 present_value,
             } => {
@@ -66,7 +69,7 @@ impl Point {
                 )?;
                 finish(object, profile, AnalogInputObject::set_profile)
             }
-            PointKind::AnalogOutput {
+            RegistrationKind::AnalogOutput {
                 units,
                 present_value,
             } => {
@@ -90,7 +93,7 @@ impl Point {
                 )?;
                 finish(object, profile, AnalogOutputObject::set_profile)
             }
-            PointKind::AnalogValue {
+            RegistrationKind::AnalogValue {
                 units,
                 value,
                 present_value,
@@ -124,7 +127,7 @@ impl Point {
                 )?;
                 finish(object, profile, AnalogValueObject::set_profile)
             }
-            PointKind::BinaryInput {
+            RegistrationKind::BinaryInput {
                 polarity,
                 present_value,
             } => {
@@ -145,7 +148,7 @@ impl Point {
                 )?;
                 finish(object, profile, BinaryInputObject::set_profile)
             }
-            PointKind::BinaryOutput {
+            RegistrationKind::BinaryOutput {
                 polarity,
                 present_value,
             } => {
@@ -166,7 +169,7 @@ impl Point {
                 )?;
                 finish(object, profile, BinaryOutputObject::set_profile)
             }
-            PointKind::BinaryValue {
+            RegistrationKind::BinaryValue {
                 value,
                 present_value,
             } => {
@@ -195,7 +198,7 @@ impl Point {
                 )?;
                 finish(object, profile, BinaryValueObject::set_profile)
             }
-            PointKind::MultiStateInput {
+            RegistrationKind::MultiStateInput {
                 number_of_states,
                 present_value,
             } => {
@@ -216,7 +219,7 @@ impl Point {
                 )?;
                 finish(object, profile, MultiStateInputObject::set_profile)
             }
-            PointKind::MultiStateOutput {
+            RegistrationKind::MultiStateOutput {
                 number_of_states,
                 present_value,
             } => {
@@ -237,7 +240,7 @@ impl Point {
                 )?;
                 finish(object, profile, MultiStateOutputObject::set_profile)
             }
-            PointKind::MultiStateValue {
+            RegistrationKind::MultiStateValue {
                 number_of_states,
                 access,
                 value_source_tracking,
