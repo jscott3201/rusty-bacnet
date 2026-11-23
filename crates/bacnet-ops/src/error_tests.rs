@@ -43,6 +43,67 @@ fn a_timeout_is_unreachable_never_refused() {
     }
 }
 
+/// A router's network reject is unreachable, like a timeout, and never a
+/// refusal by the device, which never saw the request; it isn't a timeout
+/// either. Its text is the client's, naming the router, the network and
+/// the reason (#2724).
+#[test]
+fn a_network_reject_is_unreachable_never_refused_or_timed_out() {
+    use bacnet_npdu::{Mac, RejectMessageReason};
+    use bacnet_types::error::NetworkReject;
+    let error = || {
+        Error::NetworkRejected(Box::new(NetworkReject::new(
+            Mac::from_array([2]),
+            Some(bacnet_types::data_link::DataLink::Mstp),
+            7,
+            RejectMessageReason::NOT_DIRECTLY_CONNECTED,
+        )))
+    };
+    let text = error().to_string();
+    assert!(crate::client::unreachable(&error()));
+    assert!(!crate::client::timed_out(&error()));
+    for sorted in [OpsError::at(&at(), error()), OpsError::from(error())] {
+        assert!(sorted.unreachable(), "{sorted:?}");
+        assert!(!sorted.timed_out(), "{sorted:?}");
+        assert_eq!(sorted.remote(), None, "{sorted:?}");
+        assert_eq!(sorted.to_string(), text);
+    }
+    assert!(matches!(
+        OpsError::at(&at(), error()),
+        OpsError::Unreachable { device, source: Error::NetworkRejected(_) } if device == at()
+    ));
+    assert_eq!(
+        text,
+        "Reject-Message-To-Network from router mstp:2: no route to network 7 \
+         (not-directly-connected, reason 1); an earlier attempt may have reached the device"
+    );
+}
+
+/// A timeout after a router said it was busy is a timeout, unreachable as
+/// any is, naming the router in its text (#2724).
+#[test]
+fn a_busy_timeout_is_a_timeout() {
+    use bacnet_npdu::{Mac, RejectMessageReason};
+    use bacnet_types::error::NetworkReject;
+    let busy = NetworkReject::new(
+        Mac::from_array([2]),
+        None,
+        7,
+        RejectMessageReason::ROUTER_BUSY,
+    );
+    let error = Error::RouterBusyTimeout(Box::new(busy));
+    let text = error.to_string();
+    assert!(crate::client::timed_out(&error));
+    let sorted = OpsError::at(&at(), error);
+    assert!(
+        matches!(&sorted, OpsError::Unreachable { .. }),
+        "{sorted:?}"
+    );
+    assert!(sorted.unreachable() && sorted.timed_out());
+    assert_eq!(sorted.remote(), None);
+    assert_eq!(sorted.to_string(), text);
+}
+
 /// A device's Error, Reject or other Abort is a refusal holding it; a
 /// structured Error PDU keeps its class and code.
 #[test]

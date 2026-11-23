@@ -2,13 +2,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 use std::time::{Duration, Instant as StdInstant};
 
-use bacnet_network::layer::ReceivedNetworkControl;
-use bacnet_npdu::{NetworkMessageType, RejectMessageReason, RejectMessageToNetwork};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use tokio::time::Instant as TokioInstant;
 
 use super::*;
-use crate::tsm::CompletionOutcome;
 
 /// The smallest NPDU, in octets, a router must be able to forward between
 /// any two data links, the lowest of the per-link figures in Table 6-1
@@ -127,6 +124,10 @@ struct RoutedPathEntry {
     /// (#2683), so a reason 4 is judged by the limit its request was sized
     /// to, not the one in force when it lands.
     sized_under: u64,
+    /// A busy reject (reason 2) tied to a request on the path, which names
+    /// the router if that request times out (#2724). Written on the receive
+    /// side only; a later request's owner never matches it.
+    busy: Option<Box<rejects::BusyNote>>,
 }
 
 impl RoutedPathEntry {
@@ -145,6 +146,7 @@ impl RoutedPathEntry {
             below_minimum_warned: false,
             changed: last_used,
             sized_under: last_used,
+            busy: None,
         }
     }
 
@@ -502,123 +504,6 @@ impl RoutedPathLimits {
         true
     }
 
-    pub(super) async fn handle_network_control(
-        &self,
-        tsm: &Arc<SyncMutex<Tsm>>,
-        control: ReceivedNetworkControl,
-    ) {
-        if control.npdu.message_type != Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK) {
-            return;
-        }
-        let Ok(reject) = RejectMessageToNetwork::decode(&control.npdu.payload) else {
-            return;
-        };
-        if reject.reason != RejectMessageReason::MESSAGE_TOO_LONG {
-            return;
-        }
-
-        let Some((active, attempted_npdu, changed)) = self.claim_active(
-            &control.source_mac,
-            reject.network,
-            control.ingress_sequence,
-        ) else {
-            return;
-        };
-        let outcome = tsm.lock().complete_network_path_too_long_for_owner(
-            &active.tsm_mac,
-            active.invoke_id,
-            &active.owner,
-            reject.network,
-        );
-        // A change of the path's limit may run at any point here (and a
-        // clear may leave the entry to be reclaimed once the request drops
-        // its lease); the commit then learns nothing.
-        if outcome == CompletionOutcome::Delivered {
-            self.commit_learned_limit(active, attempted_npdu, changed);
-        }
-    }
-
-    /// Take the active request a reason 4 for `router_mac` and `dnet` ends,
-    /// with the largest forwarded NPDU it has sent and the
-    /// [`changed`](RoutedPathEntry::changed) number it was sized under
-    /// ([`RoutedPathEntry::sized_under`]). A reject that reached
-    /// ingress before the request was installed is not its own. One that
-    /// could be for an earlier answered generation's larger frame is
-    /// dropped and counted, and the request runs on to its own answer,
-    /// retry or timeout. So is one claimed by a request whose largest frame is
-    /// within [`DEFAULT_ROUTED_PATH_MAX_NPDU`] (counted apart): no
-    /// conforming router refuses such a frame, so the reject was for other
-    /// traffic, and believing it would pin the path below any link's minimum.
-    /// The first such drop on a path logs a warning and marks the path,
-    /// unless the request was sized before the path's latest limit change:
-    /// the mark and the warning are about the limit in force.
-    fn claim_active(
-        &self,
-        router_mac: &[u8],
-        dnet: u16,
-        ingress_sequence: u64,
-    ) -> Option<(ActiveRoutedSend, u16, u64)> {
-        let key = RoutedPathKey::new(router_mac, dnet);
-        let mut guard = self.state();
-        let state = &mut *guard;
-        let entry = state.entries.get_mut(&key)?;
-        if entry.generation_attempts == 0
-            || entry
-                .active
-                .as_ref()
-                .is_none_or(|active| active.path != key || ingress_sequence <= active.ingress_floor)
-        {
-            return None;
-        }
-        let largest = entry.generation_largest_npdu;
-        // This check stays before the arms below: they clear the answered
-        // record and mark a one-frame generation refused, which a dropped
-        // reject must not do.
-        if largest <= DEFAULT_ROUTED_PATH_MAX_NPDU {
-            state.below_minimum_drops = state.below_minimum_drops.saturating_add(1);
-            let first = entry.sized_under == entry.changed
-                && !std::mem::replace(&mut entry.below_minimum_warned, true);
-            drop(guard);
-            if first {
-                tracing::warn!(
-                    router_mac = ?router_mac,
-                    dnet,
-                    npdu_octets = largest,
-                    minimum_npdu_octets = DEFAULT_ROUTED_PATH_MAX_NPDU,
-                    "Ignored a reason-4 (too long) network reject for a frame within \
-                     the 228-octet routed minimum of Table 6-1; a router refusing a frame that \
-                     small is outside the standard. If this router really limits the path \
-                     below that, requests through it time out until the path's limit is set \
-                     by hand (BACnetClient::configure_routed_path_max_npdu)"
-                );
-            }
-            return None;
-        }
-        // The clock is read only for a path with answered frames on record.
-        let answered = match entry.answered {
-            Some(_) => entry.answered_at(TokioInstant::now()),
-            None => None,
-        };
-        match answered {
-            Some(answered) if largest < answered.largest_npdu => {
-                state.dropped_rejects = state.dropped_rejects.saturating_add(1);
-                return None;
-            }
-            Some(_) => {}
-            None => {
-                entry.answered = None;
-                if entry.generation_attempts == 1 {
-                    entry.generation_end = GenerationEnd::Refused;
-                }
-            }
-        }
-        let sized_under = entry.sized_under;
-        entry
-            .active
-            .take()
-            .map(|active| (active, largest, sized_under))
-    }
-
     /// Learn from a reason 4 for a request sized while the path's limit was
     /// last changed at `changed`. A path whose limit changed since, or whose
     /// entry is gone, learns nothing: the change reset learned evidence, and
@@ -712,6 +597,7 @@ impl RoutedPathLease {
             .get_mut(&self.key)
             .expect("path entry remains present while its gate is held");
         entry.generation_end = GenerationEnd::Answered;
+        entry.busy = None;
     }
 }
 
@@ -910,6 +796,9 @@ pub(crate) fn check_routed_unicast(dnet: u16, dadr_len: usize) -> Result<(), Err
     check_remote_dnet(dnet)?;
     check_routed_dadr(dadr_len)
 }
+
+#[path = "routed_path_rejects.rs"]
+mod rejects;
 
 #[cfg(test)]
 #[path = "routed_path_limits_tests.rs"]

@@ -71,7 +71,7 @@ impl fmt::Display for ReasonText {
 
 /// Write a constant's `named` name in lower case with hyphens, or
 /// `field=value` for a value without a name.
-fn write_name(
+pub(super) fn write_name(
     f: &mut fmt::Formatter<'_>,
     named: Option<&str>,
     field: &str,

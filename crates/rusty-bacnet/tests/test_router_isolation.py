@@ -90,9 +90,20 @@ class IsolatedPortRoutingTests(unittest.IsolatedAsyncioTestCase):
 
         # Isolated network 5 to isolated network 7: the router answers with
         # Reject-Message-To-Network, reason 1, naming network 7, and the node
-        # on network 7 hears nothing.
+        # on network 7 hears nothing. The read fails on that reject, with no
+        # retry and no timeout (#2724), naming the router as RoutedTarget
+        # takes it.
         blocked = self.through_port_5(7, self.node.address)
-        await self.unanswered(blocked)
+        with self.assertRaises(rb.BacnetNetworkRejectError) as caught:
+            await asyncio.wait_for(self.client.read_property(blocked, AI_0, PV), 10)
+        error = caught.exception
+        self.assertEqual((error.reason, error.network), (1, 7))
+        self.assertEqual(error.router, self.ports[1].address)
+        # One frame went, and the router refused it: the node never got it.
+        self.assertIs(error.reached_device, False)
+        self.assertIn("no route to network 7 (not-directly-connected, reason 1)", str(error))
+        self.assertNotIsInstance(error, rb.BacnetTimeoutError)
+        self.assertIsNone(rb.BacnetNetworkRejectError.router)
         report = await self.reject()
         self.assertEqual((report.reason, report.network), (1, 7))
         self.assertEqual(report.source_mac, self.ports[1].mac)

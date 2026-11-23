@@ -220,7 +220,10 @@ pub(super) fn output(properties: Value) -> Value {
             json!({
                 "type": "string",
                 "description": "Set on an error result: invalid-argument, refused and \
-                                unknown-device sent nothing; bacnet, timeout and failed did",
+                                unknown-device sent nothing; bacnet, network-reject, timeout \
+                                and failed did (a network-reject's reached_device says whether \
+                                the device can have it; a timeout's router_busy names a router \
+                                that said it was busy)",
             }),
         ),
     ] {

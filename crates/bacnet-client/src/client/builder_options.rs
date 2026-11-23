@@ -37,6 +37,15 @@ impl<T: TransportPort + 'static> ClientBuilder<T> {
         self
     }
 
+    /// Set whether a Complex-ACK completes a request whose service takes a
+    /// Simple-ACK as a success, for a device in the field that answers so
+    /// (default `false`). See
+    /// [`ClientConfig::accept_complex_ack_for_simple_services`].
+    pub fn accept_complex_ack_for_simple_services(mut self, accept: bool) -> Self {
+        self.config.accept_complex_ack_for_simple_services = accept;
+        self
+    }
+
     /// Set the proposed segmented-transfer window size.
     pub fn proposed_window_size(mut self, window_size: u8) -> Self {
         self.config.proposed_window_size = window_size;
@@ -109,6 +118,15 @@ impl BipClientBuilder {
     /// Set whether this client accepts segmented responses.
     pub fn segmented_response_accepted(mut self, accepted: bool) -> Self {
         self.config.segmented_response_accepted = accepted;
+        self
+    }
+
+    /// Set whether a Complex-ACK completes a request whose service takes a
+    /// Simple-ACK as a success, for a device in the field that answers so
+    /// (default `false`). See
+    /// [`ClientConfig::accept_complex_ack_for_simple_services`].
+    pub fn accept_complex_ack_for_simple_services(mut self, accept: bool) -> Self {
+        self.config.accept_complex_ack_for_simple_services = accept;
         self
     }
 
@@ -201,6 +219,15 @@ impl Bip6ClientBuilder {
         self
     }
 
+    /// Set whether a Complex-ACK completes a request whose service takes a
+    /// Simple-ACK as a success, for a device in the field that answers so
+    /// (default `false`). See
+    /// [`ClientConfig::accept_complex_ack_for_simple_services`].
+    pub fn accept_complex_ack_for_simple_services(mut self, accept: bool) -> Self {
+        self.config.accept_complex_ack_for_simple_services = accept;
+        self
+    }
+
     /// Set the proposed segmented-transfer window size.
     pub fn proposed_window_size(mut self, window_size: u8) -> Self {
         self.config.proposed_window_size = window_size;
@@ -255,6 +282,15 @@ impl ScClientBuilder {
     /// Set whether this client accepts segmented responses.
     pub fn segmented_response_accepted(mut self, accepted: bool) -> Self {
         self.config.segmented_response_accepted = accepted;
+        self
+    }
+
+    /// Set whether a Complex-ACK completes a request whose service takes a
+    /// Simple-ACK as a success, for a device in the field that answers so
+    /// (default `false`). See
+    /// [`ClientConfig::accept_complex_ack_for_simple_services`].
+    pub fn accept_complex_ack_for_simple_services(mut self, accept: bool) -> Self {
+        self.config.accept_complex_ack_for_simple_services = accept;
         self
     }
 

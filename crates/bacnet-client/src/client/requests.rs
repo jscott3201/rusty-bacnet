@@ -41,15 +41,19 @@ pub(super) fn request_cut_off() -> Error {
 }
 
 /// Whether `response` is the device's own answer to a confirmed request: an
-/// acknowledgment, or its Error, Reject or Abort. Any of them shows that the
-/// request reached the device (Clause 19.4). A router's refusal, a reason 4
-/// ending the request as [`TsmResponse::NetworkPathTooLong`], is no answer
-/// from the device.
+/// acknowledgment, of the right kind or not (#2721), or its Error, Reject
+/// or Abort. Any of them shows that the request reached the device (Clause
+/// 19.4). A router's refusal, a reason 4 ending the request as
+/// [`Error::RoutedPathTooLong`] or another reason as
+/// [`Error::NetworkRejected`], is no answer from the device.
 pub(super) fn answered_by_peer(response: &Result<TsmResponse, Error>) -> bool {
-    matches!(
-        response,
-        Ok(TsmResponse::SimpleAck | TsmResponse::ComplexAck { .. } | TsmResponse::Remote { .. })
-    )
+    match response {
+        Ok(
+            TsmResponse::SimpleAck | TsmResponse::ComplexAck { .. } | TsmResponse::Remote { .. },
+        ) => true,
+        Ok(TsmResponse::Failed(error)) => matches!(**error, Error::UnexpectedAck { .. }),
+        _ => false,
+    }
 }
 
 /// Reject a maximum transmittable length no conformant device could accept.
@@ -442,7 +446,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return Err(e);
         }
 
-        let response = self
+        let mut response = self
             .wait_for_confirmed_response(
                 ConfirmedWait {
                     target,
@@ -459,10 +463,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         if sized_by.is_some() {
             self.note_answer(sized_by, &response);
         }
-        if let Some(lease) = path_lease.as_ref()
-            && answered_by_peer(&response)
-        {
-            lease.mark_answered();
+        if let Some(lease) = path_lease.as_ref() {
+            self.settle_routed(lease, (&tsm_mac, invoke_id, &owner), &mut response);
         }
         guard.mark_completed();
         response.and_then(Self::confirmed_response_result)
@@ -697,7 +699,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     pub(super) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, Error> {
-        super::confirmed_response_result(response)
+        response.into_result()
     }
 
     /// Send one frame of a confirmed request (its first, a retry or a

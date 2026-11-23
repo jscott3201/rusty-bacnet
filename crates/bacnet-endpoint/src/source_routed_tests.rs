@@ -685,3 +685,6 @@ mod segmented;
 
 #[path = "source_routed_broadcast_tests.rs"]
 mod broadcast_forms;
+
+#[path = "source_routed_reject_tests.rs"]
+mod reject;

@@ -22,13 +22,17 @@ use crate::constructed::BACnetObjectPropertyReference;
 use crate::data_link::DataLink;
 #[cfg(feature = "alloc")]
 use crate::enums::PropertyIdentifier;
-use crate::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
+use crate::enums::{AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, RejectReason};
 
 mod decode;
 mod encode;
+#[cfg(feature = "std")]
+mod network_reject;
 mod remote;
 pub use decode::{DecodeError, DecodingKind, RangeError};
 pub use encode::{EncodeError, SegmentationError};
+#[cfg(feature = "std")]
+pub use network_reject::NetworkReject;
 #[cfg(feature = "alloc")]
 use remote::ProtocolText;
 pub use remote::RemoteError;
@@ -53,6 +57,34 @@ impl fmt::Display for NotAdvancing {
                  the device answered with no records"
             ),
         }
+    }
+}
+
+/// [`Error::UnexpectedAck`]'s text.
+struct WrongAck {
+    service: ConfirmedServiceChoice,
+    complex: bool,
+}
+
+impl fmt::Display for WrongAck {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (came, takes) = if self.complex {
+            ("a Complex-ACK", "a Simple-ACK, with no data")
+        } else {
+            ("a Simple-ACK", "a Complex-ACK carrying its result")
+        };
+        f.write_str("the device acknowledged ")?;
+        remote::write_name(
+            f,
+            self.service.name(),
+            "service",
+            u16::from(self.service.to_raw()),
+        )?;
+        write!(
+            f,
+            " with {came}, but that service is acknowledged with {takes}; whether it \
+             carried out the request is unknown"
+        )
     }
 }
 
@@ -164,6 +196,55 @@ pub enum Error {
     RoutedPathTooLong {
         /// Destination network rejected by the router.
         dnet: u16,
+    },
+
+    /// A router the request went through refused it at the network layer
+    /// by sending back a Reject-Message-To-Network (Clause 6.4.4), so no device
+    /// answered (#2724). The client ends a routed confirmed request this
+    /// way at once for reason 1 (no route to the network), 6 (an address
+    /// length the router found invalid), 0 (other), 5 (a security refusal
+    /// in earlier revisions) and any reason the standard doesn't define.
+    /// A busy router (reason 2) leaves the request to its retries
+    /// ([`Error::RouterBusyTimeout`] when they run out), reason 3 answers a
+    /// network message and never a request, and reason 4 is
+    /// [`Error::RoutedPathTooLong`]. Whether the device can have received
+    /// the request is [`NetworkReject::single_frame`]. Only with `std`,
+    /// which the client needs; the reject is boxed so the rare refusal
+    /// widens no `Result<_, Error>` (on a 32-bit target the error stays 48
+    /// octets).
+    #[cfg(feature = "std")]
+    #[error("{0}")]
+    NetworkRejected(Box<NetworkReject>),
+
+    /// A routed confirmed request ran out of retries with no answer after
+    /// the router it went through said, with a reject of reason 2, that it
+    /// was busy for the station's network (#2724). It is a timeout as the
+    /// client's TSM_TIMEOUT abort is, and the low-level crates' and the
+    /// bindings' timeout handling treat it as one; the reject names the
+    /// router and the network. Whether the device received the request is
+    /// unknown, as after any timeout. Only with `std`, boxed as
+    /// [`Error::NetworkRejected`] is.
+    #[cfg(feature = "std")]
+    #[error("BACnet abort: tsm-timeout; on the way, {}", .0.what())]
+    RouterBusyTimeout(Box<NetworkReject>),
+
+    /// The device acknowledged a confirmed request with the other kind of
+    /// acknowledgement than its service takes (#2721): a Complex-ACK for a
+    /// service whose result carries no data, such as WriteProperty, or a
+    /// Simple-ACK for one whose result does, such as ReadProperty (Clause
+    /// 21 lists the services with a Complex-ACK). The transaction ended
+    /// there, as any final acknowledgement ends it, so the client retries
+    /// nothing and sends the device nothing more; whether the device
+    /// carried out the request is unknown. A service the standard doesn't
+    /// define, or one it removed, takes either.
+    #[error("{}", WrongAck { service: *.service, complex: *.complex })]
+    UnexpectedAck {
+        /// The service the request asked for.
+        service: ConfirmedServiceChoice,
+        /// `true`: a Complex-ACK came for a service acknowledged with a
+        /// Simple-ACK; `false`: a Simple-ACK came for one acknowledged with
+        /// a Complex-ACK.
+        complex: bool,
     },
 
     /// The client cannot safely allocate state for another routed path.

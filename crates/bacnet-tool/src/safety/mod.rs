@@ -396,7 +396,8 @@ impl Outcome {
     pub fn of(result: &Result<(), Error>) -> Self {
         let error = match result {
             Ok(()) => return Self::Ack,
-            Err(Error::Timeout(_)) => return Self::Timeout,
+            // A timeout after a router said it was busy is a timeout too.
+            Err(Error::Timeout(_) | Error::RouterBusyTimeout(_)) => return Self::Timeout,
             // The node's DeviceCommunicationControl stopped it (#2617):
             // before it went out it was never sent; once it had, only its
             // retry was held back, and whether it was applied is unknown.

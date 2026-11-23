@@ -437,6 +437,40 @@ async fn a_routed_device_is_asked_for_again_on_its_network() {
     lab.stop().await;
 }
 
+/// A following handle whose router refuses its request (no route to the
+/// device's network, #2724) asks for the device again on that network, as
+/// after a timeout: an I-Am heard through another router would move it
+/// there. The error is the router's reject, unreachable but no timeout.
+#[tokio::test(start_paused = true)]
+async fn a_router_refusal_has_a_following_handle_ask_again() {
+    let bus = Bus::new();
+    bus.rejecter(9);
+    let (client, sent) = client_on(bus.port(1)).await;
+    // Device 2002 is station 6 on network 3, heard through station 9.
+    bus.i_am_from(9, Some((3, &mac(6))), 2002);
+    settle().await;
+    let wide = client.with_resolve_scope(ResolveScope::Global);
+    let device = wide.device(2002).await.unwrap();
+    assert_eq!(device.address(), DeviceAddress::new(3, &mac(6)).unwrap());
+    sent.clear();
+    let error = name_of(&device).await.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            OpsError::Unreachable {
+                source: bacnet_types::error::Error::NetworkRejected(_),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.unreachable() && !error.timed_out());
+    assert_eq!(
+        super::discover_tests::the_who_is(&sent),
+        (super::discover_tests::remote(3), true)
+    );
+}
+
 /// A target naming the client's own network keeps its text and says that
 /// network was asked, with no hint to widen the resolve scope: only a bare
 /// instance gets that. Both go out as local broadcasts.

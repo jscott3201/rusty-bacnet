@@ -174,6 +174,15 @@ pub struct ClientConfig {
     /// [`MAX_MIN_REQUEST_INTERVAL_MS`], an hour; more fails the build. The
     /// endpoint client takes the same setting from its session (#1542).
     pub min_request_interval_ms: u64,
+    /// Whether a Complex-ACK completes a request whose service is
+    /// acknowledged with a Simple-ACK, such as WriteProperty, as a success
+    /// (default `false`: it fails the request with
+    /// [`Error::UnexpectedAck`],
+    /// #2721). Turn it on only for a device found in the field that
+    /// answers such requests with a Complex-ACK, whose answer this client
+    /// then takes as the success the device means. A Simple-ACK for a
+    /// service whose answer carries data stays an error either way.
+    pub accept_complex_ack_for_simple_services: bool,
 }
 
 /// Additional client startup options.
@@ -208,6 +217,7 @@ impl Default for ClientConfig {
             segmented_response_accepted: true,
             proposed_window_size: 1,
             min_request_interval_ms: 0,
+            accept_complex_ack_for_simple_services: false,
         }
     }
 }
@@ -233,22 +243,10 @@ pub(crate) fn new_coordinated_tsm(
             apdu_timeout_ms: config.apdu_timeout_ms,
             apdu_segment_timeout_ms: config.apdu_timeout_ms,
             apdu_retries: config.apdu_retries,
+            accept_complex_ack_for_simple_services: config.accept_complex_ack_for_simple_services,
         },
         coordinator,
     )
-}
-
-pub(crate) fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, Error> {
-    match response {
-        TsmResponse::SimpleAck => Ok(Bytes::new()),
-        TsmResponse::ComplexAck { service_data } => Ok(service_data),
-        TsmResponse::Remote {
-            error: RemoteError::Error { class, code },
-            detail,
-        } => Err(Error::with_detail(class, code, detail)),
-        TsmResponse::Remote { error, .. } => Err(Error::Remote(error)),
-        TsmResponse::NetworkPathTooLong { dnet } => Err(Error::RoutedPathTooLong { dnet }),
-    }
 }
 
 impl ClientOptions {
@@ -978,6 +976,8 @@ pub use routing_table::{
 use station::ConfirmedTarget;
 pub use station::{Broadcast, Station, ToStation};
 
+#[cfg(test)]
+mod ack_kind_tests;
 #[cfg(test)]
 mod acknowledge_alarm_tests;
 #[cfg(test)]

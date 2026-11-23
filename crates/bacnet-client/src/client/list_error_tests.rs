@@ -14,6 +14,11 @@ use bacnet_types::{
     primitives::ObjectIdentifier,
 };
 
+/// What a request ends with for `response`.
+fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, Error> {
+    response.into_result()
+}
+
 /// The structured error naming `element`.
 fn element_error<T>(
     result: &Result<T, Error>,

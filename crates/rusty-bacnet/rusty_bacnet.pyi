@@ -3955,7 +3955,14 @@ class NetworkReportIterator:
 # ---------------------------------------------------------------------------
 
 class BacnetError(Exception):
-    """Base exception for all BACnet errors."""
+    """Base exception for all BACnet errors.
+
+    Raised as itself for, among others, a device that acknowledged a request
+    with the other kind of acknowledgement than its service takes: a
+    Complex-ACK to a write or a Simple-ACK to a read (#2721). The request
+    failed at once with no retry, and whether the device carried it out is
+    unknown.
+    """
     ...
 
 class ObjectPropertyReference(TypedDict):
@@ -4007,8 +4014,17 @@ class BacnetProtocolError(BacnetError):
     vt_session_identifiers: Optional[list[int]]
 
 class BacnetTimeoutError(BacnetError):
-    """Raised when a BACnet operation times out."""
-    ...
+    """Raised when a BACnet operation times out.
+
+    Attributes:
+        busy_router: When a router on the way said it was busy for the
+            device's network (its Reject-Message-To-Network gave reason 2)
+            before the request timed out (#2724): that router's address in
+            the link's own form. ``None`` otherwise.
+        busy_network: The network that router was busy for, or ``None``.
+    """
+    busy_router: str | None
+    busy_network: int | None
 
 class BacnetRejectError(BacnetError):
     """Raised when a BACnet request is rejected.
@@ -4022,11 +4038,21 @@ class BacnetRejectError(BacnetError):
 class BacnetAbortError(BacnetError):
     """Raised when a BACnet transaction is aborted.
 
+    A typed call that runs out of retries raises it with ``reason``
+    ``TSM_TIMEOUT``, the client's own abort.
+
     Attributes:
         reason: The abort reason, an ``AbortReason`` member (an int equal
             to the wire value, #1816).
+        busy_router: For a ``TSM_TIMEOUT`` after a router on the way said
+            it was busy for the device's network (its
+            Reject-Message-To-Network gave reason 2, #2724): that router's
+            address in the link's own form. ``None`` otherwise.
+        busy_network: The network that router was busy for, or ``None``.
     """
     reason: AbortReason
+    busy_router: str | None
+    busy_network: int | None
 
 class BacnetLogNotAdvancingError(BacnetError):
     """Raised when a paged log read can't advance (#1530).
@@ -4080,16 +4106,33 @@ class BacnetBvlcUnexpectedResponseError(BacnetError):
     got: int
 
 class BacnetNetworkRejectError(BacnetError):
-    """Raised when a router answers a network-layer message the client sent
-    with a Reject-Message-To-Network, as ``routing_table()`` reports it
-    (#2612). Silence raises ``BacnetTimeoutError`` instead.
+    """Raised when a router refuses a message the client sent, sending back
+    a Reject-Message-To-Network: a confirmed request to a ``RoutedTarget``
+    (#2724) or a ``routing_table()`` query (#2612). A request fails at once,
+    with no retry, for reason 1 (no route to the network), 6 (an address
+    length the router found invalid), 0 (other), 5 or a reason the standard
+    doesn't define. A busy router (reason 2) leaves the request to its
+    retries; if they run out, the timeout's ``busy_router`` and
+    ``busy_network`` name it. The client takes a reject as a request's own
+    only when the router it went through delivered it to this station alone
+    (not as a broadcast), naming its network, after it was sent. Silence
+    raises ``BacnetTimeoutError`` instead.
 
     Attributes:
         reason: The reject reason octet the router sent.
         network: The network the router named.
+        router: The router's address in the link's own form, such as
+            ``"10.0.0.1:47808"`` or ``"mstp:5"``, which a ``RoutedTarget``'s
+            ``router`` takes; ``None`` for ``routing_table()``.
+        reached_device: ``False`` when the request had sent one frame, so
+            the device never received it; ``None`` once a retry or a
+            segment went first: an earlier attempt may have reached the
+            device, and a write may have taken effect.
     """
     reason: int
     network: int
+    router: str | None
+    reached_device: bool | None
 
 class BacnetLookupError(BacnetError, LookupError):
     """Raised when no device could be placed for the name a call gave
@@ -5379,6 +5422,7 @@ class BACnetClient:
         router: Optional[BACnetRouter] = None,
         write_policy: Optional[WritePolicy] = None,
         resolve_scope: Literal["local", "global"] | int | None = None,
+        accept_complex_ack_for_simple_services: bool = False,
     ) -> None:
         """``write_policy`` (default None, which is ``WritePolicy()``): the
         priorities ``Device.write`` and ``relinquish`` may use. The default
@@ -5396,6 +5440,15 @@ class BACnetClient:
         on each of the router's networks, ``"local"`` asks every one of
         them (#2601). Another name or number raises ValueError, another
         type TypeError.
+
+        ``accept_complex_ack_for_simple_services`` (default False): a device
+        that acknowledges a request whose service takes a Simple-ACK, such
+        as ``write_property``, with a Complex-ACK fails the request with
+        ``BacnetError`` (#2721), since whether it carried the request out is
+        unknown. Set it True only for a device found in the field that
+        answers so, whose Complex-ACK this client then takes as the success
+        it means. A Simple-ACK where an answer must carry data, such as a
+        ``read_property``'s, stays an error either way.
 
         ``transport="router"`` with ``router`` (a ``BACnetRouter`` built
         with ``application="client"`` or ``"client_and_server"``): run the
@@ -10835,7 +10888,8 @@ class BipRouterPort:
     ports (#2716): the router carries nothing between two isolated ports and
     hides each from the other, while both still reach the ordinary ports.
     A request from one isolated port for one device behind another draws
-    Reject-Message-To-Network, reason 1; a broadcast is dropped quietly. One
+    Reject-Message-To-Network, reason 1, which a client raises at once as
+    ``BacnetNetworkRejectError`` (#2724); a broadcast is dropped quietly. One
     isolated port alone changes nothing. It limits transit only and is no
     trust level for a port; see "Isolated ports" in docs/python-api.md.
     """

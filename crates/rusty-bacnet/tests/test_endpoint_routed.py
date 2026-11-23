@@ -678,11 +678,14 @@ class RoutedRouterTests(unittest.IsolatedAsyncioTestCase):
         async with endpoint:
             await accepted_registration(endpoint)
             role = await endpoint.client()
-            # Through the router: no answer, so the request times out, as a
-            # typed call's does (an abort for the transaction's timeout).
+            # Through the router: it has no route to network 9, and its
+            # reject (reason 1) ends the request at once (#2724).
             nowhere = rb.RoutedTarget(9, self.far_address, router=self.router_address)
-            with self.assertRaises(rb.BacnetAbortError):
+            with self.assertRaises(rb.BacnetNetworkRejectError) as caught:
                 await asyncio.wait_for(role.read_property(nowhere, AI_1, P.PRESENT_VALUE), 10)
+            rejected = caught.exception
+            self.assertEqual((rejected.reason, rejected.network), (1, 9))
+            self.assertEqual(rejected.router, self.router_address)
             # With no router: nobody answers the Who-Is to network 9.
             with self.assertRaises(rb.BacnetLookupError):
                 await asyncio.wait_for(

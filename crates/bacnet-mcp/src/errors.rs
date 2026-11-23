@@ -4,13 +4,13 @@
 //! bodies; an unknown tool or arguments that don't fit the input schema are
 //! JSON-RPC errors instead. "Refused, nothing was sent" (`refused`,
 //! `invalid-argument`, `unknown-device`) and "sent, then failed" (`bacnet`,
-//! `timeout`, `failed`) are always distinct, because an agent's retry logic
-//! depends on the difference.
+//! `network-reject`, `timeout`, `failed`) are always distinct, because an
+//! agent's retry logic depends on the difference.
 
 use bacnet_ops::label::kebab;
 use bacnet_ops::{DeviceAddress, OpsError, PropertyError};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
-use bacnet_types::error::{Error, RemoteError};
+use bacnet_types::error::{Error, NetworkReject, RemoteError};
 use serde_json::{Value, json};
 
 /// Why a tool call failed.
@@ -25,8 +25,19 @@ pub(crate) enum ToolError {
     /// The device answered with an Error, Reject or Abort PDU.
     Bacnet(RemoteError),
     /// The device didn't answer in time, or the call ran out of its
-    /// budget after it had sent requests (no `device` then).
-    Timeout { device: Option<u32>, after_ms: u64 },
+    /// budget after it had sent requests (no `device` then). `busy` is the
+    /// busy reject (reason 2) a router on the way sent first, if one did
+    /// (#2724).
+    Timeout {
+        device: Option<u32>,
+        after_ms: u64,
+        busy: Option<NetworkReject>,
+    },
+    /// A router on the way refused the request to `device` at the network
+    /// layer (#2724). The device never received it when the request sent
+    /// one frame; after a retry or a segment, an earlier attempt may have
+    /// reached it.
+    NetworkReject { device: u32, reject: NetworkReject },
     /// The policy refused the call. Nothing was sent.
     Refused {
         reason: &'static str,
@@ -77,24 +88,39 @@ impl ToolError {
 
     /// A request to `device` that failed with `error`: a timeout (the
     /// client's own, with how long it waited, or the state machine's
-    /// abort, with 0), the device's answer, or anything else as text.
+    /// abort, with 0), a router's network reject, the device's answer, or
+    /// anything else as text.
     pub(crate) fn device(device: u32, error: &OpsError) -> Self {
         match error {
             OpsError::Ambiguous { candidates, .. } => {
                 Self::ambiguous(&device.to_string(), candidates)
             }
+            OpsError::Unreachable {
+                source: Error::NetworkRejected(reject),
+                ..
+            }
+            | OpsError::Client(Error::NetworkRejected(reject)) => Self::NetworkReject {
+                device,
+                reject: **reject,
+            },
             error if error.timed_out() => {
-                let after = match error {
+                let (after, busy) = match error {
                     OpsError::Unreachable {
                         source: Error::Timeout(after),
                         ..
                     }
-                    | OpsError::Client(Error::Timeout(after)) => after.as_millis(),
-                    _ => 0,
+                    | OpsError::Client(Error::Timeout(after)) => (after.as_millis(), None),
+                    OpsError::Unreachable {
+                        source: Error::RouterBusyTimeout(busy),
+                        ..
+                    }
+                    | OpsError::Client(Error::RouterBusyTimeout(busy)) => (0, Some(**busy)),
+                    _ => (0, None),
                 };
                 Self::Timeout {
                     device: Some(device),
                     after_ms: u64::try_from(after).unwrap_or(u64::MAX),
+                    busy,
                 }
             }
             error => match error.remote() {
@@ -115,13 +141,35 @@ impl ToolError {
                 body["error"] = json!("bacnet");
                 body
             }
-            Self::Timeout { device, after_ms } => {
+            Self::Timeout {
+                device,
+                after_ms,
+                busy,
+            } => {
                 let mut body = json!({ "error": "timeout", "after_ms": after_ms });
                 if let Some(device) = device {
                     body["device"] = json!(device);
                 }
+                if let Some(busy) = busy {
+                    body["router_busy"] = json!({
+                        "router": busy.router().to_string(),
+                        "network": busy.network,
+                        "refused_by": busy.refused_by().map(|by| by.to_string()),
+                    });
+                }
                 body
             }
+            Self::NetworkReject { device, reject } => json!({
+                "error": "network-reject",
+                "device": device,
+                "router": reject.router().to_string(),
+                "refused_by": reject.refused_by().map(|by| by.to_string()),
+                "network": reject.network,
+                "reason": kebab(reject.reason),
+                "reason_number": reject.reason.to_raw(),
+                "reached_device": if reject.single_frame { "no" } else { "unknown" },
+                "message": reject.to_string(),
+            }),
             Self::Refused {
                 reason,
                 message,
@@ -148,10 +196,22 @@ impl ToolError {
             Self::Bacnet(remote) => format!("the device answered: {remote}"),
             Self::Timeout {
                 device: Some(device),
+                busy: None,
                 ..
             } => format!("device {device} did not answer in time"),
+            Self::Timeout {
+                device: Some(device),
+                busy: Some(busy),
+                ..
+            } => format!(
+                "device {device} did not answer in time; on the way, {}",
+                busy.what()
+            ),
             Self::Timeout { device: None, .. } => {
                 "the call ran out of time after sending requests".into()
+            }
+            Self::NetworkReject { device, reject } => {
+                format!("a router refused the request to device {device}: {reject}")
             }
             Self::Refused {
                 reason, message, ..
@@ -254,7 +314,8 @@ mod tests {
             ToolError::device(7, &error),
             ToolError::Timeout {
                 device: Some(7),
-                after_ms: 6000
+                after_ms: 6000,
+                busy: None
             }
         );
         let abort = OpsError::Unreachable {
@@ -267,7 +328,8 @@ mod tests {
             ToolError::device(7, &abort),
             ToolError::Timeout {
                 device: Some(7),
-                after_ms: 0
+                after_ms: 0,
+                busy: None
             }
         );
         let refused = OpsError::Refused {
@@ -281,5 +343,82 @@ mod tests {
             ToolError::device(7, &refused),
             ToolError::Bacnet(RemoteError::Reject { .. })
         ));
+    }
+
+    /// A router's network reject is its own kind (#2724): sent, never a
+    /// timeout and never the device's answer, with the router in its
+    /// link's form and the reason by name and number.
+    #[test]
+    fn a_network_reject_names_router_network_and_reason() {
+        use bacnet_encoding::npdu::view::{Mac, RejectMessageReason};
+        use bacnet_types::data_link::DataLink;
+        let reject = NetworkReject::new(
+            Mac::from_array([10, 0, 0, 1, 0xBA, 0xC0]),
+            Some(DataLink::Bip),
+            7,
+            RejectMessageReason::NOT_DIRECTLY_CONNECTED,
+        );
+        let sorted = |reject| OpsError::Unreachable {
+            device: DeviceAddress::new(7, &[5]).unwrap(),
+            source: Error::NetworkRejected(Box::new(reject)),
+        };
+        let tool = ToolError::device(9, &sorted(reject));
+        assert_eq!(tool, ToolError::NetworkReject { device: 9, reject });
+        // After a retry, an earlier attempt may have reached the device.
+        assert_eq!(
+            tool.json(),
+            json!({ "error": "network-reject", "device": 9, "router": "10.0.0.1:47808",
+                    "refused_by": null, "network": 7, "reason": "not-directly-connected",
+                    "reason_number": 1, "reached_device": "unknown",
+                    "message": "Reject-Message-To-Network from router 10.0.0.1:47808: no \
+                                route to network 7 (not-directly-connected, reason 1); an \
+                                earlier attempt may have reached the device" })
+        );
+        assert!(
+            tool.summary()
+                .starts_with("a router refused the request to device 9")
+        );
+        // For the one frame sent, it never did; relayed, the far router is named.
+        let once = reject
+            .after_one_frame()
+            .relayed_from(5, Mac::from_array([0x0A]));
+        let body = ToolError::device(9, &sorted(once)).json();
+        assert_eq!(body["reached_device"], json!("no"));
+        assert_eq!(body["refused_by"], json!("5:0x0A"));
+    }
+
+    /// A timeout after a router said it was busy is still a timeout, and
+    /// names that router and the network (#2724).
+    #[test]
+    fn a_busy_timeout_is_a_timeout_naming_the_router() {
+        use bacnet_encoding::npdu::view::{Mac, RejectMessageReason};
+        use bacnet_types::data_link::DataLink;
+        let busy = NetworkReject::new(
+            Mac::from_array([10, 0, 0, 1, 0xBA, 0xC0]),
+            Some(DataLink::Bip),
+            7,
+            RejectMessageReason::ROUTER_BUSY,
+        );
+        let error = OpsError::Unreachable {
+            device: DeviceAddress::new(7, &[5]).unwrap(),
+            source: Error::RouterBusyTimeout(Box::new(busy)),
+        };
+        assert!(error.timed_out());
+        let tool = ToolError::device(9, &error);
+        assert_eq!(
+            tool,
+            ToolError::Timeout {
+                device: Some(9),
+                after_ms: 0,
+                busy: Some(busy)
+            }
+        );
+        assert_eq!(
+            tool.json(),
+            json!({ "error": "timeout", "after_ms": 0, "device": 9,
+                    "router_busy": { "router": "10.0.0.1:47808", "network": 7,
+                                     "refused_by": null } })
+        );
+        assert!(tool.summary().contains("busy for network 7"));
     }
 }

@@ -1,4 +1,3 @@
-use super::super::confirmed_response_result;
 use crate::tsm::TsmResponse;
 use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_types::constructed::BACnetObjectPropertyReference;
@@ -19,7 +18,7 @@ fn wpm_error_projection_exposes_the_first_failed_write_attempt() {
     let Apdu::Error(pdu) = decode_apdu(Bytes::copy_from_slice(&wire)).unwrap() else {
         panic!("expected an Error PDU");
     };
-    let result = confirmed_response_result(TsmResponse::from_error_pdu(&pdu));
+    let result = TsmResponse::from_error_pdu(&pdu).into_result();
     let expected = BACnetObjectPropertyReference {
         object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
         property_identifier: PropertyIdentifier::PRESENT_VALUE.to_raw(),
@@ -37,10 +36,11 @@ fn wpm_error_projection_exposes_the_first_failed_write_attempt() {
 
 #[test]
 fn plain_error_projection_stays_class_and_code() {
-    let result = confirmed_response_result(TsmResponse::remote(RemoteError::Error {
+    let result = TsmResponse::remote(RemoteError::Error {
         class: ErrorClass::PROPERTY,
         code: ErrorCode::WRITE_ACCESS_DENIED,
-    }));
+    })
+    .into_result();
     assert!(matches!(
         result,
         Err(Error::Remote(RemoteError::Error { class, code }))
