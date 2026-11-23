@@ -80,9 +80,10 @@ impl fmt::Display for CoordinatedRegistrationError {
             Self::Diverted => {
                 formatter.write_str("the node's source Audit carries out this request")
             }
-            Self::Reserve(ReserveError::Exhausted) => {
-                formatter.write_str("all invoke IDs exhausted for destination")
-            }
+            // A standalone client's share is the whole pool; a node with a
+            // server role keeps that role's reserve out of it (#2617).
+            Self::Reserve(ReserveError::Exhausted) => formatter
+                .write_str("invoke IDs exhausted: none free in the client's share of the pool"),
             Self::Reserve(error) => write!(formatter, "invoke ID coordinator failed: {error}"),
             Self::DuplicateInvokeId => {
                 formatter.write_str("coordinator reserved an invoke ID already pending in the TSM")

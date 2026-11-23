@@ -12700,8 +12700,9 @@ under it the server always finds an ID. There the ID kept for the oldest
 waiter is the last of that reserve, which the client can't take, so the
 server's other work leaves it until the server is two under its reserve,
 and the oldest waiter is served within two of the server's request
-lifetimes (the APDU timeout times the retries plus one) of its first wait,
-however busy the client is. A Device recipient's
+lifetimes (the APDU timeout times the retries plus one, after its sends,
+which a busy link such as MS/TP waiting for the token can delay) of its
+first wait, however busy the client is. A Device recipient's
 binding is read again once its ID comes: a binding refreshed meanwhile still
 takes the notification, and one that lapsed or moved is looked for as at a
 first send, the ID given back while it is (#2569). A Device recipient the

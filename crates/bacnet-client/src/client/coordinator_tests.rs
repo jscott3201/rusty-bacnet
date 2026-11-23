@@ -167,7 +167,8 @@ async fn client_uses_one_global_generation_safe_pool_across_direct_and_routed_pe
     .expect("exhaustion did not return synchronously");
     assert!(matches!(
         exhausted,
-        Err(Error::Encoding(message)) if message == "all invoke IDs exhausted for destination"
+        Err(Error::Encoding(message))
+            if message == "invoke IDs exhausted: none free in the client's share of the pool"
     ));
     assert!(
         timeout(Duration::from_millis(50), peer_rx.recv())

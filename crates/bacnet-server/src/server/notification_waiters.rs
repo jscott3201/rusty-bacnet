@@ -19,16 +19,22 @@
 //! fresh change go first (#2734). But a head that a lease's end woke and
 //! that still found no ID was passed over: from then on every other
 //! reservation of this server leaves it an ID sure to be the server's, until
-//! it has one: the last free one in a pool of the server's own, the last of
-//! the server's reserve in a node's (below). So the head is passed over by
-//! this server's own work at most twice, once as its turn comes and once
-//! after a lease ends, and the next ID this server can lease is its own. In
-//! that window, until the woken head is polled, that ID is refused to the
-//! rest as when none is free: a Command or Channel run's request fails, an
-//! Audit record is dropped or kept for a retry as it would be then, and a
-//! COV report is owed a look. On a node that can happen with other IDs
-//! free, so once such work was held back, the head's leaving the queue
-//! wakes the pool's waits for an ID to look again.
+//! it has one: the last free one in a pool that keeps the server no reserve,
+//! the last of the server's reserve in one that keeps it one (below). So the
+//! head is passed over by this server's own work at most twice, once as its
+//! turn comes and once after a lease ends, and the next ID this server can
+//! lease is its own. In that window, until the woken head is polled, that ID
+//! is refused to the rest as when none is free: a Command or Channel run's
+//! request fails, an Audit record is dropped or kept for a retry as it would
+//! be then, and a COV report is owed a look.
+//!
+//! A pool that keeps the server a reserve, an endpoint session's with a
+//! server role, refuses the rest by that rule even with other IDs free: a
+//! server-only session's too, with no client attached to take them. So a
+//! head that was owed an ID wakes the pool's waits for one as it leaves the
+//! queue (taking its ID, or dropped), before it wakes the next head: work
+//! refused, or that read no room, while it was owed looks again, and a new
+//! head's own wait, made after, doesn't take that wake for a lease's end.
 //!
 //! On a node's seat the client leases from the node's pool directly, not
 //! through this queue, and may take a freed ID ahead of the head. It can
@@ -39,9 +45,10 @@
 //! owed, the server's other work leaves it the last of the reserve, so what
 //! the server holds only falls until one of its leases ends with it under
 //! its reserve, and that ID is the head's. Each lease ends within the
-//! longest the server's request stays open (the APDU timeout times the
-//! retries plus one, after its sends): the head is served within two of
-//! those of its first wait, whatever the client does.
+//! longest the server's request stays open once its send has gone (the APDU
+//! timeout times the retries plus one; a send queued on a busy link, such as
+//! MS/TP waiting for the token, adds that wait): the head is served within
+//! two of those of its first wait, whatever the client does.
 //!
 //! [`NOTIFICATION_RESERVE`]: bacnet_endpoint_core::coordinator::NOTIFICATION_RESERVE
 
@@ -63,11 +70,6 @@ pub(super) struct Waiters {
     /// reservation leaves it an ID sure to be the server's until it takes
     /// one ([`NotificationCore::spare_with`]).
     passed_over: bool,
-    /// Other work was refused an ID while the head was owed one. On a node
-    /// that can happen with several free (#2617), so as the head leaves the
-    /// pool's waits for capacity are woken to look again: no lease's end may
-    /// come to wake them.
-    held_work: bool,
 }
 
 struct Waiter {
@@ -82,17 +84,22 @@ struct Waiter {
 struct Left {
     /// The new head, for its turn.
     next: Option<Waker>,
-    /// Whether work was held back for the head that left.
-    held_work: bool,
+    /// The head that left was owed an ID. While it was, the server's other
+    /// work read no room, or was refused, perhaps with IDs free on a node
+    /// (#2617), and waits for a lease to end that may not come: the pool's
+    /// waits are woken to look again.
+    owed: bool,
 }
 
 impl Left {
     fn wake(self, coordinator: &OutboundTransactionCoordinator) {
+        // The pool's waits first: a new head woken before would make its
+        // own wait in between and take this wake for a lease's end.
+        if self.owed {
+            coordinator.wake_released();
+        }
         if let Some(next) = self.next {
             next.wake();
-        }
-        if self.held_work {
-            coordinator.wake_released();
         }
     }
 }
@@ -110,7 +117,7 @@ impl Waiters {
     }
 
     /// Take `ticket` out of the queue; when it was the head, what wakes the
-    /// new head and the work held back for the old one.
+    /// new head, and the work held back while the old one was owed an ID.
     fn leave(&mut self, ticket: u64) -> Left {
         let Some(at) = self.queue.iter().position(|waiter| waiter.ticket == ticket) else {
             return Left::default();
@@ -119,10 +126,9 @@ impl Waiters {
         if at != 0 {
             return Left::default();
         }
-        self.passed_over = false;
         Left {
             next: self.queue.front_mut().and_then(|head| head.waker.take()),
-            held_work: std::mem::take(&mut self.held_work),
+            owed: std::mem::take(&mut self.passed_over),
         }
     }
 
@@ -266,8 +272,6 @@ impl NotificationCore {
                 if head.is_some_and(|head| head.woken) {
                     state.waiters.passed_over = true;
                 }
-                // Held back for the head, perhaps with IDs free.
-                state.waiters.held_work |= !room;
                 return Err(NotificationReserveError::Coordinator(
                     ReserveError::Exhausted,
                 ));

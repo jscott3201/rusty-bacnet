@@ -110,12 +110,14 @@ fn with_two_of_the_reserve_left_other_work_goes_and_the_head_takes_the_last() {
     assert!(head.served());
 }
 
-/// Work held back for an owed head, three IDs free, is woken to look again
-/// as the head takes its ID: no lease may end to wake it, and it then goes.
+/// The head passed over, the client lets three IDs go, then one of the
+/// server's leases ends, waking the head and a COV report's owed look. The look runs first: its wait made, it reads no room (the head is
+/// owed the last of the reserve) and waits, never trying a lease. As the
+/// head takes its ID and leaves, the look is woken, and finds the three.
 #[test]
-fn work_held_back_with_ids_free_is_woken_as_the_head_takes_its_id() {
+fn a_look_that_read_no_room_while_the_head_was_owed_is_woken_as_it_leaves() {
     let (coordinator, transactions) = seated();
-    let _server: Vec<_> = (0..NOTIFICATION_RESERVE)
+    let mut server: Vec<_> = (0..NOTIFICATION_RESERVE)
         .map(|_| fresh(&transactions).expect("its reserve"))
         .collect();
     let mut held = client_fills(&coordinator);
@@ -127,16 +129,33 @@ fn work_held_back_with_ids_free_is_woken_as_the_head_takes_its_id() {
     for _ in 0..3 {
         coordinator.release(held.pop().unwrap()).unwrap();
     }
-    // A COV report's look: its wait made before the room is read.
-    let mut released = std::pin::pin!(transactions.released());
-    released.as_mut().enable();
-    assert!(exhausted(&fresh(&transactions)), "held back, three free");
+    drop(server.pop());
+    let mut look = std::pin::pin!(transactions.released());
+    look.as_mut().enable();
+    assert_eq!(transactions.free_invoke_ids(), 0, "the head is owed");
     let noop = &mut Context::from_waker(Waker::noop());
-    assert!(released.as_mut().poll(noop).is_pending());
+    assert!(look.as_mut().poll(noop).is_pending());
     assert!(head.served());
-    assert!(
-        released.as_mut().poll(noop).is_ready(),
-        "woken to look again"
-    );
+    assert!(look.as_mut().poll(noop).is_ready(), "woken to look again");
+    assert_eq!(transactions.free_invoke_ids(), 3);
     let _now = fresh(&transactions).expect("no longer held back");
+}
+
+/// A head that was never owed an ID wakes no wait as it leaves: only the
+/// lease ends do.
+#[test]
+fn a_head_never_owed_wakes_no_wait_as_it_leaves() {
+    let (coordinator, transactions) = seated();
+    let mut server: Vec<_> = (0..NOTIFICATION_RESERVE)
+        .map(|_| fresh(&transactions).expect("its reserve"))
+        .collect();
+    let _held = client_fills(&coordinator);
+    let mut head = waiter(&transactions, 0);
+    assert!(head.poll().is_pending());
+    drop(server.pop());
+    let mut wait = std::pin::pin!(transactions.released());
+    wait.as_mut().enable();
+    assert!(head.served(), "the server's own ID back");
+    let noop = &mut Context::from_waker(Waker::noop());
+    assert!(wait.as_mut().poll(noop).is_pending());
 }

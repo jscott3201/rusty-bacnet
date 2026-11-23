@@ -310,7 +310,8 @@ pub enum ReserveError {
 impl fmt::Display for ReserveError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Exhausted => formatter.write_str("all invoke IDs are leased"),
+            Self::Exhausted => formatter
+                .write_str("invoke IDs exhausted: none free in this owner's share of the pool"),
             Self::GenerationExhausted => formatter.write_str("lease generation exhausted"),
             Self::StatePoisoned => formatter.write_str("coordinator state is poisoned"),
         }
@@ -429,9 +430,11 @@ struct ActiveLease {
 // The per-invoke-ID tables live on the heap. Inline, they made the state about
 // 18 KB, and a debug build built and moved it through several stack frames
 // (about 110 KB of stack) on every server, client and endpoint start (#953).
+// Boxed arrays, not slices: an index from an invoke ID, or taken modulo 256,
+// is in bounds by its type, so a lease, an admission and a release check none.
 struct CoordinatorState {
-    slots: Box<[Option<ActiveLease>]>,
-    last_released: Box<[Option<u64>]>,
+    slots: Box<[Option<ActiveLease>; INVOKE_ID_COUNT]>,
+    last_released: Box<[Option<u64>; INVOKE_ID_COUNT]>,
     next_invoke_id: usize,
     last_generation: u64,
     /// The leases each owner may still take, indexed by [`LeaseOwner`]:
@@ -443,11 +446,19 @@ struct CoordinatorState {
     ceiling: [usize; 2],
 }
 
+/// One entry per invoke ID, built on the heap, never on the stack.
+fn table<T: Clone>() -> Box<[Option<T>; INVOKE_ID_COUNT]> {
+    match vec![None; INVOKE_ID_COUNT].into_boxed_slice().try_into() {
+        Ok(table) => table,
+        Err(_) => unreachable!("a table of {INVOKE_ID_COUNT} entries"),
+    }
+}
+
 impl CoordinatorState {
     fn new(ceiling: [usize; 2]) -> Self {
         Self {
-            slots: vec![None; INVOKE_ID_COUNT].into_boxed_slice(),
-            last_released: vec![None; INVOKE_ID_COUNT].into_boxed_slice(),
+            slots: table(),
+            last_released: table(),
             next_invoke_id: 0,
             last_generation: 0,
             room: ceiling,
@@ -482,10 +493,10 @@ impl CoordinatorState {
         let index = usize::from(token.invoke_id);
         match self.slots[index].as_ref() {
             Some(active) if active.generation == token.generation => {
-                let owner = active.metadata.owner as usize;
+                // Before the old lease drops, so its owner isn't kept across it.
+                self.room[active.metadata.owner as usize] += 1;
                 self.slots[index] = None;
                 self.last_released[index] = Some(token.generation);
-                self.room[owner] += 1;
                 ReleaseOutcome::Released
             }
             Some(_) => ReleaseOutcome::StaleToken,
@@ -788,16 +799,23 @@ impl OutboundTransactionCoordinator {
         Ok(outcome)
     }
 
-    /// Internal passive capacity wait. Register before checking reservation.
-    #[doc(hidden)]
+    /// A wait for room in the pool: it completes once a lease ends after it
+    /// is made, or once [`Self::wake_released`] is called, whether or not it
+    /// was polled by then. Nothing is stored for a wait made later, and the
+    /// wait takes no ID: an owner makes it before it reads the room or
+    /// tries [`Self::reserve`], then, on waking, reads or tries again, since
+    /// another owner may have taken what came back. Dropping it gives up
+    /// nothing.
     pub fn released(&self) -> tokio::sync::futures::Notified<'_> {
         self.released.notified()
     }
 
-    /// Wakes every [`Self::released`] wait, as a lease's end does, though
-    /// none ended: for an owner whose own rule held work back while IDs
-    /// were free, once the rule no longer does (#2617).
-    #[doc(hidden)]
+    /// Wakes every [`Self::released`] wait made so far, as a lease's end
+    /// does, though none ended. For an owner whose own rule held its work
+    /// back while IDs were free, once the rule no longer does (#2617): no
+    /// lease may end to wake that work. Every other wait made so far wakes
+    /// too, to read the room again and find what it found before; a wait
+    /// made after this call is not woken by it.
     pub fn wake_released(&self) {
         self.released.notify_waiters();
     }
