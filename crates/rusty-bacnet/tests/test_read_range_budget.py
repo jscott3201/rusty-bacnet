@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import rusty_bacnet
-from rusty_bacnet import BACnetClient, BACnetServer, ObjectIdentifier, ObjectType, PropertyIdentifier
+from rusty_bacnet import (BACnetClient, BACnetServer, ObjectIdentifier, ObjectType, PropertyIdentifier,
+                          Segmentation)
 
 CALENDAR = ObjectIdentifier(ObjectType.CALENDAR, 1)
 # ReadRange of Calendar:1 Date_List, a BACnetLIST (ReadRange refuses arrays
@@ -80,8 +81,11 @@ class ReadRangeNativeTests(unittest.IsolatedAsyncioTestCase):
                                  ({"read_range_max_service_ack_bytes": 23}, 1),
                                  ({"read_range_max_service_ack_bytes": 18}, 0),
                                  ({"read_range_max_service_ack_bytes": 13}, 0)]:
+            # One APDU per answer, so the budget trims to the peer's limit
+            # rather than segmenting past it (#2617).
             server = BACnetServer(123, interface="127.0.0.1", port=0,
-                                  broadcast_address="127.0.0.1", **policy)
+                                  broadcast_address="127.0.0.1", **policy,
+                                  segmentation_supported=Segmentation.NO_SEGMENTATION)
             server.add_calendar(1, "CAL-1")
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.bind(("127.0.0.1", 0))

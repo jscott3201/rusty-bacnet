@@ -46,8 +46,8 @@ segments, each only where the value allows it. A request that would
 need segments the endpoint doesn't send fails before anything goes out.
 `Segmentation.NO_SEGMENTATION` keeps every request and answer to one
 APDU, for a constrained link or a peer that can't segment.
-`BACnetServer()` keeps its own default of `NO_SEGMENTATION`. The
-keyword-only `apdu_segment_timeout_ms` (default 5000, positive when
+`BACnetServer()` has the same default. The keyword-only
+`apdu_segment_timeout_ms` (default 5000, positive when
 segmenting) is the Device's APDU\_Segment\_Timeout, which both roles use
 while they segment. `client()` reassembles a segmented COV
 notification while the Device takes segments (#2646).

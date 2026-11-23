@@ -4240,7 +4240,7 @@ server = BACnetServer(
     registered_network_port=None, # keyword-only; see "Registered B/IP Network Port"
     # MS/TP options same as BACnetClient (see "MS/TP serial ports");
     # request admission limits: see "Request admission limits"
-    segmentation_supported=Segmentation.NO_SEGMENTATION, # keyword-only; full-server capabilities
+    segmentation_supported=Segmentation.SEGMENTED_BOTH, # keyword-only; full-server capabilities
     apdu_segment_timeout_ms=5000, # keyword-only; shared Device/runtime segment timeout
     # SC options same as BACnetClient
     mutation_policy="permissive", # keyword-only; "deny_all", or a callable deciding each mutation
@@ -4261,7 +4261,9 @@ server = BACnetServer(
 ```
 
 `segmentation_supported` accepts `Segmentation.NO_SEGMENTATION`, `SEGMENTED_TRANSMIT`, `SEGMENTED_RECEIVE` or
-`SEGMENTED_BOTH`. When active, `apdu_segment_timeout_ms` must be positive and appears as
+`SEGMENTED_BOTH`, the default, as for the Rust server and the endpoints (#2617);
+`NO_SEGMENTATION` keeps every request and answer to one APDU. When active,
+`apdu_segment_timeout_ms` must be positive and appears as
 the Device's `APDU_Segment_Timeout`. Incoming inactivity uses `4 * Tseg`;
 outgoing SegmentACK waits use Tseg. The independent 16-second no-progress cap
 ends an incoming transfer with a local `OTHER` Abort. See [server timing](server-segmentation.md)
@@ -7778,8 +7780,8 @@ async with endpoint:
   in segments, each only where the value allows. A request that would need
   segments the endpoint doesn't send fails before anything goes out.
   `NO_SEGMENTATION` keeps everything to one APDU, for a constrained link or
-  a peer that can't segment. `BACnetServer()` keeps its own default,
-  `NO_SEGMENTATION`. The keyword-only `apdu_segment_timeout_ms` (default
+  a peer that can't segment. `BACnetServer()` has the same default. The
+  keyword-only `apdu_segment_timeout_ms` (default
   5000, positive when segmenting) is the Device's APDU_Segment_Timeout,
   which both roles use while they segment. `client()` reassembles a
   segmented COV notification while the Device takes segments (#2646).

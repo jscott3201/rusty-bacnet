@@ -65,7 +65,8 @@ confirmed notification it executes, unless `segmented_response_accepted` is
 off.
 
 The Python full server accepts keyword-only `segmentation_supported` (default
-`Segmentation.NO_SEGMENTATION`) and `apdu_segment_timeout_ms` (default 5000). It constructs
+`Segmentation.SEGMENTED_BOTH`, as the Rust server's, since #2617) and
+`apdu_segment_timeout_ms` (default 5000). It constructs
 a matching Device and server configuration and validates the enum and timeout
 before startup. See the [Python constructor](python-api.md#constructor).
 
