@@ -581,6 +581,55 @@ async fn stop_during_an_outstanding_member_write_ends_the_distribution_failed() 
     assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Null);
 }
 
+/// #2732: a member in a device bound at a broadcast or group form on its
+/// network gets no ReadProperty or WriteProperty, which its router would
+/// hand to every station there: the distribution fails as for an unbound
+/// device, configured or found by a Who-Is, while the local member is still
+/// written.
+#[tokio::test(start_paused = true)]
+async fn channel_member_in_a_device_at_a_remote_broadcast_form_is_never_sent() {
+    for form in super::event_recipient_route::broadcast_station_tests::FORMS {
+        let mut h = start().await;
+        h.server
+            .device_bindings
+            .write()
+            .await
+            .insert_configured(
+                DeviceBinding::routed(device(10), 5, form, PEER).unwrap(),
+                |_| false,
+            )
+            .unwrap();
+        write_channel(&mut h, 8, &PropertyValue::Real(80.0), Some(8))
+            .await
+            .unwrap();
+        assert_eq!(settled(&mut h, 8).await, WriteStatus::FAILED, "{form:02X?}");
+        assert_eq!(
+            reliability(&mut h, 8).await,
+            Reliability::COMMUNICATION_FAILURE
+        );
+        assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
+        assert!(sent_writes(&h).is_empty() && sent_reads(&h).is_empty());
+        assert!(who_is_sent(&h).is_empty(), "the binding is configured");
+    }
+    // Unbound, its Who-Is answered through a router from 5:0xFF.
+    let mut h = start().await;
+    write_channel(&mut h, 6, &PropertyValue::Real(80.0), Some(8))
+        .await
+        .unwrap();
+    assert_eq!(next_who_is(&h).await, (everywhere(), targeted(10)));
+    let source = NpduAddress {
+        network: 5,
+        mac_address: MacAddr::from_slice(&[0xFF]),
+    };
+    deliver(&h, &i_am(10), &PEER, Some(source)).await;
+    assert_eq!(settled(&mut h, 6).await, WriteStatus::FAILED);
+    assert_eq!(
+        reliability(&mut h, 6).await,
+        Reliability::COMMUNICATION_FAILURE
+    );
+    assert!(sent_writes(&h).is_empty() && sent_reads(&h).is_empty());
+}
+
 #[tokio::test(start_paused = true)]
 async fn write_group_distribution_writes_a_member_in_another_device() {
     let mut h = start().await;

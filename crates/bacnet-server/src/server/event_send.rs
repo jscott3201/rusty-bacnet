@@ -205,8 +205,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return None;
         }
         // A confirmed one goes to one device, never to a group address
-        // such as a multicast one, where an unconfirmed one may still go.
-        // It is counted with the confirmed broadcast recipients (#1493).
+        // such as a multicast one, nor to a broadcast or group form on
+        // another network, where an unconfirmed one may still go. Both are
+        // counted with the confirmed broadcast recipients (#1493, #2732).
         let confirmed_route = if confirmed {
             match route.clone().into_confirmed(is_group) {
                 Ok(confirmed_route) => Some(confirmed_route),
@@ -216,6 +217,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         notification_class,
                         "Recipient requests confirmed notifications at a group address; \
                          a confirmed request goes to one device, skipping"
+                    );
+                    return None;
+                }
+                Err(ConfirmedRouteRefusal::RemoteBroadcast(station)) => {
+                    suppressions.record(EventSuppression::ConfirmedBroadcastRecipient);
+                    warn_throttled!(
+                        suppressions.broadcast_warning,
+                        notification_class,
+                        recipient = %station,
+                        "Recipient requests confirmed notifications at a broadcast or group \
+                         address on its network; a confirmed request goes to one device, skipping"
                     );
                     return None;
                 }

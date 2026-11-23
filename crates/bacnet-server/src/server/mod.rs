@@ -801,6 +801,8 @@ mod rb07_provenance_tests;
 #[cfg(test)]
 mod reference_write_wire_tests;
 #[cfg(test)]
+mod remote_broadcast_recipient_tests;
+#[cfg(test)]
 mod remote_write_answer_tests;
 #[cfg(test)]
 mod remote_write_discovery_tests;

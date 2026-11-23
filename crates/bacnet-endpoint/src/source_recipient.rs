@@ -113,7 +113,10 @@ impl SourceRoutes {
     /// Add routed bindings, each a Device behind a router by its network
     /// number and its MAC there (#2371). Refused with SERVICES /
     /// SERVICE_REQUEST_DENIED unless [`routed_unicast`]: network 0, the
-    /// global network 65535, an empty MAC or one past 18 octets.
+    /// global network 65535, an empty MAC or one past 18 octets. One whose
+    /// MAC is a broadcast or group form on its network is taken, with a
+    /// warning: a reporter sending unconfirmed records reaches it, one
+    /// sending confirmed records has no route to it (#2732).
     pub(crate) fn bind_routed(
         mut self,
         bindings: &[(ObjectIdentifier, u16, MacAddr)],
@@ -122,14 +125,21 @@ impl SourceRoutes {
             if !routed_unicast(*network, mac) {
                 return Err(denied());
             }
+            let route = SourceRoute::Routed {
+                network: *network,
+                mac: mac.clone(),
+            };
+            if let Some(form) = route.broadcast_form() {
+                let hex: String = mac.iter().map(|octet| format!("{octet:02X}")).collect();
+                tracing::warn!(
+                    device = device.instance_number(),
+                    address = %format_args!("{network}:0x{hex}, {form}"),
+                    "Source Audit Device is bound at a broadcast or group address on its \
+                     network: a reporter sending confirmed records has no route to it"
+                );
+            }
             self.routers.track(*network);
-            self.bind(
-                *device,
-                SourceRoute::Routed {
-                    network: *network,
-                    mac: mac.clone(),
-                },
-            )?;
+            self.bind(*device, route)?;
         }
         Ok(self)
     }
@@ -288,8 +298,11 @@ impl SourceRecipient {
     /// have changed with it, so the Reporter's CONFIGURATION_ERROR follows
     /// the route in force now, not at the next audited operation (#1461).
     pub(crate) fn number_changed(&self, db: &ObjectDatabase) {
-        self.status
-            .set_configured(self.recipient_route(db).is_some());
+        let confirmed = self.status.configuration().confirmed;
+        self.status.set_configured(
+            self.recipient_route(db)
+                .is_some_and(|route| route.serves(confirmed)),
+        );
     }
 
     pub(crate) fn seal(&self) {
@@ -362,16 +375,23 @@ impl SourceRecipient {
                 current_value: Some(old_value.to_vec()),
                 result: None,
             };
-            // Clause 12.11.66: the change's record reaches both recipients,
-            // or goes by global broadcast. With no route to the old one, the
-            // new recipient gets its copy and an unconfirmed global
-            // broadcast (`None`) stands in for the old one's.
-            let targets = match old_route {
-                Some(old_route) => [Some(old_route), Some(new_route)],
-                None => [Some(new_route), None],
-            };
             self.status.commit_recipient_change(|confirmed, token| {
-                let mut attempts = Vec::with_capacity(2);
+                // Clause 12.11.66: the change's record reaches both
+                // recipients, or goes by global broadcast. Each recipient with
+                // a route gets its copy, and with no route to one of them an
+                // unconfirmed global broadcast (`None`) stands in for its
+                // copy. A confirmed copy has no route to a station at a
+                // broadcast or group form on another network (#2732).
+                let routes = [old_route, Some(new_route)]
+                    .map(|route| route.filter(|route| route.serves(confirmed)));
+                let stand_in = routes.iter().any(Option::is_none);
+                let targets: Vec<_> = routes
+                    .into_iter()
+                    .flatten()
+                    .map(Some)
+                    .chain(stand_in.then_some(None))
+                    .collect();
+                let mut attempts = Vec::with_capacity(targets.len());
                 for target in targets {
                     let permit = notifications.try_admit_audit().map_err(|_| denied())?;
                     let reservation = match &target {
@@ -397,11 +417,15 @@ impl SourceRecipient {
                 let egress = self.egress.clone();
                 let routers = Arc::clone(self.routes.routers());
                 let deadline = tokio::time::Instant::now() + delivery::DEADLINE;
-                let first_completion = delivery::Completion::new(Arc::clone(&self.status), token);
-                let second_completion = delivery::Completion::new(Arc::clone(&self.status), token);
+                // One or two attempts: a copy for each recipient with a
+                // route, and the stand-in. Each owns its completion.
+                let completion = || delivery::Completion::new(Arc::clone(&self.status), token);
                 let mut attempts = attempts.into_iter();
-                let first = attempts.next().unwrap();
-                let second = attempts.next().unwrap();
+                let (first, first_completion) = (
+                    attempts.next().expect("a copy or its stand-in"),
+                    completion(),
+                );
+                let second = attempts.next().map(|attempt| (attempt, completion()));
                 Ok(async move {
                     let run =
                         |(target, permit, reserved, bytes): (Option<SourceRoute>, _, _, _),
@@ -424,7 +448,12 @@ impl SourceRecipient {
                                 );
                             }
                         };
-                    tokio::join!(run(first, first_completion), run(second, second_completion));
+                    let second = async {
+                        if let Some((attempt, completion)) = second {
+                            run(attempt, completion).await;
+                        }
+                    };
+                    tokio::join!(run(first, first_completion), second);
                 })
             })
         })?;

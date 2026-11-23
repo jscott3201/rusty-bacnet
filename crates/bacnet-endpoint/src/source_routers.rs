@@ -48,6 +48,27 @@ impl SourceRoute {
             Self::Routed { network, mac } => CanonicalPeer::routed(*network, mac),
         }
     }
+
+    /// The broadcast or group form a routed station's MAC is on its network
+    /// ([`bacnet_npdu::RemoteBroadcast`], #2732), if it is one: the router
+    /// there would hand a record sent to it to every station. A binding
+    /// can't say its network is ARCNET, so the one octet `0xFF` is taken as
+    /// the MS/TP broadcast. A MAC on the session's own link has none; the
+    /// link's unicast rule judges it.
+    pub(crate) fn broadcast_form(&self) -> Option<bacnet_npdu::RemoteBroadcast> {
+        match self {
+            Self::Routed { mac, .. } => bacnet_npdu::RemoteBroadcast::of(mac, false),
+            Self::Direct(_) => None,
+        }
+    }
+
+    /// Whether a record, `confirmed` or not, may take this route: an
+    /// unconfirmed one always, a confirmed one unless the station is at a
+    /// broadcast or group form ([`Self::broadcast_form`]), since a
+    /// confirmed request goes to one station.
+    pub(crate) fn serves(&self, confirmed: bool) -> bool {
+        !confirmed || self.broadcast_form().is_none()
+    }
 }
 
 /// Whether `network` and `mac` name one station behind a router, as a
