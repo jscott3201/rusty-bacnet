@@ -50,7 +50,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             }
         }
         let Some(identity) = self.identity.as_ref() else {
-            return Ok(());
+            // No identity and no database: the session builds no Device.
+            return match &self.device_storage_path {
+                Some(path) => Err(storage_refused(path, "the session has no Device identity")),
+                None => Ok(()),
+            };
         };
         let identity = identity.resolve(self.local_receive_capacity)?;
         // Validate before replacing configuration or constructing an object.
