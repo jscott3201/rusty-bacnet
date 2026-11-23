@@ -88,7 +88,14 @@ impl SourceAudit {
             .and_then(|authority| authority.provisioned_audit_recipient().cloned())
             .expect("preflight recipient");
         routes.validate_initial(&initial)?;
-        status.set_configured(routes.resolve(&initial).is_some());
+        // A confirmed reporter has no route to a station at a broadcast or
+        // group form on another network (#2732).
+        let confirmed = status.configuration().confirmed;
+        status.set_configured(
+            routes
+                .resolve(&initial)
+                .is_some_and(|route| route.serves(confirmed)),
+        );
         let failures = Arc::new(AuditFailureQueue::default());
         let routers = Arc::clone(routes.routers());
         let runtime = Arc::new(SourceRecipient {
@@ -240,7 +247,9 @@ impl SourceAudit {
         }
         let status = reporter.status_internal();
         let confirmed = reporter.confirmed_internal();
-        let route = runtime.recipient_route(db);
+        let route = runtime
+            .recipient_route(db)
+            .filter(|route| route.serves(confirmed));
         status.set_configured(route.is_some());
         let (Some(route), Some(owner)) = (route, self.notifications.upgrade()) else {
             return;

@@ -184,6 +184,26 @@ async fn command_write_to_a_device_bound_at_a_group_address_is_never_sent() {
     }
 }
 
+/// #2732: a routed binding whose MAC on its network is a broadcast or group
+/// form there (`0xFF`, a LonTalk broadcast or group, `0xFFFFFF`, or six
+/// octets starting `FF:FF:FF:FF`) names no one device for a confirmed
+/// request, which its router would hand to every station. No WriteProperty
+/// goes out and the remote write fails as for an unbound device, while the
+/// local write still runs.
+#[tokio::test(start_paused = true)]
+async fn command_write_to_a_device_bound_at_a_remote_broadcast_form_is_never_sent() {
+    for form in super::event_recipient_route::broadcast_station_tests::FORMS {
+        let mut h = start(DeviceBinding::routed(device(9), 5, form, PEER).unwrap()).await;
+        write_pv(&mut h, 1, 1).await.unwrap();
+        idle(&h, 1).await;
+        assert!(sent_writes(&h).is_empty(), "{form:02X?}");
+        assert_eq!(db_flags(&h, 1).await, [false, true], "{form:02X?}");
+        assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
+        assert_eq!(state(&mut h, 1).await, (false, false));
+        h.server.stop().await.unwrap();
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn command_writes_another_device_and_its_ack_marks_the_command_successful() {
     let mut h = start_local().await;

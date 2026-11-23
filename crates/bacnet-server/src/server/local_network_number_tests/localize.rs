@@ -138,7 +138,7 @@ fn localize_takes_only_routes_naming_this_network_as_local() {
 #[test]
 fn into_confirmed_refuses_a_group_next_hop() {
     let refusal = |route: RecipientRoute| route.into_confirmed(is_group).err();
-    let group = Some(ConfirmedRouteRefusal::GroupNextHop);
+    let group = || Some(ConfirmedRouteRefusal::GroupNextHop);
     let bound_local = |octets: &[u8]| RecipientRoute::BoundLocalUnicast {
         mac: mac(octets),
         freshness: BindingFreshness::Configured,
@@ -158,20 +158,20 @@ fn into_confirmed_refuses_a_group_next_hop() {
         (
             "local multicast",
             RecipientRoute::LocalUnicast(mac(&MULTICAST)),
-            group,
+            group(),
         ),
         (
             "local broadcast MAC",
             RecipientRoute::LocalUnicast(mac(LITERAL_BROADCAST_MAC)),
-            group,
+            group(),
         ),
         ("bound local station", bound_local(&PEER_C), None),
-        ("bound local multicast", bound_local(&MULTICAST), group),
+        ("bound local multicast", bound_local(&MULTICAST), group()),
         ("routed via a station", routed_via(&ROUTER), None),
         (
             "routed via a multicast router",
             routed_via(&MULTICAST),
-            group,
+            group(),
         ),
         (
             "remote with no router",

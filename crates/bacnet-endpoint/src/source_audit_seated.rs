@@ -154,7 +154,9 @@ impl SourceAudit {
         }
         let status = reporter.status_internal();
         let confirmed = reporter.confirmed_internal();
-        let route = runtime.recipient_route(&db);
+        let route = runtime
+            .recipient_route(&db)
+            .filter(|route| route.serves(confirmed));
         status.set_configured(route.is_some());
         let Some(route) = route else {
             drop(db);

@@ -4696,7 +4696,14 @@ tuples raise `ValueError`, an integer outside its field's type
 `OverflowError`, other wrong types `TypeError`), and the object's own
 `add_destination` decides what the list holds, as it does for a client's
 write: more than 32 destinations, or an address MAC longer than 18 octets,
-raises `BacnetProtocolError`. `port_filter` serves Port_Filter as
+raises `BacnetProtocolError`. A destination on another network whose MAC is a
+broadcast or group form there (`0xFF`, two octets starting `0x00` or `0xFF`,
+`0xFFFFFF`, six octets starting `FF:FF:FF:FF`) is taken, but gets unconfirmed
+notifications only: a confirmed one is skipped and counted in
+`confirmed_broadcast_recipient` (#2732). The form is read from the MAC alone,
+so an ARCNET station 255, or a gateway's virtual network that numbers stations
+with two octets starting `0x00` or `0xFF`, can't take confirmed ones.
+`port_filter` serves Port_Filter as
 `(port_id, enabled)` pairs, one per network port; the server receives through
 Port_ID 0, and without `port_filter` the property is absent. Clients can still
 change both lists over the network, within the limits Port_Filter's writes
@@ -6986,7 +6993,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `recipient_list_too_long` | Transitions sent nowhere because a custom class served more than 32 destinations |
 | `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired, and a targeted Who-Is drew no I-Am within the APDU timeout, each notification that waited for it counted once (or none could go out, within a minute of one that drew nothing); also a confirmed notification ended at an attempt because the observed binding had expired by then |
 | `recipient_unroutable` | Matched recipients skipped because they can't be routed as written: a Device identifier that isn't a Device (or a binding unusable on this link), or a MAC on network 65535 |
-| `confirmed_broadcast_recipient` | Matched recipients skipped because they ask for confirmed notifications at a broadcast address, or another group address such as a multicast one, which only unconfirmed requests may use (Clause 6.3) |
+| `confirmed_broadcast_recipient` | Matched recipients skipped because they ask for confirmed notifications at a broadcast address, or another group address such as a multicast one, which only unconfirmed requests may use (Clause 6.3); also an address or Device binding on another network at a broadcast or group form there, such as `5:0xFF` or six octets starting `FF:FF:FF:FF` (#2732) |
 | `confirmed_waited_for_invoke_id` | Confirmed notifications that found every invoke ID in use and waited for one, once each; none is dropped for want of an ID, and only its destination's lane waits (#2537) |
 | `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
 | `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |

@@ -168,7 +168,9 @@ pub(super) fn encode(
 /// delivery forgets. A routed record for a network that has become this one
 /// goes direct only to a MAC the link's unicast rule takes; any other is
 /// refused here, unsent, like a send the egress can't take, so it fails
-/// without counting as a resource loss.
+/// without counting as a resource loss. So is a confirmed record to a
+/// station at a broadcast or group form on another network (#2732), which
+/// the reporter's route already leaves out ([`SourceRoute::serves`]).
 pub(super) fn admit_encoded(
     egress: &EndpointEgress,
     routers: &Arc<SourceRouters>,
@@ -180,6 +182,14 @@ pub(super) fn admit_encoded(
     Result<bacnet_endpoint_core::endpoint_ingress::EndpointSend, EndpointEgressAdmissionError>,
     Hop,
 ) {
+    if !route.serves(confirmed) {
+        tracing::debug!(
+            ?route,
+            "Confirmed source Audit record not sent: its recipient is at a broadcast or \
+             group address on its network"
+        );
+        return (Err(EndpointEgressAdmissionError::Closed), Hop::none());
+    }
     let Some((destination, hop)) = routers.destination(route) else {
         return (Err(EndpointEgressAdmissionError::Closed), Hop::none());
     };

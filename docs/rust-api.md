@@ -4219,6 +4219,37 @@ and COV notifications go to the source a request came from.
 `is_broadcast_mac` keeps its narrower meaning, this link's own broadcast,
 which routing relies on.
 
+The server also starts no confirmed request to a station on another network
+whose MAC there is a broadcast or group form, which the router delivering it
+would hand to every station there (#2732): the one octet `0xFF`, two octets
+starting `0x00` or `0xFF`, three octets of `0xFF`, or six starting
+`FF:FF:FF:FF` (`bacnet_npdu::RemoteBroadcast`, the client's check from #2709).
+That covers an Address recipient, a Device binding, configured or observed
+from an I-Am, the parent of an Audit Log that forwards, a COV subscriber
+relayed from such an address, and an endpoint session's source Audit
+recipient bound behind a router. An unconfirmed request to the same address
+still goes, as before. Such an address is taken where it is written (a
+Recipient_List, a `DeviceBinding::routed`, which logs a warning when
+configured) and skipped where a confirmed request would be sent, as a
+confirmed recipient at a broadcast address already was; the counters below
+say where each skip counts. An Audit Reporter that sends confirmed
+notifications reads CONFIGURATION_ERROR while its recipient is bound so.
+
+The forms are read from the MAC alone, since the far network's link is
+unknown here, and a recipient, a binding or a subscriber's address can't say
+which link that is, as a client's `Station::arcnet()` target can. Two kinds of
+real station are caught by that:
+
+- ARCNET station 255. A one-octet `0xFF`, written as a recipient or binding,
+  or taken from a source (a COV subscriber, a binding observed from an
+  I-Am), is read as the MS/TP broadcast, so that station gets unconfirmed
+  notifications only.
+- A two-octet address starting `0x00` or `0xFF` is read as a LonTalk
+  broadcast or group, so a gateway's virtual network that numbers its
+  stations that way can't be a confirmed recipient.
+
+There is no opt-in for either yet.
+
 A reply goes back to the link-layer MAC its request came from, so a
 confirmed request from a group address would get its answer, any segment
 ACK, and the confirmed COV notifications of a subscription it makes, sent to
@@ -7452,7 +7483,10 @@ bindings: a `DeviceBinding` registered on the builder, or an I-Am the server
 heard in the last ten minutes. A binding never takes a group address of the
 link (`TransportPort::is_group_destination`), as the device's own MAC or as its
 router's: one registered so stops the server from starting, with an error
-naming the device and the address, and an I-Am from one binds nothing (#1493). For a device with neither, the server first
+naming the device and the address, and an I-Am from one binds nothing (#1493).
+A routed binding whose MAC on its network is a broadcast or group form there
+binds, but no write or read goes to it, and the command fails as for an
+unbound device (#2732). For a device with neither, the server first
 broadcasts one Who-Is whose low and high limits are both that device's
 instance (#1322). A device it has never heard from is asked on every network
 (a global broadcast, DNET 65535). One whose stale I-Am is still held is asked
@@ -10354,7 +10388,11 @@ references and leaves with the next report, once. `stop()` ends every wait.
 `CovCounters::notifications_throttled_peer` counts each report the per-peer
 limit held back, so a subscription held back at several changes counts each
 time but waits once. A report held back by the pool or for an invoke ID warns
-at most once every 10 seconds, with the count since the last warning. What
+at most once every 10 seconds, with the count since the last warning. A
+confirmed report to a subscriber relayed from a broadcast or group form on its
+network (see #2732 above) is never sent: it doesn't wait for room, and warns
+at most once every 10 seconds the same way, while the subscription's
+unconfirmed reports at that address still go. What
 still waits for
 its next fanout: a report past the fanout budget, and a look DCC drops, as it
 drops any fanout. The standard doesn't say what a server does when it cannot
@@ -12603,10 +12641,15 @@ fixes them, and the warning logged with each skip gives the finer reason:
 - `confirmed_broadcast_recipient`: the entry asks for confirmed notifications at
   a local, remote or global broadcast address, or at any other group address
   of the link, such as a B/IP multicast address or the broadcast IP at
-  another port (#1493). Clause 6.3 allows only unconfirmed requests there,
-  and sending one unconfirmed would lose the acknowledgment, so the entry is
-  skipped before any invoke ID is reserved. An unconfirmed notification still
-  goes to such an address.
+  another port (#1493). Also an Address, or a Device binding, on another
+  network whose MAC there is a broadcast or group form (#2732): `5:0xFF`, a
+  two-octet LonTalk broadcast or group, `0xFFFFFF`, or six octets starting
+  `FF:FF:FF:FF`, judged by length since that network's link is unknown here;
+  its warning names the address and the form, at most once every ten
+  seconds. Clause 6.3 allows only unconfirmed requests there, and sending one
+  unconfirmed would lose the acknowledgment, so the entry is skipped before
+  any invoke ID is reserved. An unconfirmed notification still goes to such
+  an address.
 
 ### Concurrency
 

@@ -293,7 +293,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         revisits.owe([sub.key().clone()]);
                         None
                     }
-                    Err(Refusal::Other) => None,
+                    Err(Refusal::Other | Refusal::NotOneStation) => None,
                 }
             });
             // A subscription that waited for room and found it here waits

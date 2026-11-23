@@ -51,8 +51,12 @@ impl<T: TransportPort + 'static> WriteCommitObserver for WriteAudit<'_, T> {
         };
         let reporter = &selected_reporter.configuration;
         let device = crate::local_device::initiating_device(&self.config.device);
-        let route = recipient(db, device)
-            .and_then(|value| self.transactions.audit_routes.get()?.resolve(&value));
+        let route = recipient(db, device).and_then(|value| {
+            self.transactions
+                .audit_routes
+                .get()?
+                .resolve_for(&value, reporter.confirmed)
+        });
         let status = Arc::clone(&selected_reporter.status);
         status.set_configured(route.is_some());
         let Some(object) = db.get(&write.oid) else {
