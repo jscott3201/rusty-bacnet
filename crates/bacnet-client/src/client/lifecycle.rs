@@ -16,7 +16,31 @@ impl ClientConfig {
     pub(super) fn validate_request_settings(&self) -> Result<(), Error> {
         validate_max_apdu_length(self.max_apdu_length)?;
         validate_max_segments(self.max_segments)?;
+        if self.apdu_segment_timeout_ms == Some(0) {
+            return Err(Error::Encoding(
+                "invalid apdu-segment-timeout 0 ms; expected a positive value, or none for the \
+                 APDU timeout"
+                    .into(),
+            ));
+        }
         pacing::validate_interval_ms(self.min_request_interval_ms)
+    }
+
+    /// The segment timeout in milliseconds: the configured one, or the APDU
+    /// timeout.
+    pub(super) fn segment_timeout_ms(&self) -> u64 {
+        self.apdu_segment_timeout_ms.unwrap_or(self.apdu_timeout_ms)
+    }
+
+    /// Refuse a request that needs segments when this client sends none
+    /// ([`Self::segmented_requests`]), before anything is sent. Asked only
+    /// of a request too long for one APDU.
+    pub(super) fn check_segmented_request(&self) -> Result<(), Error> {
+        if self.segmented_requests {
+            Ok(())
+        } else {
+            Err(bacnet_types::error::SegmentationError::LocalCannotTransmit.into())
+        }
     }
 
     pub(super) fn validate_window(&self) -> Result<(), Error> {

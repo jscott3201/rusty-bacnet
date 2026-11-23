@@ -374,3 +374,104 @@ async fn caller_cancellation_reclaims_segmented_request_sender() {
     client.stop().await.unwrap();
     server.stop().await.unwrap();
 }
+
+/// A set segment timeout, not the APDU timeout, paces a segmented request:
+/// the unacknowledged first segment goes again one segment timeout after it
+/// was sent (#2617).
+#[tokio::test(start_paused = true)]
+async fn a_set_segment_timeout_paces_a_segmented_request() {
+    let config = ClientConfig {
+        apdu_timeout_ms: 6_000,
+        apdu_segment_timeout_ms: Some(250),
+        apdu_retries: 1,
+        max_apdu_length: 50,
+        proposed_window_size: 1,
+        ..ClientConfig::default()
+    };
+    let (client_transport, mut server) =
+        LoopbackTransport::pair(CLIENT_MAC.to_vec(), SERVER_MAC.to_vec());
+    let mut rx = server.start().await.unwrap();
+    let client = Arc::new(BACnetClient::start(config, client_transport).await.unwrap());
+    let request_client = Arc::clone(&client);
+    let request = tokio::spawn(async move {
+        request_client
+            .confirmed_request(
+                SERVER_MAC,
+                ConfirmedServiceChoice::READ_PROPERTY,
+                &[0x0C; 100],
+            )
+            .await
+    });
+    let mut sent = Vec::new();
+    for _ in 0..2 {
+        match recv_apdu(&mut rx, "a request segment").await {
+            Apdu::ConfirmedRequest(segment) => {
+                assert_eq!(segment.sequence_number, Some(0));
+                sent.push(tokio::time::Instant::now());
+            }
+            other => panic!("expected ConfirmedRequest segment, got {other:?}"),
+        }
+    }
+    let gap = sent[1] - sent[0];
+    assert!(
+        gap >= Duration::from_millis(250) && gap < Duration::from_millis(300),
+        "segment sent again after {gap:?}, expected the 250 ms segment timeout"
+    );
+    let result = request.await.unwrap();
+    assert!(matches!(
+        result,
+        Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::TSM_TIMEOUT
+    ));
+    let mut client =
+        Arc::try_unwrap(client).unwrap_or_else(|_| panic!("request task retained client"));
+    client.stop().await.unwrap();
+    server.stop().await.unwrap();
+}
+
+/// A set segment timeout also bounds the pause between an answer's
+/// segments: four of them, whatever the APDU timeout (#2617).
+#[tokio::test(start_paused = true)]
+async fn a_set_segment_timeout_bounds_an_answers_pause() {
+    let config = ClientConfig {
+        apdu_timeout_ms: 6_000,
+        apdu_segment_timeout_ms: Some(50),
+        apdu_retries: 3,
+        ..ClientConfig::default()
+    };
+    let (task, server, mut rx, invoke_id) = start_reassembly(config).await;
+    send_to_client(&server, &response_segment(invoke_id, 0, true, &[0x01; 8])).await;
+    expect_segment_ack(&mut rx, invoke_id, 0).await;
+    let acked = tokio::time::Instant::now();
+    let (mut client, result) = task.await.unwrap();
+    let waited = acked.elapsed();
+    assert!(matches!(
+        result,
+        Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::TSM_TIMEOUT
+    ));
+    assert!(
+        waited >= Duration::from_millis(200) && waited < Duration::from_millis(250),
+        "the answer was given up {waited:?} after its last segment, expected 4 x 50 ms"
+    );
+    client.stop().await.unwrap();
+}
+
+/// A segment timeout of zero is refused at start; none takes the APDU
+/// timeout.
+#[tokio::test]
+async fn a_zero_segment_timeout_is_refused() {
+    let config = ClientConfig {
+        apdu_segment_timeout_ms: Some(0),
+        ..ClientConfig::default()
+    };
+    let (client_transport, _server) =
+        LoopbackTransport::pair(CLIENT_MAC.to_vec(), SERVER_MAC.to_vec());
+    let error = BACnetClient::start(config, client_transport)
+        .await
+        .err()
+        .expect("a zero segment timeout is refused");
+    assert!(
+        error.to_string().contains("apdu-segment-timeout"),
+        "{error}"
+    );
+    assert_eq!(ClientConfig::default().segment_timeout_ms(), 6_000);
+}

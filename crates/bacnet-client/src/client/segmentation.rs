@@ -522,8 +522,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             );
         }
 
-        // Tseg: use APDU timeout for now (configurable via apdu_timeout_ms)
-        let timeout_duration = Duration::from_millis(self.config.apdu_timeout_ms);
+        // Tseg: the segment timeout, which defaults to the APDU timeout.
+        let timeout_duration = Duration::from_millis(self.config.segment_timeout_ms());
         let max_ack_retries = self.config.apdu_retries;
         let mut window_size = self.config.proposed_window_size.max(1) as usize;
         let mut next_seq: usize = 0;
