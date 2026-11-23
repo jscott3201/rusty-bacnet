@@ -224,9 +224,9 @@ async fn discovery_projects_claims_by_canonical_station_and_instance() {
     let stale = [(address.clone(), N + 1)].into();
     let (own, rows) = low.localized_device_snapshot();
     assert_eq!(own, Some(5));
-    assert!(discovery_results(rows.clone(), stale, own).is_empty());
+    assert!(discovery_results(&Scope::Local, rows.clone(), stale, own).is_empty());
     let heard: std::collections::BTreeSet<_> = [(address, N + 1), (at(2), N)].into();
-    let only = discovery_results(rows, heard.clone(), own);
+    let only = discovery_results(&Scope::Local, rows, heard.clone(), own);
     assert_eq!(only.len(), 1);
     assert_eq!(only[0].address, at(2));
     assert_eq!(only[0].instance, N);
@@ -235,7 +235,7 @@ async fn discovery_projects_claims_by_canonical_station_and_instance() {
     bus.i_am(3, N);
     settle().await;
     let (own, rows) = low.localized_device_snapshot();
-    let duplicated = discovery_results(rows, heard, own);
+    let duplicated = discovery_results(&Scope::Local, rows, heard, own);
     assert_eq!(duplicated.len(), 1);
     assert!(duplicated[0].duplicate);
 }

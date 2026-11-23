@@ -45,7 +45,7 @@ bacnet discover --dnet 5 --wait 3
 bacnet read 5:1005 ai:1 pv
 ```
 
-A routed target is `NETWORK:INSTANCE`, as `5:1005` above, or `NETWORK:0xMAC` for a station by its address on that network, such as `2:0x05` for MS/TP station 5 on network 2. The CLI asks that network for the device and sends the request through the router that answers. `read`, `readm`, `read-range`, `write`, `writem`, `subscribe`, `alarms`, `alarm-summary`, `enrollment-summary`, `ack-alarm`, `create-object`, `delete-object`, `control`, `reinit`, `time-sync`, `file-read` and `file-write` take routed targets, with the same write guards as a local target. The B/IP management commands `bdt`, `fdt`, `register` and `unregister` address local peers and refuse them.
+A routed target is `NETWORK:INSTANCE`, as `5:1005` above, or `NETWORK:0xMAC` for a station by its address on that network, such as `2:0x05` for MS/TP station 5 on network 2. A station whose MAC looks like a broadcast or group address but is one station is written `5:0xFF:one-station` (ARCNET station 255) or `9:0x0012:one-station` (a gateway's two-octet virtual station); the suffix is refused anywhere it lifts nothing. The CLI asks that network for the device and sends the request through the router that answers. `read`, `readm`, `read-range`, `write`, `writem`, `subscribe`, `alarms`, `alarm-summary`, `enrollment-summary`, `ack-alarm`, `create-object`, `delete-object`, `control`, `reinit`, `time-sync`, `file-read` and `file-write` take routed targets, with the same write guards as a local target. The B/IP management commands `bdt`, `fdt`, `register` and `unregister` address local peers and refuse them.
 
 ## Router options worth knowing
 

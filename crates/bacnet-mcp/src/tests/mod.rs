@@ -24,6 +24,7 @@ mod limits;
 mod listen;
 mod logs;
 mod notify;
+mod one_station;
 mod paging;
 mod plan;
 mod protocol;
@@ -243,6 +244,8 @@ pub(crate) const ALIASES: std::ops::Range<u32> = 1202..1206;
 pub(crate) struct Lab {
     pub(crate) agent: Agent,
     pub(crate) sent: SendLog,
+    /// Every frame the client sent, whole (the link MAC and the NPDU).
+    pub(crate) frames: bacnet_transport::test_transport::SendLog,
     pub(crate) received: Arc<Mutex<Vec<Instant>>>,
     server: BACnetServer<TestTransport>,
     /// The [`ALIASES`]' devices, in order.
@@ -365,6 +368,7 @@ impl Lab {
             apdu_retries: 0,
             ..ClientConfig::default()
         };
+        let frames = recording.sent();
         let low = Arc::new(BACnetClient::start(config, recording).await.unwrap());
         // Each alias's answers reach the client's receive channel beside the
         // lab device's own.
@@ -414,6 +418,7 @@ impl Lab {
         Self {
             agent,
             sent,
+            frames,
             received,
             server,
             aliases,

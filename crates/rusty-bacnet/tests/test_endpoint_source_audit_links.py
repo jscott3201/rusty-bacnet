@@ -204,6 +204,7 @@ class RoutedBindingTests(unittest.IsolatedAsyncioTestCase):
         try:
             for binding, reliability in (("5:0xff", 10), (RoutedTarget(5, b"\xff"), 10),
                                          (RoutedTarget(5, b"\xff", one_station=True), 0),
+                                         ("5:0xff:one-station", 0),
                                          (RoutedTarget(5, b"\xff\xff", one_station=True), 10)):
                 with self.subTest(binding=binding):
                     owner = bip_endpoint(audit_device_bindings=[(LOGGER, binding)])
@@ -217,6 +218,18 @@ class RoutedBindingTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(read.value, reliability)
         finally:
             await client.stop()
+
+    async def test_the_one_station_suffix_is_read_where_it_lifts_something(self):
+        """The text form takes ``:one-station`` at the MACs the mark lifts
+        (#2738), and refuses it anywhere else, as the CLI's grammar does."""
+        for binding in ("5:0xFF:one-station", "9:0x0012:one-station"):
+            with self.subTest(binding=binding):
+                bip_endpoint(audit_device_bindings=[(LOGGER, binding)])
+        for binding in ("5:0x05:one-station", "5:0x0000:one-station", "5:0xFFFF:one-station",
+                        "5:0xFF:One-Station", "5:0xFF:", "5:0xFF:arcnet"):
+            with self.subTest(binding=binding):
+                with self.assertRaises(ValueError):
+                    bip_endpoint(audit_device_bindings=[(LOGGER, binding)])
 
     async def test_a_routed_binding_resolves_in_a_running_session(self):
         """The Reporter of a B/IP endpoint bound to a Device behind a router
