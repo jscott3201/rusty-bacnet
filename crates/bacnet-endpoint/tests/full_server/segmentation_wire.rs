@@ -151,8 +151,8 @@ fn answer(invoke_id: u8) -> impl Fn(&Apdu) -> bool {
     move |apdu| matches!(apdu, Apdu::ComplexAck(ack) if ack.invoke_id == invoke_id)
 }
 
-/// A node with both roles, segmented both ways, and its client reading the
-/// peer's AI-1 name: the task, and the invoke ID its request took.
+/// A node with both roles, segmented both ways: the session, what it sent,
+/// its link, and its client, which [`Reading::read`] reads the peer with.
 struct Reading {
     session: EndpointSession<TestTransport>,
     log: SendLog,

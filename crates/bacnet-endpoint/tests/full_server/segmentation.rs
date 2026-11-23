@@ -78,6 +78,7 @@ async fn reader(wire: &Wire, n: u8) -> BACnetClient<TestTransport> {
     reader_with(wire, n, |builder| builder).await
 }
 
+/// [`reader`], with what `tune` sets on its builder besides.
 async fn reader_with(
     wire: &Wire,
     n: u8,

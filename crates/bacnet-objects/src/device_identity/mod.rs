@@ -99,7 +99,7 @@ impl DeviceIdentity {
 
     /// Sets the segment timeout (default 5000 ms): the Device's
     /// APDU_Segment_Timeout, which a full server and an endpoint session's
-    /// client use while they segment. Its APDU timeout and retries stay the
+    /// client use while they segment. APDU timeouts and retries stay the
     /// caller's.
     pub fn with_apdu_segment_timeout_ms(mut self, timeout_ms: u64) -> Self {
         self.apdu_segment_timeout_ms = timeout_ms;
