@@ -139,7 +139,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<Bytes, Error> {
-        to.confirmed(self, service_choice, service_data).await
+        to.confirmed(self, service_choice, service_data, None).await
     }
 
     /// Register a confirmed request with the TSM, its lock held for the
@@ -164,11 +164,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             )
     }
 
+    /// The one request path: `attributes` are the data attributes each
+    /// frame carries (#2723), `None` for none.
     pub(super) async fn confirmed_request_inner(
         &self,
         target: ConfirmedTarget<'_>,
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
+        attributes: Attributes<'_>,
     ) -> Result<Bytes, Error> {
         // A destination that is not one device (#1278), or a DADR or local
         // source MAC that no router could carry (#1267), fails here, before
@@ -230,13 +233,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // interval for the next request to this destination. A request still
         // waiting when the client's tasks end (its stop, or its node's stop
         // or drop) ends then, as the open requests do, and claims no turn
-        // (#2720).
-        let Some(mut _pace) = self
-            .pacer
-            .wait(pacing::PaceKey::of(target), &self.routing_query.ended)
-            .await
-        else {
-            return Err(request_cut_off());
+        // (#2720). A client with no interval names no destination and
+        // waits for nothing.
+        let mut _pace = if self.pacer.paces() {
+            let key = pacing::PaceKey::of(target);
+            match self.pacer.wait(key, &self.routing_query.ended).await {
+                Some(pace) => pace,
+                None => return Err(request_cut_off()),
+            }
+        } else {
+            pacing::PaceGuard::unpaced()
         };
         // The lease serializes one active request per (immediate router, DNET)
         // and remains live through every return path, including cancellation.
@@ -330,6 +336,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 routed_path_lease: &mut path_lease,
                 pace: &mut _pace,
                 sized_by,
+                attributes,
             };
             return self
                 .segmented_confirmed_request(target, service_choice, service_data, &mut limits)
@@ -355,13 +362,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Err(refused) => match self.on_refused(refused, target, service_choice, false)? {
                 Refused::Registered(registered) => registered,
                 Refused::Audited(auditor) => {
+                    // The runner takes the routed path again.
+                    drop(path_lease);
                     let request = self.audited_request(
                         auditor,
                         named,
                         service_choice,
                         service_data,
                         _pace,
-                        path_lease,
+                        attributes,
                     );
                     return request.await;
                 }
@@ -369,6 +378,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         };
 
         let owner = registration.owner.clone();
+        // The transaction keeps the request's data attributes, so its sends
+        // carry them from there (#2723).
+        owner.set_data_attributes(attributes);
         let mut guard = TransactionGuard::new(
             Arc::clone(&self.tsm),
             self.cleanup_tx.clone(),
@@ -421,7 +433,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             ));
         }
 
-        if let Err(e) = self.send_confirmed_target_apdu(target, &buf).await {
+        if let Err(e) = self.send_confirmed_target_apdu(target, &buf, &owner).await {
             guard.mark_completed();
             let mut tsm = self.tsm.lock();
             tsm.cancel_transaction_for_owner(&tsm_mac, invoke_id, &owner);
@@ -562,7 +574,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                         });
                                     }
                                     let send_result = self
-                                        .send_confirmed_target_apdu(target, retry_apdu)
+                                        .send_confirmed_target_apdu(target, retry_apdu, owner)
                                         .await;
                                     if let Err(error) = send_result {
                                         let expiration = self
@@ -690,16 +702,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// Send one frame of a confirmed request (its first, a retry or a
     /// segment) with the data attributes it was made with
-    /// ([`BACnetClient::with_data_attributes`]), none by default: to the
-    /// station's MAC, to its router, or by one broadcast on this link for
-    /// the form that names no router.
+    /// ([`BACnetClient::with_data_attributes`]), which its transaction's
+    /// `owner` keeps, none by default: to the station's MAC, to its router,
+    /// or by one broadcast on this link for the form that names no router.
     pub(super) async fn send_confirmed_target_apdu(
         &self,
         target: ConfirmedTarget<'_>,
         apdu: &[u8],
+        owner: &TransactionOwner,
     ) -> Result<(), Error> {
-        let scoped = super::data_attributes::scoped();
-        let (priority, attributes) = (NetworkPriority::Normal, scoped.as_deref().unwrap_or(&[]));
+        let priority = NetworkPriority::Normal;
+        let attributes = owner.data_attributes();
         match target {
             ConfirmedTarget::Local { mac } => {
                 self.network

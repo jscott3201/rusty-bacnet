@@ -138,6 +138,12 @@ pub(crate) struct PaceGuard {
 }
 
 impl PaceGuard {
+    /// The turn of a request its client doesn't pace: it ends nothing.
+    #[inline]
+    pub(crate) fn unpaced() -> Self {
+        Self { sent: None }
+    }
+
     /// Move the request's turn out, leaving a guard that ends none: for a
     /// segmented request its node audits, which only borrows its caller's
     /// guard (#2617).
@@ -178,6 +184,13 @@ impl RequestPacer {
             lanes: Mutex::new(Lanes::default()),
             audit: OnceLock::new(),
         }
+    }
+
+    /// Whether this pacer spaces requests at all: an interval of zero
+    /// paces nothing, and a request needs no turn from it.
+    #[inline]
+    pub(crate) fn paces(&self) -> bool {
+        !self.interval.is_zero()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Lanes> {

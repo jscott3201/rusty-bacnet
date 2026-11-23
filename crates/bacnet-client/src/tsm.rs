@@ -195,6 +195,25 @@ impl TransactionOwner {
     pub(crate) fn same_as(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
+
+    /// Send every frame of this transaction's request with `attributes`,
+    /// when it was made with some (#2723); set before the first frame goes.
+    #[inline]
+    pub(crate) fn set_data_attributes(
+        &self,
+        attributes: Option<&Arc<[bacnet_transport::port::DataAttribute]>>,
+    ) {
+        if let Some(attributes) = attributes {
+            self.0.set_data_attributes(Arc::clone(attributes));
+        }
+    }
+
+    /// The data attributes this transaction's frames carry: empty unless
+    /// its request was made with some.
+    #[inline]
+    pub(crate) fn data_attributes(&self) -> &[bacnet_transport::port::DataAttribute] {
+        self.0.data_attributes()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

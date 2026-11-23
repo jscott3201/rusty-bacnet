@@ -7,24 +7,22 @@
 //! gives a view whose calls send every frame of their confirmed requests
 //! with them: the first, each retry and each segment, to any station form.
 //!
-//! The attributes ride in a task-local value for the life of the call,
-//! read where the request path sends a frame. The request path and its
-//! futures carry nothing for them, so a request made without them pays
-//! one task-local read per frame. A source-audited request, which its node
-//! runs in a task of its own, takes them along. The client's own answers
-//! and acknowledgments (a SegmentACK for a segmented answer, an Abort)
-//! and unconfirmed requests carry none.
-
-use std::future::Future;
+//! The request hands them to its transaction when it registers, and each
+//! frame it sends reads them from the transaction's owner, which every send
+//! already holds; a request made without the view hands over nothing and
+//! its sends find none. No ambient state is involved, so a request made
+//! through the view carries them whichever task runs it. A source-audited
+//! request, which its node runs in a task of its own, takes them along.
+//! The client's own answers and acknowledgments (a SegmentACK for a
+//! segmented answer, an Abort) and unconfirmed requests carry none.
 
 use bacnet_transport::port::DataAttribute;
 
 use super::*;
 
-tokio::task_local! {
-    /// The data attributes of the confirmed request being made.
-    static DATA_ATTRIBUTES: Arc<[DataAttribute]>;
-}
+/// The data attributes a confirmed request's frames carry, `None` for
+/// none, as the request path passes them to the transaction.
+pub(super) type Attributes<'a> = Option<&'a Arc<[DataAttribute]>>;
 
 /// A client whose confirmed requests carry data attributes on every frame,
 /// from [`BACnetClient::with_data_attributes`]. Keep it to send several
@@ -40,9 +38,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// through the view (the first, each retry and each segment, to any
     /// station form) with `attributes` (#2723). On BACnet/SC they are the
     /// header data options of Annex AB, which the transport checks when it
-    /// sends; a link that carries none ignores them. The view has the read
-    /// calls the endpoint's removed requester took them on, and
-    /// [`run`](WithDataAttributes::run) for any other call.
+    /// sends; a link that carries none ignores them. The view has the calls
+    /// the endpoint's removed requester took them on, ReadProperty,
+    /// ReadPropertyMultiple and ReadRange, and [`confirmed_request`] for any
+    /// other confirmed service.
+    ///
+    /// [`confirmed_request`]: WithDataAttributes::confirmed_request
     pub fn with_data_attributes(
         &self,
         attributes: impl Into<Arc<[DataAttribute]>>,
@@ -52,25 +53,26 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             attributes: attributes.into(),
         }
     }
+
+    /// [`Self::confirmed_request`] with every frame carrying `attributes`,
+    /// for a request that goes on in another task, such as a source-audited
+    /// one.
+    pub(super) async fn confirmed_request_with(
+        &self,
+        to: &(impl ToStation + ?Sized),
+        service_choice: ConfirmedServiceChoice,
+        service_data: &[u8],
+        attributes: Attributes<'_>,
+    ) -> Result<Bytes, Error> {
+        to.confirmed(self, service_choice, service_data, attributes)
+            .await
+    }
 }
 
-impl<'a, T: TransportPort + 'static> WithDataAttributes<'a, T> {
+impl<T: TransportPort + 'static> WithDataAttributes<'_, T> {
     /// The data attributes this view's requests carry.
     pub fn attributes(&self) -> &[DataAttribute] {
         &self.attributes
-    }
-
-    /// Make `request`'s call on the client with this view's attributes:
-    /// every confirmed request it makes carries them, as in
-    /// `secure.run(|client| client.write_property(&station, ...))`.
-    pub async fn run<F, Fut>(&self, request: F) -> Fut::Output
-    where
-        F: FnOnce(&'a BACnetClient<T>) -> Fut,
-        Fut: Future,
-    {
-        DATA_ATTRIBUTES
-            .scope(Arc::clone(&self.attributes), request(self.client))
-            .await
     }
 
     /// [`BACnetClient::confirmed_request`] with this view's attributes.
@@ -80,8 +82,13 @@ impl<'a, T: TransportPort + 'static> WithDataAttributes<'a, T> {
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
     ) -> Result<Bytes, Error> {
-        self.run(|client| client.confirmed_request(to, service_choice, service_data))
-            .await
+        to.confirmed(
+            self.client,
+            service_choice,
+            service_data,
+            Some(&self.attributes),
+        )
+        .await
     }
 
     /// [`BACnetClient::read_property`] with this view's attributes.
@@ -92,15 +99,14 @@ impl<'a, T: TransportPort + 'static> WithDataAttributes<'a, T> {
         property_identifier: bacnet_types::enums::PropertyIdentifier,
         property_array_index: Option<u32>,
     ) -> Result<bacnet_services::read_property::ReadPropertyACK, Error> {
-        self.run(|client| {
-            client.read_property(
-                to,
-                object_identifier,
-                property_identifier,
-                property_array_index,
-            )
-        })
-        .await
+        let request = bacnet_services::read_property::ReadPropertyRequest {
+            object_identifier,
+            property_identifier,
+            property_array_index,
+        };
+        self.client
+            .call_with(to, request, Some(&self.attributes))
+            .await
     }
 
     /// [`BACnetClient::read_property_multiple`] with this view's attributes.
@@ -109,7 +115,11 @@ impl<'a, T: TransportPort + 'static> WithDataAttributes<'a, T> {
         to: &(impl ToStation + ?Sized),
         specs: Vec<bacnet_types::constructed::ReadAccessSpecification>,
     ) -> Result<bacnet_services::rpm::ReadPropertyMultipleACK, Error> {
-        self.run(|client| client.read_property_multiple(to, specs))
+        let request = bacnet_services::rpm::ReadPropertyMultipleRequest {
+            list_of_read_access_specs: specs,
+        };
+        self.client
+            .call_with(to, request, Some(&self.attributes))
             .await
     }
 
@@ -122,34 +132,20 @@ impl<'a, T: TransportPort + 'static> WithDataAttributes<'a, T> {
         property_array_index: Option<u32>,
         range: Option<bacnet_services::read_range::RangeSpec>,
     ) -> Result<bacnet_services::read_range::ReadRangeAck, Error> {
-        self.run(|client| {
-            client.read_range(
-                to,
-                object_identifier,
-                property_identifier,
-                property_array_index,
-                range,
-            )
-        })
-        .await
-    }
-}
-
-/// The data attributes of the confirmed request being made, when it is
-/// made through a [`WithDataAttributes`] view.
-pub(super) fn scoped() -> Option<Arc<[DataAttribute]>> {
-    DATA_ATTRIBUTES.try_with(Arc::clone).ok()
-}
-
-/// `request` made with `attributes`, or as it is with none: for a request
-/// that goes on in another task, such as a source-audited one.
-pub(super) async fn within<F: Future>(
-    attributes: Option<Arc<[DataAttribute]>>,
-    request: F,
-) -> F::Output {
-    match attributes {
-        Some(attributes) => DATA_ATTRIBUTES.scope(attributes, request).await,
-        None => request.await,
+        let request = bacnet_services::read_range::ReadRangeRequest {
+            object_identifier,
+            property_identifier,
+            property_array_index,
+            range,
+        };
+        let range = super::service::Range {
+            request: &request,
+            validation: bacnet_services::read_range::ReadRangeValidation::Strict,
+        };
+        self.client
+            .call_with(to, range, Some(&self.attributes))
+            .await
+            .map(|reply| reply.ack)
     }
 }
 

@@ -353,12 +353,14 @@ mod sealed {
 
     /// How a request reaches a station in one of its forms.
     pub trait Sealed {
-        /// One confirmed request to the station, its answer's service data.
+        /// One confirmed request to the station, its answer's service data,
+        /// every frame of it carrying `attributes` (#2723).
         fn confirmed<'a, T: TransportPort + 'static>(
             &'a self,
             client: &'a BACnetClient<T>,
             service_choice: ConfirmedServiceChoice,
             service_data: &'a [u8],
+            attributes: Attributes<'a>,
         ) -> impl Future<Output = Result<Bytes, Error>> + Send + 'a;
 
         /// One unconfirmed request to the station.
@@ -380,11 +382,13 @@ mod sealed {
             client: &'a BACnetClient<T>,
             service_choice: ConfirmedServiceChoice,
             service_data: &'a [u8],
+            attributes: Attributes<'a>,
         ) -> impl Future<Output = Result<Bytes, Error>> + Send + 'a {
             client.confirmed_request_inner(
                 ConfirmedTarget::Local { mac: self },
                 service_choice,
                 service_data,
+                attributes,
             )
         }
 
@@ -411,8 +415,9 @@ mod sealed {
                     client: &'a BACnetClient<T>,
                     service_choice: ConfirmedServiceChoice,
                     service_data: &'a [u8],
+                    attributes: Attributes<'a>,
                 ) -> impl Future<Output = Result<Bytes, Error>> + Send + 'a {
-                    self[..].confirmed(client, service_choice, service_data)
+                    self[..].confirmed(client, service_choice, service_data, attributes)
                 }
 
                 fn unconfirmed<'a, T: TransportPort + 'static>(
@@ -443,8 +448,9 @@ mod sealed {
             client: &'a BACnetClient<T>,
             service_choice: ConfirmedServiceChoice,
             service_data: &'a [u8],
+            attributes: Attributes<'a>,
         ) -> impl Future<Output = Result<Bytes, Error>> + Send + 'a {
-            (**self).confirmed(client, service_choice, service_data)
+            (**self).confirmed(client, service_choice, service_data, attributes)
         }
 
         fn unconfirmed<'a, T: TransportPort + 'static>(
@@ -467,6 +473,7 @@ mod sealed {
             client: &'a BACnetClient<T>,
             service_choice: ConfirmedServiceChoice,
             service_data: &'a [u8],
+            attributes: Attributes<'a>,
         ) -> impl Future<Output = Result<Bytes, Error>> + Send + 'a {
             client.confirmed_at(
                 self.network_number,
@@ -474,6 +481,7 @@ mod sealed {
                 false,
                 service_choice,
                 service_data,
+                attributes,
             )
         }
 
@@ -502,16 +510,27 @@ mod sealed {
             client: &'a BACnetClient<T>,
             service_choice: ConfirmedServiceChoice,
             service_data: &'a [u8],
+            attributes: Attributes<'a>,
         ) -> Result<Bytes, Error> {
             match self {
-                Station::Local { mac } => mac.confirmed(client, service_choice, service_data).await,
+                Station::Local { mac } => {
+                    mac.confirmed(client, service_choice, service_data, attributes)
+                        .await
+                }
                 Station::Remote {
                     network,
                     mac,
                     arcnet,
                 } => {
                     client
-                        .confirmed_at(*network, mac, *arcnet, service_choice, service_data)
+                        .confirmed_at(
+                            *network,
+                            mac,
+                            *arcnet,
+                            service_choice,
+                            service_data,
+                            attributes,
+                        )
                         .await
                 }
                 Station::Routed {
@@ -530,7 +549,7 @@ mod sealed {
                         arcnet: *arcnet,
                     };
                     client
-                        .confirmed_request_inner(target, service_choice, service_data)
+                        .confirmed_request_inner(target, service_choice, service_data, attributes)
                         .await
                 }
                 Station::RoutedViaLocalBroadcast {
@@ -545,7 +564,7 @@ mod sealed {
                         arcnet: *arcnet,
                     };
                     client
-                        .confirmed_request_inner(target, service_choice, service_data)
+                        .confirmed_request_inner(target, service_choice, service_data, attributes)
                         .await
                 }
             }
@@ -674,6 +693,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         arcnet: bool,
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
+        attributes: Attributes<'_>,
     ) -> Result<Bytes, Error> {
         if network != 0 && Some(network) != self.network.local_network_number().get() {
             check_station(network, mac)?;
@@ -682,7 +702,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         match self.route_to(network, mac)? {
             Route::Local => {
                 let target = ConfirmedTarget::Local { mac };
-                self.confirmed_request_inner(target, service_choice, service_data)
+                self.confirmed_request_inner(target, service_choice, service_data, attributes)
                     .await
             }
             Route::Via(router) => {
@@ -693,7 +713,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     dest_mac: mac,
                     arcnet,
                 };
-                self.confirmed_request_inner(target, service_choice, service_data)
+                self.confirmed_request_inner(target, service_choice, service_data, attributes)
                     .await
             }
         }

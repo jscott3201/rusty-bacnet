@@ -57,7 +57,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 .map(OutgoingSegmentSend::Terminal)
                 .map_err(|_| Error::Encoding("TSM response channel closed".into()));
         }
-        let send = self.send_confirmed_target_apdu(context.target, &buf);
+        let send = self.send_confirmed_target_apdu(context.target, &buf, context.owner);
         tokio::pin!(send);
 
         if first_final_issue {

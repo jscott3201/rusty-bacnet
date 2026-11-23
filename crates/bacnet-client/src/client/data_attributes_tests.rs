@@ -147,16 +147,22 @@ async fn every_frame_of_a_request_made_with_attributes_carries_them() {
 }
 
 /// A request made without the view carries none, even while another made
-/// with it is open; each carries its own; and unconfirmed requests carry
-/// none.
+/// with it is open; each carries its own, through a typed call too; and
+/// unconfirmed requests carry none.
 #[tokio::test(start_paused = true)]
 async fn only_the_views_requests_carry_its_attributes() {
     let (mut client, sent) = client(0).await;
     let one = client.with_data_attributes(vec![attribute(1)]);
     let two = client.with_data_attributes(vec![attribute(2), attribute(3)]);
+    let object = bacnet_types::primitives::ObjectIdentifier::new(
+        bacnet_types::enums::ObjectType::ANALOG_INPUT,
+        1,
+    )
+    .unwrap();
+    let property = bacnet_types::enums::PropertyIdentifier::PRESENT_VALUE;
     let (first, second, plain) = tokio::join!(
         one.confirmed_request(&[3], WRITE, &[0x0C]),
-        two.run(|client| client.confirmed_request(&[4], WRITE, &[0x0C])),
+        two.read_property(&[4], object, property, None),
         client.confirmed_request(&[5], WRITE, &[0x0C]),
     );
     assert!(timed_out(&first) && timed_out(&second) && timed_out(&plain));
@@ -172,7 +178,8 @@ async fn only_the_views_requests_carry_its_attributes() {
     assert!(by_mac(5).is_empty());
 
     sent.clear();
-    one.run(|client| client.unconfirmed_request(&[6], UnconfirmedServiceChoice::WHO_IS, &[]))
+    client
+        .unconfirmed_request(&[6], UnconfirmedServiceChoice::WHO_IS, &[])
         .await
         .unwrap();
     assert!(sent.frame(0).attributes.is_empty());

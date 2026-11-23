@@ -901,6 +901,7 @@ mod cov;
 mod cov_notifications;
 mod cov_renewal;
 mod data_attributes;
+use data_attributes::Attributes;
 pub use data_attributes::WithDataAttributes;
 mod device_events;
 mod device_mgmt;

@@ -14166,9 +14166,10 @@ session.stop().await?; // stops the server, then the link
 - `client.with_data_attributes(attributes)` is a view of the client whose
   confirmed requests carry those data attributes on every frame, the first,
   each retry and each segment (on BACnet/SC, Annex AB header data options):
-  its `read_property`, `read_property_multiple`, `read_range` and
-  `confirmed_request`, and `run(|client| ...)` for any other call. Each call
-  takes its own; requests made without a view, unconfirmed requests and the
+  its `read_property`, `read_property_multiple` and `read_range`, and
+  `confirmed_request` for any other confirmed service. Each call takes its
+  own, carried by the request's transaction, so a view's request may run in
+  any task; requests made without a view, unconfirmed requests and the
   client's acknowledgments (a SegmentACK for a segmented answer, an Abort)
   carry none. A source-audited request takes its attributes into the
   node's task (#2723).
