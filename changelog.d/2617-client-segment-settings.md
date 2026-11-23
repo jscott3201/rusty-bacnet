@@ -1,6 +1,7 @@
 ---
-section: Added
+section: Changed
 ---
-- **Breaking (Rust API):** `ClientConfig` gains `segmented_requests` (default on; off, a request that
-  needs segments fails with `SegmentationError::LocalCannotTransmit` before anything is sent) and
-  `apdu_segment_timeout_ms` (default: the APDU timeout) (#2617).
+- **Breaking (Rust API):** `ClientConfig::segmentation` (default SEGMENTED_BOTH) replaces
+  `segmented_response_accepted`: the client takes segmented answers and notifications only while it
+  receives segments, and segments long requests only while it transmits. `apdu_segment_timeout_ms` is
+  new (#2617).

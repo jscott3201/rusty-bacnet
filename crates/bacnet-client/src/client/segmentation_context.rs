@@ -32,7 +32,7 @@ impl ResponseLimits {
         let advertised =
             advertised_max_segments(config.max_segments).map_or(usize::MAX, usize::from);
         Self {
-            segmented_response_accepted: config.segmented_response_accepted,
+            segmented_response_accepted: config.receives_segments(),
             max_reassembly_segments: advertised.min(SEQUENCE_NUMBER_SPACE),
         }
     }

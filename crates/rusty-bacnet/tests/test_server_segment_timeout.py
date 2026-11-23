@@ -16,7 +16,7 @@ class SegmentConstructorTests(unittest.TestCase):
             self.assertEqual(signature.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertEqual(signature.parameters["apdu_segment_timeout_ms"].default, 5000)
         stub = Path(rusty_bacnet.__file__).with_suffix(".pyi").read_text()
-        self.assertIn("segmentation_supported: Segmentation = Segmentation.NO_SEGMENTATION", stub)
+        self.assertIn("segmentation_supported: Segmentation = Segmentation.SEGMENTED_BOTH", stub)
         self.assertIn("apdu_segment_timeout_ms: int = 5000", stub)
         for transport in ("bip", "ipv6", "sc", "mstp"):
             for mode in (Segmentation.SEGMENTED_TRANSMIT, Segmentation.SEGMENTED_RECEIVE, Segmentation.SEGMENTED_BOTH):
@@ -34,7 +34,12 @@ class SegmentConstructorTests(unittest.TestCase):
         for invalid in (None, 0, "SEGMENTED_BOTH"):
             with self.assertRaises(TypeError):
                 BACnetServer(123, segmentation_supported=invalid)
-        BACnetServer(123, apdu_segment_timeout_ms=0)  # Inactive under NO_SEGMENTATION.
+        # The default segments both ways (#2617), so it needs a timeout; one
+        # that doesn't segment never reads it.
+        with self.assertRaisesRegex(ValueError, "must be positive"):
+            BACnetServer(123, apdu_segment_timeout_ms=0)
+        BACnetServer(123, segmentation_supported=Segmentation.NO_SEGMENTATION,
+                     apdu_segment_timeout_ms=0)
 
 
 def read_property(property_id):
@@ -106,12 +111,27 @@ class SegmentWireTests(unittest.IsolatedAsyncioTestCase):
                 finally:
                     await server.stop()
 
-    async def test_default_none_omits_segment_timeout_property(self):
-        server = BACnetServer(123, interface="127.0.0.1", port=0, broadcast_address="127.0.0.1")
+    async def test_no_segmentation_omits_segment_timeout_property(self):
+        server = BACnetServer(123, interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
+                              segmentation_supported=Segmentation.NO_SEGMENTATION)
         try:
             await server.start()
             host, port = (await server.local_address()).rsplit(":", 1)
             reply = await self.exchange((host, int(port)), b"\x00\x05\x01\x0c" + read_property(10))
             self.assertEqual(reply, b"\x50\x01\x0c\x91\x02\x91\x20")
+        finally:
+            await server.stop()
+
+    async def test_the_default_segments_both_ways(self):
+        # As the Rust server and the endpoints do (#2617).
+        server = BACnetServer(123, interface="127.0.0.1", port=0, broadcast_address="127.0.0.1")
+        try:
+            await server.start()
+            host, port = (await server.local_address()).rsplit(":", 1)
+            address = (host, int(port))
+            for invoke, prop, encoded in ((1, 107, b"\x91\x00"), (2, 10, b"\x22\x13\x88")):
+                service = read_property(prop)
+                reply = await self.exchange(address, bytes([0x00, 0x05, invoke, 0x0c]) + service)
+                self.assertEqual(reply, bytes([0x30, invoke, 0x0c]) + service + b"\x3e" + encoded + b"\x3f")
         finally:
             await server.stop()

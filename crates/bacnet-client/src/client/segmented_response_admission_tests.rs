@@ -16,7 +16,11 @@ fn config(segmented_response_accepted: bool) -> ClientConfig {
     ClientConfig {
         apdu_timeout_ms: 50,
         apdu_retries: 2,
-        segmented_response_accepted,
+        segmentation: if segmented_response_accepted {
+            bacnet_types::enums::Segmentation::SEGMENTED_BOTH
+        } else {
+            bacnet_types::enums::Segmentation::SEGMENTED_TRANSMIT
+        },
         ..ClientConfig::default()
     }
 }

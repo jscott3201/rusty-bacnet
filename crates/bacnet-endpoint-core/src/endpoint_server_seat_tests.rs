@@ -169,13 +169,19 @@ async fn an_answer_goes_to_the_role_whose_lease_holds_it() {
         assert_quiet(&mut node);
     }
     // A requester's Abort or Segment-ACK is about a request the server
-    // serves, whatever lease its invoke ID matches.
+    // serves, whatever lease its invoke ID matches. The client sees a copy
+    // of the Abort, which may end a notification it reassembles (#2646).
     for apdu in [
         &[0x70, client.invoke_id(), 0x00][..],
         &[0x40, 9, 0x00, 0x01],
     ] {
         inject(&node.link, apdu).await;
         assert_eq!(receive(&mut node.server.apdus).await.apdu.as_ref(), apdu);
+        if apdu[0] == 0x70 {
+            let copy = receive(&mut node.client.apdus).await;
+            assert_eq!(copy.apdu.as_ref(), apdu);
+            assert!(copy.direct_response.is_none() && copy.router_response.is_none());
+        }
         assert_quiet(&mut node);
     }
     // An answer no lease holds stays with the endpoint, which counts it.

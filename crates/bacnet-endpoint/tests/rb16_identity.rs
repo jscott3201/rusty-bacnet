@@ -675,14 +675,14 @@ fn identity_maps_its_segment_timeout_to_both_database_builders_and_full_server()
         client.apdu_timeout_ms, 1234,
         "client timing remains caller-owned"
     );
-    assert!(!client.segmented_response_accepted && !client.segmented_requests);
+    assert_eq!(client.segmentation, Segmentation::NO_SEGMENTATION);
     assert_eq!(client.max_segments, None);
     assert_eq!(client.apdu_segment_timeout_ms, None);
     let segmented = DeviceIdentity::new(42, 7)
         .unwrap()
         .with_apdu_segment_timeout_ms(7300);
     bacnet_endpoint::identity::apply_to_client_config(&segmented, &mut client);
-    assert!(client.segmented_response_accepted && client.segmented_requests);
+    assert_eq!(client.segmentation, Segmentation::SEGMENTED_BOTH);
     // More than 64 segments, as the Device's Max_Segments_Accepted of 65.
     assert_eq!(client.max_segments, Some(65));
     assert_eq!(client.apdu_segment_timeout_ms, Some(7300));

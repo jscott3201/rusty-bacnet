@@ -329,9 +329,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // must not, echoed back or spoofed, complete the very
                 // transaction it was trying to abort.
                 if !abt.sent_by_server {
-                    debug!(
-                        invoke_id = abt.invoke_id,
-                        "Ignoring Abort PDU with server=FALSE"
+                    // A requester's: it may end a request the client is
+                    // reassembling (#2646), out of line.
+                    Self::hand_off_abort(
+                        tsm,
+                        source_mac,
+                        source_network,
+                        abt.invoke_id,
+                        &provenance,
                     );
                     return;
                 }
@@ -390,6 +395,25 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     return;
                 }
                 if req.segmented {
+                    // A client that receives segments hands the segment to
+                    // its reassembly task (#2646), out of line.
+                    if limits.segmented_response_accepted {
+                        Self::hand_off_segment(
+                            request_reassembly::HandOff {
+                                tsm,
+                                network,
+                                cov_tx,
+                                event_tx,
+                                policy: confirmed_cov_ack_policy,
+                                limits,
+                            },
+                            source_mac,
+                            source_network,
+                            reply,
+                            req,
+                        );
+                        return;
+                    }
                     Self::send_server_abort(
                         network,
                         source_mac,

@@ -505,3 +505,89 @@ async fn segmented_requests_impl(mode: MstpExecutionMode, frames: Frames) {
 
 variants!(segmented_answers_impl: segmented_answers_tokio, segmented_answers_dedicated, segmented_answers_extended_tokio, segmented_answers_extended_dedicated);
 variants!(segmented_requests_impl: segmented_requests_tokio, segmented_requests_dedicated, segmented_requests_extended_tokio, segmented_requests_extended_dedicated);
+
+/// Station 7 sends the node's client a ConfirmedCOVNotification in
+/// segments of a window of one, each as a frame expecting a reply (#2646).
+/// The client's Segment-ACK for each, server bit set, is the MAC's reply:
+/// none is postponed. The Simple-ACK for the whole notification goes on the
+/// node's next turn, and the client publishes the notification once.
+async fn segmented_notification_impl(mode: MstpExecutionMode, frames: Frames) {
+    let mut h = segmenting_node(mode, frames).await;
+    let client = h.session.client().unwrap();
+    let mut events = client.cov_notifications();
+    let mut body = BytesMut::new();
+    COVNotificationRequest {
+        subscriber_process_identifier: 61,
+        initiating_device_identifier: oid(ObjectType::DEVICE, 7007),
+        monitored_object_identifier: oid(ObjectType::ANALOG_INPUT, 1),
+        time_remaining: 120,
+        list_of_values: vec![BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+            value: vec![0x44, 0x42, 0x48, 0x00, 0x00],
+            priority: None,
+        }],
+    }
+    .encode(&mut body)
+    .unwrap();
+    let body = body.freeze();
+    let size = body.len().div_ceil(3);
+    let mut segments: VecDeque<MstpFrame> = (0..3)
+        .map(|seq| {
+            from(
+                PEER_MAC,
+                FrameType::BACNET_DATA_EXPECTING_REPLY,
+                &Apdu::ConfirmedRequest(ConfirmedRequest {
+                    segmented: true,
+                    more_follows: seq < 2,
+                    segmented_response_accepted: false,
+                    max_segments: None,
+                    max_apdu_length: 480,
+                    invoke_id: 72,
+                    sequence_number: Some(seq as u8),
+                    proposed_window_size: Some(1),
+                    service_choice: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+                    service_request: body.slice(seq * size..body.len().min((seq + 1) * size)),
+                }),
+            )
+        })
+        .collect();
+    let pending = VecDeque::from([segments.pop_front().unwrap()]);
+    let mut acked = Vec::new();
+    let done = Cell::new(false);
+    let mut react = |peer: u8, apdu: Apdu, _reply: bool| -> Option<MstpFrame> {
+        assert_eq!(peer, PEER_MAC);
+        match apdu {
+            Apdu::SegmentAck(ack) if ack.invoke_id == 72 => {
+                assert!(ack.sent_by_server && !ack.negative_ack, "{ack:?}");
+                acked.push(ack.sequence_number);
+                segments.pop_front()
+            }
+            Apdu::SimpleAck(ack) if ack.invoke_id == 72 => {
+                assert_eq!(
+                    ack.service_choice,
+                    ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION
+                );
+                done.set(true);
+                None
+            }
+            other => panic!("station 7 got {other:?}"),
+        }
+    };
+    let ring = run_ring(&mut h, pending, &mut react, || done.get()).await;
+    assert_eq!(acked, [0, 1, 2], "{ring:?}");
+    assert_eq!(
+        ring.postponed[0], 0,
+        "each Segment-ACK is the reply: {ring:?}"
+    );
+    let event = tokio::time::timeout(WAIT, events.recv())
+        .await
+        .expect("the notification is published")
+        .unwrap();
+    assert_eq!(event.subscriber_process_identifier(), 61);
+    assert!(events.try_recv().is_err(), "published once");
+    drop(client);
+    h.shutdown().await;
+}
+
+variants!(segmented_notification_impl: segmented_notification_tokio, segmented_notification_dedicated, segmented_notification_extended_tokio, segmented_notification_extended_dedicated);

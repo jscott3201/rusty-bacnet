@@ -31,16 +31,13 @@ impl<T: TransportPort + 'static> ClientBuilder<T> {
         self
     }
 
-    /// Set whether this client accepts segmented responses.
-    pub fn segmented_response_accepted(mut self, accepted: bool) -> Self {
-        self.config.segmented_response_accepted = accepted;
-        self
-    }
-
-    /// Set whether this client sends a request too long for one APDU as
-    /// segments (default `true`). See [`ClientConfig::segmented_requests`].
-    pub fn segmented_requests(mut self, segmented: bool) -> Self {
-        self.config.segmented_requests = segmented;
+    /// Set which ways this client segments (default SEGMENTED_BOTH). One
+    /// that doesn't receive segments takes no segmented answer and aborts a
+    /// segmented notification's first segment; one that doesn't transmit
+    /// them fails a request too long for one APDU before sending it. See
+    /// [`ClientConfig::segmentation`].
+    pub fn segmentation(mut self, segmentation: Segmentation) -> Self {
+        self.config.segmentation = segmentation;
         self
     }
 
@@ -129,16 +126,13 @@ impl BipClientBuilder {
         self
     }
 
-    /// Set whether this client accepts segmented responses.
-    pub fn segmented_response_accepted(mut self, accepted: bool) -> Self {
-        self.config.segmented_response_accepted = accepted;
-        self
-    }
-
-    /// Set whether this client sends a request too long for one APDU as
-    /// segments (default `true`). See [`ClientConfig::segmented_requests`].
-    pub fn segmented_requests(mut self, segmented: bool) -> Self {
-        self.config.segmented_requests = segmented;
+    /// Set which ways this client segments (default SEGMENTED_BOTH). One
+    /// that doesn't receive segments takes no segmented answer and aborts a
+    /// segmented notification's first segment; one that doesn't transmit
+    /// them fails a request too long for one APDU before sending it. See
+    /// [`ClientConfig::segmentation`].
+    pub fn segmentation(mut self, segmentation: Segmentation) -> Self {
+        self.config.segmentation = segmentation;
         self
     }
 
@@ -241,16 +235,13 @@ impl Bip6ClientBuilder {
         self
     }
 
-    /// Set whether this client accepts segmented responses.
-    pub fn segmented_response_accepted(mut self, accepted: bool) -> Self {
-        self.config.segmented_response_accepted = accepted;
-        self
-    }
-
-    /// Set whether this client sends a request too long for one APDU as
-    /// segments (default `true`). See [`ClientConfig::segmented_requests`].
-    pub fn segmented_requests(mut self, segmented: bool) -> Self {
-        self.config.segmented_requests = segmented;
+    /// Set which ways this client segments (default SEGMENTED_BOTH). One
+    /// that doesn't receive segments takes no segmented answer and aborts a
+    /// segmented notification's first segment; one that doesn't transmit
+    /// them fails a request too long for one APDU before sending it. See
+    /// [`ClientConfig::segmentation`].
+    pub fn segmentation(mut self, segmentation: Segmentation) -> Self {
+        self.config.segmentation = segmentation;
         self
     }
 
@@ -321,16 +312,13 @@ impl ScClientBuilder {
         self
     }
 
-    /// Set whether this client accepts segmented responses.
-    pub fn segmented_response_accepted(mut self, accepted: bool) -> Self {
-        self.config.segmented_response_accepted = accepted;
-        self
-    }
-
-    /// Set whether this client sends a request too long for one APDU as
-    /// segments (default `true`). See [`ClientConfig::segmented_requests`].
-    pub fn segmented_requests(mut self, segmented: bool) -> Self {
-        self.config.segmented_requests = segmented;
+    /// Set which ways this client segments (default SEGMENTED_BOTH). One
+    /// that doesn't receive segments takes no segmented answer and aborts a
+    /// segmented notification's first segment; one that doesn't transmit
+    /// them fails a request too long for one APDU before sending it. See
+    /// [`ClientConfig::segmentation`].
+    pub fn segmentation(mut self, segmentation: Segmentation) -> Self {
+        self.config.segmentation = segmentation;
         self
     }
 

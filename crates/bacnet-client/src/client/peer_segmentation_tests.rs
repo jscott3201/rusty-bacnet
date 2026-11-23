@@ -224,7 +224,7 @@ async fn a_client_that_sends_no_segments_refuses_a_request_that_needs_them() {
     let mut peer_rx = peer_transport.start().await.unwrap();
     let config = super::ClientConfig {
         apdu_timeout_ms: 1000,
-        segmented_requests: false,
+        segmentation: super::Segmentation::SEGMENTED_RECEIVE,
         ..super::ClientConfig::default()
     };
     let client = std::sync::Arc::new(BACnetClient::start(config, client_transport).await.unwrap());

@@ -147,7 +147,8 @@ so its requests and the server role's notifications never collide, and
 `bacnet_ops::Client::over` takes it as it is. Beside a server role the client
 answers only the COV notifications of its own subscriptions; the server
 answers everything else, a ConfirmedEventNotification among them, which the
-client hears a copy of. The session has the one owner of the local network
+client hears a copy of; known gap, tracked separately: not of one that comes
+in segments. The session has the one owner of the local network
 number. With a source Audit Reporter the session audits the client's reads and
 writes, each owned by the session once admitted (#2617); an audited write whose
 value isn't whole application data is refused before it is sent, where an
@@ -208,9 +209,9 @@ identity says, both ways by default (#2617): the server reassembles requests
 and segments answers, and the client accepts segmented answers, sends
 segmented requests and takes the identity's segment timeout only as far as the
 Device's Segmentation_Supported allows. Each segment, Segment-ACK and Abort
-reaches the role whose transaction it is. Known gap: the client still aborts a
-segmented ConfirmedCOVNotification (#2646), though the Device says it receives
-segments.
+reaches the role whose transaction it is. When the Device receives segments
+the client also reassembles a segmented COV notification of either form, as
+the answering side, and answers it once it is whole (#2646).
 
 ## What is proven
 

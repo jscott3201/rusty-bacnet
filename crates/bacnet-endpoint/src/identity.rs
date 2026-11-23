@@ -60,13 +60,14 @@ pub fn apply_to_client_config(
 
 /// Have a client do what the Device's segmentation says (#2617):
 ///
-/// - it accepts segmented answers, and states more than 64 segments in its
-///   requests (the Device's Max_Segments_Accepted of 65, Clause 12.11.20),
-///   only when the Device receives segments (SEGMENTED_RECEIVE or
-///   SEGMENTED_BOTH);
-/// - it sends a request too long for one APDU as segments only when the
-///   Device transmits them (SEGMENTED_TRANSMIT or SEGMENTED_BOTH); otherwise
-///   such a request fails before anything is sent;
+/// - its [`segmentation`](bacnet_client::client::ClientConfig::segmentation)
+///   is the Device's Segmentation_Supported, so it accepts segmented
+///   answers and notifications only when the Device receives segments, and
+///   sends a request too long for one APDU as segments only when the Device
+///   transmits them;
+/// - it states more than 64 segments in its requests (the Device's
+///   Max_Segments_Accepted of 65, Clause 12.11.20) when the Device receives
+///   segments;
 /// - its segment timeout is the Device's APDU_Segment_Timeout when the
 ///   Device segments at all, and its APDU timeout otherwise.
 pub(crate) fn apply_segmentation(
@@ -75,16 +76,12 @@ pub(crate) fn apply_segmentation(
 ) {
     use bacnet_types::enums::Segmentation;
     let mode = identity.segmentation();
+    config.segmentation = mode;
     let receives = matches!(
         mode,
         Segmentation::SEGMENTED_BOTH | Segmentation::SEGMENTED_RECEIVE
     );
-    config.segmented_response_accepted = receives;
     config.max_segments = receives.then_some(MORE_THAN_64_SEGMENTS);
-    config.segmented_requests = matches!(
-        mode,
-        Segmentation::SEGMENTED_BOTH | Segmentation::SEGMENTED_TRANSMIT
-    );
     config.apdu_segment_timeout_ms =
         (mode != Segmentation::NO_SEGMENTATION).then(|| identity.apdu_segment_timeout_ms());
 }

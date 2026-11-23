@@ -11,6 +11,11 @@ impl InboundReply {
     pub(super) fn new(route: ResponseRoute, reply_tx: Option<oneshot::Sender<Bytes>>) -> Self {
         Self { route, reply_tx }
     }
+
+    /// The route the reply takes.
+    pub(super) fn route(&self) -> &ResponseRoute {
+        &self.route
+    }
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {

@@ -12,7 +12,7 @@ use bacnet_services::cov_multiple::{
 };
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_types::enums::{AbortReason, ObjectType, PropertyIdentifier, RejectReason};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier, RejectReason};
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 
 const CHANGED: Time = Time {
@@ -503,31 +503,46 @@ async fn the_ack_policy_answers_both_confirmed_forms() {
 }
 
 #[tokio::test]
-async fn a_segmented_confirmed_multiple_is_aborted_unread() {
-    // The client can't reassemble a segmented confirmed request yet (#2646):
-    // its first segment is answered with an Abort and nothing is published.
+async fn a_segmented_confirmed_multiple_is_reassembled_and_published_once() {
+    // The notifier segments it (#2646): each segment is acknowledged with
+    // the server bit set, and the whole notification is published and
+    // answered once.
     let mut pair = pair(ClientOptions::default()).await;
-    let Apdu::ConfirmedRequest(mut first) = confirmed(
-        0x56,
-        ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
-        encoded(&multiple(37, false)).slice(..8),
-    ) else {
-        unreachable!();
+    let body = encoded(&multiple(37, false));
+    let parts = [body.slice(..8), body.slice(8..20), body.slice(20..)];
+    for (seq, part) in parts.iter().enumerate() {
+        let Apdu::ConfirmedRequest(mut segment) = confirmed(
+            0x56,
+            ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+            part.clone(),
+        ) else {
+            unreachable!();
+        };
+        segment.segmented = true;
+        segment.more_follows = seq + 1 < parts.len();
+        segment.sequence_number = Some(seq as u8);
+        segment.proposed_window_size = Some(1);
+        pair.send(Apdu::ConfirmedRequest(segment), None).await;
+        let Apdu::SegmentAck(ack) = pair.answer().await.1 else {
+            panic!("expected a Segment-ACK");
+        };
+        assert!(ack.sent_by_server && !ack.negative_ack);
+        assert_eq!((ack.invoke_id, ack.sequence_number), (0x56, seq as u8));
+    }
+    let Apdu::SimpleAck(ack) = pair.answer().await.1 else {
+        panic!("expected SimpleAck");
     };
-    first.segmented = true;
-    first.more_follows = true;
-    first.sequence_number = Some(0);
-    first.proposed_window_size = Some(1);
-    pair.send(Apdu::ConfirmedRequest(first), None).await;
-
-    let Apdu::Abort(abort) = pair.answer().await.1 else {
-        panic!("expected Abort");
-    };
-    assert!(abort.sent_by_server);
     assert_eq!(
-        (abort.invoke_id, abort.abort_reason),
-        (0x56, AbortReason::SEGMENTATION_NOT_SUPPORTED)
+        (ack.invoke_id, ack.service_choice),
+        (
+            0x56,
+            ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE
+        )
     );
+    let COVEvent::Multiple(event) = pair.next_event().await else {
+        panic!("expected the several-object form");
+    };
+    assert_eq!(event.notification, multiple(37, false));
     pair.assert_quiet().await;
     pair.stop().await;
 }
