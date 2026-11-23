@@ -232,7 +232,8 @@ impl Responder {
     pub fn new(identity: DeviceIdentity, limits: Limits) -> Result<Self, Error> {
         if identity.segmentation() != Segmentation::NO_SEGMENTATION {
             return Err(Error::Encoding(
-                "bacnet-device-core segments neither way: the Device identity must claim no segmentation"
+                "bacnet-device-core segments neither way: build the Device identity \
+                 .with_segmentation(Segmentation::NO_SEGMENTATION)"
                     .into(),
             ));
         }
