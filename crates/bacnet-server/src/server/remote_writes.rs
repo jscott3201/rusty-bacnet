@@ -374,7 +374,8 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
     /// is the local device it is (#1358): the write goes straight to its MAC
     /// with no DNET and is answered from there, and one at a group address,
     /// the link's broadcast MAC or another, names no device, so it gives no
-    /// route (#1493).
+    /// route (#1493). Nor does one whose MAC on another network is a
+    /// broadcast or group form there (#2732).
     fn confirmed(
         &self,
         resolution: DeviceResolution,
@@ -389,8 +390,19 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
             )
             .into_confirmed(is_group)
             .map_err(|refusal| {
-                if refusal == ConfirmedRouteRefusal::GroupNextHop {
-                    warn!("No request sent to another device at a group address");
+                match refusal {
+                    ConfirmedRouteRefusal::GroupNextHop => {
+                        warn!("No request sent to another device at a group address");
+                    }
+                    ConfirmedRouteRefusal::RemoteBroadcast(station) => {
+                        warn_throttled!(
+                            self.transactions.broadcast_station_warning,
+                            device = %station,
+                            "No request sent to another device bound at a broadcast or group \
+                             address on its network; a confirmed request goes to one device"
+                        );
+                    }
+                    ConfirmedRouteRefusal::NotOneDevice => {}
                 }
                 missing
             })

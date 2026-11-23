@@ -82,6 +82,14 @@ pub struct AtomicCovCounters {
     pub(crate) notifications_throttled_pool: AtomicU64,
     /// The same for want of an invoke ID (#2661).
     pub(crate) notifications_throttled_invoke_id: AtomicU64,
+    /// Confirmed notifications not sent because their subscriber, relayed
+    /// from another network, is at a broadcast or group form there (the
+    /// one octet `0xFF`, two octets starting `0x00` or `0xFF`, three of
+    /// `0xFF`, or six starting `FF:FF:FF:FF`; #2732), one per report the
+    /// subscription would have had. Its unconfirmed notifications aren't
+    /// held back. Not in [`CovCounters`] yet; the warning is throttled, so
+    /// this is the count.
+    pub(crate) confirmed_broadcast_subscriber: AtomicU64,
 }
 
 impl AtomicCovCounters {

@@ -9,9 +9,10 @@ use std::sync::atomic::AtomicU64;
 /// `cov_wait_expired`), each saturating at `u64::MAX`. A new server starts at
 /// zero, and the totals stay readable after `stop()`. Fields are sampled
 /// independently, not as one atomic aggregate. Each refusal also logs a
-/// warning (the forwarding cap's at most once a minute), and each wait for
-/// an invoke ID a debug line; these totals are the running signal, not an
-/// audit log.
+/// warning (the forwarding cap's at most once a minute, and a confirmed
+/// recipient's at a broadcast or group form on another network at most once
+/// every ten seconds), and each wait for an invoke ID a debug line; these
+/// totals are the running signal, not an audit log.
 ///
 /// The first four count transitions (event or acknowledgment notifications)
 /// whose Notification Class lookup failed closed, so no recipient received
@@ -91,9 +92,16 @@ pub struct EventNotificationCounters {
     /// address (local, remote or global, the link's own broadcast MAC
     /// included), or at any other group address the link reports
     /// ([`TransportPort::is_group_destination`], such as a B/IP multicast
-    /// address, #1493). Clause 6.3 lets only unconfirmed requests be
-    /// broadcast, and sending one unconfirmed would drop the acknowledgment
-    /// the destination asks for. No invoke ID is reserved for them.
+    /// address, #1493). Also an Address or a Device binding on another
+    /// network whose MAC there is a broadcast or group form, judged by its
+    /// length and octets since that link is unknown here (#2732): the one
+    /// octet `0xFF` (an MS/TP broadcast), two octets starting `0x00` or
+    /// `0xFF` (a LonTalk broadcast or group), three of `0xFF`, or six
+    /// starting `FF:FF:FF:FF`. A recipient can't say its network is ARCNET,
+    /// so ARCNET station 255 counts here too. Clause 6.3 lets only
+    /// unconfirmed requests be broadcast, and sending one unconfirmed would
+    /// drop the acknowledgment the destination asks for. No invoke ID is
+    /// reserved for them.
     pub confirmed_broadcast_recipient: u64,
     /// Confirmed notifications that found every invoke ID in use and waited
     /// for one to come back, counted once each as its wait starts (#2537).

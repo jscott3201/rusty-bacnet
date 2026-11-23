@@ -4,6 +4,7 @@
 use super::super::cov_notify_context::CovFanoutHandles;
 use super::*;
 use crate::cov::timed_store::{ClaimGuard, LodgedClaim};
+use crate::server::event_recipient_route::BroadcastStation;
 use crate::server::notification_transactions::NotificationReserveError;
 use bacnet_device_core::cov::{BeginRefusal, Delivery, PreparedCovCompletion};
 use bacnet_device_core::cov::{CovObservation, CovSubscriptionKey};
@@ -86,6 +87,11 @@ pub(in crate::server) enum Refusal {
     NoRoom,
     /// A closed or broken pool, logged.
     Other,
+    /// The subscriber's address on its network is a broadcast or group
+    /// form there (#2732), counted and logged, throttled. Its baseline
+    /// stays, so each change it would report is refused again; an
+    /// unconfirmed subscription at the same address is still served.
+    NotOneStation,
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -95,6 +101,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// when it was refused for want of room. Synchronous: it takes leaf
     /// mutexes only, so the Single fanout calls it under its database and
     /// table guards.
+    ///
+    /// A subscriber relayed from another network whose address there is a
+    /// broadcast or group form is refused first ([`BroadcastStation`],
+    /// #2732). The subscription came from a request's SNET and SADR, which
+    /// no router writes as a broadcast, but a crafted or misrelayed
+    /// request can; a confirmed notification sent there would reach every
+    /// station of that network. One from a group MAC on this link was
+    /// ignored on arrival (#1504).
     pub(in crate::server) fn admit_confirmed(
         handles: &CovFanoutHandles<'_, '_, T>,
         route: &CovSubscriptionSnapshot,
@@ -107,6 +121,23 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             counters,
             ..
         } = handles;
+        if let Some(station) = route
+            .subscriber_network
+            .as_ref()
+            .and_then(|source| BroadcastStation::of(source.network, &source.mac_address))
+        {
+            counters
+                .confirmed_broadcast_subscriber
+                .fetch_add(1, Ordering::Relaxed);
+            warn_throttled!(
+                ctx.notification_transactions.broadcast_station_warning,
+                object = ?route.monitored_object_identifier,
+                subscriber = %station,
+                "Confirmed {label} not sent: its subscriber is at a broadcast or group address \
+                 on its network, and a confirmed request goes to one device"
+            );
+            return Err(Refusal::NotOneStation);
+        }
         let guard = match in_flight_tracker.try_acquire(
             route.recipient(),
             ctx.config.cov_policy.max_confirmed_in_flight_per_peer,
@@ -201,7 +232,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Err(Refusal::NoRoom) => {
                 return Box::pin(Self::owe_context(handles, report)).await;
             }
-            Err(Refusal::Other) => return,
+            Err(Refusal::Other | Refusal::NotOneStation) => return,
         };
         let buf = match encode(lease.invoke_id()) {
             Ok(buf) => buf,

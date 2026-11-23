@@ -116,6 +116,31 @@ async fn audit_forwarding_to_a_parent_bound_at_a_group_address_never_sends() {
     }
 }
 
+/// #2732: a parent bound through its router at a broadcast or group form on
+/// its network names no one device for the confirmed copy, which that
+/// router would hand to every station there. Forwarding finds no route, so
+/// no copy goes out and the log reports a configuration error.
+#[tokio::test(start_paused = true)]
+async fn audit_forwarding_to_a_parent_bound_at_a_remote_broadcast_form_never_sends() {
+    for form in crate::server::event_recipient_route::broadcast_station_tests::FORMS {
+        let mut f = fixture(
+            Some(parent()),
+            Some(DeviceBinding::routed(oid(ObjectType::DEVICE, 20), 200, form, [2]).unwrap()),
+        )
+        .await;
+        f.unconfirmed(payload(false)).await;
+        settle().await;
+        assert!(f.requests().is_empty(), "{form:02X?}");
+        assert!(f.wire.sent.lock().unwrap().is_empty(), "{form:02X?}");
+        assert_eq!(
+            f.reliability().await,
+            PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw()),
+            "{form:02X?}"
+        );
+        f.server.stop().await.unwrap();
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn audit_forwarding_observed_binding_and_local_alias_do_not_send() {
     let mut f = fixture(Some(parent()), None).await;

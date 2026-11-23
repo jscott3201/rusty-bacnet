@@ -135,3 +135,54 @@ async fn an_address_recipient_at_a_group_address_is_refused() {
     );
     fixture.server.stop().await.unwrap();
 }
+
+/// #2732: a Device recipient bound through a router at a broadcast or group
+/// form on its network keeps its route, which serves both kinds: an
+/// unconfirmed reporter's record still goes there through the router, and a
+/// confirmed reporter's is never sent, which the reporter reads as a
+/// communication failure.
+#[tokio::test(start_paused = true)]
+async fn a_device_bound_at_a_remote_broadcast_form_gets_unconfirmed_records_only() {
+    let recipient = oid(ObjectType::DEVICE, 20);
+    for form in crate::server::event_recipient_route::broadcast_station_tests::FORMS {
+        for confirmed in [false, true] {
+            let mut reporter = reporter();
+            reporter
+                .set_issue_confirmed_notifications(confirmed)
+                .unwrap();
+            let mut fixture = try_server(
+                reporter,
+                &[10],
+                Some(BACnetRecipient::Device(recipient)),
+                vec![DeviceBinding::routed(recipient, 5, form, LOGGER).unwrap()],
+            )
+            .await
+            .expect("a Device recipient starts");
+            assert!(matches!(
+                write_value(&fixture.server, None).await,
+                Apdu::SimpleAck(_)
+            ));
+            settle().await;
+            let case = format!("{form:02X?}, confirmed {confirmed}");
+            if confirmed {
+                assert!(fixture.transport.sent.lock().unwrap().is_empty(), "{case}");
+                assert_eq!(
+                    health(&fixture.server).await,
+                    Reliability::COMMUNICATION_FAILURE,
+                    "{case}"
+                );
+            } else {
+                assert_eq!(notifications(&fixture.transport.sent).len(), 1, "{case}");
+                let wire = fixture.transport.sent.lock().unwrap()[0].clone();
+                let to = decode_npdu(wire).unwrap().destination.unwrap();
+                assert_eq!((to.network, to.mac_address.as_slice()), (5, form), "{case}");
+                assert_eq!(
+                    health(&fixture.server).await,
+                    Reliability::NO_FAULT_DETECTED,
+                    "{case}"
+                );
+            }
+            fixture.server.stop().await.unwrap();
+        }
+    }
+}

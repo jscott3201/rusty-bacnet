@@ -176,8 +176,11 @@ impl AuditRoutes {
     /// station, and target Audit routes no Address off this link, so it has
     /// no route ([`Self::awaits_local_number`]). No route goes to a group
     /// address ([`Self::is_group`], #1493): an Address at one is no unicast,
-    /// and every route's next hop passes the check every confirmed request's
-    /// route gets ([`RecipientRoute::into_confirmed`]).
+    /// and every route's next hop passes the link's group check
+    /// ([`RecipientRoute::into_unicast`]). The route serves unconfirmed
+    /// notifications too, so a Device bound at a broadcast or group form on
+    /// another network keeps it; a confirmed notification is refused at
+    /// delivery ([`ConfirmedRecipientRoute::broadcast_station`], #2732).
     pub(super) fn resolve(
         &self,
         recipient: &BACnetRecipient,
@@ -210,7 +213,7 @@ impl AuditRoutes {
                 route
             }
         };
-        route.into_confirmed(is_group).ok().map(Arc::new)
+        route.into_unicast(is_group).ok().map(Arc::new)
     }
 
     /// Whether `recipient` is an Address on a network numbered 1 to 65534

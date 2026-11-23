@@ -11,6 +11,7 @@ use bacnet_endpoint_core::coordinator::{
     LeaseToken, OutboundTransactionCoordinator, ReserveError,
 };
 use bacnet_objects::audit::AuditReporterStatus;
+use bacnet_transport::warn_throttle::WarnThrottle;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
@@ -89,6 +90,12 @@ pub struct NotificationTransactions {
     /// How many times a confirmed event notification is sent again: the
     /// server's [`ServerConfig::notification_retries`], set at start.
     retries: std::sync::atomic::AtomicU8,
+    /// The throttle on the warning for a confirmed request the server
+    /// doesn't start because its station on another network is at a
+    /// broadcast or group form there (#2732): an event notification, a
+    /// confirmed COV notification or a request to another device, one
+    /// warning for them all at most once an interval.
+    pub(super) broadcast_station_warning: WarnThrottle,
 }
 
 type ReporterFailureQueue = (
@@ -225,6 +232,7 @@ impl NotificationTransactions {
             run_slots: crate::command_lists::RemoteSlots::default(),
             event_lanes: std::sync::OnceLock::new(),
             retries: std::sync::atomic::AtomicU8::new(super::DEFAULT_APDU_RETRIES),
+            broadcast_station_warning: WarnThrottle::default(),
         })
     }
 

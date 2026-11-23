@@ -1,5 +1,5 @@
 use super::binding_probes::{BindingProbes, WhoIsScope};
-use super::event_recipient_route::RecipientRoute;
+use super::event_recipient_route::{BroadcastStation, RecipientRoute};
 use super::*;
 use bacnet_encoding::primitives::{
     encode_app_object_id, encode_app_octet_string, encode_app_unsigned,
@@ -52,6 +52,14 @@ impl DeviceBinding {
     }
 
     /// Create a routed binding with a final network/address and local router.
+    ///
+    /// A final MAC that is a broadcast or group form on its network (the
+    /// one octet `0xFF`, two octets starting `0x00` or `0xFF`, three of
+    /// `0xFF`, or six starting `FF:FF:FF:FF`; `bacnet_npdu::RemoteBroadcast`)
+    /// is taken, and the server logs a warning when it is configured: such
+    /// a device gets unconfirmed requests only, since a confirmed request
+    /// goes to one station (#2732). A binding can't say its network is
+    /// ARCNET, so ARCNET station 255 gets no confirmed request either.
     pub fn routed(
         device: ObjectIdentifier,
         network: u16,
@@ -318,6 +326,21 @@ impl DeviceBindingTable {
         }
         if self.entries.len() >= MAX_DEVICE_BINDINGS {
             return Err(binding_error("configured binding capacity exceeded"));
+        }
+        // Kept: an unconfirmed request may still go there, and the far
+        // network's link is unknown here (#2732).
+        if let DeviceBindingTarget::Routed {
+            network, final_mac, ..
+        } = &binding.target
+            && let Some(station) = BroadcastStation::of(*network, final_mac)
+        {
+            warn!(
+                device = binding.device.instance_number(),
+                address = %station,
+                "Device is bound at a broadcast or group address on its network: the server \
+                 sends it no confirmed request (event or audit notification, write or read), \
+                 only unconfirmed ones"
+            );
         }
         self.entries
             .insert(binding.device, BindingEntry::Configured(binding.target));
