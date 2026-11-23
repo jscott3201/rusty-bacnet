@@ -377,7 +377,7 @@ fn sc_reconnect_and_connect_timeout_reach_the_transport_settings() {
 
     let sc = p.sc_mut();
     (sc.reconnect_initial_delay_ms, sc.reconnect_max_delay_ms) = (500, 4_000);
-    (sc.reconnect_max_retries, sc.connect_timeout_ms) = (3, 2_500);
+    (sc.reconnect_max_retries, sc.connect_timeout_ms) = (sc::Rounds(Some(3)), 2_500);
     let args = p.transport_args().unwrap();
     let policy = args.sc_reconnect.unwrap();
     assert_eq!(

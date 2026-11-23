@@ -469,12 +469,17 @@ same across restarts. An SC profile reconnects with backoff after it loses its
 hub, primary-only profiles included, so a long session survives a hub restart:
 by default the first retry comes after 10 s, the delay doubles up to 10 min,
 and 10 rounds are made, each trying the primary and then a failover hub, if
-one is set. `reconnect_max_retries = 0` gives up at the first loss.
-`reconnect = false` turns this off (a lost hub then stays down) and is refused
-with a failover URL, since the failover hub is reached by reconnecting. The
-backoff (`reconnect_initial_delay_ms`, `reconnect_max_delay_ms`,
-`reconnect_max_retries`) and the connect timeout (`connect_timeout_ms`, 1 to
-600000, default 10000) can be set in the file; the editor offers the connect
+one is set. `reconnect_max_retries = 0` gives up at the first loss, and
+`reconnect_max_retries = "unlimited"` keeps trying for as long as a hub can be
+dialled, which needs `reconnect_initial_delay_ms` of at least 1000; a file
+without the key makes the 10 rounds. The connection view shows the rounds,
+`0` as no recovery. `reconnect = false` turns this off (a lost hub then stays
+down) and is refused with a failover URL, since the failover hub is reached by
+reconnecting. The backoff (`reconnect_initial_delay_ms`,
+`reconnect_max_delay_ms`, at most 600000, ten minutes, the most Annex AB.6.1
+lets the reconnect wait grow to, and `reconnect_max_retries`) and the connect
+timeout (`connect_timeout_ms`, 1 to 600000, default 10000) can be set in the
+file, and a value out of range is a profile error naming its key; the editor offers the connect
 timeout and reconnect on/off. `--sc-failover-url`, `--sc-reconnect` and
 `--sc-connect-timeout` override a profile like the other flags, and give a
 flags-only session the same settings (reconnect stays off there unless one of
@@ -565,7 +570,7 @@ connect_timeout_ms = 10000
 reconnect = true                  # false: a lost hub stays down (no failover then)
 reconnect_initial_delay_ms = 10000
 reconnect_max_delay_ms = 600000
-reconnect_max_retries = 10
+reconnect_max_retries = 10        # 0: no recovery; "unlimited": no limit
 
 [safety]
 writes = "session"

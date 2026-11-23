@@ -1,10 +1,5 @@
 use bacnet_types::error::Error;
 
-/// The smallest `initial_delay_ms` unlimited recovery (`max_retries: None`)
-/// accepts: one second, so a node retrying a hub that stays down for days
-/// cannot dial it in a tight loop.
-const UNLIMITED_MIN_INITIAL_DELAY_MS: u64 = 1_000;
-
 /// Configuration for SC transport reconnection with jittered exponential backoff.
 ///
 /// Recovery after losing an established hub connection runs in rounds. Each
@@ -34,10 +29,10 @@ const UNLIMITED_MIN_INITIAL_DELAY_MS: u64 = 1_000;
 pub struct ScReconnectConfig {
     /// Initial nominal backoff and minimum reconnect sleep (ms), nonzero and
     /// no greater than `max_delay_ms`. With `max_retries: None` it must be at
-    /// least 1,000 (one second).
+    /// least [`Self::UNLIMITED_MIN_INITIAL_DELAY_MS`] (one second).
     pub initial_delay_ms: u64,
     /// Maximum delay between reconnect rounds (ms), nonzero and at most
-    /// 86_400_000 (24 hours). This is a local defensive cap, not a conformance limit.
+    /// [`Self::MAX_DELAY_MS`] (ten minutes).
     pub max_delay_ms: u64,
     /// Reconnect rounds after an established connection is lost: `Some(n)`
     /// makes at most `n` rounds and `None` keeps going while a hub can still be
@@ -58,14 +53,27 @@ impl Default for ScReconnectConfig {
 }
 
 impl ScReconnectConfig {
+    /// The largest `max_delay_ms` [`validate`](Self::validate) accepts:
+    /// 600,000 ms, ten minutes. Annex AB.6.1 lets the wait between reconnect
+    /// attempts grow after each failure, but never past 600 seconds, and the
+    /// jittered sleep never exceeds `max_delay_ms`.
+    pub const MAX_DELAY_MS: u64 = 600_000;
+
+    /// The smallest `initial_delay_ms` unlimited recovery (`max_retries:
+    /// None`) accepts: one second, so a node retrying a hub that stays down
+    /// for days cannot dial it in a tight loop. A local choice, not one the
+    /// standard makes.
+    pub const UNLIMITED_MIN_INITIAL_DELAY_MS: u64 = 1_000;
+
     /// Check that delays are nonzero, the initial delay does not exceed the
-    /// maximum, `max_delay_ms` is at most 86_400_000 (24 hours), and that
-    /// unlimited recovery (`max_retries: None`) has an initial delay of at
-    /// least 1,000 ms.
+    /// maximum, `max_delay_ms` is at most [`Self::MAX_DELAY_MS`] (ten
+    /// minutes), and that unlimited recovery (`max_retries: None`) has an
+    /// initial delay of at least [`Self::UNLIMITED_MIN_INITIAL_DELAY_MS`].
     ///
     /// These are defensive guards. They impose no production minimum delay on
     /// bounded recovery, and acceptance does not establish deployment safety or
-    /// Annex AB.6.1 conformance. The transport's `start` and the hub dialer
+    /// Annex AB.6.1 conformance (whose range for the initial wait this does not
+    /// check). The transport's `start` and the hub dialer
     /// call this before dialling; call it yourself before handing a socket to a
     /// raw SC transport.
     pub fn validate(&self) -> Result<(), Error> {
@@ -86,18 +94,21 @@ impl ScReconnectConfig {
                 self.initial_delay_ms, self.max_delay_ms
             )));
         }
-        if self.max_delay_ms > 86_400_000 {
+        if self.max_delay_ms > Self::MAX_DELAY_MS {
             return Err(Error::OutOfRange(format!(
-                "BACnet/SC reconnect max_delay_ms must not exceed 86400000 (24 hours), \
+                "BACnet/SC reconnect max_delay_ms must not exceed {} (10 minutes), \
                  got max_delay_ms={}",
+                Self::MAX_DELAY_MS,
                 self.max_delay_ms
             )));
         }
-        if self.max_retries.is_none() && self.initial_delay_ms < UNLIMITED_MIN_INITIAL_DELAY_MS {
+        if self.max_retries.is_none()
+            && self.initial_delay_ms < Self::UNLIMITED_MIN_INITIAL_DELAY_MS
+        {
             return Err(Error::OutOfRange(format!(
-                "BACnet/SC reconnect initial_delay_ms must be at least \
-                 {UNLIMITED_MIN_INITIAL_DELAY_MS} with unlimited retries, \
-                 got initial_delay_ms={}",
+                "BACnet/SC reconnect initial_delay_ms must be at least {} with unlimited \
+                 retries, got initial_delay_ms={}",
+                Self::UNLIMITED_MIN_INITIAL_DELAY_MS,
                 self.initial_delay_ms
             )));
         }
@@ -142,7 +153,7 @@ mod tests {
     #[test]
     fn reconnect_validation_rejects_over_cap_delays_for_all_retry_counts() {
         for max_retries in [0, 1, 10, u32::MAX] {
-            for max_delay_ms in [86_400_001, u64::MAX] {
+            for max_delay_ms in [600_001, 86_400_000, u64::MAX] {
                 for initial_delay_ms in [1, max_delay_ms] {
                     let config = ScReconnectConfig {
                         initial_delay_ms,
@@ -153,7 +164,7 @@ mod tests {
                         Err(Error::OutOfRange(message)) => assert_eq!(
                             message,
                             format!(
-                                "BACnet/SC reconnect max_delay_ms must not exceed 86400000 (24 hours), \
+                                "BACnet/SC reconnect max_delay_ms must not exceed 600000 (10 minutes), \
                                  got max_delay_ms={max_delay_ms}"
                             )
                         ),
@@ -180,10 +191,9 @@ mod tests {
                 (1, 1),
                 (1, 2),
                 (10_000, 600_000),
-                (600_001, 600_001),
-                (1, 86_400_000),
-                (86_399_999, 86_400_000),
-                (86_400_000, 86_400_000),
+                (1, 600_000),
+                (599_999, 600_000),
+                (600_000, 600_000),
             ] {
                 ScReconnectConfig {
                     initial_delay_ms,

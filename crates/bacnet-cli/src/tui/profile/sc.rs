@@ -57,9 +57,10 @@ pub(crate) struct Sc {
     #[serde(default = "default_max_delay_ms")]
     pub(crate) reconnect_max_delay_ms: u64,
     /// Reconnect rounds after a lost connection. Each round tries the primary
-    /// hub, then the failover hub if any; zero turns recovery off.
+    /// hub, then the failover hub if any; zero turns recovery off, and
+    /// `"unlimited"` keeps going while a hub can be dialled.
     #[serde(default = "default_max_retries")]
-    pub(crate) reconnect_max_retries: u32,
+    pub(crate) reconnect_max_retries: Rounds,
 }
 
 fn default_timeout_ms() -> u64 {
@@ -78,10 +79,80 @@ fn default_max_delay_ms() -> u64 {
     ScReconnectConfig::default().max_delay_ms
 }
 
-fn default_max_retries() -> u32 {
-    // The library default is bounded; a profile cannot ask for unlimited
-    // rounds, so `None` could only map to the largest count.
-    ScReconnectConfig::default().max_retries.unwrap_or(u32::MAX)
+fn default_max_retries() -> Rounds {
+    Rounds(ScReconnectConfig::default().max_retries)
+}
+
+/// The profile's word for unlimited reconnect rounds.
+const UNLIMITED: &str = "unlimited";
+
+/// `reconnect_max_retries` (#2708): a number of reconnect rounds, `0` for
+/// no recovery, or the word `"unlimited"` for the transport's `None`,
+/// which keeps going while a hub can be dialled. An absent key is the
+/// default of 10, so unlimited recovery is written out, never implied, and
+/// a number reads as it always did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Rounds(pub(crate) Option<u32>);
+
+impl fmt::Display for Rounds {
+    /// What the rounds mean, for the connection view.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(0) => f.write_str("no recovery"),
+            Some(1) => f.write_str("1 round"),
+            Some(rounds) => write!(f, "{rounds} rounds"),
+            None => f.write_str("unlimited rounds"),
+        }
+    }
+}
+
+impl Serialize for Rounds {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            Some(rounds) => serializer.serialize_u32(rounds),
+            None => serializer.serialize_str(UNLIMITED),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Rounds {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(RoundsVisitor)
+    }
+}
+
+/// Reads [`Rounds`]: a whole number that fits a `u32`, or `"unlimited"`.
+struct RoundsVisitor;
+
+impl serde::de::Visitor<'_> for RoundsVisitor {
+    type Value = Rounds;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "reconnect rounds: 0 (no recovery) to {}, or \"{UNLIMITED}\"",
+            u32::MAX
+        )
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, rounds: i64) -> Result<Rounds, E> {
+        u32::try_from(rounds)
+            .map(|rounds| Rounds(Some(rounds)))
+            .map_err(|_| E::invalid_value(serde::de::Unexpected::Signed(rounds), &self))
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, rounds: u64) -> Result<Rounds, E> {
+        u32::try_from(rounds)
+            .map(|rounds| Rounds(Some(rounds)))
+            .map_err(|_| E::invalid_value(serde::de::Unexpected::Unsigned(rounds), &self))
+    }
+
+    fn visit_str<E: serde::de::Error>(self, word: &str) -> Result<Rounds, E> {
+        match word {
+            UNLIMITED => Ok(Rounds(None)),
+            _ => Err(E::invalid_value(serde::de::Unexpected::Str(word), &self)),
+        }
+    }
 }
 
 /// The SC client's default connect timeout.
@@ -127,9 +198,7 @@ impl Sc {
         }
         check_sc_connect_timeout(self.connect_timeout_ms)
             .map_err(|e| format!("connect_timeout_ms {e}"))?;
-        self.reconnect_policy()
-            .validate()
-            .map_err(|e| format!("reconnect settings: {e}"))?;
+        self.check_reconnect()?;
         for (label, path) in [
             ("CA file", &self.ca),
             ("Certificate file", &self.cert),
@@ -145,12 +214,36 @@ impl Sc {
         Ok(())
     }
 
+    /// The backoff settings by the profile's own key names, so a file is
+    /// fixed where it is wrong: the floor unlimited recovery needs and the
+    /// cap on the longest delay (#2708), then the transport's own checks.
+    fn check_reconnect(&self) -> Result<(), String> {
+        let floor = ScReconnectConfig::UNLIMITED_MIN_INITIAL_DELAY_MS;
+        if self.reconnect_max_retries.0.is_none() && self.reconnect_initial_delay_ms < floor {
+            return Err(format!(
+                "reconnect_initial_delay_ms must be at least {floor} with \
+                 reconnect_max_retries = \"{UNLIMITED}\", got {}",
+                self.reconnect_initial_delay_ms
+            ));
+        }
+        let cap = ScReconnectConfig::MAX_DELAY_MS;
+        if self.reconnect_max_delay_ms > cap {
+            return Err(format!(
+                "reconnect_max_delay_ms must be at most {cap} (10 minutes), got {}",
+                self.reconnect_max_delay_ms
+            ));
+        }
+        self.reconnect_policy()
+            .validate()
+            .map_err(|e| format!("reconnect settings: {e}"))
+    }
+
     /// The backoff settings, whether or not `reconnect` is on.
     pub(crate) fn reconnect_policy(&self) -> ScReconnectConfig {
         ScReconnectConfig {
             initial_delay_ms: self.reconnect_initial_delay_ms,
             max_delay_ms: self.reconnect_max_delay_ms,
-            max_retries: Some(self.reconnect_max_retries),
+            max_retries: self.reconnect_max_retries.0,
         }
     }
 

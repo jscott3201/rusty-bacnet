@@ -6,8 +6,9 @@ use pyo3::prelude::*;
 
 /// Reconnect settings for a Python SC client.
 ///
-/// The native transport policy validates them: delays, and the one-second
-/// floor of unlimited recovery (`max_retries=None`). Each round tries the
+/// The native transport policy validates them: delays, with a maximum of
+/// at most 600,000 ms (ten minutes), and the one-second floor of unlimited
+/// recovery (`max_retries=None`). Each round tries the
 /// primary hub, then the failover hub; `max_retries=0` turns recovery off.
 #[pyclass(
     name = "ScReconnect",

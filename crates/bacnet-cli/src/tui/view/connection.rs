@@ -189,13 +189,15 @@ fn sc_lines(profile: &Profile, lines: &mut Vec<Line<'_>>) {
     if let Some(failover) = &s.failover_hub_url {
         lines.push(Line::raw(format!("Failover hub: {failover}")));
     }
-    lines.push(Line::raw(if s.reconnect {
+    lines.push(Line::raw(if !s.reconnect {
+        "Reconnect: off (a lost hub stays down)".into()
+    } else if s.reconnect_max_retries.0 == Some(0) {
+        "Reconnect: on, no recovery after a loss (reconnect_max_retries = 0)".into()
+    } else {
         format!(
-            "Reconnect: on, {} ms doubling to {} ms, {} attempts",
+            "Reconnect: on, {} ms doubling to {} ms, {}",
             s.reconnect_initial_delay_ms, s.reconnect_max_delay_ms, s.reconnect_max_retries,
         )
-    } else {
-        "Reconnect: off (a lost hub stays down)".into()
     }));
     lines.push(Line::raw(format!("CA file:   {}", s.ca.display())));
     lines.push(Line::raw(format!("Cert file: {}", s.cert.display())));
