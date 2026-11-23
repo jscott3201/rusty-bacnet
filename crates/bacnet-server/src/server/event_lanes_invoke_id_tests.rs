@@ -348,8 +348,8 @@ async fn a_worker_that_panics_gives_its_invoke_id_back() {
     spy.assert_logged_unlocked(1);
 }
 
-/// Two lanes wait and one ID comes back: one of them sends, the other wakes,
-/// finds none and waits again, and each wait counts once.
+/// Two lanes wait and one ID comes back: the first to wait sends, the other
+/// keeps waiting, and each wait counts once.
 #[tokio::test(start_paused = true)]
 async fn each_wait_counts_once_however_often_it_wakes() {
     let rig = Rig::start(|db| {
@@ -372,6 +372,62 @@ async fn each_wait_counts_once_however_often_it_wakes() {
     let sent = sent_to(&rig, &OTHER).len() + sent_to(&rig, &HELD).len();
     assert_eq!(sent, 1, "one took the ID");
     assert_eq!(waited(&rig), 2, "the other waits again, not counted again");
+}
+
+/// The destination of each confirmed event notification first sent, in the
+/// order they went out; retries, under the same invoke ID, left out.
+fn first_sends(rig: &Rig) -> Vec<Vec<u8>> {
+    let mut sent: Vec<(Vec<u8>, u8)> = Vec::new();
+    for frame in rig.sent.frames() {
+        if let Apdu::ConfirmedRequest(request) = frame.apdu()
+            && request.service_choice == ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION
+            && !sent.contains(&(frame.mac.to_vec(), request.invoke_id))
+        {
+            sent.push((frame.mac.to_vec(), request.invoke_id));
+        }
+    }
+    sent.into_iter().map(|(mac, _)| mac).collect()
+}
+
+/// Lanes waiting for an invoke ID go in the order they began to wait
+/// (#2563): HELD's lane, waiting first, takes the first ID to come back
+/// while OTHER's waits behind it, and as each lane's next notification
+/// waits again it queues behind the other's, so the six go out one per ID
+/// in commit order, each wait counted once.
+#[tokio::test(start_paused = true)]
+async fn lanes_waiting_for_an_invoke_id_go_in_the_order_they_began_to_wait() {
+    let rig = Rig::start(|db| {
+        ai_objects(db);
+        class_0(
+            db,
+            vec![
+                to_mac(&HELD, true, EventTransitionBits::TO_FAULT),
+                to_mac(&OTHER, true, EventTransitionBits::TO_NORMAL),
+            ],
+        );
+    })
+    .await;
+    let mut leases = lease_every_id(&rig.server.notification_transactions);
+    for _ in 0..3 {
+        rig.reliability(Reliability::NO_SENSOR).await;
+        rig.reliability(Reliability::NO_FAULT_DETECTED).await;
+    }
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(waited(&rig), 2, "each lane's head");
+    let mut expected = Vec::new();
+    for at in 0..6 {
+        drop(leases.pop());
+        let next = if at % 2 == 0 { HELD } else { OTHER };
+        expected.push(next.to_vec());
+        for _ in 0..100 {
+            if first_sends(&rig).len() > at {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(first_sends(&rig), expected, "ID {at}");
+    }
+    assert_eq!(waited(&rig), 6, "each waited once");
 }
 
 /// A transaction state that can lease no invoke ID at all (poisoned by a

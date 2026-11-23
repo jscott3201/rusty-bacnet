@@ -88,6 +88,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         runs
     }
 
+    /// The Staging plans due at start-up, written in `start()`, each target
+    /// under its own guard with the transition it causes (#2530). Their
+    /// event notifications go in their lanes, and when they pushed any, their
+    /// COV fanout waits for them, capped (#889), in a task of the server's
+    /// own, as a peer request's does after its response: `start()` waits for
+    /// the writes only, never for a recipient, so one that is silent, or a
+    /// device looked for, costs it nothing (#2573). `stop()` and the drop
+    /// abort that task with the requests. A fanout with no notification to
+    /// wait for goes before `start()` returns, as it always has.
     pub(in crate::server) async fn execute_initial_staging_plans(&self) {
         let staging_oids = {
             let database = self.db.read().await;
@@ -97,14 +106,64 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let mut database = self.db.write().await;
             Self::take_staging_plans(&mut database, &staging_oids)
         };
+        let mut settle = Settle::default();
+        let mut owed = CommittedCov::default();
+        let request = Some((&mut settle, (&mut owed.coarse, &mut owed.life_safety)));
         let runs = Self::execute_staging_plans(
             &self.local_event_delivery(),
             &self.local_cov_context(),
             staging_plans,
-            None,
+            request,
         )
         .await;
         super::command_runs::CommandRunner::for_server(self).start(runs);
+        let cov = self.local_cov_context();
+        // What a caller of `start()` can rely on: the writes are committed
+        // when it returns; their event notifications may still be in flight,
+        // and a `stop()` at once drops those not yet sent.
+        let Some(settled) = settle.into_wait() else {
+            // No notification to wait for: the fanout goes now, before
+            // `start()` returns, as it always has.
+            let (coarse, life_safety) = (&owed.coarse, &owed.life_safety);
+            Self::fire_post_write_cov_notifications(&cov, coarse, life_safety).await;
+            return;
+        };
+        let fanout = super::super::cov_fanout::CovFanout::new(
+            &cov,
+            &self.event_suppressions,
+            &self.learned_routers,
+            &self.device_bindings,
+        );
+        let cap = self.config.cov_retry_timeout_ms;
+        self.request_tasks
+            .spawn(Self::start_up_fanout(fanout, settled, cap, owed));
+    }
+
+    /// The start-up plans' COV fanout, once their notifications are handed
+    /// off or `cap` runs out. A panic ends only it, said as its own, not as
+    /// a request's.
+    async fn start_up_fanout(
+        fanout: super::super::cov_fanout::CovFanout<T>,
+        settled: oneshot::Receiver<()>,
+        cap: u64,
+        owed: CommittedCov,
+    ) {
+        use futures_util::FutureExt;
+        let fire = async {
+            settled_lanes(Some(settled), cap, &fanout.notification_transactions).await;
+            fanout.fire(&owed).await;
+        };
+        if std::panic::AssertUnwindSafe(fire)
+            .catch_unwind()
+            .await
+            .is_err()
+        {
+            warn!(
+                objects = owed.coarse.len() + owed.life_safety.len(),
+                "The start-up Staging plans' COV fanout panicked; those objects report on \
+                 their next change"
+            );
+        }
     }
 
     pub(in crate::server) fn take_staging_plans(

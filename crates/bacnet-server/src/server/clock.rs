@@ -59,6 +59,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// Start with the default system-UTC Device clock.
+    ///
+    /// The Staging plans due at start-up have written their targets by the
+    /// time it returns. Their event notifications may still be on their way
+    /// (a `stop()` at once drops those not yet sent), and it never waits on a
+    /// recipient for them, a silent one included. Their COV fanout has run
+    /// by then only when they made no event notification; otherwise it
+    /// follows the notifications, waiting for them at most the APDU timeout
+    /// (#2573).
     pub async fn start(
         config: ServerConfig,
         db: ObjectDatabase,
@@ -67,7 +75,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         Self::start_with_clock(config, db, transport, ClockConfig::default()).await
     }
 
-    /// Start with a validated Device clock configuration.
+    /// Start with a validated Device clock configuration. Start-up Staging
+    /// plans go as for [`Self::start`].
     pub async fn start_with_clock(
         config: ServerConfig,
         db: ObjectDatabase,
@@ -78,6 +87,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// Start without a Device wall clock or time-synchronization execution.
+    /// Start-up Staging plans go as for [`Self::start`].
     pub async fn start_clockless(
         config: ServerConfig,
         db: ObjectDatabase,

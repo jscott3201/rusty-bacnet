@@ -12685,7 +12685,20 @@ task per destination, so one destination's notifications go out in commit
 order whichever task committed them, and a destination that stalls holds up
 only its own lane (#2537). A confirmed one holds its lane until its first
 attempt is handed off, and, with every invoke ID in use, until one comes back,
-counted once in `confirmed_waited_for_invoke_id`. A Device recipient the
+counted once in `confirmed_waited_for_invoke_id`. The lanes waiting for an
+ID get one in the order they began to wait, one arriving while others wait
+queuing behind them, and counted, even with an ID free (#2563). Other work
+of the server that doesn't wait (a COV report, an Audit record, a run's
+request) may take a freed ID first, but once it has, the next free ID is
+kept for the oldest waiter: until that waiter takes it, a Command or Channel
+run's request fails, an Audit record is dropped or kept for a retry, and a
+COV report is owed a look, as when no ID is free. A known limit, tracked on
+#2617: a node's client role leases from the node's pool apart from this
+order, so while that pool is full a client that keeps leasing can take each
+freed ID ahead of the waiters. A Device recipient's
+binding is read again once its ID comes: a binding refreshed meanwhile still
+takes the notification, and one that lapsed or moved is looked for as at a
+first send, the ID given back while it is (#2569). A Device recipient the
 server holds no binding for holds its lane the same way while its device is
 looked for (below). `lane_full`, `lanes_entries_full` and `lanes_full` count
 notifications dropped, the newest, at 64 entries waiting behind the one a
@@ -12693,7 +12706,10 @@ destination's lane is sending, 1,024 across the lanes and 256 destinations.
 A change's COV notifications wait for its event notifications to be handed
 off (#889) for at most the APDU timeout (`cov_retry_timeout_ms`), a wait for
 a Device recipient's I-Am included; `cov_wait_expired` counts the changes for
-which they went out at that limit instead. The intrinsic-reporting sweep
+which they went out at that limit instead. Staging plans due at start-up are
+written before `start()` returns, but their notifications, and the COV fanout
+that waits for them, go on afterwards, so `start()` never waits for a
+recipient, a silent device included (#2573). The intrinsic-reporting sweep
 doesn't wait itself: each pass's COV fanout goes in sweep order, within the
 APDU timeout of that pass's commit. A sweep's COV report carries the object's
 state when it goes. When a pass's notifications go in time, an object that a
@@ -12730,9 +12746,9 @@ fixes them, and the warning logged with each skip gives the finer reason:
   counts here once; one that can't be looked for within the minute after a
   fruitless Who-Is counts here at once. Observing the device's I-Am again,
   or configuring a binding, clears it. A confirmed notification whose
-  observed binding expires before an attempt (a retry, or a first one that
-  waited for its invoke ID) ends there, its invoke ID freed, and counts here,
-  not in `confirmed_unanswered` (#1371).
+  observed binding expires before a retry ends there, its invoke ID freed,
+  and counts here, not in `confirmed_unanswered` (#1371); one whose binding
+  lapsed while it waited for its invoke ID is looked for first (#2569).
 - `recipient_unroutable`: the entry can't be routed as written. Its Device
   identifier names an object that isn't a Device (or its binding is unusable on
   this link), or its address puts a MAC on network 65535.
