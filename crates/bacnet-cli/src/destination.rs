@@ -116,8 +116,16 @@ impl Destination {
     /// Where `device`, a row of the discovery table, answers.
     fn of(device: &DiscoveredDevice) -> Result<Self, String> {
         let instance = device.object_identifier.instance_number();
-        let address = DeviceAddress::of(device)
-            .ok_or_else(|| format!("device {instance} has no address the CLI can write"))?;
+        let address =
+            DeviceAddress::of(device).ok_or_else(|| {
+                match DeviceAddress::one_station_form(device) {
+                    Some(form) => format!(
+                        "device {instance} answered from {form}, an address that needs the \
+                     one-station form: name it by that address"
+                    ),
+                    None => format!("device {instance} has no address the CLI can write"),
+                }
+            })?;
         Ok(Self {
             address,
             instance: Some(instance),
@@ -178,9 +186,15 @@ impl Station {
             return Ok(());
         };
         if !one_station {
-            return DeviceAddress::new(dnet, mac)
-                .map(drop)
-                .map_err(|why| format!("'{}': {why}", self.name(dnet)));
+            return DeviceAddress::new(dnet, mac).map(drop).map_err(|why| {
+                // On the client's own network the MAC is a local one, and
+                // the mark lifts nothing there: give the link's reason.
+                let why = match own {
+                    Some(own) if own == dnet => DeviceAddress::new(0, mac).err().unwrap_or(why),
+                    _ => why,
+                };
+                format!("'{}': {why}", self.name(dnet))
+            });
         }
         if own == Some(dnet) {
             return Err(format!(
@@ -244,7 +258,26 @@ impl Station {
             .filter_map(|row| self.destination(dnet, own, row))
             .collect();
         match found.as_slice() {
-            [] => None,
+            [] => {
+                // An instance whose only claimant answered from an address
+                // the mark lifts has no `DeviceAddress`: say so, and how to
+                // name it, instead of waiting for an answer (#2738).
+                let Self::Instance(wanted) = self else {
+                    return None;
+                };
+                let form = devices
+                    .iter()
+                    .filter(|row| {
+                        row.object_identifier.instance_number() == *wanted
+                            && row.source_network == Some(dnet)
+                    })
+                    .find_map(DeviceAddress::one_station_form)?;
+                Some(Err(format!(
+                    "device {} answered from {form}, an address that needs the one-station \
+                     form: name it by that address",
+                    self.name(dnet)
+                )))
+            }
             [station] => Some(Ok(station.clone())),
             several => {
                 let at: Vec<_> = several

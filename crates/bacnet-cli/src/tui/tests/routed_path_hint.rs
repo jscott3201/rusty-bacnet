@@ -124,6 +124,7 @@ fn a_device_names_its_path_and_the_forms_stay_apart() {
             "path-limit 5:0xFF:one-station 128",
             "lists no device at a one-station address",
         ),
+        ("path-limit 5:0xFF 128", "not a station"),
         (
             "path-limit 5:0x05:one-station 128",
             "':one-station' lifts nothing at MAC 0x05",

@@ -401,14 +401,10 @@ fn at_station<'a>(
              can't mark its own); a one-shot command or an MCP tool reaches it by this address"
         ));
     }
-    DeviceAddress::new(dnet, mac)
-        .ok()
-        .and_then(|at| devices.at(&at))
-        .ok_or_else(|| {
-            format!(
-                "'{word}': no device in the device table is at that station; run a Who-Is first"
-            )
-        })
+    let at = DeviceAddress::new(dnet, mac).map_err(|why| format!("'{word}': {why}"))?;
+    devices.at(&at).ok_or_else(|| {
+        format!("'{word}': no device in the device table is at that station; run a Who-Is first")
+    })
 }
 
 fn object(word: &str) -> Result<ObjectIdentifier, String> {

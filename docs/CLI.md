@@ -180,7 +180,13 @@ for exactly the MACs it lifts, the one octet `0xFF` and two octets from
 anywhere else, naming why (an ordinary station, `0x0000`, `0xFFFF`, three or
 six octets, a device instance). A device at such an address is named by its
 address, never by `DNET:instance`. The write ledger, the audit file and
-every table print the suffix back, so a saved target reads back as it was.
+the targets the CLI resolves write the suffix, so a saved target reads back
+as it was. Discovery and COV-source tables show a device's routed source
+as the router passed it on, without the suffix: the suffix is the
+operator's word that the MAC is one station, and an I-Am can't give it
+(typing such a row back is refused, naming the suffixed form). A device
+that is the only claimant of an instance at such an address is named by
+that address too.
 The TUI's device table lists no device at such an address (an I-Am can't
 mark itself), so its commands refuse the form and point to the one-shot
 commands and the MCP tools. The CLI waits up to

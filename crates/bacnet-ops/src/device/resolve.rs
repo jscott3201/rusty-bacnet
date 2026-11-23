@@ -58,7 +58,16 @@ impl<T: TransportPort + 'static> Client<T> {
                         let address = if one_station {
                             DeviceAddress::marked(dnet, &mac)
                         } else {
-                            DeviceAddress::new(dnet, &mac)
+                            // On this client's own network the MAC is a
+                            // local one: say why the link refuses it, and
+                            // suggest no mark, which lifts nothing there.
+                            let own = self.low_level().network_number();
+                            DeviceAddress::new(dnet, &mac).map_err(|why| match own {
+                                Some(own) if own == dnet => {
+                                    DeviceAddress::new(0, &mac).err().unwrap_or(why)
+                                }
+                                _ => why,
+                            })
                         };
                         self.at(address.map_err(parse)?).await
                     }
@@ -416,7 +425,7 @@ impl<T: TransportPort + 'static> Client<T> {
         self.who_is(request.scope(), range).await?;
         let answered = |row: &DiscoveredDevice| {
             let instance = row.object_identifier.instance_number();
-            let address = DeviceAddress::of(row)?;
+            let address = DeviceAddress::of(row).or_else(|| marked_answer(request.scope(), row))?;
             let low = self.low_level();
             let (own, local) = (low.network_number(), low.local_networks());
             (range.is_none_or(|r| r.contains(instance))
@@ -440,7 +449,7 @@ impl<T: TransportPort + 'static> Client<T> {
             }
         }
         let (own, table) = self.low_level().localized_device_snapshot();
-        Ok(discovery_results(table, heard, own))
+        Ok(discovery_results(request.scope(), table, heard, own))
     }
 
     /// Every instance two or more addresses claim in the discovery table,
@@ -469,6 +478,7 @@ impl<T: TransportPort + 'static> Client<T> {
 
 /// Join this call's answers to the final table with one local-number snapshot.
 pub(super) fn discovery_results(
+    scope: &Scope,
     table: Vec<DiscoveredDevice>,
     heard: BTreeSet<(DeviceAddress, u32)>,
     own: Option<u16>,
@@ -481,7 +491,7 @@ pub(super) fn discovery_results(
     let stations: Vec<_> = table
         .into_iter()
         .filter_map(|entry| {
-            let address = DeviceAddress::of(&entry)?;
+            let address = DeviceAddress::of(&entry).or_else(|| marked_answer(scope, &entry))?;
             let instance = entry.object_identifier.instance_number();
             *claims.entry(instance).or_insert(0usize) += 1;
             Some((address, instance, entry))
@@ -524,4 +534,19 @@ pub(super) fn unknown(instance: u32, network: Option<u16>) -> Error {
             _ => instance.to_string(),
         },
     }
+}
+
+/// The marked address of `row`, an answer from a MAC the one-station mark
+/// lifts, when `scope` is a directed Who-Is to exactly that station and the
+/// caller marked it one station (#2738): the mark is the caller's word, not
+/// the I-Am's, so any other answer from such a MAC stays unlisted.
+fn marked_answer(scope: &Scope, row: &DiscoveredDevice) -> Option<DeviceAddress> {
+    let Scope::Directed(station) = scope else {
+        return None;
+    };
+    let (network, mac) = station.address();
+    let at = row.address()?;
+    (station.is_one_station() && at.network_number == network && at.mac_address.as_slice() == mac)
+        .then(|| DeviceAddress::marked(network, mac).ok())
+        .flatten()
 }

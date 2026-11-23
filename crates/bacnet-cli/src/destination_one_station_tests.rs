@@ -114,3 +114,31 @@ fn a_one_station_target_on_the_own_network_is_refused() {
     assert!(marked.check(5, Some(6)).is_ok());
     assert!(marked.check(5, None).is_ok());
 }
+
+/// An instance whose only claimant answered from an address the mark
+/// lifts says so and shows the form, instead of waiting for an answer; and
+/// on the client's own network the unmarked refusal is the link's, with no
+/// suffix to suggest, since it would lift nothing there (#2738).
+#[tokio::test(start_paused = true)]
+async fn the_refusals_say_how_to_name_the_station() {
+    let (mut client, sent) = site(&[(5, &[0xFF])]).await;
+    let error = resolve(&client, "5:100", Duration::from_secs(1))
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("answered from 5:0xFF:one-station"),
+        "{error}"
+    );
+    assert!(sent.is_empty(), "nothing sent, nothing waited for");
+    client.stop().await.unwrap();
+
+    let unmarked = Station::Mac {
+        mac: vec![0x00, 0x12],
+        one_station: false,
+    };
+    let remote = unmarked.check(9, Some(5)).unwrap_err();
+    assert!(remote.contains("9:0x0012:one-station"), "{remote}");
+    let own = unmarked.check(5, Some(5)).unwrap_err();
+    assert!(own.contains("local network"), "{own}");
+    assert!(!own.contains("one-station"), "{own}");
+}

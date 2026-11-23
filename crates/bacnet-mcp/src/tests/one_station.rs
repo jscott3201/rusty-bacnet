@@ -72,9 +72,20 @@ async fn a_one_station_address_is_read_through_its_router() {
         let message = body["message"].as_str().unwrap_or_default();
         assert_eq!(refused["isError"], json!(true), "{bare}: {refused}");
         assert!(message.contains(text), "{bare}: {refused}");
+        assert!(message.contains("Ask the operator"), "{bare}: {refused}");
+        assert!(message.contains("MS/TP"), "{bare}: {refused}");
         assert_eq!(lab.sends().len(), before, "{bare}: nothing sent");
         assert!(lab.frames.is_empty(), "{bare}: nothing sent");
     }
+    // An instance whose only claimant on a network is at a lifted MAC is
+    // named by that address, which the refusal shows, for the operator.
+    let read = json!({ "device": "9:1201", "reads": [{ "object": "ai:1" }] });
+    let refused = lab.agent.call("bacnet_read", read).await;
+    let message = refused["structuredContent"]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(message.contains("answered from 9:0x0012"), "{refused}");
+    assert!(message.contains("Ask the operator"), "{refused}");
     // The suffix where it lifts nothing is refused with its reason.
     let read = json!({ "device": "5:0x05:one-station", "reads": [{ "object": "ai:1" }] });
     let refused = lab.agent.call("bacnet_read", read).await;

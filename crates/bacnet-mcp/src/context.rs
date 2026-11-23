@@ -329,6 +329,20 @@ pub(crate) async fn pinned<T: TransportPort + 'static>(
 
 const DISCOVER_HINT: &str = "call bacnet_discover first (with a range or network that includes it)";
 
+/// Why the tools refuse `text`, a routed station at a MAC that is the
+/// broadcast on an MS/TP network, `shown` as the address (#2738). They name
+/// the suffix, but only to hand the question to the operator: it asserts
+/// knowledge the agent doesn't have.
+fn lifted_refusal(text: &str, shown: &str) -> String {
+    format!(
+        "'{text}': {shown} is the broadcast on an MS/TP network, so it is refused as a \
+         station. On a link that numbers that address as a single station (ARCNET, or a \
+         gateway's virtual network) the operator can name it {shown}:{suffix}, which asserts \
+         that knowledge. Ask the operator; do not add the suffix yourself",
+        suffix = target::ONE_STATION_SUFFIX
+    )
+}
+
 /// The ambiguity error for `instance`, claimed by every row of `claims`.
 fn ambiguous(instance: u32, claims: &[DiscoveredDevice]) -> OpsError {
     OpsError::Ambiguous {
@@ -375,6 +389,23 @@ impl<T: TransportPort + 'static> Ctx<T> {
             error => ToolError::Failed(format!("{text}: {error}")),
         };
         let parsed = target::parse_target(&text).map_err(|e| ToolError::invalid("device", e))?;
+        // A station at a MAC the one-station mark lifts, named without it:
+        // the refusal is the agent's to pass to the operator (#2738).
+        if let Target::RoutedMac {
+            dnet,
+            mac,
+            one_station: false,
+        } = &parsed
+            && target::lifted_by_one_station(mac)
+        {
+            return Err(ToolError::invalid(
+                "device",
+                lifted_refusal(
+                    &text,
+                    &format!("{dnet}:0x{}", bacnet_ops::octets::hex_upper(mac)),
+                ),
+            ));
+        }
         // The handle an address made, when the call named an address: for
         // a station at a MAC the one-station mark lifts, the row has no
         // `DeviceAddress` of its own, so it is the only handle there is
@@ -417,6 +448,11 @@ impl<T: TransportPort + 'static> Ctx<T> {
         };
         let handle = match named {
             Some(handle) => handle,
+            // An instance whose claimant answered from an address only the
+            // operator's mark lifts has no handle by instance (#2738).
+            None if DeviceAddress::of(&entry).is_none() => {
+                return Err(self.lifted_claim(&text, &entry).unwrap_or_else(unknown));
+            }
             None => client.device(&entry).await.map_err(failed)?,
         };
         let address = handle.address();
@@ -431,6 +467,22 @@ impl<T: TransportPort + 'static> Ctx<T> {
         self.remember(&device.entry);
         call.reached(&device.address, device.instance);
         Ok(device)
+    }
+
+    /// The refusal for a device `row` that answered from an address only the
+    /// operator's one-station mark lifts, named by the instance `text`
+    /// (#2738); `None` for any other row.
+    fn lifted_claim(&self, text: &str, row: &DiscoveredDevice) -> Option<ToolError> {
+        let form = DeviceAddress::one_station_form(row)?;
+        let shown = form.trim_end_matches(&format!(":{}", target::ONE_STATION_SUFFIX));
+        Some(ToolError::invalid(
+            "device",
+            format!(
+                "device {text} answered from {shown}, an address that is the broadcast on an \
+                 MS/TP network, so no tool names it by its instance. {}",
+                lifted_refusal(shown, shown)
+            ),
+        ))
     }
 
     /// The rows of the discovery table claiming `instance`, on `network`

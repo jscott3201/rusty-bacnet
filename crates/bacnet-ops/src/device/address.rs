@@ -61,9 +61,9 @@ impl DeviceAddress {
     /// refuses a confirmed request to ([`RemoteBroadcast`]: the MS/TP
     /// broadcast `0xFF`, two octets beginning `0x00` or `0xFF`, three
     /// octets of `0xFF`, and six beginning with four) name no one station,
-    /// on this network or a remote one (#2709). The grammar has no form for
-    /// an address marked one station (#2738), such as an ARCNET station 255
-    /// or a gateway's two-octet virtual station, is refused here: only
+    /// on this network or a remote one (#2709). A remote address that is
+    /// one station at such a MAC (#2738), such as an ARCNET station 255 or
+    /// a gateway's two-octet virtual station, is refused here too: only
     /// [`marked`](Self::marked) builds one, so that a discovered device's
     /// address ([`of`](Self::of)) can never invent the mark.
     ///
@@ -144,6 +144,20 @@ impl DeviceAddress {
     /// it as a marked [`Station`](bacnet_client::client::Station).
     pub fn is_one_station(&self) -> bool {
         self.network != 0 && lifted_by_one_station(&self.mac)
+    }
+
+    /// The target text of a routed row `device` whose address is a MAC the
+    /// mark lifts, with the suffix: how an operator who knows it is one
+    /// station names it (#2738). `None` for any other row. A device that
+    /// answered from such an address has no [`DeviceAddress`] of its own
+    /// ([`of`](Self::of)), so a caller that finds an instance's only
+    /// claimant there uses this to say how to name it.
+    pub fn one_station_form(device: &DiscoveredDevice) -> Option<String> {
+        let at = device.address()?;
+        if at.network_number == 0 || !lifted_by_one_station(&at.mac_address) {
+            return None;
+        }
+        routed_target(at.network_number, &at.mac_address, true)
     }
 
     /// The station at `mac` on the local network.
