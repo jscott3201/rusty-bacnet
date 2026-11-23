@@ -14277,9 +14277,9 @@ session.stop().await?; // stops the server, then the link
   (`SegmentationError::LocalCannotTransmit` otherwise, before anything is
   sent), and takes the identity's segment timeout. Each segment, Segment-ACK
   and Abort reaches the role whose transaction it is, by its PDU type, the
-  side that sent it and the invoke ID the role leased. The client still
-  can't reassemble a segmented ConfirmedCOVNotification, which it aborts
-  (#2646).
+  side that sent it and the invoke ID the role leased. Known gap: the
+  client still aborts a segmented ConfirmedCOVNotification (#2646), though
+  the Device says it receives segments.
 - DeviceCommunicationControl binds the whole node (Clause 16.1). While the
   server holds a DISABLE_INITIATION it accepted, nothing on the node
   initiates but I-Am answers to Who-Is and audit notifications, and nothing

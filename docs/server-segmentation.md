@@ -54,7 +54,9 @@ the table above, and its client follows the same identity, accepting segmented
 answers only when the Device receives segments, sending segmented requests only
 when it transmits them, and taking the identity's Tseg as its segment timeout.
 A selected Device database must state the identity's mode. The client's APDU
-timeout and retries stay the session's.
+timeout and retries stay the session's. Known gap: the session's client still
+aborts a segmented ConfirmedCOVNotification (#2646), though the Device says it
+receives segments.
 
 The Python full server accepts keyword-only `segmentation_supported` (default
 `Segmentation.NO_SEGMENTATION`) and `apdu_segment_timeout_ms` (default 5000). It constructs
