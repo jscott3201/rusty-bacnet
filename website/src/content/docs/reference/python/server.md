@@ -31,9 +31,12 @@ Provision before deployment and durably reuse the same UUID for the device's
 lifetime. No generation, persistence, change detection, or version/variant
 enforcement is provided. Non-SC transports ignore this option.
 
-Segmentation defaults to NO\_SEGMENTATION. When enabled, apdu\_segment\_timeout\_ms must
-be positive; it supplies Device APDU\_SEGMENT\_TIMEOUT, response SegmentACK
-waits, and the 4\*Tseg receive inactivity timer. A separate 16-second
+Segmentation defaults to SEGMENTED\_BOTH, as the Rust server's and the
+endpoints' do (#2617); `segmentation_supported=Segmentation.NO_SEGMENTATION`
+keeps every request and answer to one APDU. While it segments,
+apdu\_segment\_timeout\_ms must be positive; it supplies Device
+APDU\_SEGMENT\_TIMEOUT, response SegmentACK waits, and the 4\*Tseg receive
+inactivity timer. A separate 16-second
 no-progress resource limit aborts abandoned request transfers with OTHER.
 
 `device_instance` takes 0 to 4194302. Instance 4194303 is reserved, as
@@ -131,7 +134,7 @@ def __init__(
     device_storage_path: Optional[str] = None,
     share_port_by_address: bool = False,
     share_wildcard_port: bool = False,
-    segmentation_supported: Segmentation = Segmentation.NO_SEGMENTATION,
+    segmentation_supported: Segmentation = Segmentation.SEGMENTED_BOTH,
     apdu_segment_timeout_ms: int = 5000,
     bbmd: Optional[Bbmd] = None,
     foreign_device: Optional[ForeignDevice] = None,

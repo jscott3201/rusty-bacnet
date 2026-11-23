@@ -200,6 +200,8 @@ async fn unknown_confirmed_service_receives_unrecognized_service_reject() {
     peer_transport.stop().await.unwrap();
 }
 
+/// A client that takes no segments aborts a segmented request's first
+/// segment; one that does reassembles it (`request_reassembly`, #2646).
 #[tokio::test]
 async fn segmented_confirmed_request_is_aborted_by_responding_client() {
     let client_mac = vec![0x31];
@@ -208,6 +210,7 @@ async fn segmented_confirmed_request_is_aborted_by_responding_client() {
     let mut peer_rx = peer_transport.start().await.unwrap();
     let mut client = BACnetClient::generic_builder()
         .transport(client_transport)
+        .segmentation(bacnet_types::enums::Segmentation::SEGMENTED_TRANSMIT)
         .build()
         .await
         .unwrap();

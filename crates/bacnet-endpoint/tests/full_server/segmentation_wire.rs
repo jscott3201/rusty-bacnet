@@ -13,12 +13,12 @@ use std::sync::Arc;
 
 /// The peer's MAC. No device answers on it: what the node sends it is only
 /// logged.
-fn peer() -> MacAddr {
+pub(super) fn peer() -> MacAddr {
     Wire::mac(PEER)
 }
 
 /// Put `apdu` from the peer in front of the node.
-fn from_peer(wire: &Wire, apdu: &Apdu) {
+pub(super) fn from_peer(wire: &Wire, apdu: &Apdu) {
     let mut payload = BytesMut::new();
     encode_apdu(&mut payload, apdu).unwrap();
     let mut npdu = BytesMut::new();
@@ -35,7 +35,7 @@ fn from_peer(wire: &Wire, apdu: &Apdu) {
 }
 
 /// Segment `seq` of a request from the peer for `service`.
-fn request_segment(
+pub(super) fn request_segment(
     invoke_id: u8,
     seq: u8,
     more_follows: bool,
@@ -58,7 +58,7 @@ fn request_segment(
 
 /// Segment `seq` of two of the peer's ReadProperty request: the node's
 /// AI-1 Present_Value, whose answer fits one APDU.
-fn read_segment(invoke_id: u8, seq: u8) -> Apdu {
+pub(super) fn read_segment(invoke_id: u8, seq: u8) -> Apdu {
     let mut request = BytesMut::new();
     ReadPropertyRequest {
         object_identifier: ai1(),
@@ -114,7 +114,7 @@ fn answer_segments(invoke_id: u8, name: &str, parts: usize) -> Vec<Apdu> {
 }
 
 /// The first APDU the node sent the peer that `want` takes, once it has.
-async fn sent(log: &SendLog, what: &str, want: impl Fn(&Apdu) -> bool) -> Apdu {
+pub(super) async fn sent(log: &SendLog, what: &str, want: impl Fn(&Apdu) -> bool) -> Apdu {
     eventually(WAIT, what, async || sent_to(log, &peer()).iter().any(&want)).await;
     sent_to(log, &peer())
         .into_iter()
@@ -123,7 +123,7 @@ async fn sent(log: &SendLog, what: &str, want: impl Fn(&Apdu) -> bool) -> Apdu {
 }
 
 /// How many APDUs the node sent the peer that `want` takes.
-fn count(log: &SendLog, want: impl Fn(&Apdu) -> bool) -> usize {
+pub(super) fn count(log: &SendLog, want: impl Fn(&Apdu) -> bool) -> usize {
     sent_to(log, &peer())
         .iter()
         .filter(|apdu| want(apdu))
@@ -132,7 +132,7 @@ fn count(log: &SendLog, want: impl Fn(&Apdu) -> bool) -> usize {
 
 /// A positive Segment-ACK for `seq` under `invoke_id`, sent by the side
 /// that answers (`server`) or by the side that asked.
-fn ack(server: bool, invoke_id: u8, seq: u8) -> impl Fn(&Apdu) -> bool {
+pub(super) fn ack(server: bool, invoke_id: u8, seq: u8) -> impl Fn(&Apdu) -> bool {
     move |apdu| {
         matches!(apdu, Apdu::SegmentAck(ack)
             if ack.sent_by_server == server && !ack.negative_ack
@@ -142,12 +142,12 @@ fn ack(server: bool, invoke_id: u8, seq: u8) -> impl Fn(&Apdu) -> bool {
 
 /// An Abort under `invoke_id` sent by the answering side (`server`) or the
 /// asking side.
-fn abort(server: bool, invoke_id: u8) -> impl Fn(&Apdu) -> bool {
+pub(super) fn abort(server: bool, invoke_id: u8) -> impl Fn(&Apdu) -> bool {
     move |apdu| matches!(apdu, Apdu::Abort(abort) if abort.sent_by_server == server && abort.invoke_id == invoke_id)
 }
 
 /// The server's answer under `invoke_id`.
-fn answer(invoke_id: u8) -> impl Fn(&Apdu) -> bool {
+pub(super) fn answer(invoke_id: u8) -> impl Fn(&Apdu) -> bool {
     move |apdu| matches!(apdu, Apdu::ComplexAck(ack) if ack.invoke_id == invoke_id)
 }
 
@@ -365,37 +365,6 @@ async fn an_answer_no_request_holds_is_aborted_once_by_the_client() {
     assert_eq!(count(&lab.log, abort(false, 0x79)), 0, "not the client's");
     assert_eq!(count(&lab.log, abort(true, 0x77)), 0, "not the server's");
     assert_eq!(count(&lab.log, abort(true, 0x78)), 0, "not the server's");
-
-    drop(lab.client);
-    lab.session.stop().await.unwrap();
-}
-
-/// The client can't reassemble a segmented ConfirmedCOVNotification yet
-/// (#2646): it aborts the first segment, once, though its Device says it
-/// receives segments.
-#[tokio::test(start_paused = true)]
-async fn a_segmented_cov_notification_is_aborted_by_the_client() {
-    let wire = Wire::new();
-    let mut lab = Reading::new(&wire).await;
-    from_peer(
-        &wire,
-        &request_segment(
-            0x55,
-            0,
-            true,
-            ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
-            Bytes::from_static(&[0x09, 0x01]),
-        ),
-    );
-    let Apdu::Abort(aborted) = sent(&lab.log, "the client's Abort", abort(true, 0x55)).await else {
-        unreachable!()
-    };
-    assert_eq!(
-        aborted.abort_reason,
-        AbortReason::SEGMENTATION_NOT_SUPPORTED
-    );
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    assert_eq!(count(&lab.log, |apdu| matches!(apdu, Apdu::Abort(_))), 1);
 
     drop(lab.client);
     lab.session.stop().await.unwrap();

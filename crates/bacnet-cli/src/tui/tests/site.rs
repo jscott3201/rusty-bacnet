@@ -26,7 +26,7 @@ use bacnet_server::server::BACnetServer;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::MacAddr;
-use bacnet_types::enums::ConfirmedServiceChoice;
+use bacnet_types::enums::{ConfirmedServiceChoice, Segmentation};
 use bytes::Bytes;
 use ratatui::crossterm::event::KeyCode;
 use tokio::sync::mpsc;
@@ -545,7 +545,11 @@ impl Site {
             .transport(hub_port(&hub, [10, 0, 0, 1], Quirks::default()))
             .apdu_timeout_ms(2_000)
             .max_apdu_length(limits.max_apdu)
-            .segmented_response_accepted(limits.segmented);
+            .segmentation(if limits.segmented {
+                Segmentation::SEGMENTED_BOTH
+            } else {
+                Segmentation::SEGMENTED_TRANSMIT
+            });
         let client = bounded(boxed(|| client.build())).await.unwrap();
         boxed(|| Self::launch(hub, started, client, options)).await
     }

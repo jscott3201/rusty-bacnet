@@ -336,9 +336,20 @@ pub struct Tsm {
     restricted: bool,
     /// The client's registrations go to its node's source Audit.
     diverted: bool,
+    /// The task reassembling the segmented requests this client answers,
+    /// once the first came (#2646). Only the cold branches of the dispatch,
+    /// `stop`, the drop and a closing seat touch it.
+    pub(crate) request_reassembly:
+        Option<Box<crate::client::request_reassembly::RequestReassembly>>,
 }
 
 impl Tsm {
+    /// The segment timeout this client's transfers use, which the
+    /// reassembly of segmented requests takes when it starts (#2646).
+    pub(crate) fn segment_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.config.apdu_segment_timeout_ms)
+    }
+
     /// Create a transaction state machine with the given timing and retry configuration.
     pub fn new(config: TsmConfig) -> Self {
         Self {
@@ -349,6 +360,7 @@ impl Tsm {
             leasing: None,
             restricted: false,
             diverted: false,
+            request_reassembly: None,
         }
     }
 

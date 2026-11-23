@@ -37,6 +37,10 @@ mod segmentation;
 #[path = "full_server/segmentation_wire.rs"]
 mod segmentation_wire;
 
+/// The client reassembles the segmented notifications it answers (#2646).
+#[path = "full_server/segmented_notifications.rs"]
+mod segmented_notifications;
+
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, Broadcast, COVNotificationDelivery};

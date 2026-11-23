@@ -44,7 +44,9 @@ use bacnet_transport::port::{TransportPort, TransportProvenance};
 use bacnet_transport::warn_throttle::WarnThrottle;
 use bacnet_transport::warn_throttled;
 use bacnet_types::MacAddr;
-use bacnet_types::enums::{ConfirmedServiceChoice, RejectReason, UnconfirmedServiceChoice};
+use bacnet_types::enums::{
+    ConfirmedServiceChoice, RejectReason, Segmentation, UnconfirmedServiceChoice,
+};
 use bacnet_types::error::{Error, RemoteError};
 
 use crate::discovery::{Change, DeviceTable, DiscoveredDevice, RoutedDeviceConfig};
@@ -151,19 +153,28 @@ pub struct ClientConfig {
     /// transport's limit at that moment, so it follows a limit that changes
     /// after start (#2086).
     pub max_apdu_length: u16,
-    /// Maximum segments this client accepts (`None` = unspecified).
+    /// Maximum segments this client accepts (`None` = unspecified): what
+    /// its requests state, and the most it keeps of one segmented answer or
+    /// notification. Stated only while the client receives segments.
     ///
     /// Values 0 and 1 are invalid. Finite values between the BACnet wire
     /// encodings are conservatively rounded down (for example, 5 advertises 4).
     pub max_segments: Option<u8>,
-    /// Whether this client accepts segmented responses.
-    pub segmented_response_accepted: bool,
-    /// Whether this client sends a confirmed request too long for one APDU
-    /// as segments (default `true`). Off, such a request fails before
-    /// anything is sent, with [`SegmentationError::LocalCannotTransmit`](bacnet_types::error::SegmentationError::LocalCannotTransmit).
-    /// An endpoint session's client follows its Device's
-    /// Segmentation_Supported (#2617).
-    pub segmented_requests: bool,
+    /// Which ways this client segments (default
+    /// [`Segmentation::SEGMENTED_BOTH`]), as a Device's
+    /// Segmentation_Supported says it (#2617).
+    ///
+    /// While it receives segments (SEGMENTED_BOTH or SEGMENTED_RECEIVE) its
+    /// requests state that it accepts a segmented answer, and it reassembles
+    /// a confirmed request its sender segments before it answers it
+    /// (#2646); otherwise such a request's first segment draws an Abort
+    /// (SEGMENTATION_NOT_SUPPORTED). While it transmits them (SEGMENTED_BOTH
+    /// or SEGMENTED_TRANSMIT) it sends a request too long for one APDU as
+    /// segments; otherwise such a request fails before anything is sent,
+    /// with [`SegmentationError::LocalCannotTransmit`](bacnet_types::error::SegmentationError::LocalCannotTransmit).
+    /// Any other value fails the build. An endpoint session's client takes
+    /// its Device's.
+    pub segmentation: Segmentation,
     /// Proposed window size for segmented transfers (1-127, default 1).
     pub proposed_window_size: u8,
     /// The segment timeout in milliseconds (Clause 5.3): how long a
@@ -228,8 +239,7 @@ impl Default for ClientConfig {
             apdu_retries: 3,
             max_apdu_length: 1476,
             max_segments: None,
-            segmented_response_accepted: true,
-            segmented_requests: true,
+            segmentation: Segmentation::SEGMENTED_BOTH,
             proposed_window_size: 1,
             apdu_segment_timeout_ms: None,
             min_request_interval_ms: 0,
@@ -935,6 +945,7 @@ mod object_mgmt;
 pub(crate) mod pacing;
 mod property;
 mod read_range;
+pub(crate) mod request_reassembly;
 mod requests;
 mod response_admission;
 mod routed_path_limits;
