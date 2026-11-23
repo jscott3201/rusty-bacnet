@@ -315,11 +315,11 @@ mod request_byte_budget;
 mod request_byte_budget_failures;
 mod request_payload_detachment;
 mod request_peer_quota;
-mod request_peer_quota_state;
 mod request_progress;
 mod request_progress_expiry;
 mod request_reassembly;
 mod request_receive_timeout;
+mod request_window_interop;
 mod routing_overlap;
 
 mod segment_timeout_config;

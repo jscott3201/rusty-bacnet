@@ -1,137 +1,133 @@
 //! Opening route survives request reassembly and every segmented reply path.
 use super::*;
-use crate::server::segmented_receive::{
-    RequestPayload, check_opening_response_route, initial_state,
-};
-use crate::server::segmented_send::{segmented_receive_key, segmented_transaction_key};
+use crate::server::segmented_send::segmented_transaction_key;
+use bacnet_endpoint_core::segmented_request::{SegmentedRequests, transfer_key};
 use bacnet_types::enums::EngineeringUnits;
 
-fn open(
-    received: &ReceivedApdu,
-    request: &ConfirmedRequestPdu,
-) -> (SegRecvKey, SegmentedRequestState, Option<SegmentAckPdu>) {
-    let mut payload = RequestPayload::new(request);
-    payload
-        .save_new(0, request.service_request.clone(), Some(0))
-        .unwrap();
-    let key = segmented_receive_key(
-        &received.source_mac,
-        received.source_network.as_ref(),
-        request.invoke_id,
-        received.provenance.clone(),
-    );
-    let (state, ack) = initial_state(
-        payload,
-        received.response_route(),
-        received.source_mac.clone(),
-        received.source_network.clone(),
-        request,
-    );
-    (key, state, ack)
-}
-async fn send_ack(
+/// The Device's default segment timeout.
+const TSEG: Duration = Duration::from_secs(5);
+
+/// Take one received segment through the dispatch loop's segment branch.
+async fn take(
     context: &DispatchContext<TestTransport>,
-    received: &ReceivedApdu,
-    route: &bacnet_network::response_route::ResponseRoute,
-    ack: SegmentAckPdu,
+    table: &mut SegmentedRequests,
+    received: ReceivedApdu,
 ) {
-    let mut bytes = BytesMut::new();
-    encode_apdu(&mut bytes, &Apdu::SegmentAck(ack)).unwrap();
-    BACnetServer::<TestTransport>::send_confirmed_response_apdu(
+    let source = received.source_mac.clone();
+    let Apdu::ConfirmedRequest(request) = decode_apdu(received.apdu.clone()).unwrap() else {
+        panic!("a segment of a confirmed request");
+    };
+    BACnetServer::receive_request_segment(
         &context.services.network,
-        &bytes,
-        &received.source_mac,
-        received.source_network.as_ref(),
-        route,
+        context,
+        &context.services.config,
+        table,
+        &context.services.warnings.segment,
+        &source,
+        &request,
+        received,
     )
-    .await
-    .unwrap();
+    .await;
 }
-#[tokio::test]
-async fn r7_segment_opening_context_drives_ack_reassembly_and_retarget_abort() {
-    let mut routed = Routed::new().await;
+
+/// `read(invoke)` as segment zero of a window of one, carrying the first
+/// half of its service data, and the whole of that data.
+fn first_half(invoke: u8) -> (ConfirmedRequestPdu, Bytes) {
+    let Apdu::ConfirmedRequest(mut first) = read(invoke) else {
+        unreachable!()
+    };
+    let full = first.service_request.clone();
+    first.segmented = true;
+    first.more_follows = true;
+    first.sequence_number = Some(0);
+    first.proposed_window_size = Some(1);
+    first.service_request = full.slice(..full.len() / 2);
+    (first, full)
+}
+
+/// The last segment of what `first_half` began.
+fn second_half(first: &ConfirmedRequestPdu, full: &Bytes) -> ConfirmedRequestPdu {
+    let mut last = first.clone();
+    last.more_follows = false;
+    last.sequence_number = Some(1);
+    last.service_request = full.slice(full.len() / 2..);
+    last
+}
+
+/// A segment from the same routed requester to the same endpoint, arriving
+/// on router port `arrival_port` from next hop 10.
+async fn alternate(
+    routed: &mut Routed,
+    arrival_port: usize,
+    request: ConfirmedRequestPdu,
+) -> ReceivedApdu {
+    routed
+        .receive_via(
+            arrival_port,
+            &[10],
+            Some(address(9000, &[7])),
+            Some(address(2000, &[2])),
+            &Apdu::ConfirmedRequest(request),
+            None,
+        )
+        .await
+}
+
+fn analog_input() -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         AnalogInputObject::new(7, "input", EngineeringUnits::SQUARE_METERS).unwrap(),
     ))
     .unwrap();
-    let context = context(db, ServerConfig::default());
-    let Apdu::ConfirmedRequest(mut first) = read(4) else {
-        unreachable!()
-    };
-    let full = first.service_request.clone();
-    let middle = full.len() / 2;
-    first.segmented = true;
-    first.more_follows = true;
-    first.sequence_number = Some(0);
-    first.proposed_window_size = Some(1);
-    first.service_request = full.slice(..middle);
-    let received = routed
+    db
+}
+
+#[tokio::test]
+async fn r7_segment_opening_context_drives_ack_reassembly_and_retarget_abort() {
+    let mut routed = Routed::new().await;
+    let context = context(analog_input(), ServerConfig::default());
+    let (first, full) = first_half(4);
+    let mut table = SegmentedRequests::new(TSEG);
+    let opening = routed
         .receive(2000, &Apdu::ConfirmedRequest(first.clone()), None)
         .await;
-    let (key, state, ack) = open(&received, &first);
-    let mut states = HashMap::from([(key.clone(), state)]);
-    send_ack(
-        &context,
-        &received,
-        &received.response_route(),
-        ack.unwrap(),
-    )
-    .await;
+    take(&context, &mut table, opening).await;
     assert!(matches!(
         routed.response(2000, 4).await.0,
-        Apdu::SegmentAck(_)
+        Apdu::SegmentAck(ack) if ack.sequence_number == 0
     ));
-    let mut last = first.clone();
-    last.more_follows = false;
-    last.sequence_number = Some(1);
-    last.service_request = full.slice(middle..);
-    let mut final_envelope = routed
-        .receive(2000, &Apdu::ConfirmedRequest(last.clone()), None)
+    let last = second_half(&first, &full);
+    let final_envelope = routed
+        .receive(2000, &Apdu::ConfirmedRequest(last), None)
         .await;
-    check_opening_response_route(&mut states, &key, &final_envelope.response_route())
-        .unwrap_or_else(|_| panic!("matching opening route"));
-    let mut state = states.remove(&key).unwrap();
-    state
-        .payload
-        .save_new(1, last.service_request, Some(middle))
-        .unwrap();
-    final_envelope.set_response_route(state.route.clone());
-    let complete = state.payload.complete(2).unwrap();
-    assert_eq!(complete.service_request, full);
-    BACnetServer::dispatch(
-        &context,
-        &final_envelope.source_mac.clone(),
-        Apdu::ConfirmedRequest(complete),
-        final_envelope,
-    )
-    .await;
+    take(&context, &mut table, final_envelope).await;
+    assert!(table.is_empty());
+    assert!(matches!(
+        routed.response(2000, 4).await.0,
+        Apdu::SegmentAck(ack) if ack.sequence_number == 1
+    ));
+    // Reassembled byte for byte, or the read would draw no ComplexAck.
     assert!(matches!(
         routed.response(2000, 4).await.0,
         Apdu::ComplexAck(_)
     ));
     settled(&context).await;
 
-    let (key, state, _) = open(&received, &first);
-    states.insert(key.clone(), state);
+    let opening = routed
+        .receive(2000, &Apdu::ConfirmedRequest(first.clone()), None)
+        .await;
+    take(&context, &mut table, opening).await;
+    assert!(matches!(
+        routed.response(2000, 4).await.0,
+        Apdu::SegmentAck(_)
+    ));
+    // The same transfer through another local endpoint fails closed, and
+    // its Abort goes back the way the first segment came.
     let retarget = routed
         .receive(3000, &Apdu::ConfirmedRequest(first), None)
         .await;
-    let opening = match check_opening_response_route(&mut states, &key, &retarget.response_route())
-    {
-        Err(state) => state,
-        Ok(_) => panic!("changed endpoint must fail closed"),
-    };
-    assert!(states.is_empty());
-    BACnetServer::<TestTransport>::send_server_abort(
-        &context.services.network,
-        &opening.source_mac,
-        opening.source_network.as_ref(),
-        &opening.route,
-        4,
-        AbortReason::INVALID_APDU_IN_THIS_STATE,
-    )
-    .await;
+    take(&context, &mut table, retarget).await;
+    assert!(table.is_empty());
     assert!(
         matches!(routed.response(2000,4).await.0,Apdu::Abort(x) if x.abort_reason==AbortReason::INVALID_APDU_IN_THIS_STATE)
     );
@@ -143,63 +139,77 @@ async fn r7_segment_opening_context_drives_ack_reassembly_and_retarget_abort() {
 async fn r7_segment_capacity_abort_and_quiet_progress_expiry_keep_opening_route() {
     let mut routed = Routed::new().await;
     let context = context(ObjectDatabase::new(), ServerConfig::default());
-    let Apdu::ConfirmedRequest(mut request) = read(5) else {
-        unreachable!()
-    };
-    request.segmented = true;
-    request.more_follows = true;
-    request.sequence_number = Some(0);
-    request.proposed_window_size = Some(1);
-    let received = routed
-        .receive(2000, &Apdu::ConfirmedRequest(request.clone()), None)
-        .await;
-    let (key, mut state, _) = open(&received, &request);
-    assert!(
-        state
-            .payload
-            .save_new(1, Bytes::from_static(&[1]), Some(usize::MAX))
-            .is_err()
-    );
-    BACnetServer::<TestTransport>::send_server_abort(
-        &context.services.network,
-        &state.source_mac,
-        state.source_network.as_ref(),
-        &state.route,
-        5,
-        AbortReason::BUFFER_OVERFLOW,
+    let (first, _) = first_half(5);
+    let opening = || Apdu::ConfirmedRequest(first.clone());
+    // A table that takes one segment: the next ends the transfer.
+    let mut table = SegmentedRequests::new(TSEG).with_max_segments(1);
+    take(
+        &context,
+        &mut table,
+        routed.receive(2000, &opening(), None).await,
     )
     .await;
+    assert!(matches!(
+        routed.response(2000, 5).await.0,
+        Apdu::SegmentAck(_)
+    ));
+    let mut next = first.clone();
+    next.sequence_number = Some(1);
+    next.service_request = Bytes::from_static(&[1]);
+    let next = routed
+        .receive(2000, &Apdu::ConfirmedRequest(next), None)
+        .await;
+    take(&context, &mut table, next).await;
+    assert!(table.is_empty());
     assert!(
         matches!(routed.response(2000,5).await.0,Apdu::Abort(x) if x.abort_reason==AbortReason::BUFFER_OVERFLOW)
     );
-    let now = crate::runtime_clock::now();
-    state.last_activity = now;
-    state.last_progress = now - Duration::from_secs(16);
-    let mut states = HashMap::from([(key, state)]);
-    BACnetServer::<TestTransport>::reap_expired_requests(
-        &context.services.network,
-        &mut states,
-        now,
-        Duration::from_secs(20),
+
+    // No progress for 16 s: the Abort goes the opening's way.
+    let mut table = SegmentedRequests::new(TSEG);
+    take(
+        &context,
+        &mut table,
+        routed.receive(2000, &opening(), None).await,
     )
     .await;
-    assert!(states.is_empty());
+    assert!(matches!(
+        routed.response(2000, 5).await.0,
+        Apdu::SegmentAck(_)
+    ));
+    let now = crate::runtime_clock::now() + Duration::from_secs(16);
+    BACnetServer::<TestTransport>::reap_expired_requests(
+        &context.services.network,
+        &mut table,
+        now,
+    )
+    .await;
+    assert!(table.is_empty());
     assert!(
         matches!(routed.response(2000,5).await.0,Apdu::Abort(x) if x.abort_reason==AbortReason::OTHER)
     );
-    let (key, mut state, _) = open(&received, &request);
-    state.last_activity = now - Duration::from_secs(5);
-    state.last_progress = now - Duration::from_secs(16);
-    let mut states = HashMap::from([(key, state)]);
+
+    // Four segment timeouts of 1 s run out first, and end it silently.
+    let mut table = SegmentedRequests::new(Duration::from_secs(1));
+    take(
+        &context,
+        &mut table,
+        routed.receive(2000, &opening(), None).await,
+    )
+    .await;
+    assert!(matches!(
+        routed.response(2000, 5).await.0,
+        Apdu::SegmentAck(_)
+    ));
+    let now = crate::runtime_clock::now() + Duration::from_secs(16);
     BACnetServer::<TestTransport>::reap_expired_requests(
         &context.services.network,
-        &mut states,
+        &mut table,
         now,
-        Duration::from_secs(4),
     )
     .await;
     assert!(
-        states.is_empty() && routed.wire.try_recv().is_err(),
+        table.is_empty() && routed.wire.try_recv().is_err(),
         "protocol inactivity expiry stays silent"
     );
     routed.router.stop().await.unwrap();
@@ -285,116 +295,82 @@ async fn r7_segmented_ack_retry_and_terminal_abort_use_one_saved_route() {
 async fn r7_segment_alternate_return_paths_keep_opening_reply_plan() {
     for arrival_port in [0, 2] {
         let mut routed = Routed::new().await;
-        let mut db = ObjectDatabase::new();
-        db.add(Box::new(
-            AnalogInputObject::new(7, "input", EngineeringUnits::SQUARE_METERS).unwrap(),
-        ))
-        .unwrap();
-        let context = context(db, ServerConfig::default());
-        let Apdu::ConfirmedRequest(mut first) = read(17) else {
-            unreachable!()
-        };
-        let full = first.service_request.clone();
-        let cut = full.len() / 2;
-        first.segmented = true;
-        first.more_follows = true;
-        first.sequence_number = Some(0);
-        first.proposed_window_size = Some(1);
-        first.service_request = full.slice(..cut);
+        let context = context(analog_input(), ServerConfig::default());
+        let (first, full) = first_half(17);
+        let mut table = SegmentedRequests::new(TSEG);
         let opening = routed
             .receive(2000, &Apdu::ConfirmedRequest(first.clone()), None)
             .await;
-        let (key, state, _) = open(&opening, &first);
-        let mut states = HashMap::from([(key.clone(), state)]);
-        let mut last = first.clone();
-        last.more_follows = false;
-        last.sequence_number = Some(1);
-        last.service_request = full.slice(cut..);
-        let mut continuation = routed
-            .receive_via(
-                arrival_port,
-                &[10],
-                Some(address(9000, &[7])),
-                Some(address(2000, &[2])),
-                &Apdu::ConfirmedRequest(last.clone()),
-                None,
-            )
-            .await;
+        let key = transfer_key(
+            &opening.source_mac,
+            opening.source_network.as_ref(),
+            17,
+            opening.provenance.clone(),
+        );
+        take(&context, &mut table, opening).await;
+        assert!(matches!(
+            routed.response(2000, 17).await.0,
+            Apdu::SegmentAck(_)
+        ));
+        let continuation = alternate(&mut routed, arrival_port, second_half(&first, &full)).await;
         assert_eq!(
             key,
-            segmented_receive_key(
+            transfer_key(
                 &continuation.source_mac,
                 continuation.source_network.as_ref(),
-                last.invoke_id,
+                17,
                 continuation.provenance.clone(),
             ),
             "canonical routed requester did not change"
         );
+        take(&context, &mut table, continuation).await;
         assert!(
-            BACnetServer::<TestTransport>::accept_segment_route(
-                &context.services.network,
-                &mut states,
-                &key,
-                &continuation.response_route(),
-            )
-            .await,
+            table.is_empty(),
             "same routed requester and addressed endpoint may change return path"
         );
-        let mut state = states.remove(&key).unwrap();
-        state
-            .payload
-            .save_new(1, last.service_request, Some(cut))
-            .unwrap();
-        continuation.set_response_route(state.route.clone());
-        let complete = state.payload.complete(2).unwrap();
-        BACnetServer::dispatch(
-            &context,
-            &continuation.source_mac.clone(),
-            Apdu::ConfirmedRequest(complete),
-            continuation,
-        )
-        .await;
+        // The segment's own Segment-ACK goes back the way it came...
+        let alternate_port = if arrival_port == 0 { 1000 } else { 3000 };
+        let (port, bytes, peer) = bounded(routed.wire.recv()).await.unwrap();
+        assert_eq!((port, peer.as_slice()), (alternate_port, &[10][..]));
+        assert!(matches!(
+            decode_response(bytes, 2000, 17).0,
+            Apdu::SegmentAck(ack) if ack.sequence_number == 1
+        ));
         assert!(
             matches!(routed.response(2000, 17).await.0, Apdu::ComplexAck(_)),
             "completion uses original port 1000 and peer 9, never the alternate path"
         );
         settled(&context).await;
 
-        let (key, mut state, _) = open(&opening, &first);
-        let now = crate::runtime_clock::now();
-        state.last_activity = now;
-        state.last_progress = now - Duration::from_secs(16);
-        let mut states = HashMap::from([(key.clone(), state)]);
-        let continuation = routed
-            .receive_via(
-                arrival_port,
-                &[10],
-                Some(address(9000, &[7])),
-                Some(address(2000, &[2])),
-                &Apdu::ConfirmedRequest(first),
-                None,
-            )
+        let opening = routed
+            .receive(2000, &Apdu::ConfirmedRequest(first.clone()), None)
             .await;
-        assert!(
-            BACnetServer::<TestTransport>::accept_segment_route(
-                &context.services.network,
-                &mut states,
-                &key,
-                &continuation.response_route(),
-            )
-            .await
-        );
+        take(&context, &mut table, opening).await;
+        assert!(matches!(
+            routed.response(2000, 17).await.0,
+            Apdu::SegmentAck(_)
+        ));
+        // Segment zero again, the alternate way: asked for again, that way.
+        let continuation = alternate(&mut routed, arrival_port, first.clone()).await;
+        take(&context, &mut table, continuation).await;
+        let (port, bytes, peer) = bounded(routed.wire.recv()).await.unwrap();
+        assert_eq!((port, peer.as_slice()), (alternate_port, &[10][..]));
+        assert!(matches!(
+            decode_response(bytes, 2000, 17).0,
+            Apdu::SegmentAck(ack) if ack.negative_ack
+        ));
+        assert_eq!(table.len(), 1);
+        let now = crate::runtime_clock::now() + Duration::from_secs(16);
         BACnetServer::<TestTransport>::reap_expired_requests(
             &context.services.network,
-            &mut states,
+            &mut table,
             now,
-            Duration::from_secs(20),
         )
         .await;
         assert!(
             matches!(routed.response(2000,17).await.0,Apdu::Abort(x) if x.abort_reason==AbortReason::OTHER)
         );
-        assert!(states.is_empty() && routed.wire.try_recv().is_err());
+        assert!(table.is_empty() && routed.wire.try_recv().is_err());
         routed.router.stop().await.unwrap();
     }
 }

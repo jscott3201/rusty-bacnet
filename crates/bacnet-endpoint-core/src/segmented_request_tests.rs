@@ -582,3 +582,9 @@ fn a_stated_segment_count_caps_a_request_but_never_past_the_sequence_space() {
     let none = SegmentedRequests::new(TSEG).with_max_segments(0);
     assert_eq!(none.limits.segments, 1);
 }
+
+#[path = "segmented_request_budget_tests.rs"]
+mod budget;
+
+#[path = "segmented_request_timer_tests.rs"]
+mod timers;

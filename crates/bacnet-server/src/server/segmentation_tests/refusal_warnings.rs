@@ -12,9 +12,10 @@ use bacnet_types::enums::Segmentation;
 use request_reassembly::{recv_apdu, send_apdu, send_segment_with_window, start_reassembly_server};
 
 const UNDECODABLE: &str = "Server failed to decode received APDU";
-const WINDOW: &str = "Rejecting segmented request with invalid proposed window size";
-const GAP: &str = "Segment gap detected, sending negative SegmentAck";
-const NO_SEGMENT_0: &str = "Received non-initial segment without prior segment 0, aborting";
+/// Every segment the receiver refuses (a bad window, no segment zero) warns
+/// the same, with the reason; a gap warns as it asks again (#2742).
+const ABORT: &str = "Aborting a segmented confirmed request";
+const GAP: &str = "Asking again for segments of a confirmed request";
 
 type Rx = mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>;
 
@@ -80,13 +81,13 @@ fn warned(spy: &WarnSpy, messages: &[&str]) -> Vec<(String, Option<u64>)> {
 async fn a_flood_of_bad_apdus_and_refused_segments_warns_once_per_interval() {
     let (spy, _guard) = WarnSpy::install();
     let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
-    let segment = [WINDOW, GAP, NO_SEGMENT_0];
+    let segment = [ABORT, GAP];
     flood(&client, &mut rx, 5, 0).await;
     assert_eq!(
         warned(&spy, &[UNDECODABLE]),
         [(UNDECODABLE.into(), Some(1))]
     );
-    assert_eq!(warned(&spy, &segment), [(WINDOW.into(), Some(1))]);
+    assert_eq!(warned(&spy, &segment), [(ABORT.into(), Some(1))]);
 
     tokio::time::advance(WARNING_INTERVAL).await;
     flood(&client, &mut rx, 3, 100).await;
@@ -97,7 +98,7 @@ async fn a_flood_of_bad_apdus_and_refused_segments_warns_once_per_interval() {
     );
     assert_eq!(
         warned(&spy, &segment),
-        [(WINDOW.into(), Some(1)), (WINDOW.into(), Some(7))],
+        [(ABORT.into(), Some(1)), (ABORT.into(), Some(7))],
         "the gap and five refusals held back, and the first of the next burst"
     );
     // Nothing else the floods set off warned (the other is the startup

@@ -232,6 +232,8 @@ async fn request_byte_budget_full_silent_oversized_duplicates_preserve_window_an
     let write = write_property_payload(text);
     fill_budget(&client, &mut rx, BUDGET - write.len()).await;
     send_segment_with_window(&client, 12, 0, 3, true, &write[..1]).await;
+    // Segment zero is acknowledged at once, whatever the window (#2742).
+    expect_positive_ack(&mut rx, 12, 0).await;
     send_segment_with_window(&client, 12, 1, 3, true, &write[1..]).await;
     // Two saved segments, full bytes, but the three-segment window is not full.
     // Its three-duplicate allowance must silently discard even oversized input.

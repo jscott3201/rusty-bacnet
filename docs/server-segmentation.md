@@ -47,6 +47,18 @@ segment received after removal still gets the normal invalid-state Abort;
 segment zero can start a fresh transfer. The existing 128 global / 16 per-peer
 slots, 4 MiB saved-payload budget and 256-segment limit remain in force.
 
+The full server reassembles with `bacnet_endpoint_core::segmented_request`,
+the receiver its clients use too (#2742). It acknowledges segment zero at
+once, with the window the requester proposed, so a requester that sends
+segment zero alone and waits for that answer (Clause 5.4.4.1) goes on at
+once. After that it acknowledges each full window, counted from its last
+acknowledgment, positive or negative (Clause 5.4.5.2), and the last segment.
+A requester that sends its whole first window without waiting still
+completes: the segments it sends again after segment zero's acknowledgment
+are duplicates and are discarded. A segment sent again after the request is
+whole draws the invalid-state Abort above, even while the request is still
+being answered.
+
 `DeviceIdentity` is shared by full servers and endpoints, with a 5000 ms
 segment timeout. `with_apdu_segment_timeout_ms(...)` changes both. An
 `EndpointSession` takes any of the four modes (#2617): its full server follows
@@ -56,11 +68,9 @@ when it transmits them, and taking the identity's Tseg as its segment timeout.
 A selected Device database must state the identity's mode. The client's APDU
 timeout and retries stay the session's. When the Device receives segments, the
 session's client also reassembles a segmented COV notification of either form
-(#2646), with the full server's limits and timers
-(`bacnet_endpoint_core::segmented_request`): it acknowledges segment zero at
-once with the window the requester proposed, then each full window and the
-last segment, all with the server bit set, and answers the whole notification
-as one that came in one APDU. A standalone client, or one on a session with no
+(#2646) with the full server's receiver, acknowledging as the full server
+does, all with the server bit set, and answers the whole notification as one
+that came in one APDU. A standalone client, or one on a session with no
 server role, reassembles every segmented confirmed request the same way,
 unless its `ClientConfig::segmentation` receives no segments: it executes a
 notification and rejects any other service as unrecognized, as it does an

@@ -1,8 +1,8 @@
 //! Retention Aborts keep the verified original direct response capability.
 use super::*;
-use crate::server::segmented_receive::{RequestPayload, initial_state};
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
+use bacnet_endpoint_core::segmented_request::{Receipt, Segment, SegmentedRequests};
 use bacnet_transport::sc::WebSocketPort;
 
 #[tokio::test]
@@ -24,34 +24,27 @@ async fn progress_abort_uses_original_direct_capability_and_retirement_never_fal
             service_choice: ConfirmedServiceChoice::READ_PROPERTY,
             service_request: Bytes::from_static(&[1]),
         };
-        let mut payload = RequestPayload::new(&request);
-        payload
-            .save_new(0, request.service_request.clone(), Some(0))
-            .unwrap();
-        let source = MacAddr::from_slice(SOURCE);
-        let (mut state, _) = initial_state(
-            payload,
-            bacnet_network::response_route::ResponseRoute::new(provenance.clone(), Some(response)),
-            source.clone(),
-            None,
-            &request,
+        // Opened 16 s before `now` and never heard from since; four
+        // segment timeouts of 5 s aren't up yet, so it ends with an Abort.
+        let start = crate::runtime_clock::now();
+        let now = start + std::time::Duration::from_secs(16);
+        let mut receivers = SegmentedRequests::new(std::time::Duration::from_secs(5));
+        let route =
+            bacnet_network::response_route::ResponseRoute::new(provenance.clone(), Some(response));
+        let receipt = receivers.receive(
+            Segment {
+                source_mac: SOURCE,
+                source_network: None,
+                route: &route,
+                request: &request,
+            },
+            start,
         );
-        let now = crate::runtime_clock::now();
-        state.last_activity = now;
-        state.last_progress = now - std::time::Duration::from_secs(16);
-        let key =
-            crate::server::segmented_send::segmented_receive_key(&source, None, 42, provenance);
-        let mut receivers = HashMap::from([(key, state)]);
+        assert!(matches!(receipt, Receipt::Ack(_)));
         if retired {
             listener.stop().await;
         }
-        BACnetServer::<TestTransport>::reap_expired_requests(
-            &network,
-            &mut receivers,
-            now,
-            std::time::Duration::from_secs(20),
-        )
-        .await;
+        BACnetServer::<TestTransport>::reap_expired_requests(&network, &mut receivers, now).await;
         assert!(receivers.is_empty());
         assert!(
             sent.is_empty(),

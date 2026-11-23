@@ -6,7 +6,7 @@ Shared outbound transaction coordination and single-owner APDU ingress for the
 and matches decoded responses to their owning operation. [`endpoint_ingress`]
 classifies incoming APDUs into bounded role queues above one network layer.
 [`segmented_request`] reassembles segmented Confirmed-Requests on the answering
-side, without I/O.
+side, without I/O: the full server's receiver, and the full client's.
 Applications that need a complete client/server lifecycle can use
 `bacnet-endpoint`; this crate provides the underlying coordination components.
 

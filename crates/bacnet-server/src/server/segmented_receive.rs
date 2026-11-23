@@ -1,60 +1,217 @@
+//! The server's side of a segmented confirmed request (Clause 5.4.5): the
+//! dispatch loop's branches for a segment, a requester's Abort and the
+//! reassembly timers, over the shared receiver
+//! [`SegmentedRequests`](bacnet_endpoint_core::segmented_request) (#2742).
+//!
+//! The dispatch loop owns the table and drives it inline: no task, no lock.
+//! Its limits are the receiver's fixed ones (128 transfers, 16 from one peer,
+//! 4 MiB of saved segments, 256 segments, the 16 s no-progress Abort and the
+//! silent end past four segment timeouts). The server takes up to the
+//! sequence space whatever its Device states as Max_Segments_Accepted: more
+//! than it states is permissive, while a 257th segment would land on segment
+//! zero's slot.
+
 use super::*;
+use bacnet_endpoint_core::segmented_request::{Opening, Receipt, Segment, SegmentedRequests};
+use bacnet_network::layer::ReceivedApdu;
+use bacnet_network::response_route::ResponseRoute;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Retire a request whose later segment targets a different local endpoint.
-    pub(super) async fn accept_segment_route(
+    /// End every transfer due at `now`, and send the Aborts that ending
+    /// draws. The table gives up every due transfer, and its saved segments,
+    /// before the first Abort awaits. The dispatch loop owns this future, so
+    /// a stop cancels it.
+    pub(super) async fn reap_expired_requests(
         network: &Arc<NetworkLayer<T>>,
-        receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
-        key: &SegRecvKey,
-        incoming: &bacnet_network::response_route::ResponseRoute,
-    ) -> bool {
-        let Err(opening) = check_opening_response_route(receivers, key, incoming) else {
-            return true;
-        };
+        receivers: &mut SegmentedRequests,
+        now: Instant,
+    ) {
+        Self::abort_expired(network, receivers.expire(now)).await;
+    }
+
+    /// Send an Abort (OTHER) along each expired transfer's opening route; a
+    /// failed send leaves the rest to go.
+    pub(super) async fn abort_expired(network: &Arc<NetworkLayer<T>>, expired: Vec<Opening>) {
+        for opening in expired {
+            Self::abort_opening(network, &opening, AbortReason::OTHER).await;
+        }
+    }
+
+    /// The body of the dispatch loop's branch for a segment of a confirmed
+    /// request: take it into `receivers` and send what it draws, along the
+    /// segment's own path. A whole request goes on to `dispatch` with the
+    /// last segment's envelope and its transfer's opening route, so its
+    /// answer goes back the way the first segment came.
+    ///
+    /// `#[inline]`, so each crate that compiles the dispatch loop compiles
+    /// its own copy, and `#[cold]`, so the loop's plain path is laid out
+    /// without it: an `#[inline(never)]` generic hand-off cost the client's
+    /// plain requests about 28 instructions each in #2646, by bringing in
+    /// another crate's copy of the B/IP send path.
+    #[cold]
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn receive_request_segment(
+        network: &Arc<NetworkLayer<T>>,
+        dispatch_context: &DispatchContext<T>,
+        config: &ServerConfig,
+        receivers: &mut SegmentedRequests,
+        warning: &WarnThrottle,
+        source_mac: &MacAddr,
+        request: &ConfirmedRequestPdu,
+        mut received: ReceivedApdu,
+    ) {
+        let invoke_id = request.invoke_id;
+        let route = received.response_route();
+        // A device that takes no segments answers the first one it meets
+        // with this Abort and keeps nothing (Clause 5.4.5.1), so its table
+        // stays empty.
+        let segmentation = config.device.segmentation();
+        if segmentation != Segmentation::SEGMENTED_BOTH
+            && segmentation != Segmentation::SEGMENTED_RECEIVE
+        {
+            Self::send_server_abort(
+                network,
+                source_mac,
+                received.source_network.as_ref(),
+                &route,
+                invoke_id,
+                AbortReason::SEGMENTATION_NOT_SUPPORTED,
+            )
+            .await;
+            return;
+        }
+        let receipt = receivers.receive(
+            Segment {
+                source_mac,
+                source_network: received.source_network.as_ref(),
+                route: &route,
+                request,
+            },
+            runtime_clock::now(),
+        );
+        match receipt {
+            Receipt::Saved => {}
+            Receipt::Discarded => {
+                debug!(
+                    invoke_id,
+                    seq = request.sequence_number,
+                    "Discarding a duplicate segment"
+                );
+            }
+            Receipt::Ack(ack) => {
+                if ack.negative_ack {
+                    warn_throttled!(
+                        warning,
+                        invoke_id,
+                        seq = ack.sequence_number,
+                        "Asking again for segments of a confirmed request"
+                    );
+                }
+                Self::send_request_segment_ack(
+                    network,
+                    source_mac,
+                    received.source_network.as_ref(),
+                    &route,
+                    ack,
+                )
+                .await;
+            }
+            Receipt::Abort(reason) => {
+                warn_throttled!(
+                    warning,
+                    invoke_id,
+                    reason = reason.to_raw(),
+                    "Aborting a segmented confirmed request"
+                );
+                Self::send_server_abort(
+                    network,
+                    source_mac,
+                    received.source_network.as_ref(),
+                    &route,
+                    invoke_id,
+                    reason,
+                )
+                .await;
+            }
+            Receipt::Retired(opening) => {
+                warn_throttled!(
+                    warning,
+                    invoke_id,
+                    "Aborting a segmented confirmed request whose segment changed route"
+                );
+                Self::abort_opening(network, &opening, AbortReason::INVALID_APDU_IN_THIS_STATE)
+                    .await;
+            }
+            Receipt::Complete(done) => {
+                Self::send_request_segment_ack(
+                    network,
+                    source_mac,
+                    received.source_network.as_ref(),
+                    &route,
+                    done.ack,
+                )
+                .await;
+                debug!(
+                    invoke_id,
+                    payload_len = done.request.service_request.len(),
+                    "Reassembled segmented ConfirmedRequest"
+                );
+                received.set_response_route(done.opening.route);
+                Self::dispatch(
+                    dispatch_context,
+                    source_mac,
+                    Apdu::ConfirmedRequest(done.request),
+                    received,
+                )
+                .await;
+            }
+        }
+    }
+
+    /// Send a Segment-ACK for a request's segment, along `route`.
+    async fn send_request_segment_ack(
+        network: &Arc<NetworkLayer<T>>,
+        source_mac: &MacAddr,
+        source_network: Option<&NpduAddress>,
+        route: &ResponseRoute,
+        ack: SegmentAckPdu,
+    ) {
+        let mut buf = BytesMut::new();
+        encode_apdu(&mut buf, &Apdu::SegmentAck(ack)).expect("valid APDU encoding");
+        if let Err(e) =
+            Self::send_confirmed_response_apdu(network, &buf, source_mac, source_network, route)
+                .await
+        {
+            warn!(
+                error = %e,
+                "Failed to send SegmentAck for segmented request"
+            );
+        }
+    }
+
+    /// Abort a transfer along the route its first segment came by.
+    async fn abort_opening(network: &Arc<NetworkLayer<T>>, opening: &Opening, reason: AbortReason) {
         Self::send_server_abort(
             network,
             &opening.source_mac,
             opening.source_network.as_ref(),
             &opening.route,
-            key.2,
-            AbortReason::INVALID_APDU_IN_THIS_STATE,
+            opening.invoke_id,
+            reason,
         )
         .await;
-        false
-    }
-
-    pub(super) async fn reap_expired_requests(
-        network: &Arc<NetworkLayer<T>>,
-        receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
-        now: Instant,
-        receive_timeout: Duration,
-    ) {
-        // All selected states and payload charges are gone before any I/O.
-        // This future belongs to dispatch, including cancellation on shutdown.
-        let expired = expire_segmented_requests(receivers, now, receive_timeout);
-        for expired in expired {
-            Self::send_server_abort(
-                network,
-                &expired.source_mac,
-                expired.source_network.as_ref(),
-                &expired.route,
-                expired.invoke_id,
-                AbortReason::OTHER,
-            )
-            .await;
-        }
     }
 
     /// Send a `'server' = TRUE` Abort back along the request's path.
     ///
-    /// Split from `lifecycle.rs` to keep the 700-LOC file cap; no behavior
-    /// change. Every Abort this dispatch loop originates answers a client's
+    /// Every Abort this dispatch loop originates answers a client's
     /// request, so the flag is always TRUE (Clause 20.1.9.1).
     pub(super) async fn send_server_abort(
         network: &Arc<NetworkLayer<T>>,
         source_mac: &MacAddr,
         source_network: Option<&NpduAddress>,
-        route: &bacnet_network::response_route::ResponseRoute,
+        route: &ResponseRoute,
         invoke_id: u8,
         abort_reason: AbortReason,
     ) {
@@ -79,177 +236,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 }
 
-/// Private defensive limit, not a normative SegmentTimer or total-request age.
-const SEG_RECEIVER_PROGRESS_TIMEOUT: Duration = Duration::from_secs(16);
-
-/// Private resource partition, not an authenticated-peer fairness guarantee.
-const MAX_SEG_RECEIVERS_PER_PEER: usize = 16;
-
-/// Owner policy: logical saved service payload per server instance, not a
-/// normative cap, heap/RSS bound, or application memory budget. Current input,
-/// channels, metadata, allocation overhead/capacity and completed output are
-/// excluded. Each accepted segment is copied once to detach its backing owner.
-const MAX_SAVED_REQUEST_BYTES: usize = 4 * 1024 * 1024;
-
-pub(super) fn saved_request_payload_bytes(
-    receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
-) -> Option<usize> {
-    receivers.values().try_fold(0usize, |sum, state| {
-        sum.checked_add(state.payload.saved_payload_bytes())
-    })
-}
-
-fn payload_fits(saved: Option<usize>, additional: usize) -> bool {
-    saved
-        .and_then(|bytes| bytes.checked_add(additional))
-        .is_some_and(|bytes| bytes <= MAX_SAVED_REQUEST_BYTES)
-}
-
-/// Owns all active payload storage and its accounting. The mutable encoding
-/// receiver never escapes: server saves are append-only, ordered, and charged
-/// exactly once, while the first request template contains metadata only.
-pub(crate) struct RequestPayload {
-    receiver: SegmentReceiver,
-    first: ConfirmedRequestPdu,
-    saved_payload_bytes: usize,
-}
-
-impl RequestPayload {
-    pub(super) fn new(first: &ConfirmedRequestPdu) -> Self {
-        Self {
-            receiver: SegmentReceiver::new(),
-            first: reassembled_confirmed_request(first, Bytes::new()),
-            saved_payload_bytes: 0,
-        }
-    }
-
-    /// The aggregate snapshot includes this owner. Call only at the new-save
-    /// point, with no await between snapshot, validation, save and charge.
-    pub(super) fn save_new(
-        &mut self,
-        seq: u8,
-        data: Bytes,
-        aggregate: Option<usize>,
-    ) -> Result<(), Error> {
-        if usize::from(seq) != self.receiver.received_count()
-            || self.receiver.received_count() >= MAX_REQUEST_SEGMENTS
-            || !payload_fits(aggregate, data.len())
-        {
-            return Err(bacnet_types::error::SegmentationError::PayloadCapacityExceeded.into());
-        }
-        let charged = self
-            .saved_payload_bytes
-            .checked_add(data.len())
-            .ok_or_else(|| {
-                Error::from(bacnet_types::error::SegmentationError::PayloadAccountingOverflow)
-            })?;
-        // Authoritative per-segment validation happens BEFORE copying. Insert
-        // the original transiently, then replace the SAME key synchronously
-        // with detached bytes of the validated length. No extra charge/save.
-        self.receiver.receive(seq, data.clone())?;
-        let detached = Bytes::copy_from_slice(&data);
-        #[cfg(test)]
-        let detached = tests::observe_saved_payload(detached);
-        self.receiver
-            .receive(seq, detached)
-            .expect("same validated segment length");
-        self.saved_payload_bytes = charged;
-        Ok(())
-    }
-
-    pub(super) fn saved_payload_bytes(&self) -> usize {
-        self.saved_payload_bytes
-    }
-
-    /// Consuming completion releases all saved owners before returning to async
-    /// dispatch, even on error. Reassembly temporarily overlaps the output Vec
-    /// with saved segments; output storage is outside the active payload budget.
-    pub(super) fn complete(self, total: usize) -> Result<ConfirmedRequestPdu, Error> {
-        let data = self.receiver.reassemble(total)?;
-        Ok(reassembled_confirmed_request(
-            &self.first,
-            Bytes::from(data),
-        ))
-    }
-}
-
-#[cfg(test)]
-#[path = "segmentation_tests/request_payload_owner.rs"]
-pub(super) mod tests;
-
-/// Only for a new, supported sequence-zero request with a valid window.
-/// Global capacity takes precedence; the bounded key scan ignores invoke ID.
-pub(super) fn segmented_request_admission_error(
-    receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
-    key: &SegRecvKey,
-) -> Option<AbortReason> {
-    if receivers.len() >= MAX_SEG_RECEIVERS {
-        return Some(AbortReason::BUFFER_OVERFLOW);
-    }
-    if receivers
-        .keys()
-        .filter(|existing| existing.0 == key.0 && existing.1 == key.1)
-        .count()
-        >= MAX_SEG_RECEIVERS_PER_PEER
-    {
-        return Some(AbortReason::OUT_OF_RESOURCES);
-    }
-    None
-}
-
-/// Fail-closed conflict for segmented request reassembly (RB-07).
-/// Returns the conflicting key when the same (peer, invoke) exists under a
-/// different non-direct scope; the caller aborts that session rather than
-/// merging. Direct identities always own independent exact keys, including
-/// when a non-direct frame claims their address.
-pub(super) fn find_receive_provenance_conflict(
-    receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
-    key: &SegRecvKey,
-) -> Option<SegRecvKey> {
-    if key.3.is_direct_peer() {
-        return None;
-    }
-    receivers
-        .keys()
-        .find(|existing| {
-            !existing.3.is_direct_peer()
-                && existing.0 == key.0
-                && existing.1 == key.1
-                && existing.2 == key.2
-                && existing.3 != key.3
-        })
-        .cloned()
-}
-
-/// A direct Abort cancels only its exact principal/incarnation key. Legacy
-/// address-scoped cancellation may sweep non-direct contexts only. Whole-server
-/// shutdown and timeouts retain their independent global cleanup semantics.
-pub(super) fn remove_matching_reassemblies(
-    receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
-    key: &SegRecvKey,
-) {
-    if key.3.is_direct_peer() {
-        receivers.remove(key);
-        return;
-    }
-    let doomed: Vec<SegRecvKey> = receivers
-        .keys()
-        .filter(|existing| {
-            !existing.3.is_direct_peer()
-                && existing.0 == key.0
-                && existing.1 == key.1
-                && existing.2 == key.2
-        })
-        .cloned()
-        .collect();
-    for doomed in doomed {
-        receivers.remove(&doomed);
-    }
-}
-
-/// Validate the active timing/declaration contract before starting network I/O.
+/// Check the Device's segment timeout (Tseg) before any network I/O: four of
+/// them, the silence that ends a transfer, must be a representable deadline.
 pub(super) fn validate_segment_timeout(config: &ServerConfig) -> Result<Duration, Error> {
     config.device.validate()?;
+    let segment_timeout = Duration::from_millis(config.device.apdu_segment_timeout_ms());
     let milliseconds = config
         .device
         .apdu_segment_timeout_ms()
@@ -260,218 +251,33 @@ pub(super) fn validate_segment_timeout(config: &ServerConfig) -> Result<Duration
         .checked_add(receive_timeout)
         .and_then(|deadline| deadline.checked_add(Duration::from_nanos(1)))
         .ok_or_else(|| Error::Encoding("receive segment deadline is not representable".into()))?;
-    Ok(receive_timeout)
+    Ok(segment_timeout)
 }
 
-/// An expired local-policy response retains no reassembly payload or quota charge.
-pub(super) struct ExpiredRequest {
-    pub(super) source_mac: MacAddr,
-    pub(super) source_network: Option<NpduAddress>,
-    pub(super) route: bacnet_network::response_route::ResponseRoute,
-    pub(super) invoke_id: u8,
-}
-
-/// Remove every due state before any response can await. Protocol expiry is
-/// silent and wins if both conditions are already due when dispatch observes
-/// them. At exact 4*Tseg equality the protocol timer is live, so a coincident
-/// inclusive local progress deadline still produces OTHER.
-pub(super) fn expire_segmented_requests(
-    receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
-    now: Instant,
-    receive_timeout: Duration,
-) -> Vec<ExpiredRequest> {
-    let mut expired = Vec::new();
-    receivers.retain(|key, state| {
-        if now.duration_since(state.last_activity) > receive_timeout {
-            return false;
-        }
-        if now.duration_since(state.last_progress) >= SEG_RECEIVER_PROGRESS_TIMEOUT {
-            expired.push(ExpiredRequest {
-                source_mac: state.source_mac.clone(),
-                source_network: state.source_network.clone(),
-                route: state.route.clone(),
-                invoke_id: key.2,
-            });
-            return false;
-        }
-        true
-    });
-    expired
-}
-
-/// A fresh scan of at most 128 entries avoids stale deadlines after activity,
-/// completion or removal. Strict protocol expiry wakes one representable tick
-/// beyond equality; tokio may round this up to its timer resolution.
-pub(super) fn next_receive_deadline(
-    receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
-    receive_timeout: Duration,
-) -> Option<Instant> {
-    receivers
-        .values()
-        .flat_map(|state| {
-            let protocol = state
-                .last_activity
-                .checked_add(receive_timeout)
-                .and_then(|deadline| deadline.checked_add(Duration::from_nanos(1)));
-            let progress = state
-                .last_progress
-                .checked_add(SEG_RECEIVER_PROGRESS_TIMEOUT);
-            [protocol, progress].into_iter().flatten()
-        })
-        .min()
-}
-
-pub(super) async fn wait_receive_deadline(
-    receivers: &HashMap<SegRecvKey, SegmentedRequestState>,
-    receive_timeout: Duration,
-) {
-    match next_receive_deadline(receivers, receive_timeout) {
+/// Sleep until the table's next deadline; forever with none.
+pub(super) async fn wait_receive_deadline(receivers: &SegmentedRequests) {
+    match receivers.next_deadline() {
         Some(deadline) => tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await,
         None => std::future::pending().await,
     }
 }
 
-pub(super) fn reassembled_confirmed_request(
-    first: &ConfirmedRequestPdu,
-    service_request: Bytes,
-) -> ConfirmedRequestPdu {
-    ConfirmedRequestPdu {
-        segmented: false,
-        more_follows: false,
-        sequence_number: None,
-        proposed_window_size: None,
-        service_request,
-        invoke_id: first.invoke_id,
-        service_choice: first.service_choice,
-        max_apdu_length: first.max_apdu_length,
-        segmented_response_accepted: first.segmented_response_accepted,
-        max_segments: first.max_segments,
-    }
-}
-
-/// Apply the Clause 5.4.5.2 duplicate or out-of-order receive transition.
-/// Its warnings go through `warning`, the server's segment throttle (#1950).
-pub(super) fn classify_non_next_segment(
-    state: &mut SegmentedRequestState,
-    invoke_id: u8,
-    sequence_number: u8,
-    warning: &WarnThrottle,
-) -> Option<SegmentAckPdu> {
-    let is_duplicate = duplicate_in_window(
-        sequence_number,
-        state.initial_sequence_number,
-        state.last_acked_seq,
-    );
-    if is_duplicate && state.duplicate_count < state.actual_window_size {
-        state.duplicate_count += 1;
-        debug!(
-            invoke_id,
-            seq = sequence_number,
-            duplicate_count = state.duplicate_count,
-            "Silently discarding duplicate segment"
-        );
-        return None;
-    }
-
-    if is_duplicate {
-        warn_throttled!(
-            warning,
-            invoke_id,
-            seq = sequence_number,
-            "Duplicate allowance exhausted, sending negative SegmentAck"
-        );
-    } else {
-        warn_throttled!(
-            warning,
-            invoke_id,
-            expected = state.expected_seq,
-            received = sequence_number,
-            "Segment gap detected, sending negative SegmentAck"
-        );
-    }
-    state.initial_sequence_number = state.last_acked_seq;
-    state.duplicate_count = 0;
-    Some(SegmentAckPdu {
-        negative_ack: true,
-        sent_by_server: true,
-        invoke_id,
-        sequence_number: state.last_acked_seq,
-        actual_window_size: state.actual_window_size,
-    })
-}
-
-/// Segment zero owns the immutable authorization and response snapshots.
-pub(super) fn initial_state(
-    payload: RequestPayload,
-    route: bacnet_network::response_route::ResponseRoute,
-    source_mac: MacAddr,
-    source_network: Option<NpduAddress>,
-    request: &ConfirmedRequestPdu,
-) -> (SegmentedRequestState, Option<SegmentAckPdu>) {
-    let actual_window_size = request.proposed_window_size.unwrap_or(0);
-    let should_ack = !request.more_follows || actual_window_size <= 1;
-    let now = runtime_clock::now();
-    let state = SegmentedRequestState {
-        source_mac,
-        source_network,
-        payload,
-        provenance: route.provenance(),
-        route,
-        last_activity: now,
-        last_progress: now,
-        expected_seq: 1,
-        initial_sequence_number: 0,
-        duplicate_count: 0,
-        last_acked_seq: 0,
-        window_pos: if should_ack { 0 } else { 1 },
-        actual_window_size,
-        accepted_segments: 1,
-    };
-    let ack = should_ack.then_some(SegmentAckPdu {
-        negative_ack: false,
-        sent_by_server: true,
-        invoke_id: request.invoke_id,
-        sequence_number: request.sequence_number.unwrap_or(0),
-        actual_window_size,
-    });
-    (state, ack)
-}
-
-/// Check a segment against its opening endpoint before any ACK, Abort, or
-/// payload mutation. A conflict retires and returns the opening context for
-/// its terminal Abort. Immediate replies still check the current direct
-/// capability; completion and expiry use the complete saved opening route.
-pub(super) fn check_opening_response_route(
-    receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
-    key: &SegRecvKey,
-    incoming: &bacnet_network::response_route::ResponseRoute,
-) -> Result<(), Box<SegmentedRequestState>> {
-    let Some(opening) = receivers.get(key) else {
-        return Ok(());
-    };
-    if opening.route.same_origin(incoming) {
-        return Ok(());
-    }
-    Err(Box::new(
-        receivers.remove(key).expect("opening session exists"),
-    ))
-}
-
-/// A client Abort retires only its matching active reassembly.
+/// A requester's Abort (server bit clear) ends the transfer it names
+/// (Clause 5.4.5.2). A side effect only: the Abort still goes on to
+/// `dispatch`, which ends the segmented answers it names.
 pub(super) fn remove_peer_aborted_request(
-    receivers: &mut HashMap<SegRecvKey, SegmentedRequestState>,
-    received: &bacnet_network::layer::ReceivedApdu,
+    receivers: &mut SegmentedRequests,
+    received: &ReceivedApdu,
     decoded: &Apdu,
 ) {
     if let Apdu::Abort(abort) = decoded
         && !abort.sent_by_server
     {
-        let key = segmented_receive_key(
+        receivers.abort(
             &received.source_mac,
             received.source_network.as_ref(),
             abort.invoke_id,
             received.provenance.clone(),
         );
-        remove_matching_reassemblies(receivers, &key);
     }
 }
