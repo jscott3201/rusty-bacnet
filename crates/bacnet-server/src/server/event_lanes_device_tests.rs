@@ -810,3 +810,6 @@ async fn an_i_am_during_the_who_is_send_still_ends_the_wait() {
 // invoke ID (#2569).
 #[path = "event_lanes_rebind_tests.rs"]
 mod rebind;
+// Start-up Staging plans that alarm to silent devices (#2573).
+#[path = "event_lanes_start_tests.rs"]
+mod start_up;

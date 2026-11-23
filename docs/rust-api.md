@@ -12631,7 +12631,10 @@ destination's lane is sending, 1,024 across the lanes and 256 destinations.
 A change's COV notifications wait for its event notifications to be handed
 off (#889) for at most the APDU timeout (`cov_retry_timeout_ms`), a wait for
 a Device recipient's I-Am included; `cov_wait_expired` counts the changes for
-which they went out at that limit instead. The intrinsic-reporting sweep
+which they went out at that limit instead. Staging plans due at start-up are
+written before `start()` returns, but their notifications, and the COV fanout
+that waits for them, go on afterwards, so `start()` never waits for a
+recipient, a silent device included (#2573). The intrinsic-reporting sweep
 doesn't wait itself: each pass's COV fanout goes in sweep order, within the
 APDU timeout of that pass's commit. A sweep's COV report carries the object's
 state when it goes. When a pass's notifications go in time, an object that a
