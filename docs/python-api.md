@@ -6783,7 +6783,7 @@ sample is not an atomic aggregate. Like `comm_state()`, it raises
 counters = await server.cov_counters()
 counters["subscriptions_active"]          # subscriptions held now
 counters["subscriptions_rejected_quota"]  # refused by the per-peer quota
-counters["notifications_throttled_peer"]  # skipped at the confirmed in-flight limit
+counters["notifications_throttled_peer"]  # held back by the confirmed in-flight limit
 counters["timed_changes_dropped"]         # timestamped COV-multiple changes lost
 ```
 
@@ -6801,7 +6801,7 @@ counters["timed_changes_dropped"]         # timestamped COV-multiple changes los
 | `notifications_unconfirmed` | Unconfirmed notifications sent |
 | `notification_bytes_sent` | APDU bytes of the notifications in `notifications_sent` |
 | `notifications_throttled_fanout` | Notifications not sent because the per-event count or byte budget ran out |
-| `notifications_throttled_peer` | Confirmed notifications not sent because the peer was at its in-flight limit |
+| `notifications_throttled_peer` | Each confirmed notification held back because the peer had its limit in flight (a subscription held back at several changes counts each time but waits once); it goes, with the value then current, once the peer has room, which may take more than one of its reports ending |
 | `timed_changes_dropped` | Timestamped COV-multiple changes discarded for good, in whole or in part, the running signal for a subscriber whose maximum APDU can't hold one timestamped value |
 | `untimed_references_oversized` | Each COV-multiple report that left out an untimestamped reference too large for one notification |
 
@@ -7753,9 +7753,9 @@ async with endpoint:
   server holds at most 64 at once for its confirmed COV, event and Audit
   notifications. Past them a confirmed COV notification waits for one to
   come back and then goes, if its value still differs from what the
-  subscriber last acknowledged (#2661). A first report refused by the
-  subscriber's in-flight limit or the pool of 255 still waits for its next
-  fanout.
+  subscriber last acknowledged (#2661). A report held back by the
+  subscriber's in-flight limit or the server's pool of 255 waits the same
+  way, until its reports, or any reports, end and leave it room (#2671).
 - **Callables.** A `mutation_policy` callable runs on Tokio's blocking pool
   while its request waits, so a slow one delays only its own request, as
   on a standalone server. The callables run with no lock held

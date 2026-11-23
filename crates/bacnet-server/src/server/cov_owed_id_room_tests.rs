@@ -7,7 +7,6 @@
 use super::cov_fanout::owed_gap;
 use super::cov_owed_id_tests::{lease_all, owed, owed_counts, pv_of, refusals, subscribed_on};
 use super::cov_wire_test_support::*;
-use super::warn_spy::WarnSpy;
 use super::*;
 use bacnet_device_core::cov::{CovNotificationKind, CovPolicy, CovRecipient, CovSubscription};
 use bacnet_objects::analog::AnalogValueObject;
@@ -16,7 +15,7 @@ use std::sync::atomic::Ordering::Relaxed;
 
 /// A harness whose subscriber may have `per_peer` confirmed notifications
 /// in flight.
-async fn with_peer_limit(per_peer: usize) -> Harness {
+pub(super) async fn with_peer_limit(per_peer: usize) -> Harness {
     Harness::start(ServerConfig {
         cov_policy: CovPolicy {
             max_confirmed_in_flight_per_peer: per_peer,
@@ -27,8 +26,8 @@ async fn with_peer_limit(per_peer: usize) -> Harness {
     .await
 }
 
-/// Reports refused by the peer's in-flight limit so far.
-fn throttled(h: &Harness) -> u64 {
+/// Reports held back by the peer's in-flight limit so far.
+pub(super) fn throttled(h: &Harness) -> u64 {
     h.server
         .cov_counters
         .notifications_throttled_peer
@@ -36,12 +35,12 @@ fn throttled(h: &Harness) -> u64 {
 }
 
 /// The harness subscriber's peer, as its in-flight slots count it.
-fn peer() -> CovRecipient {
+pub(super) fn peer() -> CovRecipient {
     CovRecipient::from_endpoint(&PEER, None)
 }
 
 /// The server's in-flight tracker.
-async fn tracker(h: &Harness) -> Arc<crate::cov::CovInFlightTracker> {
+pub(super) async fn tracker(h: &Harness) -> Arc<crate::cov::CovInFlightTracker> {
     Arc::clone(h.server.cov_table.read().await.in_flight_tracker())
 }
 
@@ -119,73 +118,6 @@ async fn a_look_refused_by_a_slot_taken_meanwhile_keeps_its_wait() {
     }
 }
 
-/// A first send refused by the peer's in-flight limit is not queued: it
-/// waits for its next fanout, a deliberate throttle (#533; whether it
-/// should wait too is open on #2671). Ordinary form.
-#[tokio::test(start_paused = true)]
-async fn a_first_send_refused_by_the_peer_limit_is_not_owed() {
-    let mut h = with_peer_limit(1).await;
-    subscribed_on(&mut h, 1, av1()).await;
-    let slot = tracker(&h)
-        .await
-        .try_acquire(peer(), 1, &h.server.cov_in_flight)
-        .unwrap();
-    h.write_local(42.0).await;
-    h.settle().await;
-    assert!(owed(&h).await.is_empty(), "a first send is not owed");
-    assert_eq!(throttled(&h), 1);
-    drop(slot);
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    h.no_notification().await;
-    assert_eq!(owed_counts(&h), (0, 0, 0));
-}
-
-/// The same for a confirmed COV-multiple context.
-#[tokio::test(start_paused = true)]
-async fn a_first_send_refused_by_the_peer_limit_is_not_owed_multiple() {
-    let mut h = with_peer_limit(1).await;
-    h.subscribe_specs(true, vec![(av1(), vec![(PV, false)])])
-        .await;
-    h.notification().await;
-    h.ack().await;
-    h.settle().await;
-    let slot = tracker(&h)
-        .await
-        .try_acquire(peer(), 1, &h.server.cov_in_flight)
-        .unwrap();
-    h.write_local(42.0).await;
-    h.settle().await;
-    assert!(owed(&h).await.is_empty(), "a first send is not owed");
-    assert_eq!(throttled(&h), 1);
-    drop(slot);
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    h.no_notification().await;
-    assert_eq!(owed_counts(&h), (0, 0, 0));
-}
-
-/// A first send refused by the pool of 255 is not queued either.
-#[tokio::test(start_paused = true)]
-async fn a_first_send_refused_by_the_pool_is_not_owed() {
-    let mut h = Harness::start(ServerConfig::default()).await;
-    subscribed_on(&mut h, 1, av1()).await;
-    let tracker = tracker(&h).await;
-    let other = CovRecipient::from_endpoint(&[7], None);
-    let mut pool: Vec<_> = (0..255)
-        .map(|_| {
-            tracker
-                .try_acquire(other.clone(), usize::MAX, &h.server.cov_in_flight)
-                .unwrap()
-        })
-        .collect();
-    h.write_local(42.0).await;
-    h.settle().await;
-    assert!(owed(&h).await.is_empty());
-    drop(pool.pop());
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    h.no_notification().await;
-    assert_eq!(owed_counts(&h), (0, 0, 0));
-}
-
 /// A wrong estimate of the room (here, one that admits everything) has
 /// looks refused for want of a slot: each waits for room to come back
 /// before the next pass, so the attempts stay bounded by what ends, and
@@ -223,7 +155,6 @@ async fn a_look_refused_for_room_waits_for_room_before_the_next_pass() {
 /// reservation is refused by the peer's limit, however long they wait.
 #[tokio::test(start_paused = true)]
 async fn a_peers_references_go_as_its_reports_end_in_the_order_owed() {
-    let (spy, _guard) = WarnSpy::install();
     let mut h = with_peer_limit(2).await;
     for process in 1..=6 {
         subscribed_on(&mut h, process, av1()).await;
@@ -251,7 +182,7 @@ async fn a_peers_references_go_as_its_reports_end_in_the_order_owed() {
     assert_eq!(served, [1, 2, 3, 4, 5, 6]);
     h.no_notification().await;
     assert_eq!(throttled(&h), 0);
-    assert_eq!(refusals(&spy), 6, "each refused an ID once, nothing more");
+    assert_eq!(refusals(&h), 6, "each refused an ID once, nothing more");
     assert_eq!(owed_counts(&h), (6, 6, 0));
 }
 
@@ -314,7 +245,6 @@ async fn a_full_peer_does_not_hold_back_another_peers_references() {
 /// waits in its place, untried, and goes when a report in flight ends.
 #[tokio::test(start_paused = true)]
 async fn a_look_that_finds_the_pool_full_waits_for_a_report_to_end() {
-    let (spy, _guard) = WarnSpy::install();
     let mut h = Harness::start(ServerConfig::default()).await;
     subscribed_on(&mut h, 1, av1()).await;
     let mut held = lease_all(&h);
@@ -335,13 +265,12 @@ async fn a_look_that_finds_the_pool_full_waits_for_a_report_to_end() {
 
     drop(pool.pop());
     assert_eq!(pv_of(&h.cov_notification().await), real(42.0));
-    let pool_refusals = spy
-        .warnings()
-        .iter()
-        .filter(|warning| warning.message.starts_with("255 confirmed COV"))
-        .count();
     assert_eq!(
-        pool_refusals, 0,
+        h.server
+            .cov_counters
+            .notifications_throttled_pool
+            .load(Relaxed),
+        0,
         "no reservation tried while the pool was full"
     );
 }
@@ -377,7 +306,7 @@ async fn a_slot_back_between_the_pass_and_the_wait_ends_the_wait() {
     assert_eq!(pv_of(&h.cov_notification().await), real(42.0));
 }
 
-fn av(instance: u32) -> ObjectIdentifier {
+pub(super) fn av(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_VALUE, instance).unwrap()
 }
 

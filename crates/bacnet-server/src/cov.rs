@@ -81,16 +81,12 @@ impl CovSubscriptionTable {
 
     /// Create a new COV subscription table with a custom policy and counters.
     pub fn with_policy(policy: CovPolicy, counters: Arc<AtomicCovCounters>) -> Self {
-        let revisits = Arc::new(CovRevisits::new(Arc::clone(&counters)));
-        let timed = timed_store::HistoryStore::new(
-            DEFAULT_TIMED_APDU_LENGTH,
-            Arc::clone(&counters),
-            Arc::clone(&revisits),
-        );
+        let timed =
+            timed_store::HistoryStore::new(DEFAULT_TIMED_APDU_LENGTH, Arc::clone(&counters));
         Self {
             core: CovTable::new(policy),
             wakes: BTreeMap::new(),
-            revisits,
+            revisits: Arc::new(CovRevisits::new(Arc::clone(&counters))),
             counters,
             in_flight: Arc::new(CovInFlightTracker::default()),
             dispatch_turn: 0,
@@ -103,11 +99,7 @@ impl CovSubscriptionTable {
     /// Bound each Multiple context's pending timestamped changes by what one
     /// notification of this maximum APDU length can carry.
     pub fn with_max_apdu_length(mut self, max_apdu_length: usize) -> Self {
-        self.timed = timed_store::HistoryStore::new(
-            max_apdu_length,
-            Arc::clone(&self.counters),
-            Arc::clone(&self.revisits),
-        );
+        self.timed = timed_store::HistoryStore::new(max_apdu_length, Arc::clone(&self.counters));
         self
     }
 
@@ -371,7 +363,7 @@ impl CovSubscriptionTable {
         );
         self.settle();
         // A listed reference replaces its old self, which waits no more for
-        // an invoke ID: the context's initial report covers it (#2661).
+        // room: the context's initial report covers it (#2661).
         if let Ok(accepted) = &accepted {
             self.revisits
                 .forget_owed(accepted.iter().map(CovSubscriptionSnapshot::key));
@@ -614,7 +606,8 @@ impl CovSubscriptionTable {
     }
 
     /// References owed a fresh evaluation: after an acknowledgment or a
-    /// fence, or once an invoke ID comes back (#2661).
+    /// fence, or once there is room for a report refused for want of it
+    /// (#2661, #2671).
     pub(crate) fn revisits(&self) -> &Arc<CovRevisits> {
         &self.revisits
     }
@@ -633,7 +626,7 @@ impl CovSubscriptionTable {
             return;
         }
         // A replacement reports for itself: its old self waits no more for
-        // an invoke ID (#2661).
+        // room (#2661).
         if !published.is_empty() {
             self.revisits
                 .forget_owed(published.iter().map(CovSubscriptionSnapshot::key));

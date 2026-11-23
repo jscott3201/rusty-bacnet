@@ -5,7 +5,6 @@
 //! carries every row once, in capture order.
 use super::cov_owed_id_tests::{lease_all, owed, owed_counts, pv_of, refusals};
 use super::cov_wire_test_support::*;
-use super::warn_spy::WarnSpy;
 use super::*;
 use bacnet_services::cov::SubscribeCOVPropertyRequest;
 
@@ -75,7 +74,6 @@ async fn an_untimestamped_context_refused_an_id_goes_once_one_comes_back() {
 /// follows its Ack.
 #[tokio::test(start_paused = true)]
 async fn a_timestamped_context_refused_an_id_keeps_its_rows() {
-    let (spy, _guard) = WarnSpy::install();
     let mut h = Harness::start(ServerConfig::default()).await;
     h.subscribe_with_delay(true, vec![(av1(), vec![(PV, true)])], 2)
         .await;
@@ -91,7 +89,7 @@ async fn a_timestamped_context_refused_an_id_keeps_its_rows() {
     tokio::time::sleep(Duration::from_secs(20)).await;
     h.no_notification().await;
     // The backstop tries at its spacing, not in a spin.
-    assert!(refusals(&spy) <= 12, "{} refusals", refusals(&spy));
+    assert!(refusals(&h) <= 12, "{} refusals", refusals(&h));
     assert_eq!(owed(&h).await.len(), 1);
 
     drop(held.pop());

@@ -43,8 +43,6 @@ struct Shared {
     /// Wakes [`HistoryStore::next_due`] when a deadline may have moved earlier.
     wake: Notify,
     counters: Arc<AtomicCovCounters>,
-    /// The table's revisits, reached here without the table's guard.
-    revisits: Arc<CovRevisits>,
 }
 
 /// Shared handle to the table's timestamped histories. Locked only for short
@@ -112,25 +110,14 @@ impl Drop for TimedGuard<'_> {
 }
 
 impl HistoryStore {
-    pub(super) fn new(
-        max_apdu_length: usize,
-        counters: Arc<AtomicCovCounters>,
-        revisits: Arc<CovRevisits>,
-    ) -> Self {
+    pub(super) fn new(max_apdu_length: usize, counters: Arc<AtomicCovCounters>) -> Self {
         Self {
             shared: Arc::new(Shared {
                 histories: Mutex::new(TimedHistories::new(max_apdu_length)),
                 wake: Notify::new(),
                 counters,
-                revisits,
             }),
         }
-    }
-
-    /// The table's revisits, for a fanout that holds no table guard and
-    /// mustn't await one (#2661).
-    pub(crate) fn revisits(&self) -> &CovRevisits {
-        &self.shared.revisits
     }
 
     pub(crate) fn lock(&self) -> TimedGuard<'_> {

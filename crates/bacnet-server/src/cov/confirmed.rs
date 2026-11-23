@@ -1,10 +1,11 @@
 //! The server's side of a confirmed COV report (#896): the worker's wake-up
 //! for a fence, and the queues of references owed a fresh evaluation, now
-//! or once an invoke ID comes back (#2661). The flight itself is plain
-//! state in the table; `flight.rs` has the policy.
+//! or once there is room for their report: an invoke ID (#2661), a slot of
+//! the in-flight pool and one of their peer's in-flight slots (#2671). The
+//! flight itself is plain state in the table; `flight.rs` has the policy.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use bacnet_device_core::cov::{CovSubscriptionKey, MultipleContextKey};
@@ -50,16 +51,22 @@ impl ConfirmedFlight {
 /// out through the usual path, which reports only what differs from each
 /// baseline.
 ///
-/// Beside them wait the references whose confirmed report found no invoke
-/// ID free (#2661), each looked at again once IDs come back, oldest first,
-/// and only as many at a time as the IDs and in-flight slots free let go,
-/// so a wait at a limit never spins.
+/// Beside them wait the references whose confirmed report found no room:
+/// no invoke ID free (#2661), or its peer at its in-flight limit or the
+/// pool of in-flight slots full (#2671). Each is looked at again once room
+/// comes back, oldest first, and only as many at a time as the room free
+/// lets go, so a wait at a limit never spins.
 #[derive(Debug, Default)]
 pub(crate) struct CovRevisits {
     pending: Mutex<Pending>,
     wake: Notify,
-    /// Wakes the wait for invoke IDs when a reference is owed one.
+    /// Wakes the wait for room when a reference is owed a look.
     owed_wake: Notify,
+    /// How many references hold a place, waiting or being looked at,
+    /// stored under the lock after each change. A caller holding the
+    /// table's guard reads it to skip the lock while none does: every place
+    /// is made under a table guard, so a zero read there is never stale.
+    holding: AtomicUsize,
     counters: Arc<AtomicCovCounters>,
 }
 
@@ -68,17 +75,17 @@ pub(crate) struct CovRevisits {
 struct Pending {
     /// References owed a look now.
     now: HashSet<CovSubscriptionKey>,
-    /// References owed a look once an invoke ID comes back.
-    owed: OwedIds,
+    /// References owed a look once there is room.
+    owed: Owed,
 }
 
-/// References whose confirmed report found no invoke ID free, in the order
-/// each was first owed one (#2661). A reference holds one place however
-/// often it is refused, and keeps it through a look that is refused again,
-/// as when other work takes the freed ID first or its peer's in-flight
-/// slots are full.
+/// References whose confirmed report found no room, in the order each was
+/// first owed a look. A reference holds one place however often it is
+/// refused, whichever limit refused it, so they are at most as many as the
+/// subscriptions; and it keeps its place through a look that is refused
+/// again, as when other work takes the freed room first.
 #[derive(Debug, Default)]
-struct OwedIds {
+struct Owed {
     /// The references waiting, by place.
     queue: BTreeMap<u64, CovSubscriptionKey>,
     /// The place of each reference waiting or being looked at.
@@ -86,8 +93,10 @@ struct OwedIds {
     next: u64,
 }
 
-impl OwedIds {
-    /// Queue `key` in its place; whether it wasn't waiting already.
+impl Owed {
+    /// Queue `key` in its place: its old one while it waits or is being
+    /// looked at, else a new one at the back. Whether it wasn't waiting
+    /// already.
     fn owe(&mut self, key: CovSubscriptionKey) -> bool {
         let place = match self.places.get(&key) {
             Some(&place) => place,
@@ -105,15 +114,6 @@ impl OwedIds {
             }
             std::collections::btree_map::Entry::Occupied(_) => false,
         }
-    }
-
-    /// Queue `key` again in its place if it has one and is out of the
-    /// queue, being looked at. Whether it was queued.
-    fn requeue(&mut self, key: &CovSubscriptionKey) -> bool {
-        self.places
-            .get(key)
-            .is_some_and(|place| !self.queue.contains_key(place))
-            && self.owe(key.clone())
     }
 
     /// Take the references `admit` lets go, oldest first, for a look; each
@@ -180,6 +180,17 @@ impl CovRevisits {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Store how many references hold a place, under the lock.
+    fn publish(&self, pending: &Pending) {
+        self.holding
+            .store(pending.owed.places.len(), Ordering::Release);
+    }
+
+    /// Whether any reference may hold a place; see [`Self::holding`].
+    fn any_holding(&self) -> bool {
+        self.holding.load(Ordering::Acquire) != 0
+    }
+
     /// Queue references for evaluation and wake the drain.
     pub(crate) fn request(&self, keys: impl IntoIterator<Item = CovSubscriptionKey>) {
         let mut keys = keys.into_iter().peekable();
@@ -208,93 +219,109 @@ impl CovRevisits {
         }
     }
 
-    /// Owe `keys`, whose confirmed report found no invoke ID free, a look
-    /// once one comes back (#2661), and wake the wait for one. Whether any
-    /// wasn't waiting already.
+    /// Owe `keys`, whose confirmed report found no room (an invoke ID, a
+    /// slot of the pool or one of its peer's), a look once there is some,
+    /// and wake the wait for room. A reference already waiting, or being
+    /// looked at, keeps its place. Whether any wasn't waiting already.
     pub(crate) fn owe(&self, keys: impl IntoIterator<Item = CovSubscriptionKey>) -> bool {
         let mut pending = self.pending();
         let mut added = 0;
         for key in keys {
             added += usize::from(pending.owed.owe(key));
         }
+        self.publish(&pending);
         drop(pending);
-        self.count_queued(added)
-    }
-
-    /// `key`'s look met an in-flight limit: if it was waiting for an
-    /// invoke ID, it keeps its place, looked at again once there is room.
-    /// A first send is left as the limit left it (#533).
-    pub(crate) fn keep_waiting(&self, key: &CovSubscriptionKey) {
-        let again = self.pending().owed.requeue(key);
-        self.count_queued(usize::from(again));
-    }
-
-    /// [`Self::keep_waiting`] for the references of `context` being looked
-    /// at, without listing the context's: usually none waits, and the
-    /// check is the lock alone.
-    pub(crate) fn keep_context_waiting(&self, context: &MultipleContextKey) {
-        let mut pending = self.pending();
-        if pending.owed.places.is_empty() {
-            return;
-        }
-        let looked_at: Vec<_> = pending
-            .owed
-            .places
-            .keys()
-            .filter(|key| key.multiple_context() == Some(context))
-            .cloned()
-            .collect();
-        let again = looked_at
-            .iter()
-            .filter(|key| pending.owed.requeue(key))
-            .count();
-        drop(pending);
-        self.count_queued(again);
-    }
-
-    /// Count `added` references queued, and wake the wait for room.
-    fn count_queued(&self, added: usize) -> bool {
-        count(&self.counters.owed_id_revisits_queued, added);
+        count(&self.counters.owed_revisits_queued, added);
         if added != 0 {
             self.owed_wake.notify_one();
         }
         added != 0
     }
 
-    /// Completes once a reference is owed an invoke ID after this is made,
-    /// or at once if one was since the last wait.
+    /// Completes once a reference is owed a look after this is made, or at
+    /// once if one was since the last wait.
     pub(crate) fn owed_notified(&self) -> Notified<'_> {
         self.owed_wake.notified()
     }
 
-    /// Whether any reference waits for an invoke ID.
-    pub(crate) fn owes_invoke_id(&self) -> bool {
+    /// Whether any reference waits for room.
+    pub(crate) fn owes_any(&self) -> bool {
         !self.pending().owed.queue.is_empty()
     }
 
-    /// Take the references waiting for an invoke ID that `admit` lets go,
-    /// oldest first, for a look; [`Self::looked`] ends it. Those held back
-    /// keep their places.
+    /// Take the references waiting for room that `admit` lets go, oldest
+    /// first, for a look; [`Self::looked`] ends it. Those held back keep
+    /// their places.
     pub(crate) fn take_owed(
         &self,
         admit: impl FnMut(&CovSubscriptionKey) -> bool,
     ) -> Vec<CovSubscriptionKey> {
         let keys = self.pending().owed.take(admit);
-        count(&self.counters.owed_id_revisits_delivered, keys.len());
+        count(&self.counters.owed_revisits_delivered, keys.len());
         keys
     }
 
     /// The look at `keys`, which [`Self::take_owed`] gave, is over: those
-    /// it queued again, refused for want of room, wait in their old places;
-    /// the rest leave. Whether any was queued again.
+    /// it owed again, refused for want of room, wait in their old places;
+    /// the rest leave. Whether any was owed again.
     pub(crate) fn looked(&self, keys: &[CovSubscriptionKey]) -> bool {
-        self.pending().owed.looked(keys)
+        let mut pending = self.pending();
+        let again = pending.owed.looked(keys);
+        self.publish(&pending);
+        again
     }
 
-    /// The references waiting for an invoke ID, oldest first.
+    /// Confirmed reports began for `keys` without their looks, a fresh
+    /// fanout or a follow-up having found room first: their waits end, and
+    /// each report's Ack owes its coordinate the next look (#2671). Without
+    /// this a stale place would spend a pass's room and could jump a later
+    /// waiter. Neither work nor the lock while no reference holds a place.
+    pub(crate) fn sent<'a>(&self, keys: impl IntoIterator<Item = &'a CovSubscriptionKey>) {
+        if !self.any_holding() {
+            return;
+        }
+        let mut pending = self.pending();
+        let left = keys
+            .into_iter()
+            .filter(|key| pending.owed.forget(key))
+            .count();
+        self.publish(&pending);
+        drop(pending);
+        count(&self.counters.owed_revisits_delivered, left);
+    }
+
+    /// [`Self::sent`] for every reference of `context`, whose report
+    /// began: one coordinate, so its Ack owes them all the next look. The
+    /// places are scanned, not the context's references listed, and only
+    /// while some reference holds one.
+    pub(crate) fn context_sent(&self, context: &MultipleContextKey) {
+        if !self.any_holding() {
+            return;
+        }
+        let mut pending = self.pending();
+        let keys: Vec<_> = pending
+            .owed
+            .places
+            .keys()
+            .filter(|key| key.multiple_context() == Some(context))
+            .cloned()
+            .collect();
+        let left = keys.iter().filter(|key| pending.owed.forget(key)).count();
+        self.publish(&pending);
+        drop(pending);
+        count(&self.counters.owed_revisits_delivered, left);
+    }
+
+    /// The references waiting for room, oldest first.
     #[cfg(test)]
     pub(crate) fn owed(&self) -> Vec<CovSubscriptionKey> {
         self.pending().owed.queue.values().cloned().collect()
+    }
+
+    /// How many references hold a place, waiting or being looked at.
+    #[cfg(test)]
+    pub(crate) fn owed_places(&self) -> usize {
+        self.pending().owed.places.len()
     }
 
     /// Queued references, without taking them.
@@ -303,31 +330,43 @@ impl CovRevisits {
         self.pending().now.clone()
     }
 
-    /// Drop a removed reference's pending evaluation, now or for an ID.
+    /// Drop a removed reference's pending evaluation, now or for room.
     pub(super) fn forget(&self, key: &CovSubscriptionKey) {
         let mut pending = self.pending();
         pending.now.remove(key);
         let dropped = pending.owed.forget(key);
+        self.publish(&pending);
         drop(pending);
-        count(
-            &self.counters.owed_id_revisits_dropped,
-            usize::from(dropped),
-        );
+        count(&self.counters.owed_revisits_dropped, usize::from(dropped));
     }
 
-    /// Drop the waits for an invoke ID of references a subscription just
-    /// replaced: each reports for itself.
+    /// Drop the waits for room of references a subscription just replaced:
+    /// each reports for itself.
     pub(super) fn forget_owed<'a>(&self, keys: impl IntoIterator<Item = &'a CovSubscriptionKey>) {
-        let mut pending = self.pending();
-        if pending.owed.places.is_empty() {
+        // Every subscription comes here: no lock while none waits.
+        if !self.any_holding() {
             return;
         }
+        let mut pending = self.pending();
         let dropped = keys
             .into_iter()
             .filter(|key| pending.owed.forget(key))
             .count();
+        self.publish(&pending);
         drop(pending);
-        count(&self.counters.owed_id_revisits_dropped, dropped);
+        count(&self.counters.owed_revisits_dropped, dropped);
+    }
+
+    /// The server stopped and nothing will look again: drop every pending
+    /// evaluation, now or for room, and count the waits dropped.
+    pub(crate) fn clear(&self) {
+        let mut pending = self.pending();
+        pending.now.clear();
+        let dropped = pending.owed.queue.len();
+        pending.owed = Owed::default();
+        self.publish(&pending);
+        drop(pending);
+        count(&self.counters.owed_revisits_dropped, dropped);
     }
 }
 

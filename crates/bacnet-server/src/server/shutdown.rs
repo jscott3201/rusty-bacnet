@@ -163,6 +163,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         stop_producer(&mut self.binary_lighting_operation_task).await;
         stop_producer(&mut self.cov_purge_task).await;
         stop_producer(&mut self.cov_revisit_task).await;
+        // Nothing looks at a reference owed room any more: its wait goes
+        // with the task (#2671).
+        self.cov_table.read().await.revisits().clear();
         // A local write dropped while the guard was taken lets go of its
         // stage from a task of its own (#2493). Let those finish, so none
         // holds the guard as the objects settle (#2495), but for a bounded

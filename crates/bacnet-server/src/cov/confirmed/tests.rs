@@ -426,9 +426,10 @@ async fn revisits_drain_once_and_forget_removed_references() {
     assert_eq!(revisits.next().await, vec![a.key().clone()]);
 }
 
-/// References owed an invoke ID (#2661) wait once each, in the order first
+/// References owed room (#2661, #2671) wait once each, in the order first
 /// owed; one refused again during its look keeps its place, one served
-/// gives it up, and one removed while it waits is dropped and counted.
+/// gives it up, one removed while it waits is dropped and counted, and a
+/// stop drops every wait.
 #[test]
 fn owed_references_keep_their_places() {
     use std::sync::atomic::Ordering::Relaxed;
@@ -466,25 +467,34 @@ fn owed_references_keep_their_places() {
 
     // `c` can't go (its peer is full, say): those behind it still do, and
     // it keeps the head. Refused an in-flight slot during its look, `b`
-    // keeps its place too; a first send (`d`, served) is not queued.
+    // keeps its place too; `d`, served and then refused by a later
+    // fanout, waits at the back (#2671).
     let looked = revisits.take_owed(|key| key != &c && key != &a);
     assert_eq!(looked, [b.clone(), d.clone()]);
-    revisits.keep_waiting(&b);
+    assert!(revisits.owe([b.clone()]));
     revisits.looked(&looked);
-    revisits.keep_waiting(&d);
-    assert_eq!(revisits.owed(), [c.clone(), b.clone(), a.clone()]);
+    assert!(revisits.owe([d.clone()]));
+    assert_eq!(
+        revisits.owed(),
+        [c.clone(), b.clone(), a.clone(), d.clone()]
+    );
 
     assert!(table.unsubscribe(&b));
-    assert_eq!(revisits.owed(), [c, a]);
+    assert_eq!(revisits.owed(), [c, a, d]);
     let counters = table.counters();
-    assert_eq!(counters.owed_id_revisits_queued.load(Relaxed), 7);
-    assert_eq!(counters.owed_id_revisits_delivered.load(Relaxed), 4);
-    assert_eq!(counters.owed_id_revisits_dropped.load(Relaxed), 1);
+    assert_eq!(counters.owed_revisits_queued.load(Relaxed), 8);
+    assert_eq!(counters.owed_revisits_delivered.load(Relaxed), 4);
+    assert_eq!(counters.owed_revisits_dropped.load(Relaxed), 1);
     assert_eq!(
         revisits.take_owed(|_| false),
         Vec::new(),
         "no room, no look"
     );
+
+    revisits.clear();
+    assert!(revisits.owed().is_empty());
+    assert_eq!(revisits.owed_places(), 0);
+    assert_eq!(counters.owed_revisits_dropped.load(Relaxed), 4);
 }
 
 #[tokio::test(start_paused = true)]
