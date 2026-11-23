@@ -255,10 +255,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let (runner, invoke_id) = self.runner();
         let station = Station::of(named);
         let data = Bytes::copy_from_slice(service_data);
+        // The node runs the request in a task of its own: its frames carry
+        // the data attributes its caller sent it with (#2723).
+        let attributes = super::data_attributes::scoped();
         let run: Run = Box::pin(async move {
-            let result = runner
-                .confirmed_request(&station, service_choice, &data)
-                .await;
+            let request = runner.confirmed_request(&station, service_choice, &data);
+            let result = super::data_attributes::within(attributes, request).await;
             drop(pace);
             (result, invoke_id.get().copied())
         });
@@ -335,8 +337,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             routed_path_limits: Arc::clone(&self.routed_path_limits),
             group_source_request_drops: Arc::clone(&self.group_source_request_drops),
             pacer: Arc::new(pacer),
-            // The request's frames carry its client's attributes.
-            data_attributes: self.data_attributes.clone(),
         };
         (runner, invoke_id)
     }

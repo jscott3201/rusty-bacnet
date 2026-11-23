@@ -123,8 +123,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// would make it a local broadcast (Clause 6.3, #1479); an empty MAC in
     /// an address; and on another network a network of 0 or 65535 or a MAC
     /// longer than [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) octets, which
-    /// no router carries to one station, a MAC that is that network's
-    /// broadcast ([`RemoteBroadcast`], #2709), or a
+    /// no router carries to one station, a MAC that is a broadcast or a
+    /// group on that network ([`RemoteBroadcast`], #2709), or a
     /// named router that is a broadcast or group address on this link
     /// (#2722). [`Error::UnknownDevice`] for a remote address with no named
     /// router and no row in the discovery table, since the row is the route.
@@ -689,16 +689,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// Send one frame of a confirmed request (its first, a retry or a
-    /// segment) with this client's data attributes
-    /// ([`ClientOptions::with_data_attributes`]): to the station's MAC, to
-    /// its router, or by one broadcast on this link for the form that names
-    /// no router.
+    /// segment) with the data attributes it was made with
+    /// ([`BACnetClient::with_data_attributes`]), none by default: to the
+    /// station's MAC, to its router, or by one broadcast on this link for
+    /// the form that names no router.
     pub(super) async fn send_confirmed_target_apdu(
         &self,
         target: ConfirmedTarget<'_>,
         apdu: &[u8],
     ) -> Result<(), Error> {
-        let (priority, attributes) = (NetworkPriority::Normal, &*self.data_attributes);
+        let scoped = super::data_attributes::scoped();
+        let (priority, attributes) = (NetworkPriority::Normal, scoped.as_deref().unwrap_or(&[]));
         match target {
             ConfirmedTarget::Local { mac } => {
                 self.network

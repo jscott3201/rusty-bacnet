@@ -48,11 +48,12 @@ impl DeviceAddress {
     /// Network 65535 (every network), an empty MAC (a broadcast), a MAC
     /// longer than [`BACnetAddress::MAX_MAC_LEN`] octets, a local MAC of a
     /// length the target grammar has no form for (one of 1, 3 or 6
-    /// octets), and the broadcast forms the low-level client refuses a
-    /// confirmed request to ([`RemoteBroadcast`]: the MS/TP broadcast
-    /// `0xFF`, three octets of `0xFF` and six) name no one station, on this
-    /// network or a remote one (#2709). The grammar has no form for an
-    /// ARCNET station 255: the low-level client's [`Station::arcnet`]
+    /// octets), and the broadcast and group forms the low-level client
+    /// refuses a confirmed request to ([`RemoteBroadcast`]: the MS/TP
+    /// broadcast `0xFF`, two octets beginning `0x00` or `0xFF`, three
+    /// octets of `0xFF`, and six beginning with four) name no one station,
+    /// on this network or a remote one (#2709). The grammar has no form for
+    /// an ARCNET station 255: the low-level client's [`Station::arcnet`]
     /// reaches one.
     ///
     /// [`RemoteBroadcast`]: bacnet_client::client::RemoteBroadcast
@@ -76,7 +77,7 @@ impl DeviceAddress {
         }
         if let Some(form) = bacnet_client::client::RemoteBroadcast::of(mac, false) {
             return Err(format!(
-                "MAC 0x{} is a broadcast, not a station: {form}",
+                "MAC 0x{} is {form}, not a station",
                 crate::octets::hex_upper(mac)
             ));
         }

@@ -164,21 +164,23 @@ mod tests {
         assert_eq!(misses.get(&proxied, start), Known::default());
         misses.forget(&silent);
 
+        // Two-octet stations, LonTalk unicasts: a first octet of 0x00 or
+        // 0xFF would be a broadcast or a group, no station (#2709).
+        let mac = |n: usize| (0x0100 + u16::try_from(n).unwrap()).to_be_bytes();
         for n in 0..MISS_ROWS {
             let later = start + Duration::from_millis(n as u64);
-            let mac = u16::try_from(n).unwrap().to_be_bytes();
-            misses.answered_network_form(station(7, &mac), later);
+            misses.answered_network_form(station(7, &mac(n)), later);
         }
         let newest = start + Duration::from_secs(1);
         // Three octets, so none of the two-octet stations above; not all
         // ones, which is no station (#2709).
         misses.answered_network_form(station(7, &[0x3f, 0xff, 0xff]), newest);
         assert_eq!(
-            misses.get(&station(7, &[0, 0]), newest),
+            misses.get(&station(7, &mac(0)), newest),
             Known::default(),
             "the oldest went"
         );
-        assert_eq!(misses.get(&station(7, &[0, 1]), newest), NETWORK);
+        assert_eq!(misses.get(&station(7, &mac(1)), newest), NETWORK);
         assert_eq!(misses.rows.len(), MISS_ROWS);
         // Expired silent misses go before any live row.
         misses.went_silent(silent.clone(), newest);

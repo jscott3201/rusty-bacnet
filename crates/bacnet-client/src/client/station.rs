@@ -28,9 +28,10 @@ use bacnet_types::constructed::BACnetAddress;
 /// the ARCNET mark ([`Station::arcnet`]). The four forms are all there are,
 /// so a caller can match every one.
 ///
-/// A remote station's MAC is checked against the broadcast forms a router
-/// delivers to every station of its network ([`RemoteBroadcast`]): a
-/// confirmed request to one is refused before anything is sent (#2709).
+/// A remote station's MAC is checked against the forms a router delivers
+/// to every station of its network, or to a group of them
+/// ([`RemoteBroadcast`]): a confirmed request to one is refused before
+/// anything is sent (#2709).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Station {
     /// A station on this link, at its MAC.

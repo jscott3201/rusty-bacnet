@@ -20,9 +20,11 @@ use super::*;
 /// `"aa:bb:..."`, or one octet in decimal as `"N"` or `"mstp:N"` (0 to 254,
 /// so `RoutedTarget(5, "10") == RoutedTarget(5, b"\x0a")`). The string
 /// forms refuse 255, MS/TP's broadcast. A confirmed call refuses an address
-/// that is a broadcast on its network, before anything is sent (#2709):
-/// `b"\xff"` (MS/TP's broadcast), three octets of `0xFF` (no device's VMAC)
-/// and six (Ethernet's and BACnet/SC's broadcast). `arcnet=True` says the
+/// that is a broadcast or a group on its network, before anything is sent
+/// (#2709): `b"\xff"` (MS/TP's broadcast), two octets beginning `0x00` or
+/// `0xFF` (LonTalk's broadcast and groups), three octets of `0xFF` (no
+/// device's VMAC) and six beginning with four (the B/IP limited broadcast at
+/// any port, an Ethernet group, BACnet/SC's broadcast). `arcnet=True` says the
 /// network is ARCNET, whose broadcast is 0 and where 255 is a station: a
 /// call then goes to `b"\xff"` and refuses `b"\x00"`; it takes a one-octet
 /// address only. `router`, when given, is the next hop's address on the

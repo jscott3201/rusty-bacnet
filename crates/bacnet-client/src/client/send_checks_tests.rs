@@ -2,35 +2,38 @@
 //! refused router (#2722).
 use super::*;
 
+/// Each form `RemoteBroadcast` names (its own tests are bacnet-npdu's) is
+/// refused, and a station's MAC of each length goes.
 #[test]
-fn only_the_all_ones_forms_of_one_three_and_six_octets_are_remote_broadcasts() {
-    use RemoteBroadcast::*;
-    let cases: [(&[u8], bool, Option<RemoteBroadcast>); 14] = [
-        (&[0xFF], false, Some(MstpBroadcast)),
-        // Marked ARCNET: 255 is a station and 0 the broadcast.
-        (&[0xFF], true, None),
-        (&[0x00], true, Some(ArcnetBroadcast)),
-        (&[0x00], false, None),
-        (&[0xFE], false, None),
-        (&[0xFF, 0xFF, 0xFF], false, Some(NoVmac)),
-        (&[0xFF, 0xFF, 0xFF], true, Some(NoVmac)),
-        (&[0x3F, 0xFF, 0xFF], false, None),
-        (&[0xFF; 6], false, Some(SixOctetBroadcast)),
-        (&[0xFF; 6], true, Some(SixOctetBroadcast)),
-        (&[0xFF, 0xFF, 0xFF, 0xFF, 0xBA, 0xC0], false, None),
-        // Two and seven octets (LonTalk) and other lengths: one station.
-        (&[0xFF, 0xFF], false, None),
-        (&[0xFF; 7], false, None),
-        (&[0xFF; 18], false, None),
+fn a_confirmed_request_refuses_exactly_the_remote_broadcast_forms() {
+    let refused: [(&[u8], bool); 9] = [
+        (&[0xFF], false),
+        (&[0x00], true),
+        (&[0x00, 0x05], false),
+        (&[0xFF, 0x07], false),
+        (&[0xFF, 0xFF, 0xFF], false),
+        (&[0xFF; 6], false),
+        (&[0xFF, 0xFF, 0xFF, 0xFF, 0xBA, 0xC0], false),
+        (&[0xFF, 0xFF, 0xFF, 0xFF, 0xBA, 0xC0], true),
+        (&[0x00, 0x05], true),
     ];
-    for (mac, arcnet, form) in cases {
-        assert_eq!(
-            RemoteBroadcast::of(mac, arcnet),
-            form,
-            "{mac:02X?} arcnet {arcnet}"
-        );
+    for (mac, arcnet) in refused {
         let checked = check_remote_station(7, mac, arcnet);
-        assert_eq!(checked.is_err(), form.is_some(), "{mac:02X?}: {checked:?}");
+        assert!(checked.is_err(), "{mac:02X?} arcnet {arcnet}");
+    }
+    let stations: [(&[u8], bool); 8] = [
+        (&[0xFF], true),
+        (&[0x00], false),
+        (&[0x01, 0x05], false),
+        (&[0x3F, 0xFF, 0xFF], false),
+        (&[0xFF, 0xFF, 0xFF, 0xFE, 0xBA, 0xC0], false),
+        (&[192, 168, 1, 255, 0xBA, 0xC0], false),
+        (&[0xFF; 7], false),
+        (&[0xFF; 18], false),
+    ];
+    for (mac, arcnet) in stations {
+        let checked = check_remote_station(7, mac, arcnet);
+        assert!(checked.is_ok(), "{mac:02X?} arcnet {arcnet}: {checked:?}");
     }
 }
 
@@ -47,13 +50,30 @@ fn a_remote_broadcast_refusal_says_which_form_and_what_to_use() {
     );
     assert!(text.contains("mark the station ARCNET"), "{text}");
     assert!(text.contains("only an unconfirmed request"), "{text}");
-    let Err(Error::Encoding(text)) = check_remote_station(9, &[0xFF; 6], false) else {
-        panic!("refused");
-    };
-    assert!(
-        text.contains("255.255.255.255:65535 on BACnet/IP"),
-        "{text}"
-    );
+    let decoded: [(u16, &[u8], &str); 3] = [
+        (
+            9,
+            &[0xFF, 0xFF, 0xFF, 0xFF, 0xBA, 0xC0],
+            "9:0xFFFFFFFFBAC0 on network 9 is a broadcast on every six-octet link: \
+             255.255.255.255:47808, the limited broadcast, on BACnet/IP",
+        ),
+        (
+            4,
+            &[0x00, 0x05],
+            "4:0x0005 on network 4 is a LonTalk broadcast (subnet 5)",
+        ),
+        (
+            4,
+            &[0xFF, 0x07],
+            "4:0xFF07 on network 4 is LonTalk group 7, a multicast",
+        ),
+    ];
+    for (network, mac, expected) in decoded {
+        let Err(Error::Encoding(text)) = check_remote_station(network, mac, false) else {
+            panic!("refused");
+        };
+        assert!(text.contains(expected), "{text}");
+    }
 }
 
 #[test]

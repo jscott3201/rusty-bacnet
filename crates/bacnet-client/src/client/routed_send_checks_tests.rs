@@ -1,8 +1,8 @@
 //! The checks on a routed confirmed request, before anything is sent: a
 //! router that is a broadcast or group address on this link (#2722), and a
-//! remote MAC that is its network's broadcast (#2709); the form that reaches
-//! a network by one local broadcast while no router is known, and the data
-//! attributes a client's confirmed requests carry (#2723).
+//! remote MAC that is its network's broadcast (#2709); and the form that
+//! reaches a network by one local broadcast while no router is known
+//! (#2723).
 //!
 //! Each link's own group rule decides what a router may be: the client asks
 //! the transport. What was sent is read from the shared test transport's
@@ -13,9 +13,7 @@ use bacnet_encoding::apdu::{Apdu, ComplexAck, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
 use bacnet_transport::bip::BipTransport;
 use bacnet_transport::mstp::{LoopbackSerial, MstpTransport};
-use bacnet_transport::port::{
-    DataAttribute, GroupDestinations, ReceivedNpdu, TransportPort, TransportProvenance,
-};
+use bacnet_transport::port::{GroupDestinations, ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_transport::sc::{LoopbackWebSocket, ScTransport};
 use bacnet_transport::test_transport::{SendLog, TestTransport};
 use bacnet_types::MacAddr;
@@ -249,9 +247,15 @@ async fn a_confirmed_request_to_a_remote_broadcast_form_is_refused_in_every_form
             "station 255, the broadcast of an MS/TP network",
         ),
         (&[0xFF; 3][..], "VMAC 0xFFFFFF"),
+        (&[0x00, 0x05][..], "a LonTalk broadcast (subnet 5)"),
+        (&[0xFF, 0x07][..], "LonTalk group 7, a multicast"),
         (
             &[0xFF; 6][..],
-            "FF:FF:FF:FF:FF:FF, a broadcast on every six-octet link",
+            "5:0xFFFFFFFFFFFF on network 5 is a broadcast on every six-octet link",
+        ),
+        (
+            &[0xFF, 0xFF, 0xFF, 0xFF, 0xBA, 0xC0][..],
+            "255.255.255.255:47808, the limited broadcast",
         ),
     ] {
         let address = BACnetAddress {
@@ -501,47 +505,5 @@ async fn a_request_by_local_broadcast_to_this_network_goes_to_the_station() {
     assert!(!frame.broadcast);
     assert_eq!(frame.mac.as_slice(), STATION);
     assert!(frame.decode_npdu().destination.is_none());
-    client.stop().await.unwrap();
-}
-
-/// Every frame of a confirmed request carries the client's data attributes:
-/// to a local station, through a router and by local broadcast, retries
-/// included; an unconfirmed request carries none (#2723).
-#[tokio::test(start_paused = true)]
-async fn the_clients_data_attributes_ride_every_confirmed_frame() {
-    let attribute = DataAttribute {
-        option_type: 1,
-        must_understand: true,
-        data: Vec::new(),
-    };
-    let options = ClientOptions::default().with_data_attributes(vec![attribute.clone()]);
-    let (mut client, sent, _inbound) =
-        client_on(DataLink::Sc, &[0x02; 6], no_groups(), options, 1).await;
-    for to in [
-        Station::local(&[0x02, 0, 0, 0, 0, 9]),
-        Station::routed(&[0x02, 0, 0, 0, 0, 9], NETWORK, STATION),
-        Station::routed_via_local_broadcast(NETWORK, STATION),
-    ] {
-        let result = client.confirmed_request(&to, READ, &[0x0C]).await;
-        assert!(timed_out(&result), "{to:?}: {result:?}");
-    }
-    let frames = sent.take();
-    assert_eq!(frames.len(), 6, "each request and its retry");
-    for frame in &frames {
-        assert_eq!(frame.attributes, std::slice::from_ref(&attribute));
-    }
-    client
-        .unconfirmed_request(
-            &[0x02, 0, 0, 0, 0, 9],
-            UnconfirmedServiceChoice::WHO_IS,
-            &[],
-        )
-        .await
-        .unwrap();
-    assert!(
-        sent.frames()
-            .iter()
-            .all(|frame| frame.attributes.is_empty())
-    );
     client.stop().await.unwrap();
 }

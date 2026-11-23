@@ -10747,12 +10747,15 @@ naming the address in its link's form (#2722, #2709):
   the BACnet/SC broadcast VMAC): it would reach every router at once. Name
   the router's own address, or use `RoutedViaLocalBroadcast`, which names
   none;
-- a station MAC that is its network's broadcast, read from its length since
-  the far link is unknown: one octet `0xFF` (MS/TP's broadcast), three
-  octets of `0xFF` (no device's VMAC) or six (Ethernet's and BACnet/SC's
-  broadcast, a B/IP broadcast). `RemoteBroadcast::of` names the form. On an
-  ARCNET network 255 is a station and 0 the broadcast: mark the station with
-  `.arcnet()` to send to `0xFF` (and have `0x00` refused).
+- a station MAC that is a broadcast or a group on its network, read from its
+  length since the far link is unknown: one octet `0xFF` (MS/TP's
+  broadcast), two octets beginning `0x00` or `0xFF` (a LonTalk broadcast or
+  group), three octets of `0xFF` (no device's VMAC), or six beginning with
+  four of `0xFF` (the B/IP limited broadcast at any port, an Ethernet group
+  MAC, BACnet/SC's broadcast). `RemoteBroadcast::of`, in `bacnet-npdu` and
+  re-exported here, names the form. On an ARCNET network 255 is a station
+  and 0 the broadcast: mark the station with `.arcnet()` to send to `0xFF`
+  (and have `0x00` refused).
 
 Unconfirmed requests are left alone: a remote broadcast carries those, and
 `Broadcast::Network(n)` sends one. `Station::check_confirmed` makes the
@@ -14096,11 +14099,15 @@ session.stop().await?; // stops the server, then the link
   COLDSTART, or the server's stop or drop. An operator's own tool may start a client
   outside it with `ClientOptions::with_node_dcc_override(true)`, an override
   of Clause 16.1 the node warns about in its log.
-- `client_with(ClientOptions::default().with_data_attributes(attributes))`
-  gives a client whose confirmed requests carry those data attributes on
-  every frame (on BACnet/SC, Annex AB header data options); unconfirmed
-  requests and answers carry none. Each client takes its own, so a session
-  serves several sets at once (#2723).
+- `client.with_data_attributes(attributes)` is a view of the client whose
+  confirmed requests carry those data attributes on every frame, the first,
+  each retry and each segment (on BACnet/SC, Annex AB header data options):
+  its `read_property`, `read_property_multiple`, `read_range` and
+  `confirmed_request`, and `run(|client| ...)` for any other call. Each call
+  takes its own; requests made without a view, unconfirmed requests and the
+  client's acknowledgments (a SegmentACK for a segmented answer, an Abort)
+  carry none. A source-audited request takes its attributes into the
+  node's task (#2723).
 - A segmented Complex-ACK, or a Segment-ACK from an answering device, that
   answers no request of the node's goes to the full client, which aborts it
   as an idle client does (Clause 5.4.4.1); it takes at most half of the
@@ -14219,7 +14226,7 @@ concrete references, ReadRange and a WriteProperty to a direct B/IP peer.
 | `read_property`, `read_property_multiple`, `read_range`, `read_range_with`, `read_log_page` taking a MAC | the client's calls of the same names, whose destination is any `ToStation`: a MAC slice or array, a `MacAddr`, a `BACnetAddress` or a `Station` |
 | the `_with_destination` forms with `EndpointApduDestination::Routed { router_mac, destination_network, destination_mac }` | the same call with `Station::routed(&router_mac, network, &mac)`, or `Station::remote(network, &mac)` to use the router the station's row in the discovery table names |
 | `EndpointApduDestination::RoutedViaLocalBroadcast { destination_network, destination_mac }` | the same call with `Station::routed_via_local_broadcast(network, &mac)`: one broadcast on the link whose NPDU names the station, while no router to its network is known (#2723) |
-| the `data_attributes` argument | `ClientOptions::with_data_attributes(attributes)` on `client_with(options)`: every frame of that client's confirmed requests carries them; start one client per set of attributes (#2723) |
+| the `data_attributes` argument of `read_property_with_destination`, `read_property_multiple_with_destination` and `read_range_with_destination` | the same call on `client.with_data_attributes(attributes)`: every frame of that request, retries and segments included, carries them (#2723) |
 | the `bacnet_endpoint::EndpointApduDestination` re-export | `bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination`, where the type lives |
 | `write_property(mac, WritePropertyRequest, Commandability)`, `roles::Commandability` | `write_property(to, object, property, index, value, priority)`, on every link and through routers. A write sent with a priority is audited as a command at that priority; one without names none |
 | `LeaseHolder::EndpointRequester`, `OutboundTransactionCoordinator::mark_endpoint_requester`, `EndpointEgress::admit_owned_apdu` (hidden) | `LeaseHolder::Client` |

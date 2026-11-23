@@ -8000,11 +8000,13 @@ first three arguments in that order, positionally or by keyword, and
 - `arcnet`: `True` marks the station's network as ARCNET, where 255 is a
   station and 0 the broadcast. It takes a one-octet `address` only.
 
-A call refuses an `address` that is its network's broadcast with
-`BacnetError`, before anything is sent or looked up (#2709). The client
-can't see the far network's link, so it goes by length: `b"\xff"` (MS/TP's
-broadcast), three octets of `0xFF` (no device's VMAC) and six (Ethernet's
-and BACnet/SC's broadcast, a B/IP broadcast). For station 255 on an ARCNET
+A call refuses an `address` that is a broadcast or a group on its network
+with `BacnetError`, before anything is sent or looked up (#2709). The
+client can't see the far network's link, so it goes by length: `b"\xff"`
+(MS/TP's broadcast), two octets beginning `0x00` or `0xFF` (a LonTalk
+broadcast or group), three octets of `0xFF` (no device's VMAC), and six
+beginning with four of `0xFF` (the B/IP limited broadcast at any port, an
+Ethernet group MAC, BACnet/SC's broadcast). For station 255 on an ARCNET
 network pass `arcnet=True`; `b"\x00"` is then refused instead. Without a
 `router`, an ARCNET station 255 is reached through its discovery-table row
 alone, so name its router when the client has heard no I-Am from it.

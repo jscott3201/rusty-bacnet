@@ -368,12 +368,14 @@ class RoutedWireTests(unittest.IsolatedAsyncioTestCase):
         # A station address that is its network's broadcast: refused on
         # every call, with a router named or not, before anything is sent or
         # looked up (#2709).
-        for address in (b"\xff", b"\xff" * 3, b"\xff" * 6):
+        for address in (b"\xff", b"\x00\x05", b"\xff\x07", b"\xff" * 3, b"\xff" * 6,
+                        b"\xff\xff\xff\xff\xba\xc0"):
             for router in (self.router.address, None):
                 target = rb.RoutedTarget(5, address, router=router)
                 for name, call in calls(self.role, target).items():
                     with self.subTest(address=address, router=router, method=name), \
-                            self.assertRaisesRegex(rb.BacnetError, "a remote broadcast carries only"):
+                            self.assertRaisesRegex(rb.BacnetError,
+                                                   "carries only an unconfirmed request"):
                         await asyncio.wait_for(call(), 5)
         self.assertEqual(self.requests, [])
         # Marked ARCNET, 255 is a station there and 0 the broadcast.

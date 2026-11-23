@@ -10,80 +10,20 @@
 //! carry one (Clause 6.3), and has its own calls
 //! ([`BACnetClient::broadcast_network_unconfirmed`], `Broadcast::Network`).
 
-use std::fmt;
 use std::net::Ipv4Addr;
 
 use bacnet_types::data_link::DataLink;
 
 use super::*;
 
-/// A MAC that names every station of a remote network rather than one, read
-/// from its length and octets alone, since this client can't see the far
-/// network's data link (#2709). A router delivers a DADR equal to its
-/// network's broadcast MAC as a broadcast there (Clause 6.5.4).
-///
-/// Only an all-ones MAC of one, three or six octets is such a form, and
-/// only on ARCNET (Clause 8) is the one-octet `0xFF` a station. Two- and
-/// seven-octet (LonTalk) and other lengths are taken as one station.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum RemoteBroadcast {
-    /// The one octet `0xFF`: the broadcast on an MS/TP network (Clause 9),
-    /// whose stations are 0 to 254. On an ARCNET network it is a station:
-    /// [`Station::arcnet`] says so.
-    MstpBroadcast,
-    /// The one octet `0x00` of a station marked ARCNET
-    /// ([`Station::arcnet`]): that network's broadcast (Clause 8).
-    ArcnetBroadcast,
-    /// Three octets of `0xFF`: no device's VMAC, since a device instance's
-    /// VMAC leaves the top two bits clear (Clause H.7.2), on B/IPv6
-    /// (Annex U) and ZigBee (Annex O) alike.
-    NoVmac,
-    /// Six octets of `0xFF`: the broadcast MAC on Ethernet (Clause 6.3),
-    /// the local broadcast VMAC on BACnet/SC (Annex AB.1.5.2), and on
-    /// BACnet/IP an address whose host bits are all set, a broadcast
-    /// (Annex J.1.2).
-    SixOctetBroadcast,
-}
-
-impl RemoteBroadcast {
-    /// The form `mac`, a station's MAC on a remote network, takes, if it
-    /// is one; `arcnet` when the station is marked as on an ARCNET network
-    /// ([`Station::arcnet`]). A handful of comparisons, no allocation.
-    pub fn of(mac: &[u8], arcnet: bool) -> Option<Self> {
-        match mac {
-            [0xFF] if !arcnet => Some(Self::MstpBroadcast),
-            [0x00] if arcnet => Some(Self::ArcnetBroadcast),
-            [0xFF, 0xFF, 0xFF] => Some(Self::NoVmac),
-            [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF] => Some(Self::SixOctetBroadcast),
-            _ => None,
-        }
-    }
-}
-
-impl fmt::Display for RemoteBroadcast {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::MstpBroadcast => {
-                "station 255, the broadcast of an MS/TP network (on an ARCNET network, where \
-                 255 is a station, mark the station ARCNET)"
-            }
-            Self::ArcnetBroadcast => "station 0, the broadcast of an ARCNET network",
-            Self::NoVmac => {
-                "VMAC 0xFFFFFF, which no device has (a device's VMAC keeps its top two bits \
-                 clear)"
-            }
-            Self::SixOctetBroadcast => {
-                "FF:FF:FF:FF:FF:FF, a broadcast on every six-octet link: Ethernet's broadcast \
-                 MAC, BACnet/SC's broadcast VMAC, and 255.255.255.255:65535 on BACnet/IP"
-            }
-        })
-    }
-}
+/// The DADR forms a confirmed request to a remote station refuses: the
+/// network layer's vocabulary, so the server's own confirmed sends can
+/// refuse them too. [`Station::arcnet`] is this client's `arcnet`.
+pub use bacnet_npdu::RemoteBroadcast;
 
 /// Refuse a confirmed request to `mac` on `network` when the MAC is a
-/// [`RemoteBroadcast`] form (#2709). Free unless the MAC is one octet,
-/// three or six.
+/// [`RemoteBroadcast`] form (#2709). Free unless the MAC is one, two,
+/// three or six octets.
 #[inline]
 pub(super) fn check_remote_station(network: u16, mac: &[u8], arcnet: bool) -> Result<(), Error> {
     match RemoteBroadcast::of(mac, arcnet) {
@@ -97,7 +37,7 @@ pub(super) fn check_remote_station(network: u16, mac: &[u8], arcnet: bool) -> Re
 fn remote_broadcast_refused(network: u16, mac: &[u8], form: RemoteBroadcast) -> Error {
     Error::Encoding(format!(
         "a confirmed request goes to one station, and {} on network {network} is {form}; \
-         a remote broadcast carries only an unconfirmed request",
+         a remote broadcast or multicast carries only an unconfirmed request",
         station::station_text(network, mac)
     ))
 }
@@ -169,23 +109,6 @@ pub(super) fn link_text(link: Option<DataLink>, mac: &[u8]) -> String {
             .map(|octet| format!("{octet:02X}"))
             .collect::<Vec<_>>()
             .join(":"),
-    }
-}
-
-impl ClientOptions {
-    /// Send every frame of this client's confirmed requests (the first, each
-    /// retry and each segment, to any station form) with `attributes`, the
-    /// data attributes of the link: on BACnet/SC its header data options
-    /// (Annex AB), which the transport checks when it sends. A link that
-    /// carries none ignores them. Empty by default, which costs a request
-    /// nothing. Unconfirmed requests and the client's answers carry none.
-    ///
-    /// For different attributes per request, start a client for each set:
-    /// on an endpoint session each `EndpointSession::client_with` takes its
-    /// own options and shares the session's link (#2723).
-    pub fn with_data_attributes(mut self, attributes: Vec<DataAttribute>) -> Self {
-        self.data_attributes = attributes;
-        self
     }
 }
 
