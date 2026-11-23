@@ -1238,7 +1238,9 @@ Code that handled `application_data` reads should expect:
   give. Broken framing still raises as for any read.
 - **Network Port tables.** A whole read of a Network Port's
   BBMD_Broadcast_Distribution_Table (414) or BBMD_Foreign_Device_Table
-  (415) is tagged `bdt` or `fdt` (#2690), not `tagged`: see
+  (415) is tagged `bdt` or `fdt` (#2690), not `tagged`, and its
+  FD_BBMD_Address (418) and BACnet_IP_Global_Address (407) read as
+  `host_n_port`, the address text (#2710): see
   [Typed constructed values](#typed-constructed-values).
 - **Failed typed reads.** A typed constructed property whose octets don't
   decode as its elements (a malformed Recipient_List, say) falls back to
@@ -1373,8 +1375,9 @@ collection's elements back to back), for comparing with a capture or for
 | Trend Log; Averaging, Event Enrollment | Log_DeviceObjectProperty; Object_Property_Reference (one value) | `"device_object_property_reference"` | a `DeviceObjectPropertyReference` mapping with every key | existing property writes where writable |
 | any object with intrinsic reporting | Event_Algorithm_Inhibit_Ref (one value) | `"object_property_reference"` | `{"object_identifier", "property_identifier", "property_array_index"}`: a `DeviceObjectPropertyReference` mapping without `device_identifier`; instance 4194303 while unset | existing property writes where writable |
 | Access Point; Lift, Escalator | Access_Event_Credential; Energy_Meter_Ref (one value) | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | none |
-| Network Port | BBMD_Broadcast_Distribution_Table | `"bdt_entry"` | a `BdtEntry`: `{"address", "broadcast_mask"}`, `address` the BBMD as display text (`"ip:port"` as `read_bdt()` gives IPv4, `"[v6]:port"` or `"name:port"`; `None` for an entry that names no host), `broadcast_mask` dotted text or `None` | none yet |
-| Network Port | BBMD_Foreign_Device_Table | `"fdt_entry"` | an `FdtEntry`, as `read_fdt()` gives it: `{"address", "ttl", "seconds_remaining"}`, `address` `"ip:port"` or `"[v6]:port"` | none yet |
+| Network Port | BBMD_Broadcast_Distribution_Table | `"bdt_entry"` | a `BdtEntry`: `{"address", "broadcast_mask"}`, `address` the BBMD (`"ip:port"` as `read_bdt()` gives IPv4, `"[v6]:port"` or `"name:port"`; `None` for an entry that names no host), `broadcast_mask` dotted text or `None` | `PropertyValue.bdt(rows)` (#2710) |
+| Network Port | BBMD_Foreign_Device_Table | `"fdt_entry"` | an `FdtEntry`, as `read_fdt()` gives it: `{"address", "ttl", "seconds_remaining"}`, `address` `"ip:port"` or `"[v6]:port"` | none: the property is read-only, filled by registrations |
+| Network Port | FD_BBMD_Address, BACnet_IP_Global_Address (one value) | `"host_n_port"` | the address text a `BdtEntry` gives: `"ip:port"`, `"[v6]:port"` or `"name:port"`; `None` for no host, the port then in `.octets` only | existing property writes of the read value |
 | Global Group | Present_Value | `"property_access_result"` | the member's `DeviceObjectPropertyReference` keys, then `"value"` (shaped as a read of the member) and `"error"` (`(ErrorClass, ErrorCode)`), one of them `None` | none |
 | Device | Audit_Notification_Recipient (one value) | `"recipient"` | an `AuditRecipientInput` mapping | `configure_audit_recipient(...)` |
 | Device | Active_COV_Subscriptions | `"cov_subscription"` | `{"recipient", "process_identifier", "object_identifier", "property_identifier", "property_array_index", "issue_confirmed_notifications", "time_remaining", "cov_increment"}`; `recipient` an `AuditRecipientInput` mapping, `cov_increment` a `float` or `None` | none |
@@ -1398,16 +1401,67 @@ ReadPropertyMultiple, COV values and the local `BACnetServer.read_property`
 (#2690). A BDT row's address is the `"ip:port"` text `read_bdt()` gives
 for IPv4, with `"[v6]:port"` and `"name:port"` for the other host kinds,
 so a script can compare a Network Port read with the BVLC reads of the same
-BBMD; that text is for display (a host name may itself hold a colon), and
-the value's `.octets` are the exact form. The rows are read-only for now:
-they aren't accepted as `Bbmd(bdt=)` input, no `PropertyValue` is built from
-rows, so writing a changed table means encoding its octets yourself and
-passing `PropertyValue.application_data`. Writing back a value as read
+BBMD; the value's `.octets` are the exact form. Writing back a value as read
 sends its octets unchanged. Octets that aren't the entries, to the last
 octet, or more than 10,000 entries, read as `tagged` or `application_data`
 holding the octets as served; application-tagged values that aren't
-entries don't become a plain list, as they would for other typed lists. FD_BBMD_Address and BACnet_IP_Global_Address have no typed
-form yet and read as `tagged`.
+entries don't become a plain list, as they would for other typed lists.
+
+FD_BBMD_Address and BACnet_IP_Global_Address hold the same host and port
+as a BDT entry's BBMD, and read as one `host_n_port` value whose `.value`
+is that address text (#2710); `None` stands for the no-host choice, which
+a global address uses with port 0 while it isn't known (Clause 12.56.33).
+`.octets` keep the value exactly as served. A value that isn't exactly one
+host and port reads as `tagged`, its octets as served.
+
+##### Writing a BDT from rows
+
+`PropertyValue.bdt(rows)` builds a BBMD_Broadcast_Distribution_Table value
+from rows in the form a read gives (#2710). Each row is a `BdtEntry`
+mapping: `address` as `"ip:port"`, `"[v6]:port"` or `"name:port"`, and
+`broadcast_mask` as dotted text, `None` or left out. The rows are encoded
+with the stack's own BDT entry codec, so a table read from a device that
+encodes as the stack does builds back to the same octets:
+`PropertyValue.bdt(read.value) == read`.
+
+```python
+BDT = rb.PropertyIdentifier.BBMD_BROADCAST_DISTRIBUTION_TABLE
+read = await client.read_property(address, port, BDT)
+rows = read.value + [{"address": "192.0.2.40:47808", "broadcast_mask": "255.255.255.255"}]
+await client.write_property(address, port, BDT, rb.PropertyValue.bdt(rows))
+await client.reinitialize_device(address, rb.ReinitializedState.ACTIVATE_CHANGES)
+```
+
+Each row is checked as it is read, and an error names it by index
+(`rows[3]: ...`). `ValueError` covers an `address` that is `None` or
+missing (Clause 12.56.34 keeps entries without a host out of the list, so
+a row read from such an entry doesn't build), a port that isn't 0 to
+65535, an IPv6 address without brackets or with a zone, a host name longer
+than 253 octets (the longest DNS resolves), a mask that isn't four dotted
+octets, and a key other than the two. A row of the wrong type raises
+`TypeError`. The address text is parsed as a read shows it: everything
+before the last colon is the host, so a host name holding a colon builds
+back to itself, while a host name spelled as an IPv4 address builds as that
+address. A device's non-UTF-8 host name or a port encoded in more octets
+than it needs reads as the same row but builds in the stack's shortest
+form; to send a table exactly as read, write the read value itself.
+
+The written table is pending until the device activates it: a
+ReinitializeDevice with ACTIVATE_CHANGES (or WARMSTART) puts it in effect
+(Clause 12.56.13). This is the 2020 way to change a BBMD's table. Three
+related paths stay as they are:
+
+- `Bbmd(bdt=...)` configures this process's own BBMD at start, from
+  `"ip:port"` strings or `("ip:port", "mask")` pairs; it doesn't take these
+  rows. A table written to our own BBMD's registered Network Port this way
+  is activated with the rest of its pending values and saved in
+  `bdt_persist_path`.
+- `BACnetClient.write_bdt(address, entries)` sends the BVLC
+  Write-Broadcast-Distribution-Table an older BBMD takes; a 2020 BBMD
+  refuses it with 0x0010 (see [BBMD management](#bbmd-management)).
+- The Foreign Device Table has no builder: Clause 12.56.36 makes
+  BBMD_Foreign_Device_Table read-only, since the BBMD fills it from
+  registrations.
 
 Single reference reads use these forms through local reads, client and endpoint
 RP/RPM, and device-aware singular and batch reads. A property-reference mapping
@@ -2005,8 +2059,10 @@ three seconds for the answer:
 
 - `read_bdt(address)` returns the Broadcast Distribution Table as
   `("ip:port", "mask")` rows, the shape `Bbmd(bdt=)` takes.
-- `write_bdt(address, entries)` asks the BBMD to take `entries` as its BDT. A
-  BBMD that follows the 2020 standard refuses (result code 0x0010).
+- `write_bdt(address, entries)` asks the BBMD to take `entries` as its BDT,
+  for an older BBMD. A BBMD that follows the 2020 standard refuses (result
+  code 0x0010): write its Network Port's BBMD_Broadcast_Distribution_Table
+  instead (see [Writing a BDT from rows](#writing-a-bdt-from-rows)).
 - `read_fdt(address)` returns the Foreign Device Table, a dict per entry with
   `address`, `ttl` and `seconds_remaining` (the grace period included).
 - `delete_fdt_entry(address, entry)` asks it to delete the foreign device at

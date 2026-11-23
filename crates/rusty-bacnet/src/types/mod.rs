@@ -31,6 +31,7 @@ mod address;
 mod audit;
 mod audit_projection;
 mod authentication_policy;
+mod bdt_rows;
 mod bit_string;
 mod constructed_py;
 mod constructed_read;

@@ -13,6 +13,8 @@ from bvll_peer import RawPeer, bvll
 PORT = rb.ObjectIdentifier(rb.ObjectType.NETWORK_PORT, 1)
 BDT = rb.PropertyIdentifier.from_raw(414)
 FDT = rb.PropertyIdentifier.from_raw(415)
+P_GLOBAL_ADDRESS = rb.PropertyIdentifier.from_raw(407)
+P_FD_BBMD_ADDRESS = rb.PropertyIdentifier.from_raw(418)
 BDT4 = bytes.fromhex("0e0e1cc00002020f1abac00f1cffffff00")
 FDT4 = bytes.fromhex("0d06c0000203bac0193c2932")
 BDT4_ROWS = [dict(address="192.0.2.2:47808", broadcast_mask="255.255.255.0")]
@@ -135,6 +137,86 @@ class NetworkPortTableTests(unittest.IsolatedAsyncioTestCase):
         value = await self.read(BDT, BDT4, PORT, 1)
         self.assertEqual((value.tag, value.value, value.octets), ("bdt_entry", BDT4_ROWS[0], BDT4))
 
+    async def test_rows_a_read_gives_build_the_same_bdt(self):
+        # #2710: every form a conforming read can give builds its octets
+        # again, and the built value writes those octets.
+        ip6 = bytes.fromhex("20010db8000000000000000000000002")
+        rows_v6 = bytes.fromhex("0e0e1d10") + ip6 + bytes.fromhex("0f1abac00f1cffffffff")
+        name = bytes.fromhex("0e0e2c006875620f197b0f")
+        colon = bytes.fromhex("0e0e2c00613a620f1abac10f")  # the name "a:b"
+        for octets in (BDT4, rows_v6, name, colon, BDT4 + name + rows_v6, b""):
+            with self.subTest(octets=octets.hex()):
+                read = await self.read(BDT, octets)
+                built = rb.PropertyValue.bdt(read.value)
+                self.assertEqual(built, read)
+                self.assertEqual((built.tag, built.value, built.octets),
+                                 ("bdt", read.value, octets))
+                for copied in (copy.copy(built), pickle.loads(pickle.dumps(built))):
+                    self.assertEqual(copied, built)
+                await self.client.write_property(self.peer.address, PORT, BDT, built)
+                self.assertEqual(self.written_fields,
+                                 self.read_fields + b"\x3e" + octets + b"\x3f")
+        # A read can show an entry that names no host, which the list may
+        # not hold (Clause 12.56.34): such rows don't build, and the read
+        # value's octets still write back as they came.
+        read = await self.read(BDT, name + bytes.fromhex("0e0e080f19000f"))
+        with self.assertRaisesRegex(ValueError, r"^rows\[1\]: a BDT entry names its BBMD"):
+            rb.PropertyValue.bdt(read.value)
+
+    def test_rows_are_checked_and_named_by_index(self):
+        good = dict(address="192.0.2.1:47808", broadcast_mask="255.255.255.255")
+        for row, error, text in (
+            (dict(address="192.0.2.1:70000"), ValueError, "not a number from 0 to 65535"),
+            (dict(address="192.0.2.1"), ValueError, "has no port"),
+            (dict(address="2001:db8::2:47808"), ValueError, "in brackets"),
+            (dict(address="h" * 254 + ":47808"), ValueError, "longer than 253"),
+            (dict(address="hub:1", broadcast_mask="255.255.0"), ValueError, "four dotted"),
+            (dict(address="hub:1", mask="255.0.0.0"), ValueError, "unknown key 'mask'"),
+            (dict(address=None), ValueError, "names its BBMD"),
+            (dict(address=47808), TypeError, r"rows\[1\]\.address must be a str"),
+            ("192.0.2.1:47808", TypeError, r"rows\[1\] must be a mapping"),
+        ):
+            with self.subTest(row=row):
+                with self.assertRaisesRegex(error, text):
+                    rb.PropertyValue.bdt([good, row])
+                if error is ValueError:
+                    with self.assertRaisesRegex(error, r"rows\[1\]"):
+                        rb.PropertyValue.bdt([good, row])
+        # A row may leave its mask out; a host name is everything before
+        # the last colon.
+        built = rb.PropertyValue.bdt([dict(address="bbmd.example:47809")])
+        self.assertEqual(built.value,
+                         [dict(address="bbmd.example:47809", broadcast_mask=None)])
+        self.assertEqual(rb.PropertyValue.bdt([]).tag, "bdt")
+
+    async def test_host_and_port_properties_read_as_a_rows_address(self):
+        # #2710: FD_BBMD_Address (418) and BACnet_IP_Global_Address (407).
+        ip6 = bytes.fromhex("20010db8000000000000000000000002")
+        for prop in (P_FD_BBMD_ADDRESS, P_GLOBAL_ADDRESS):
+            for octets, text in (
+                (bytes.fromhex("0e1cc00002020f1abac0"), "192.0.2.2:47808"),
+                (bytes.fromhex("0e1d10") + ip6 + bytes.fromhex("0f1abac1"),
+                 "[2001:db8::2]:47809"),
+                (bytes.fromhex("0e2c006875620f197b"), "hub:123"),
+                # Not determined yet (Clause 12.56.33).
+                (bytes.fromhex("0e080f1900"), None),
+            ):
+                with self.subTest(prop=prop, octets=octets.hex()):
+                    value = await self.read(prop, octets)
+                    self.assertEqual((value.tag, value.value, value.octets),
+                                     ("host_n_port", text, octets))
+                    for copied in (copy.copy(value), pickle.loads(pickle.dumps(value))):
+                        self.assertEqual(copied, value)
+                    await self.client.write_property(self.peer.address, PORT, prop, value)
+                    self.assertEqual(self.written_fields,
+                                     self.read_fields + b"\x3e" + octets + b"\x3f")
+            # Not one host and port: the octets as served, read as tags.
+            for octets in (bytes.fromhex("0e1cc00002020f1abac00e1cc00002020f1abac0"),
+                           bytes.fromhex("0e1cc00002020f1b010000")):
+                with self.subTest(prop=prop, octets=octets.hex()):
+                    value = await self.read(prop, octets)
+                    self.assertEqual((value.tag, value.octets), ("tagged", octets))
+
     async def test_read_property_multiple_gives_the_same_tables(self):
         for prop, octets, tag, rows in ((BDT, BDT4, "bdt", BDT4_ROWS), (FDT, FDT4, "fdt", FDT4_ROWS),
                                         (FDT, b"", "fdt", [])):
@@ -183,6 +265,38 @@ class LocalBbmdTableTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual([(row["address"], row["ttl"]) for row in local.value],
                                          [(row["address"], row["ttl"]) for row in rows])
 
+
+
+class LocalBbmdTableWriteTests(unittest.IsolatedAsyncioTestCase):
+    """A table built from rows (#2710) writes to our own BBMD's Network
+    Port, which serves it while pending and takes it on activation, so the
+    BVLC read then gives the new rows."""
+
+    @staticmethod
+    async def stop(server):
+        await asyncio.wait_for(server.stop(), 10)
+
+    async def test_a_built_table_is_written_and_activated(self):
+        server = rb.BACnetServer(
+            2692, interface="127.0.0.1", port=0, broadcast_address="127.255.255.255",
+            registered_network_port=1, on_reinitialize=lambda request: None,
+            bbmd=rb.Bbmd(bdt=[("127.0.0.2:47808", "255.255.255.255")]))
+        server.add_bip_network_port(1, "bbmd", ip_address="127.0.0.1", udp_port=0)
+        await asyncio.wait_for(server.start(), 10)
+        self.addAsyncCleanup(self.stop, server)
+        address = await server.local_address()
+        async with rb.BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=2000) as client:
+            rows = (await client.read_property(address, PORT, BDT)).value
+            added = dict(address="127.0.0.3:47808", broadcast_mask="255.255.255.255")
+            table = rb.PropertyValue.bdt(rows + [added])
+            await client.write_property(address, PORT, BDT, table)
+            self.assertEqual(await client.read_property(address, PORT, BDT), table)
+            self.assertEqual(
+                (await client.read_property(address, PORT, rb.PropertyIdentifier.CHANGES_PENDING)).value,
+                True)
+            await client.reinitialize_device(address, rb.ReinitializedState.ACTIVATE_CHANGES)
+            self.assertIn(("127.0.0.3:47808", "255.255.255.255"), await client.read_bdt(address))
+            self.assertEqual(await client.read_property(address, PORT, BDT), table)
 
 
 class TypedListRebuildTests(unittest.TestCase):

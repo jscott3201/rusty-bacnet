@@ -1817,7 +1817,10 @@ def write_bdt(
 ```
 
 Ask a BBMD to take `entries` (rows as `Bbmd(bdt=)` takes them)
-as its BDT. A BBMD that follows the 2020 standard refuses with 0x0010.
+as its BDT: the BVLC Write-Broadcast-Distribution-Table, the path
+for an older BBMD. A BBMD that follows the 2020 standard refuses with
+0x0010; write its Network Port's BBMD\_Broadcast\_Distribution\_Table
+with `PropertyValue.bdt(rows)` instead (#2710).
 
 ### BACnetClient.read_fdt
 

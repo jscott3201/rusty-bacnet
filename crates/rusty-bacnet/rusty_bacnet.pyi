@@ -2535,8 +2535,11 @@ class PropertyValue:
       BBMD_Broadcast_Distribution_Table (``"bdt_entry"``: a ``BdtEntry``)
       and BBMD_Foreign_Device_Table (``"fdt_entry"``: an ``FdtEntry``, as
       ``read_fdt`` gives it). A whole read of those two is tagged ``"bdt"``
-      or ``"fdt"``, not ``"list"``, empty ones included (#2690); they read
-      only, with no typed write from the rows yet. Access_Event_Time and
+      or ``"fdt"``, not ``"list"``, empty ones included (#2690);
+      ``PropertyValue.bdt(rows)`` builds a BDT to write from rows (#2710),
+      and the FDT is read-only. A Network Port's FD_BBMD_Address and
+      BACnet_IP_Global_Address read as ``"host_n_port"``: the address text
+      a ``BdtEntry`` gives its BBMD, ``None`` for no host (#2710). Access_Event_Time and
       Last_Restore_Time read as ``"timestamp"``, and Subordinate_List as a list of
       ``"device_object_reference"``. Tags elements are ``"name_value"``
       mappings with ``"name": str`` and ``"value": None | PropertyValue``. Semantic tags
@@ -2641,6 +2644,26 @@ class PropertyValue:
         form for, raise ValueError. A ``list`` of tagged values keeps its
         items tagged."""
         ...
+    @staticmethod
+    def bdt(rows: Iterable[BdtEntry]) -> PropertyValue:
+        """A Network Port's BBMD_Broadcast_Distribution_Table to write,
+        built from rows in the form a whole read of it gives (#2710): each
+        a ``BdtEntry`` mapping, ``address`` as ``"ip:port"``,
+        ``"[v6]:port"`` or ``"name:port"`` (everything before the last
+        colon is the name) and ``broadcast_mask`` dotted text, ``None`` or
+        left out. Each row is encoded with the stack's BDT entry codec;
+        the value is tagged ``"bdt"`` and ``.value`` gives the rows back,
+        so ``PropertyValue.bdt(read.value)`` equals a read the stack could
+        have encoded. A row the entry can't hold raises ValueError naming
+        it (``rows[2]: ...``): an ``address`` that is ``None`` or missing
+        (the list holds no entry without a host), a port past 65535, an
+        IPv6 address without brackets or with a zone, a host name of more
+        than 253 octets, a mask that isn't four dotted octets, or another
+        key. A row of the wrong type raises TypeError. A 2020 BBMD takes
+        its BDT this way, through WriteProperty and an ACTIVATE_CHANGES
+        reinitialize; ``BACnetClient.write_bdt`` stays the path for an
+        older one."""
+        ...
 
     @property
     def tag(self) -> str:
@@ -2657,7 +2680,7 @@ class PropertyValue:
         'special_event', 'calendar_entry', 'date_range', 'timestamp',
         'cov_subscription', 'value_source', 'scale', 'prescale',
         'address_binding', 'shed_level', 'authentication_factor',
-        'event_parameter', 'bdt_entry', 'fdt_entry'."""
+        'event_parameter', 'bdt_entry', 'fdt_entry', 'host_n_port'."""
         ...
 
     @property
@@ -2666,7 +2689,9 @@ class PropertyValue:
         ObjectIdentifier, BitString, list, or None); ``application_data`` is ``bytes``
         (except a DateTime Value's set Priority_Array slot, ``[date, time]``),
         ``tagged`` a list of ``TagNode``, ``bdt`` a list of ``BdtEntry``,
-        ``fdt`` a list of ``FdtEntry``, and a typed constructed element the
+        ``fdt`` a list of ``FdtEntry``, ``host_n_port`` the address text
+        (``"ip:port"``, ``"[v6]:port"`` or ``"name:port"``, ``None`` for no
+        host), and a typed constructed element the
         form its typed write takes, or the form docs/python-api.md gives it. A date is ``(year, month, day,
         day_of_week)`` with the full year, or 255 for an unspecified year,
         as in every other date the binding reads. A bit string is a
@@ -4568,9 +4593,11 @@ class BdtEntry(TypedDict):
     the ``"ip:port"`` text ``read_bdt()`` uses for IPv4, ``"[v6]:port"``
     for IPv6 and ``"name:port"`` for a host name; ``None`` when the entry
     names no host. ``broadcast_mask`` is dotted text, ``None`` when the
-    entry has none. The text is for display (a name may itself hold a
-    colon); the value's ``.octets`` are the exact form. Rows aren't
-    accepted as ``Bbmd(bdt=)`` input."""
+    entry has none. The value's ``.octets`` are the exact form.
+    ``PropertyValue.bdt(rows)`` builds a table to write from these rows
+    (#2710), taking everything before the last colon as a host name; a
+    row whose ``address`` is ``None`` doesn't build. Rows aren't accepted
+    as ``Bbmd(bdt=)`` input, which configures this device's own BBMD."""
     address: str | None
     broadcast_mask: str | None
 
@@ -6926,7 +6953,10 @@ class BACnetClient:
 
     def write_bdt(self, address: str, entries: Sequence[str | tuple[str, str]]) -> Awaitable[None]:
         """Ask a BBMD to take ``entries`` (rows as ``Bbmd(bdt=)`` takes them)
-        as its BDT. A BBMD that follows the 2020 standard refuses with 0x0010."""
+        as its BDT: the BVLC Write-Broadcast-Distribution-Table, the path
+        for an older BBMD. A BBMD that follows the 2020 standard refuses with
+        0x0010; write its Network Port's BBMD_Broadcast_Distribution_Table
+        with ``PropertyValue.bdt(rows)`` instead (#2710)."""
         ...
 
     def read_fdt(self, address: str) -> Awaitable[list[FdtEntry]]:

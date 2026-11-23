@@ -1551,7 +1551,9 @@ join it later without removing `text`. The kinds are `access-rule`,
 `authentication-factor-format`, `authentication-policy`, `bdt-entry`,
 `calendar-entry`, `cov-subscription`, `daily-schedule`, `date-range`,
 `destination`, `device-object-property-reference`,
-`device-object-reference`, `event-parameter`, `fdt-entry`, `name-value`, `object-property-reference`,
+`device-object-reference`, `event-parameter`, `fdt-entry`, `host-n-port`
+(a Network Port's FD_BBMD_Address and BACnet_IP_Global_Address, shown as
+a BDT entry shows its BBMD), `name-value`, `object-property-reference`,
 `port-permission`, `prescale`, `property-access-result`,
 `read-access-result`, `read-access-specification`, `recipient`, `scale`,
 `shed-level`, `special-event`, `stage-limit-value`, `tagged`, `time-stamp`

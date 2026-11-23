@@ -163,8 +163,38 @@ fn element_kinds_have_fixed_names() {
             "event-parameter",
             "bdt-entry",
             "fdt-entry",
+            "host-n-port",
         ]
     );
+}
+
+/// #2710: FD_BBMD_Address and BACnet_IP_Global_Address show the host and
+/// port as a BDT row shows its BBMD; a value that isn't one host and port
+/// keeps the generic view.
+#[test]
+fn network_port_host_n_ports_show_as_addresses() {
+    let texts = StateTexts::default();
+    let format = ValueFormat::new(O::NETWORK_PORT, &texts, Floats::Exact);
+    for property in [P::FD_BBMD_ADDRESS, P::BACNET_IP_GLOBAL_ADDRESS] {
+        let show = |octets: &str| format.value(property, &hex_octets(octets));
+        assert_eq!(show("0e1cc00002020f1abac0"), "192.0.2.2:47808");
+        assert_eq!(show("0e2c006875620f197b"), "hub:123");
+        assert_eq!(show("0e080f1900"), "none");
+        assert_eq!(
+            show("0e1d1020010db80000000000000000000000020f1abac0"),
+            "[2001:db8::2]:47808"
+        );
+        assert_eq!(
+            format.data(property, &hex_octets("0e1cc00002020f1abac0")),
+            Datum::Constructed {
+                element: "host-n-port".into(),
+                text: "192.0.2.2:47808".into(),
+                fields: None,
+            }
+        );
+        // A host and port with octets after it isn't one value.
+        assert!(!show("0e1cc00002020f1abac021").contains("192.0.2.2:47808"));
+    }
 }
 
 /// #2690: a Network Port's BDT and FDT show one entry per row, as
