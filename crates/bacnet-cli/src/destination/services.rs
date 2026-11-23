@@ -2,7 +2,7 @@
 //! client's typed call to the destination's address (#2560, #2588), so the
 //! CLI encodes and checks nothing itself.
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, Station};
 use bacnet_client::log_reader::{LogCursor, LogPage};
 use bacnet_services::alarm_event::{AcknowledgeAlarmRequest, GetEventInformationAck};
 use bacnet_services::alarm_summary::GetAlarmSummaryAck;
@@ -15,7 +15,7 @@ use bacnet_services::read_range::{ReadRangeReply, ReadRangeRequest, ReadRangeVal
 use bacnet_services::rpm::ReadPropertyMultipleACK;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::constructed::{BACnetAddress, ReadAccessSpecification};
+use bacnet_types::constructed::ReadAccessSpecification;
 use bacnet_types::enums::{EnableDisable, PropertyIdentifier, ReinitializedState};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
@@ -24,8 +24,9 @@ use bytes::Bytes;
 use super::Destination;
 
 impl Destination {
-    /// The address as the client takes it.
-    fn station(&self) -> BACnetAddress {
+    /// The address as the client takes it: a station at a MAC the
+    /// one-station mark lifts goes as a marked one (#2738).
+    fn station(&self) -> Station {
         (&self.address).into()
     }
 

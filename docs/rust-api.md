@@ -10944,9 +10944,14 @@ naming the address in its link's form (#2722, #2709):
   are checked as unmarked. The mark only lifts, never refuses: the one octet
   `0x00` goes marked or not, so an ARCNET network's broadcast there is not
   caught. The refusal of an unmarked
-  form the mark lifts names the mark. The target grammar of the CLI, TUI and
-  MCP and `bacnet_ops::DeviceAddress` have no form for a marked address; a
-  `Station` reaches one.
+  form the mark lifts names the mark. The target grammar of the CLI and MCP
+  writes it as a third field, `5:0xFF:one-station` or
+  `9:0x0012:one-station`; `bacnet_ops::DeviceAddress::marked` builds the
+  address and its `Display` writes the suffix back, exactly at the MACs the
+  mark lifts (no field holds it, and `DeviceAddress::new` and `of` refuse
+  those MACs, so an I-Am never invents the mark). The suffix is refused
+  where it lifts nothing, and a device at such an address is named by its
+  address, never by `dnet:instance`.
 
 Unconfirmed requests are left alone: a remote broadcast carries those, and
 `Broadcast::Network(n)` sends one. `Station::check_confirmed` makes the
@@ -12763,7 +12768,7 @@ keeping only its own answers (#2689). That router answers with a local
 broadcast, so a B/IP router on another IP subnet is heard only when a BBMD
 forwards its answer here, as a peer or by foreign-device registration.
 `client.device(target).await?` gives a `Device` handle: from an address
-(`192.168.1.10`, `2:0x05` or a `DeviceAddress`) it is pinned there (an
+(`192.168.1.10`, `2:0x05`, `5:0xFF:one-station` or a `DeviceAddress`) it is pinned there (an
 address on the client's own network, once `BACnetClient::network_number`
 knows it, is the local station), from an instance (`1234`, or `2:1234` on
 one network) it follows the one address claiming it (none: one Who-Is for

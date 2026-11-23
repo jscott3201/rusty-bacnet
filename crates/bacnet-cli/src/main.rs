@@ -100,8 +100,9 @@ fn routed_wait() -> Duration {
 }
 
 /// Resolve a device command's target string: besides an address or a
-/// discovered instance, it takes `dnet:instance` and `dnet:0xMAC` for a
-/// device behind a router. Boxed, as each command is (see [`heap`]).
+/// discovered instance, it takes `dnet:instance` and `dnet:0xMAC` (with
+/// `:one-station` for a MAC that looks like a broadcast) for a device
+/// behind a router. Boxed, as each command is (see [`heap`]).
 fn resolve_destination<'a, T: TransportPort + 'static>(
     client: &'a BACnetClient<T>,
     target_str: &'a str,

@@ -243,7 +243,7 @@ impl PyMstpEndpoint {
     ///     source_audit_reporter / audit_recipient / audit_device_bindings:
     ///         Keyword-only, as on `BipEndpoint` (#2348, #2357), each binding
     ///         address a station in decimal digits (`"2"`), as
-    ///         `local_address()` gives it, or a routed `"network:0xMAC"` or
+    ///         `local_address()` gives it, or a routed `"network:0xMAC[:one-station]"` or
     ///         `RoutedTarget` (#2371, #2738). An address `audit_recipient` takes
     ///         another station: never 255 or this endpoint's own.
     #[new]

@@ -357,7 +357,10 @@ decimal parts such as `"10:20"`, read as instance 20 on network
 - an address pins the handle there and sends nothing for a station
 on this network: `"192.168.1.10"` or `"192.168.1.10:47808"`,
 `"mstp:5"`, `"bip6:0x0004D2"`, an SC VMAC as six hex octets,
-a routed station as `"2:0x05"` (network 2, MAC 05), or a
+a routed station as `"2:0x05"` (network 2, MAC 05; a MAC that
+is one station though it looks like a broadcast, ARCNET's
+station 255 or a gateway's two-octet station, takes the suffix
+`":one-station"`, as `"5:0xFF:one-station"`), or a
 `(network, mac)` pair such as a lookup error's candidate. A
 routed station with no learned router is asked directly
 first;

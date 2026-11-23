@@ -24,7 +24,17 @@ pub(crate) async fn path_to<T: TransportPort + 'static>(
     let address = address.clone().localized(client.network_number());
     match routed_from(client, &address).await? {
         None => Ok(Station::local(address.mac())),
-        Some((router, network)) => Ok(Station::routed(&router, network, address.mac())),
+        Some((router, network)) => {
+            let station = Station::routed(&router, network, address.mac());
+            // A MAC the mark lifts is only ever a marked address
+            // (#2738): the client would refuse a confirmed request to it
+            // otherwise.
+            Ok(if address.is_one_station() {
+                station.one_station()
+            } else {
+                station
+            })
+        }
     }
 }
 

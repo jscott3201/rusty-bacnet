@@ -7953,7 +7953,7 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
     endpoint's own.
   - `MstpEndpoint`: a station in decimal digits, `"0"` to `"254"`; never 255
     or the endpoint's own `mstp_mac`.
-  - Any endpoint (#2371): a Device behind a router, `"network:0xMAC"`, as the
+  - Any endpoint (#2371): a Device behind a router, `"network:0xMAC[:one-station]"`, as the
     CLI writes a routed target (`"2:0x05"` is station 5 on network 2). The
     network is 1 to 65534 and the MAC 1 to 18 octets, in the remote link's
     format. Records go through the router to that network, which the session
@@ -7961,8 +7961,9 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
     I-Am-Router-To-Network; until then they go with the link's broadcast
     address. A failed delivery sets the Reporter's Reliability to
     COMMUNICATION_FAILURE as a direct one does. A `RoutedTarget` with no
-    `router` names the same binding, and is the form that can mark the
-    address `one_station=True` (#2738): a Reporter sending confirmed
+    `router` names the same binding and can mark the address
+    `one_station=True`, as the text can with a `":one-station"` suffix
+    (`"5:0xFF:one-station"`, taken only at the MACs the mark lifts) (#2738): a Reporter sending confirmed
     records has no route to a Device bound at `b"\xff"` or two octets
     starting `0x00` or `0xFF` (the forms `RoutedTarget` lists) and reads
     CONFIGURATION_ERROR, and marked one station it reaches those the mark

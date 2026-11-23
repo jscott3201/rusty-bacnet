@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use bacnet_client::client::ClientConfig;
 use bacnet_encoding::apdu::{Apdu, ComplexAck, SimpleAck, decode_apdu, encode_apdu};
-use bacnet_encoding::npdu::{Npdu, encode_npdu};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_services::read_property::ReadPropertyACK;
 use bacnet_services::rpm::{ReadAccessResult, ReadPropertyMultipleACK, ReadResultElement};
@@ -150,7 +150,14 @@ fn answer(frame: &SentFrame, identity: Option<u32>, slots: &Slots) -> Option<Rec
     if frame.broadcast {
         return None;
     }
-    let Ok(Apdu::ConfirmedRequest(request)) = decode_apdu(frame.decode_npdu().payload) else {
+    let sent = frame.decode_npdu();
+    // A router passes the station's answer on from the station it was
+    // asked for.
+    let from_station = sent.destination.as_ref().map(|to| NpduAddress {
+        network: to.network,
+        mac_address: to.mac_address.clone(),
+    });
+    let Ok(Apdu::ConfirmedRequest(request)) = decode_apdu(sent.payload) else {
         return None;
     };
     let complex = |ack: BytesMut| {
@@ -192,6 +199,7 @@ fn answer(frame: &SentFrame, identity: Option<u32>, slots: &Slots) -> Option<Rec
     encode_apdu(&mut payload, &reply).unwrap();
     let mut npdu = BytesMut::new();
     let back = Npdu {
+        source: from_station,
         payload: payload.freeze(),
         ..Npdu::default()
     };
@@ -548,3 +556,74 @@ mod place;
 
 #[path = "desk_policy_tests.rs"]
 mod policy;
+
+/// A write to a station at an address the one-station mark lifts (#2738)
+/// goes through its router to the network and MAC the address names: the
+/// pre-image reads and the WriteProperty are all sent, none refused as a
+/// broadcast, and the entry keeps the address with its suffix, which
+/// reads back.
+#[tokio::test(start_paused = true)]
+async fn a_write_to_a_one_station_address_goes_there() {
+    let sites: [(u16, &[u8], &str); 2] = [
+        (5, &[0xFF], "5:0xFF:one-station"),
+        (9, &[0x00, 0x12], "9:0x0012:one-station"),
+    ];
+    for (network, station, text) in sites {
+        let lab = lab().await;
+        lab.client
+            .add_routed_device(bacnet_client::discovery::RoutedDeviceConfig {
+                instance: DEVICE,
+                router_mac: A.to_vec(),
+                remote_network: network,
+                remote_mac: station.to_vec(),
+                max_apdu_length: 1476,
+                segmentation_supported: bacnet_types::enums::Segmentation::NO_SEGMENTATION,
+                max_segments_accepted: None,
+            })
+            .await
+            .unwrap();
+        let address: DeviceAddress = text.parse().unwrap();
+        assert_eq!(address, DeviceAddress::marked(network, station).unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let mut desk = Desk::open(Some(dir.path()), context(), Origin::default());
+        let preview = desk
+            .prepare(
+                &lab.client,
+                &lab.rate,
+                &Armed,
+                &[spec(address.clone())],
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(preview.address, address, "{text}");
+        let done = desk
+            .execute(&lab.client, &lab.rate, &Armed, &preview, false)
+            .await;
+        assert_eq!(done[0].outcome, Outcome::Ack, "{text}: {done:?}");
+        let writes: Vec<_> = lab
+            .sent
+            .unicasts()
+            .iter()
+            .filter(|frame| {
+                matches!(
+                    frame.apdu(),
+                    Apdu::ConfirmedRequest(request)
+                        if request.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY
+                )
+            })
+            .map(|frame| {
+                let to = frame.decode_npdu().destination.unwrap();
+                (frame.mac.to_vec(), to.network, to.mac_address.to_vec())
+            })
+            .collect();
+        assert_eq!(writes, [(A.to_vec(), network, station.to_vec())], "{text}");
+        // The entry, and the ledger file, keep the address as written.
+        assert_eq!(desk.entries()[0].address.as_ref(), Some(&address));
+        let saved = std::fs::read_to_string(dir.path().join(crate::safety::ledger::FILE)).unwrap();
+        assert!(saved.contains(&format!("\"{text}\"")), "{saved}");
+        let reopened = crate::safety::ledger::Ledger::open(dir.path()).unwrap();
+        assert_eq!(reopened.entries()[0].address.as_ref(), Some(&address));
+    }
+}

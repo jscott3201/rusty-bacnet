@@ -6,11 +6,15 @@ use serde_json::{Map, Value, json};
 pub(super) fn device() -> Value {
     json!({
         "type": ["string", "integer"],
-        "pattern": "^([0-9]+|[0-9]+:[0-9]+|[0-9]+:0[xX][0-9a-fA-F]+|[0-9]{1,3}(\\.[0-9]{1,3}){3}(:[0-9]+)?|mstp:(0[xX][0-9a-fA-F]{1,2}|[0-9]{1,3})|bip6:(0[xX][0-9a-fA-F]{6}|[0-9]+)|[0-9a-fA-F]{12}|[0-9a-fA-F]{2}([:-][0-9a-fA-F]{2}){5})$",
+        "pattern": "^([0-9]+|[0-9]+:[0-9]+|[0-9]+:0[xX][0-9a-fA-F]+(:one-station)?|[0-9]{1,3}(\\.[0-9]{1,3}){3}(:[0-9]+)?|mstp:(0[xX][0-9a-fA-F]{1,2}|[0-9]{1,3})|bip6:(0[xX][0-9a-fA-F]{6}|[0-9]+)|[0-9a-fA-F]{12}|[0-9a-fA-F]{2}([:-][0-9a-fA-F]{2}){5})$",
         "description": "Device instance (0-4194302), dnet:instance for one on that network, or the \
                         address of a device in the discovery table: ip:port, mstp:N, bip6:0xVMAC, \
-                        six hex octets, or dnet:0xMAC behind a router. An instance two addresses \
-                        claim needs its address. Find devices with bacnet_discover first.",
+                        six hex octets, or dnet:0xMAC behind a router. A MAC that is the broadcast on an \
+                        MS/TP network (0xFF, or two octets 0x0001-0x00FF or 0xFF00-0xFFFE) is \
+                        refused; only the operator, who knows the remote link numbers it as \
+                        one station (ARCNET, a gateway's virtual network), can name it with \
+                        the suffix :one-station, so ask the operator and never add it \
+                        yourself. An instance two addresses claim needs its address. Find devices with bacnet_discover first.",
     })
 }
 

@@ -196,8 +196,10 @@ impl DeviceFeed {
         }
     }
 
-    /// Convert a client row for the UI; `None` for one whose address the
-    /// target grammar can't write, which the UI has no key for.
+    /// Convert a client row for the UI; `None` for one with no
+    /// [`DeviceAddress`], which the UI has no key for: no usable routing
+    /// fields, or a station at a MAC only the operator's one-station mark
+    /// lifts (#2738), which an I-Am can't give.
     pub(crate) fn row(&self, device: &DiscoveredDevice) -> Option<DeviceRow> {
         let at = DeviceAddress::of(device)?;
         let routed = device

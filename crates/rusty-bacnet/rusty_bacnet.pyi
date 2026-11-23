@@ -5644,7 +5644,10 @@ class BACnetClient:
         - an address pins the handle there and sends nothing for a station
           on this network: ``"192.168.1.10"`` or ``"192.168.1.10:47808"``,
           ``"mstp:5"``, ``"bip6:0x0004D2"``, an SC VMAC as six hex octets,
-          a routed station as ``"2:0x05"`` (network 2, MAC 05), or a
+          a routed station as ``"2:0x05"`` (network 2, MAC 05; a MAC that
+          is one station though it looks like a broadcast, ARCNET's
+          station 255 or a gateway's two-octet station, takes the suffix
+          ``":one-station"``, as ``"5:0xFF:one-station"``), or a
           ``(network, mac)`` pair such as a lookup error's candidate. A
           routed station with no learned router is asked directly
           first;
@@ -10134,10 +10137,11 @@ class BipEndpoint:
         peer redirects the audit trail unasked: none (read-only),
         ``"deny_all"`` or a callable, never ``"permissive"`` (ValueError).
         The bindings are ``(Device identifier, "ipv4:port")``
-        routes to recipient Devices, or ``"network:0xMAC"`` for one behind a
+        routes to recipient Devices, or ``"network:0xMAC[:one-station]"`` for one behind a
         router on that network (#2371; network 1 to 65534, MAC 1 to 18
         octets), or a ``RoutedTarget`` with no ``router`` for one there, the
-        form that can mark the address ``one_station=True`` (#2738; the
+        form that can mark the address ``one_station=True``, as the text
+        ``"5:0xFF:one-station"`` does (#2738; the
         session learns the router, so one with a ``router`` raises
         ValueError). A confirmed Reporter has no route to a Device bound at a
         broadcast or group form on its network (``b"\\xff"``, two octets
@@ -10447,7 +10451,7 @@ class ScEndpoint:
         ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
         binding address a VMAC as ``local_address()`` gives it
         (``"xx:xx:xx:xx:xx:xx"``) or as twelve hex digits, or a routed
-        ``"network:0xMAC"`` or ``RoutedTarget``. An address
+        ``"network:0xMAC[:one-station]"`` or ``RoutedTarget``. An address
         ``audit_recipient`` takes another node's VMAC: never the broadcast
         or all-zero VMAC or this endpoint's own.
 
@@ -10725,7 +10729,7 @@ class MstpEndpoint:
         ``source_audit_reporter`` / ``audit_recipient`` /
         ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
         binding address a station in decimal digits, as ``local_address()``
-        gives it (``"2"``), or a routed ``"network:0xMAC"`` or
+        gives it (``"2"``), or a routed ``"network:0xMAC[:one-station]"`` or
         ``RoutedTarget``. An address
         ``audit_recipient`` takes another station: never 255 or this
         endpoint's own."""
