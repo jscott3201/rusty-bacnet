@@ -102,7 +102,7 @@ async fn claimed_control_cannot_complete_reused_invoke_id_for_new_owner() {
             &claimed.tsm_mac,
             claimed.invoke_id,
             &claimed.owner,
-            TsmResponse::NetworkPathTooLong { dnet: 100 },
+            TsmResponse::Failed(Box::new(Error::RoutedPathTooLong { dnet: 100 })),
         ),
         CompletionOutcome::NoTransaction
     );
@@ -373,9 +373,9 @@ async fn control_queued_before_activation_cannot_claim_the_new_generation() {
     limits
         .handle_network_control(&tsm, reason_4_control(&router, 100, 6), None)
         .await;
-    assert!(matches!(
-        registration.response.await.unwrap(),
-        TsmResponse::NetworkPathTooLong { dnet: 100 }
-    ));
+    let TsmResponse::Failed(error) = registration.response.await.unwrap() else {
+        panic!("expected the router's refusal")
+    };
+    assert!(matches!(*error, Error::RoutedPathTooLong { dnet: 100 }));
     drop(lease);
 }

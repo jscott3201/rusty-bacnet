@@ -28,6 +28,7 @@
 //! rare enough that its segments are acknowledged first.
 
 use bacnet_types::enums::ConfirmedServiceChoice;
+use bacnet_types::error::Error;
 
 use super::TsmResponse;
 
@@ -69,40 +70,71 @@ const SIMPLE: u64 = bit(ConfirmedServiceChoice::ACKNOWLEDGE_ALARM)
     | bit(ConfirmedServiceChoice::REINITIALIZE_DEVICE)
     | bit(ConfirmedServiceChoice::VT_CLOSE);
 
-/// Whether `service` is in `set`.
-const fn listed(set: u64, service: ConfirmedServiceChoice) -> bool {
-    let raw = service.to_raw();
-    raw < 64 && (set >> raw) & 1 == 1
+/// Which acknowledgement is the wrong kind for each service number, one
+/// octet per number: bit 0 set when a Simple-ACK is, bit 1 when a
+/// Complex-ACK is. The check on every answer is then one load and one bit
+/// test, with no bounds check and no 64-bit mask to build.
+static WRONG: [u8; 256] = {
+    let mut table = [0; 256];
+    let mut raw = 0;
+    while raw < 64 {
+        if (COMPLEX >> raw) & 1 == 1 {
+            table[raw] |= 1 << SIMPLE_ACK;
+        }
+        if (SIMPLE >> raw) & 1 == 1 {
+            table[raw] |= 1 << COMPLEX_ACK;
+        }
+        raw += 1;
+    }
+    table
+};
+
+/// [`slot`] of a Simple-ACK.
+const SIMPLE_ACK: u8 = 0;
+/// [`slot`] of a Complex-ACK.
+const COMPLEX_ACK: u8 = 1;
+
+/// Which of [`WRONG`]'s bits `response` reads: [`SIMPLE_ACK`],
+/// [`COMPLEX_ACK`], or a bit no service sets for any other response. The
+/// match is the one the completion makes anyway, so it costs nothing more.
+#[inline(always)]
+pub(super) fn slot(response: &TsmResponse) -> u8 {
+    match response {
+        TsmResponse::SimpleAck => SIMPLE_ACK,
+        TsmResponse::ComplexAck { .. } => COMPLEX_ACK,
+        TsmResponse::Remote { .. } => 2,
+        TsmResponse::Failed(_) => 3,
+    }
 }
 
-/// The acknowledgement `response` would complete a request for `service`
-/// with is the wrong kind for it: `Some(true)` for a Complex-ACK the
-/// service doesn't take, `Some(false)` for a Simple-ACK. `None` for the
-/// right kind, any other response, and a service that takes either. One
-/// bit test on every acknowledgement; [`refuse`] does the rest.
-#[inline]
-pub(super) fn wrong_kind(service: ConfirmedServiceChoice, response: &TsmResponse) -> Option<bool> {
-    let complex = match response {
-        TsmResponse::SimpleAck => false,
-        TsmResponse::ComplexAck { .. } => true,
-        _ => return None,
-    };
-    listed(if complex { SIMPLE } else { COMPLEX }, service).then_some(complex)
+/// Whether `slot` is an acknowledgement's.
+#[inline(always)]
+pub(super) const fn is_ack(slot: u8) -> bool {
+    slot <= COMPLEX_ACK
 }
 
-/// Make `response`, an acknowledgement of the wrong kind for `service`,
-/// the request's failure, unless it is a Complex-ACK and the client takes
-/// those (`accept_complex`, read only here).
+/// Whether the answer in `slot` is an acknowledgement of the wrong kind
+/// for `service`: `false` for the right kind, for a service that takes
+/// either and for any other answer. [`refuse`] does the rest.
+#[inline(always)]
+pub(super) fn wrong(service: ConfirmedServiceChoice, slot: u8) -> bool {
+    (WRONG[usize::from(service.to_raw())] >> slot) & 1 == 1
+}
+
+/// Make `response`, an acknowledgement in `slot` of the wrong kind for
+/// `service`, the request's failure, unless it is a Complex-ACK and the
+/// client takes those (`accept_complex`, read only here).
 #[cold]
 #[inline(never)]
 pub(super) fn refuse(
     service: ConfirmedServiceChoice,
-    complex: bool,
+    slot: u8,
     accept_complex: bool,
     response: &mut TsmResponse,
 ) {
+    let complex = slot == COMPLEX_ACK;
     if !(complex && accept_complex) {
-        *response = TsmResponse::UnexpectedAck { service, complex };
+        *response = TsmResponse::Failed(Box::new(Error::UnexpectedAck { service, complex }));
     }
 }
 
@@ -110,21 +142,30 @@ pub(super) fn refuse(
 mod tests {
     use super::*;
 
+    /// Whether `raw` is in `set`.
+    fn listed(set: u64, raw: u8) -> bool {
+        raw < 64 && (set >> raw) & 1 == 1
+    }
+
     /// Every service 135-2020 defines takes exactly one kind, and the
-    /// removed and unassigned numbers take either.
+    /// removed and unassigned numbers take either; the table the check
+    /// reads says the same.
     #[test]
     fn each_defined_service_takes_one_acknowledgement() {
         assert_eq!(COMPLEX & SIMPLE, 0);
         for raw in 0..=u8::MAX {
             let service = ConfirmedServiceChoice::from_raw(raw);
-            let complex = listed(COMPLEX, service);
-            let simple = listed(SIMPLE, service);
+            let complex = listed(COMPLEX, raw);
+            let simple = listed(SIMPLE, raw);
             let either = matches!(raw, 13 | 18 | 24 | 25);
             assert_eq!(
                 complex || simple,
                 service.name().is_some() && !either,
                 "service {raw}"
             );
+            assert_eq!(wrong(service, SIMPLE_ACK), complex, "service {raw}");
+            assert_eq!(wrong(service, COMPLEX_ACK), simple, "service {raw}");
+            assert!(!wrong(service, 2) && !wrong(service, 3), "service {raw}");
         }
         assert_eq!(COMPLEX.count_ones(), 12);
         assert_eq!(SIMPLE.count_ones(), 18);
@@ -132,8 +173,8 @@ mod tests {
 
     /// Every answer moves through the response channel and the request
     /// future by value, so a completion stays as small as the
-    /// acknowledgements and the device's errors make it: a router's reject
-    /// is boxed (#2724).
+    /// acknowledgements and the device's errors make it: the rare endings
+    /// are boxed (#2724, #2721).
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn a_completion_stays_small() {

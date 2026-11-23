@@ -173,7 +173,7 @@ impl RoutedPathLimits {
             &active.tsm_mac,
             active.invoke_id,
             &active.owner,
-            TsmResponse::NetworkPathTooLong { dnet },
+            TsmResponse::Failed(Box::new(Error::RoutedPathTooLong { dnet })),
         );
         // A change of the path's limit may run at any point here (and a
         // clear may leave the entry to be reclaimed once the request drops
@@ -201,7 +201,7 @@ impl RoutedPathLimits {
             &active.tsm_mac,
             active.invoke_id,
             &active.owner,
-            TsmResponse::NetworkRejected(Box::new(refusal)),
+            TsmResponse::Failed(Box::new(Error::NetworkRejected(Box::new(refusal)))),
         );
     }
 
@@ -367,7 +367,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ) {
         let (tsm_mac, invoke_id, owner) = transaction;
         match response {
-            Ok(TsmResponse::NetworkRejected(_) | TsmResponse::NetworkPathTooLong { .. }) => {
+            Ok(TsmResponse::Failed(error))
+                if matches!(
+                    **error,
+                    Error::NetworkRejected(_) | Error::RoutedPathTooLong { .. }
+                ) =>
+            {
                 self.enqueue_transaction_cleanup(tsm_mac, invoke_id, owner, false, None);
             }
             Err(Error::Timeout(_)) => {

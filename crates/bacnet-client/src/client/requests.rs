@@ -44,16 +44,16 @@ pub(super) fn request_cut_off() -> Error {
 /// acknowledgment, of the right kind or not (#2721), or its Error, Reject
 /// or Abort. Any of them shows that the request reached the device (Clause
 /// 19.4). A router's refusal, a reason 4 ending the request as
-/// [`TsmResponse::NetworkPathTooLong`] or another reason as
-/// [`TsmResponse::NetworkRejected`], is no answer from the device.
+/// [`Error::RoutedPathTooLong`] or another reason as
+/// [`Error::NetworkRejected`], is no answer from the device.
 pub(super) fn answered_by_peer(response: &Result<TsmResponse, Error>) -> bool {
-    matches!(
-        response,
-        Ok(TsmResponse::SimpleAck
-            | TsmResponse::ComplexAck { .. }
-            | TsmResponse::UnexpectedAck { .. }
-            | TsmResponse::Remote { .. })
-    )
+    match response {
+        Ok(
+            TsmResponse::SimpleAck | TsmResponse::ComplexAck { .. } | TsmResponse::Remote { .. },
+        ) => true,
+        Ok(TsmResponse::Failed(error)) => matches!(**error, Error::UnexpectedAck { .. }),
+        _ => false,
+    }
 }
 
 /// Reject a maximum transmittable length no conformant device could accept.

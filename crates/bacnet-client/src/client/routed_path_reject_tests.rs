@@ -506,7 +506,10 @@ async fn a_reject_queued_before_the_request_went_out_is_not_its_own() {
     limits
         .handle_network_control(&tsm, control(reason, 6), Some(DataLink::Mstp))
         .await;
-    let TsmResponse::NetworkRejected(reject) = registration.response.await.unwrap() else {
+    let TsmResponse::Failed(error) = registration.response.await.unwrap() else {
+        panic!("expected a network reject")
+    };
+    let Error::NetworkRejected(reject) = *error else {
         panic!("expected a network reject")
     };
     assert_eq!(

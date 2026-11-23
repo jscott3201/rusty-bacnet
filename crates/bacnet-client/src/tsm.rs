@@ -78,23 +78,18 @@ pub enum TsmResponse {
         /// others); `None` for a plain error, a Reject or an Abort.
         detail: Option<bacnet_types::error::ErrorDetail>,
     },
-    /// A router rejected the active message as too long for its routed path.
-    NetworkPathTooLong {
-        /// Destination network named by the network-layer rejection.
-        dnet: u16,
-    },
-    /// The router the request went through refused it at the network
-    /// layer for another reason that ends a request at once (#2724).
-    /// Boxed, so the rare refusal leaves every completion small.
-    NetworkRejected(Box<bacnet_types::error::NetworkReject>),
-    /// The device acknowledged the request with the other kind of
-    /// acknowledgement than its service takes (#2721).
-    UnexpectedAck {
-        /// The service the request asked for.
-        service: ConfirmedServiceChoice,
-        /// `true` for a Complex-ACK, `false` for a Simple-ACK.
-        complex: bool,
-    },
+    /// The transaction ended without an answer the request can use, and
+    /// this is the error it fails with: the router the request went through
+    /// refused it, as too long for the routed path
+    /// ([`Error::RoutedPathTooLong`](bacnet_types::error::Error::RoutedPathTooLong))
+    /// or for another reason that ends a request at once
+    /// ([`Error::NetworkRejected`](bacnet_types::error::Error::NetworkRejected),
+    /// #2724), or the device acknowledged it with the other kind of
+    /// acknowledgement than its service takes
+    /// ([`Error::UnexpectedAck`](bacnet_types::error::Error::UnexpectedAck),
+    /// #2721). One boxed variant for these rare endings keeps every
+    /// completion's size and variant tags as they were.
+    Failed(Box<bacnet_types::error::Error>),
 }
 
 impl TsmResponse {
@@ -118,24 +113,42 @@ impl TsmResponse {
     }
 
     /// What a request ends with: an acknowledgement's service data (empty
-    /// for a Simple-ACK), or the error the completion reports.
+    /// for a Simple-ACK), or the error the completion reports. Each arm
+    /// takes all its variant holds and returns or hands off in a tail call,
+    /// so an acknowledgement's ending needs no stack frame and no check of
+    /// what is left to drop.
     pub(crate) fn into_result(self) -> Result<Bytes, bacnet_types::error::Error> {
-        use bacnet_types::error::Error;
         match self {
             Self::SimpleAck => Ok(Bytes::new()),
             Self::ComplexAck { service_data } => Ok(service_data),
-            Self::Remote {
-                error: RemoteError::Error { class, code },
-                detail,
-            } => Err(Error::with_detail(class, code, detail)),
-            Self::Remote { error, .. } => Err(Error::Remote(error)),
-            Self::NetworkPathTooLong { dnet } => Err(Error::RoutedPathTooLong { dnet }),
-            Self::NetworkRejected(reject) => Err(Error::NetworkRejected(reject)),
-            Self::UnexpectedAck { service, complex } => {
-                Err(Error::UnexpectedAck { service, complex })
-            }
+            Self::Remote { error, detail } => remote_failure(error, detail),
+            Self::Failed(error) => failed(error),
         }
     }
+}
+
+/// The error an Error, Reject or Abort PDU's completion ends with: an
+/// Error PDU's class and code with any structured detail; a Reject or
+/// Abort, which has no detail, as itself.
+#[inline(never)]
+fn remote_failure(
+    error: RemoteError,
+    detail: Option<bacnet_types::error::ErrorDetail>,
+) -> Result<Bytes, bacnet_types::error::Error> {
+    use bacnet_types::error::Error;
+    match error {
+        RemoteError::Error { class, code } => Err(Error::with_detail(class, code, detail)),
+        _ => Err(Error::Remote(error)),
+    }
+}
+
+/// The error a [`TsmResponse::Failed`] holds, taken out of its box here
+/// rather than in [`TsmResponse::into_result`], which only hands it off.
+#[cold]
+#[inline(never)]
+#[allow(clippy::boxed_local)] // unboxing out of line is this function's job
+fn failed(error: Box<bacnet_types::error::Error>) -> Result<Bytes, bacnet_types::error::Error> {
+    Err(*error)
 }
 
 /// Invoke ID allocator scoped to a single destination MAC.

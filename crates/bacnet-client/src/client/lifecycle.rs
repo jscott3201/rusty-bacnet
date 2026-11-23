@@ -239,8 +239,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             &config,
         )));
         let routed_path_limits_dispatch = Arc::clone(&routed_path_limits);
-        // Names the router in a network reject's error (#2724).
-        let link = network.transport().data_link();
         let group_source_request_drops = Arc::new(AtomicU64::new(0));
         let group_source_drops_dispatch = Arc::clone(&group_source_request_drops);
         // One of each per client: a peer's flood of undecodable APDUs, or of
@@ -289,6 +287,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             }
                         } else {
                             // Preserve the original envelope and ingress sequence for Reject correlation.
+                            // The data link, read here and not kept by the task,
+                            // names the router in a reject's error (#2724).
+                            let link = inbound.network().transport().data_link();
                             routed_path_limits_dispatch
                                 .handle_network_control(&tsm_dispatch, control, link)
                                 .await;
