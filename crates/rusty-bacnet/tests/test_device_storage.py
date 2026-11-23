@@ -162,6 +162,9 @@ class DeviceStorageTests(unittest.IsolatedAsyncioTestCase):
             await self.peer_writes(server, (P.DESCRIPTION, LOBBY))
         finally:
             await server.stop()
+            # Leave the directory before it is removed: Windows refuses to
+            # delete a process's working directory.
+            os.chdir(home)
         self.assertTrue(self.path.exists())
         self.assertFalse(Path(elsewhere.name, "state").exists())
 
