@@ -8,9 +8,9 @@
 //! names the sender instead. The command is run with `--port` set to
 //! [`Unsent::source_port`], so everything it sends leaves from that port, and
 //! only a datagram from there counts as the command's. Datagrams from any
-//! other source are somebody else's and are set aside. No outcome here, in
-//! the helper or in its own tests, depends on how many datagrams in total
-//! reach the socket.
+//! other source are somebody else's and are set aside ([`super::sender`],
+//! which the TUI's tests share). No outcome here, in the helper or in its own
+//! tests, depends on how many datagrams in total reach the socket.
 //!
 //! The source port is a free one the helper picked and let go. A refused
 //! command never binds it (the refusal precedes any transport), so nothing
@@ -19,6 +19,8 @@
 use std::cell::RefCell;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::Duration;
+
+use super::sender::queued_from;
 
 pub struct Unsent {
     socket: UdpSocket,
@@ -93,16 +95,13 @@ impl Unsent {
     /// other sources are set aside.
     pub fn assert_nothing_sent(&self, what: &str) {
         let own = SocketAddr::from((Ipv4Addr::LOCALHOST, self.source));
-        let mut seen: Vec<_> = self.held.take();
-        let mut buffer = [0u8; 1500];
-        loop {
-            match self.socket.recv_from(&mut buffer) {
-                Ok((length, from)) => seen.push((from, buffer[..length].to_vec())),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(error) => panic!("{what}: reading the peer socket: {error}"),
-            }
-        }
-        if let Some((_, bytes)) = seen.iter().find(|(from, _)| *from == own) {
+        let held = self.held.take().into_iter().find(|(from, _)| *from == own);
+        let sent = match held {
+            Some((_, bytes)) => Some(bytes),
+            None => queued_from(own, |buffer| self.socket.recv_from(buffer))
+                .unwrap_or_else(|error| panic!("{what}: reading the peer socket: {error}")),
+        };
+        if let Some(bytes) = sent {
             panic!(
                 "{what}: the command sent {} bytes from its own port: {bytes:02x?}",
                 bytes.len()

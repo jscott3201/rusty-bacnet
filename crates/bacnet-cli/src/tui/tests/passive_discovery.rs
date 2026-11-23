@@ -320,12 +320,14 @@ async fn zero_send_attempts() -> std::io::Result<()> {
     peer.send_to(&wire(Bvll::ReadBroadcastDistributionTable), address)
         .await
         .unwrap();
-    let mut reply = [0; 128];
-    let (n, from) = peer.recv_from(&mut reply).await.unwrap();
-    assert_eq!(from.port(), address.port());
+    // The control's answer, judged by its sender: a late datagram meant for
+    // another test's process can land on `peer`'s fresh port (#2718).
+    let reply = super::sender::next_from(&peer, address.into()).await;
     assert_eq!(
-        reply[1], 0,
-        "normal node responds with a BVLC result, {n} bytes"
+        reply[1],
+        0,
+        "normal node responds with a BVLC result, {} bytes",
+        reply.len()
     );
     assert!(
         positive.attempts() > 0,
@@ -408,10 +410,10 @@ async fn zero_send_attempts() -> std::io::Result<()> {
         0,
         "startup, commands, requests, foreign settings and shutdown"
     );
-    assert_eq!(
-        peer.try_recv_from(&mut reply).unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock
-    );
+    // Nothing came from the listener's address; a datagram from anywhere
+    // else is another test's (#2718).
+    let answered = super::sender::queued_from(address.into(), |buffer| peer.try_recv_from(buffer));
+    assert_eq!(answered.unwrap(), None, "the passive listener answered");
     released
 }
 
