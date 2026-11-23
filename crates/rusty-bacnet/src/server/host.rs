@@ -170,7 +170,7 @@ impl super::BACnetServer {
             registered_network_port: None,
             inner: host,
             device_instance,
-            segmentation_supported: bacnet_types::enums::Segmentation::NO_SEGMENTATION,
+            segmentation_supported: bacnet_types::enums::Segmentation::SEGMENTED_BOTH,
             apdu_segment_timeout_ms: 5000,
             device_name: String::new(),
             transport_type: "bip".into(),

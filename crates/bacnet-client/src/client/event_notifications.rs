@@ -72,8 +72,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Only subsequent notifications are delivered. Slow receivers observe
     /// broadcast lag; no receivers or lag never prevent a valid confirmed request
     /// from being acknowledged. The wire acknowledgment confirms receipt, not
-    /// operator acknowledgment or durable application processing. Stopping the
-    /// client ends dispatch; dropping it closes the channel after queued messages.
+    /// operator acknowledgment or durable application processing. A confirmed
+    /// notification that comes in segments is reassembled first, when the
+    /// client receives segments, and then published and acknowledged once
+    /// (#2646). Beside a server role the server answers it, and the client
+    /// publishes only one that came whole (known gap, tracked separately).
+    /// Stopping the client ends
+    /// dispatch; dropping it closes the channel after queued messages.
     pub fn event_notifications(&self) -> broadcast::Receiver<ReceivedEventNotification> {
         self.event_tx.subscribe()
     }

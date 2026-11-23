@@ -69,7 +69,7 @@ impl BACnetServer {
         device_storage_path=None,
         share_port_by_address=false,
         share_wildcard_port=false,
-        segmentation_supported=crate::types::PySegmentation { inner: bacnet_types::enums::Segmentation::NO_SEGMENTATION },
+        segmentation_supported=crate::types::PySegmentation { inner: bacnet_types::enums::Segmentation::SEGMENTED_BOTH },
         apdu_segment_timeout_ms=5000,
         bbmd=None,
         foreign_device=None,

@@ -6403,9 +6403,9 @@ class BACnetClient:
         An unsubscribed sender's broadcast can bring a
         ``CovNotificationMultiple`` too, so check ``kind`` (or use
         ``isinstance``) before reading a ``CovNotification``'s fields. A
-        segmented COV-multiple request is answered with an Abort (the client
-        does not support segmentation; tracked in #2646), and a confirmed
-        notification sent again, its answer lost, is published again.
+        confirmed notification that comes in segments is reassembled, then
+        acknowledged and yielded once (#2646), and a confirmed notification
+        sent again, its answer lost, is published again.
         """
         ...
 
@@ -7318,9 +7318,12 @@ class BACnetServer:
     lifetime. No generation, persistence, change detection, or version/variant
     enforcement is provided. Non-SC transports ignore this option.
 
-    Segmentation defaults to NO_SEGMENTATION. When enabled, apdu_segment_timeout_ms must
-    be positive; it supplies Device APDU_SEGMENT_TIMEOUT, response SegmentACK
-    waits, and the 4*Tseg receive inactivity timer. A separate 16-second
+    Segmentation defaults to SEGMENTED_BOTH, as the Rust server's and the
+    endpoints' do (#2617); ``segmentation_supported=Segmentation.NO_SEGMENTATION``
+    keeps every request and answer to one APDU. While it segments,
+    apdu_segment_timeout_ms must be positive; it supplies Device
+    APDU_SEGMENT_TIMEOUT, response SegmentACK waits, and the 4*Tseg receive
+    inactivity timer. A separate 16-second
     no-progress resource limit aborts abandoned request transfers with OTHER.
 
     ``device_instance`` takes 0 to 4194302. Instance 4194303 is reserved, as
@@ -7414,7 +7417,7 @@ class BACnetServer:
         device_storage_path: Optional[str] = None,
         share_port_by_address: bool = False,
         share_wildcard_port: bool = False,
-        segmentation_supported: Segmentation = Segmentation.NO_SEGMENTATION,
+        segmentation_supported: Segmentation = Segmentation.SEGMENTED_BOTH,
         apdu_segment_timeout_ms: int = 5000,
         bbmd: Optional[Bbmd] = None,
         foreign_device: Optional[ForeignDevice] = None,
@@ -10065,12 +10068,11 @@ class BipEndpoint:
     need segments the endpoint doesn't send fails before anything goes out.
     ``Segmentation.NO_SEGMENTATION`` keeps every request and answer to one
     APDU, for a constrained link or a peer that can't segment.
-    ``BACnetServer()`` keeps its own default of ``NO_SEGMENTATION``. The
-    keyword-only ``apdu_segment_timeout_ms`` (default 5000, positive when
+    ``BACnetServer()`` has the same default. The keyword-only
+    ``apdu_segment_timeout_ms`` (default 5000, positive when
     segmenting) is the Device's APDU_Segment_Timeout, which both roles use
-    while they segment. Known gap: ``client()`` still aborts a segmented
-    ConfirmedCOVNotification (#2646), though the Device says it takes
-    segments.
+    while they segment. ``client()`` reassembles a segmented COV
+    notification while the Device takes segments (#2646).
 
     ``device_instance`` takes 0 to 4194302. Instance 4194303 is reserved, as
     no object may have it, so it, or anything larger, raises ValueError at

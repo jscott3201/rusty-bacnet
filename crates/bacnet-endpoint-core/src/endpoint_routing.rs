@@ -33,7 +33,9 @@
 //! - Each seat has three tiers: Unconfirmed-Requests stop at half of it,
 //!   Confirmed-Requests at its reserve, and answers to the role's own
 //!   requests (and, on the server seat, a requester's Abort or Segment-ACK)
-//!   may fill it ([`SeatSlot::takes`](crate::seat::SeatSlot::takes)).
+//!   may fill it ([`SeatSlot::takes`](crate::seat::SeatSlot::takes)). The
+//!   client seat's copy of a requester's Abort stops at half, as
+//!   Unconfirmed-Requests do.
 //! - An APDU the classifier refuses goes to the policy queue, and is dropped
 //!   when that is full.
 use std::sync::atomic::AtomicU64;
@@ -343,6 +345,10 @@ enum SeatShare {
     /// a copy may take, so a flood of these leaves room for the client's
     /// own answers (#2635).
     Stray,
+    /// A copy with no reply authority, held to the share a [`Self::Stray`]
+    /// may take: a requester's Abort, which may end a request the client
+    /// is reassembling (#2646). The endpoint's queue keeps the APDU.
+    StrayCopy,
 }
 
 /// Whether `apdu` is an Abort (7) or Segment-ACK (4) with the server bit
@@ -350,6 +356,13 @@ enum SeatShare {
 fn from_requester(apdu: &[u8]) -> bool {
     apdu.first()
         .is_some_and(|first| matches!(first >> 4, 4 | 7) && first & 0x01 == 0)
+}
+
+/// Whether `apdu` is an Abort (7) with the server bit clear: a requester
+/// ending a request, which may be one the client reassembles.
+fn requester_abort(apdu: &[u8]) -> bool {
+    apdu.first()
+        .is_some_and(|first| first >> 4 == 7 && first & 0x01 == 0)
 }
 
 /// Whether `apdu` is a segmented Complex-ACK (3 with the segmented-message
@@ -418,9 +431,16 @@ fn client_share(
         (IngressRoute::TerminalOrSegment, _) if holder == Some(LeaseHolder::Client) => {
             SeatShare::Whole
         }
-        // No lease holds it: a segmented answer is the client's to abort.
-        (IngressRoute::TerminalOrSegment, _) if holder.is_none() && client_stray(apdu) => {
-            SeatShare::Stray
+        // No lease holds it: a segmented answer is the client's to abort,
+        // and a requester's Abort may end a request it reassembles.
+        (IngressRoute::TerminalOrSegment, _) if holder.is_none() => {
+            if client_stray(apdu) {
+                SeatShare::Stray
+            } else if requester_abort(apdu) {
+                SeatShare::StrayCopy
+            } else {
+                SeatShare::None
+            }
         }
         (IngressRoute::TerminalOrSegment, _) => SeatShare::None,
     }
@@ -474,6 +494,11 @@ fn share_out(
                     received = seats.offer(client, received.take()?)
                 }
                 SeatShare::Stray => received = None,
+                SeatShare::StrayCopy => {
+                    if seats.takes_stray(client) {
+                        let _ = seats.offer(client, seat_copy(apdu));
+                    }
+                }
             }
         }
         if let Some(server) = server {
