@@ -138,7 +138,10 @@ pub(super) struct RouterSettings {
 
 impl RouterSettings {
     /// The keywords, checked: `control_policy` is `"permissive"` or
-    /// `"hardened"`, anything else ValueError.
+    /// `"hardened"`, anything else ValueError. With `"hardened"` and no
+    /// authorizer, which Python can't give, the router denies every
+    /// routing-table update and every reject, so `remote_table_updates` or
+    /// `next_hop_rejects` beside it could never apply: ValueError too.
     pub fn parse(
         remote_table_updates: bool,
         next_hop_rejects: bool,
@@ -153,6 +156,17 @@ impl RouterSettings {
                 )));
             }
         };
+        let idle = match (remote_table_updates, next_hop_rejects) {
+            (true, _) => Some(("remote_table_updates", "routing-table update")),
+            (_, true) => Some(("next_hop_rejects", "reject")),
+            _ => None,
+        };
+        if let (ControlPolicy::Hardened, Some((option, what))) = (control_policy, idle) {
+            return Err(PyValueError::new_err(format!(
+                "{option}=True does nothing with control_policy='hardened': with no \
+                 authorizer the router denies every {what}"
+            )));
+        }
         Ok(Self {
             remote_table_updates,
             next_hop_rejects,

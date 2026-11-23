@@ -711,12 +711,16 @@ Three keyword-only options, Rust's `RouterOptions`, apply at each start
   admitted. `"hardened"` denies every protected one, route announcements and
   routing-table updates and answers among them, since this binding installs no
   authorizer; the router then keeps its direct routes and learns none from the
-  wire. Each decision is counted under `counters()["control"]`.
+  wire, so only its directly attached networks are reachable. Each decision is
+  counted under `counters()["control"]`.
 
 Another policy raises `ValueError`, and a flag that isn't a `bool` `TypeError`.
+So does `"hardened"` beside `remote_table_updates=True` or
+`next_hop_rejects=True`: with no authorizer it denies every routing-table
+update and every reject, so neither option could ever apply.
 
 ```python
-router = BACnetRouter(ports, next_hop_rejects=True, control_policy="hardened")
+router = BACnetRouter(ports, next_hop_rejects=True)
 async with router:
     counts = await router.counters()
     print(counts["isolated_drops"], counts["denied"],
@@ -788,6 +792,15 @@ network the router doesn't know yet raises `BacnetTransportError` with errno
 `ENETUNREACH`, and the router starts looking for it; once the route is
 learned, a retry goes. The server answers at the router's address on each
 network.
+
+Every local broadcast either stack sends goes to each of the router's networks,
+isolated ports included, once each (#2601): the server's I-Am, an unconfirmed
+event notification to a local-broadcast recipient and the Who-Is that looks
+for a Device recipient, as well as the client's Who-Is, Who-Has, Who-Am-I and
+Write-Group. A recipient or scope that names one network's number reaches that
+network alone. A port that can't carry its copy fails the send with its error,
+yet the other networks' copies still go: an error doesn't mean nothing was
+sent.
 
 A stack whose role the router doesn't share raises `ValueError` at
 construction: a server needs `application="client_and_server"`. `router=`
@@ -2790,8 +2803,9 @@ Find a device hosting a specific object by identifier. The Who-Has goes where
 local broadcast which no router passes on; `scope="global"` every network,
 where every device that hears it searches its objects; a network number from
 1 to 65534 that remote network. The same values raise the same errors as
-`who_is()`'s, before anything is sent, and on `transport="router"` a local
-Who-Has raises `ValueError` naming the scopes to use. Answers come through
+`who_is()`'s, before anything is sent. On `transport="router"` a local
+Who-Has asks each of the router's networks (#2601), and a station's address,
+which names no one of them, raises `ValueError`. Answers come through
 `i_have_events()`.
 
 ```python

@@ -73,8 +73,12 @@ is `"permissive"` (the default), which admits the wire controls
 that change routes, or `"hardened"`, which denies every protected
 one, route announcements and table updates among them, since this
 binding installs no authorizer: the router then keeps its direct
-routes and learns none from the wire. Another policy raises
-ValueError, and a flag that isn't a bool TypeError.
+routes and learns none from the wire, so only its directly attached
+networks are reachable. Another policy raises ValueError, as does
+`"hardened"` beside `remote_table_updates=True` or
+`next_hop_rejects=True`: it denies every routing-table update and
+every reject, so neither option could ever apply. A flag that isn't
+a bool raises TypeError.
 
 ### BACnetRouter.start
 

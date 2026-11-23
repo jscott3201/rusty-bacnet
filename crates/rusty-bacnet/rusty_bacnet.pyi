@@ -7384,7 +7384,11 @@ class BACnetServer:
         reach both with only this server's answer sent; confirmed audit
         notifications reach this server alone. Unconfirmed requests reach
         both. A start refused before the server runs, such as for a
-        duplicate object name, leaves the share for the next start.
+        duplicate object name, leaves the share for the next start. Its
+        local broadcasts, such as its I-Am and an unconfirmed event
+        notification to a local-broadcast recipient, go to each of the
+        router's networks, isolated ports included (#2601); a recipient
+        that names one network's number reaches that network alone.
         ``apdu_segment_timeout_ms`` must be under 60000. ``router`` without
         ``transport="router"``, or the reverse, raises ValueError.
 
@@ -11005,8 +11009,12 @@ class BACnetRouter:
         that change routes, or ``"hardened"``, which denies every protected
         one, route announcements and table updates among them, since this
         binding installs no authorizer: the router then keeps its direct
-        routes and learns none from the wire. Another policy raises
-        ValueError, and a flag that isn't a bool TypeError."""
+        routes and learns none from the wire, so only its directly attached
+        networks are reachable. Another policy raises ValueError, as does
+        ``"hardened"`` beside ``remote_table_updates=True`` or
+        ``next_hop_rejects=True``: it denies every routing-table update and
+        every reject, so neither option could ever apply. A flag that isn't
+        a bool raises TypeError."""
         ...
     @property
     def application(self) -> Optional[Literal["client", "client_and_server"]]:

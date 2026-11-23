@@ -4255,8 +4255,17 @@ let ack = client
   `Scope::Local` ask each attached network, and `BACnetClient::local_networks`
   lists them, so their answers, which carry those networks as SNET, count as
   local. A copy a port refuses fails the send, while the other copies still
-  go, as for a global broadcast. A unicast with no DNET names a MAC on no one
-  network and fails with `Error::Encoding`, and so do network messages.
+  go, as for a global broadcast: an error from a local broadcast doesn't mean
+  nothing was sent. A unicast with no DNET names a MAC on no one network and
+  fails with `Error::Encoding`, and so do network messages.
+- A server on the port (`RouterApplicationPorts::server`) sends its local
+  broadcasts the same way: `BACnetServer::broadcast_i_am`, an unconfirmed
+  event notification to a local-broadcast recipient, a Notification
+  Forwarder's copy of one, and the Who-Is that looks for a Device recipient
+  go to each attached network, isolated ports included, as do a client's
+  Write-Group, Who-Am-I and other unconfirmed broadcasts with no network. A
+  recipient or call that names one network's number reaches that network
+  alone.
 - A refusal from `originate` fails the send. Too long for the egress port is
   `Error::SendTooLong`. Anything else is an `Error::Transport` carrying the
   `OriginateFailure`, which `OriginateFailure::from_error` returns. A network

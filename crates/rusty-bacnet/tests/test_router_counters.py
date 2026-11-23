@@ -42,16 +42,24 @@ class RouterOptionSurfaceTests(unittest.TestCase):
         self.assertEqual(
             (plain.remote_table_updates, plain.next_hop_rejects, plain.control_policy),
             (False, False, "permissive"))
-        set_ = rb.BACnetRouter([port(1)], remote_table_updates=True, next_hop_rejects=True,
-                               control_policy="hardened")
+        set_ = rb.BACnetRouter([port(1)], remote_table_updates=True, next_hop_rejects=True)
         self.assertEqual(
             (set_.remote_table_updates, set_.next_hop_rejects, set_.control_policy),
-            (True, True, "hardened"))
+            (True, True, "permissive"))
+        hardened = rb.BACnetRouter([port(1)], control_policy="hardened")
+        self.assertEqual(hardened.control_policy, "hardened")
         for name in ("remote_table_updates", "next_hop_rejects", "control_policy"):
             with self.assertRaises(AttributeError):
                 setattr(set_, name, None)
         with self.assertRaisesRegex(ValueError, "control_policy must be 'permissive' or 'hardened'"):
             rb.BACnetRouter([port(1)], control_policy="strict")
+        # With no authorizer, "hardened" denies every table update and every
+        # reject, so these options beside it could never apply.
+        for flag, what in (("remote_table_updates", "routing-table update"),
+                           ("next_hop_rejects", "reject")):
+            with self.subTest(flag=flag), self.assertRaisesRegex(
+                    ValueError, f"{flag}=True does nothing with control_policy='hardened'.*{what}"):
+                rb.BACnetRouter([port(1)], control_policy="hardened", **{flag: True})
         for flag in ("remote_table_updates", "next_hop_rejects"):
             with self.subTest(flag=flag), self.assertRaises(TypeError):
                 rb.BACnetRouter([port(1)], **{flag: 1})

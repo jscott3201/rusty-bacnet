@@ -130,6 +130,19 @@ async fn a_copy_one_port_cannot_carry_fails_the_send_and_the_rest_go() {
     router.stop().await.unwrap();
 }
 
+/// The shared test transport in front of the port answers its networks, as
+/// the trait asks of a wrapper; on its own it has none.
+#[tokio::test]
+async fn a_wrapper_forwards_the_attached_networks() {
+    use bacnet_transport::test_transport::TestTransport;
+
+    let (mut router, port, _handles) = router(&[1497; 2], 1).await;
+    let wrapped = TestTransport::builder().inner(port).build();
+    assert_eq!(wrapped.attached_networks(), [1000, 2000]);
+    assert!(TestTransport::new().attached_networks().is_empty());
+    router.stop().await.unwrap();
+}
+
 /// A unicast with no DNET names a MAC on no one network: refused, sending
 /// nothing.
 #[tokio::test]

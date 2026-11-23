@@ -9,6 +9,7 @@ import errno
 import unittest
 
 import rusty_bacnet as rb
+from bvll_peer import RawPeer, bvll
 from test_bip_modes import accepted_registration, eventually
 
 PV = rb.PropertyIdentifier.PRESENT_VALUE
@@ -148,6 +149,21 @@ class RouterApplicationTests(unittest.IsolatedAsyncioTestCase):
         client = await self.router_client(near)
         low, high = BASE + 21, BASE + 27
         attached = [(BASE + 21, 1), (BASE + 25, 5), (BASE + 26, 6)]
+        # A raw listener on network 7, a foreign device of its BBMD, counts
+        # the Who-Is requests for this range that reach that network.
+        listener = RawPeer(lambda data, source: ())
+        self.addCleanup(listener.close)
+        host, udp = far_ports[1].address.rsplit(":", 1)
+        listener.send(bvll(0x05, (60).to_bytes(2, "big")), (host, int(udp)))
+        who_is = (bytes([0x10, 0x08, 0x0B]) + low.to_bytes(3, "big") + bytes([0x1B])
+                  + high.to_bytes(3, "big"))
+
+        def heard():
+            return sum(data.endswith(who_is) for data, _ in list(listener.received))
+
+        async def registered():
+            return any(data[:2] == b"\x81\x00" for data, _ in list(listener.received))
+        await eventually(registered, seconds=10)
 
         async def found(**scope):
             rows = await client.discover(wait=0.5, low=low, high=high, **scope)
@@ -157,6 +173,9 @@ class RouterApplicationTests(unittest.IsolatedAsyncioTestCase):
         async def everywhere():
             return await found(scope="global") == attached + [(BASE + 27, 7)]
         await eventually(everywhere, seconds=15)
+        await asyncio.sleep(0.2)
+        reached = heard()
+        self.assertGreater(reached, 0, "a global Who-Is reaches network 7")
 
         async def local():
             return await found() == attached
@@ -182,6 +201,9 @@ class RouterApplicationTests(unittest.IsolatedAsyncioTestCase):
         # A station's address alone names none of the router's networks.
         with self.assertRaisesRegex(ValueError, "names no one station for a directed Who-Is"):
             client.discover(scope=near_ports[0].address)
+        # None of the local, named or directed Who-Is requests reached it.
+        await asyncio.sleep(0.2)
+        self.assertEqual(heard(), reached)
 
     async def test_the_client_reads_a_device_behind_a_second_router(self):
         near = rb.BACnetRouter([bbmd_port(1), bbmd_port(5)], application="client")

@@ -76,8 +76,11 @@ impl PyBACnetRouter {
     /// only when it comes from that route's next router; `control_policy`
     /// is `"permissive"` (the default) or `"hardened"`, which denies every
     /// protected wire control, such as a route announcement or a table
-    /// update, since Python installs no authorizer. Anything else raises
-    /// ValueError, and a non-bool flag TypeError.
+    /// update, since Python installs no authorizer: the router then learns
+    /// no routes, and only its directly attached networks are reachable.
+    /// Anything else raises ValueError, as does `"hardened"` beside
+    /// `remote_table_updates=True` or `next_hop_rejects=True`, which it would
+    /// keep from ever applying, and a non-bool flag TypeError.
     #[new]
     #[pyo3(signature = (
         ports,
