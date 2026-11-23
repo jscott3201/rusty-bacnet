@@ -216,11 +216,46 @@ fn is_host_name(host: &str) -> bool {
         })
 }
 
+/// Whether text a person gives as a BBMD's host, such as a
+/// `ForeignDevice` target or a row `PropertyValue.bdt` takes in the Python
+/// binding (#2710), names it by host name: the RFC 1123 form, and not made
+/// of digits and dots alone, which only an IPv4 address may be. So a
+/// mistyped address (`192.0.2.300`, `01.2.3.4`) is refused, not looked up
+/// as a name.
+pub fn is_bbmd_host_name(host: &str) -> bool {
+    is_host_name(host)
+        && !host
+            .bytes()
+            .all(|octet| octet.is_ascii_digit() || octet == b'.')
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv6Addr};
 
-    use super::{BbmdName, BbmdResolver, SystemResolver, is_host_name};
+    use super::{BbmdName, BbmdResolver, SystemResolver, is_bbmd_host_name, is_host_name};
+
+    /// The typed form refuses what only looks like an IPv4 address.
+    #[test]
+    fn a_typed_bbmd_host_name_is_not_digits_and_dots_alone() {
+        for good in ["bbmd", "bbmd.example.", "10.example", "1a.2.3.4", "BBMD-1"] {
+            assert!(is_bbmd_host_name(good), "{good}");
+        }
+        for bad in [
+            "192.0.2.300",
+            "01.2.3.4",
+            "192.0.2.1",
+            "1.2.3",
+            "4294967295",
+            "1.2.3.4.",
+            " 10.0.0.1",
+            "fe80:",
+            "bbmd.exämple",
+            "",
+        ] {
+            assert!(!is_bbmd_host_name(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn host_names_take_the_rfc_1123_form() {

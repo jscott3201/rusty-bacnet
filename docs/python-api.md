@@ -1432,19 +1432,36 @@ await client.write_property(address, port, BDT, rb.PropertyValue.bdt(rows))
 await client.reinitialize_device(address, rb.ReinitializedState.ACTIVATE_CHANGES)
 ```
 
+Masks: the entry form gives a B/IP BBMD's rows a mask and a B/IPv6 BBMD's
+none (Clause 21). The builder encodes each row's mask as the row gives it,
+whatever the address, and leaves the rule to the device the table is
+written to. This stack's own B/IP BBMD refuses the write
+(`BacnetProtocolError` VALUE_OUT_OF_RANGE) when a row names its BBMD by
+host name or IPv6 address, or has no mask.
+
 Each row is checked as it is read, and an error names it by index
-(`rows[3]: ...`). `ValueError` covers an `address` that is `None` or
-missing (Clause 12.56.34 keeps entries without a host out of the list, so
-a row read from such an entry doesn't build), a port that isn't 0 to
-65535, an IPv6 address without brackets or with a zone, a host name longer
-than 253 octets (the longest DNS resolves), a mask that isn't four dotted
-octets, and a key other than the two. A row of the wrong type raises
-`TypeError`. The address text is parsed as a read shows it: everything
-before the last colon is the host, so a host name holding a colon builds
-back to itself, while a host name spelled as an IPv4 address builds as that
-address. A device's non-UTF-8 host name or a port encoded in more octets
-than it needs reads as the same row but builds in the stack's shortest
-form; to send a table exactly as read, write the read value itself.
+(`rows[3]: ...`). `ValueError` covers:
+
+- an `address` that is `None` or missing (Clause 12.56.34 keeps entries
+  without a host out of the list, so a row read from such an entry doesn't
+  build);
+- a port that isn't plain decimal from 0 to 65535: ASCII digits only, no
+  sign, no leading zero;
+- an IPv6 address without brackets or with a zone;
+- a host that is neither an IPv4 address nor a host name. A host name
+  follows the rule `ForeignDevice` targets do: RFC 1123 labels of letters,
+  digits and hyphens, at most 253 octets, and not digits and dots alone, so
+  a mistyped address (`192.168.1.300`, `01.2.3.4`) is refused instead of
+  taken as a name;
+- a mask that isn't four dotted octets, and a key other than the two.
+
+A row of the wrong type raises `TypeError`. A device's table can hold a
+name that rule refuses (one with a colon, or one past ASCII), and so can
+show a row that doesn't build; to send such a table, or any table exactly
+as read, write the read value itself, whose `.octets` are what the device
+served. A port encoded in more octets than it needs, or a host name in
+another character set, reads as the same row but builds in the stack's
+shortest form.
 
 The written table is pending until the device activates it: a
 ReinitializeDevice with ACTIVATE_CHANGES (or WARMSTART) puts it in effect

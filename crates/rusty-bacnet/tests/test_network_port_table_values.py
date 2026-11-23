@@ -138,13 +138,16 @@ class NetworkPortTableTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((value.tag, value.value, value.octets), ("bdt_entry", BDT4_ROWS[0], BDT4))
 
     async def test_rows_a_read_gives_build_the_same_bdt(self):
-        # #2710: every form a conforming read can give builds its octets
-        # again, and the built value writes those octets.
+        # #2710: what the stack encodes builds its octets again, and the
+        # built value writes those octets. The builder encodes a mask as a
+        # row gives it, so an IPv6 row with one (not the B/IPv6 entry form,
+        # Clause 21) builds back too, as does a mask-less IPv4 row.
         ip6 = bytes.fromhex("20010db8000000000000000000000002")
-        rows_v6 = bytes.fromhex("0e0e1d10") + ip6 + bytes.fromhex("0f1abac00f1cffffffff")
+        ip6_with_mask = bytes.fromhex("0e0e1d10") + ip6 + bytes.fromhex("0f1abac00f1cffffffff")
+        ip4_without_mask = bytes.fromhex("0e0e1cc00002090f1abac00f")
         name = bytes.fromhex("0e0e2c006875620f197b0f")
-        colon = bytes.fromhex("0e0e2c00613a620f1abac10f")  # the name "a:b"
-        for octets in (BDT4, rows_v6, name, colon, BDT4 + name + rows_v6, b""):
+        for octets in (BDT4, ip6_with_mask, ip4_without_mask, name,
+                       BDT4 + name + ip6_with_mask, b""):
             with self.subTest(octets=octets.hex()):
                 read = await self.read(BDT, octets)
                 built = rb.PropertyValue.bdt(read.value)
@@ -162,14 +165,33 @@ class NetworkPortTableTests(unittest.IsolatedAsyncioTestCase):
         read = await self.read(BDT, name + bytes.fromhex("0e0e080f19000f"))
         with self.assertRaisesRegex(ValueError, r"^rows\[1\]: a BDT entry names its BBMD"):
             rb.PropertyValue.bdt(read.value)
+        # So does a name the host-name rule doesn't take, such as one with a
+        # colon: the table is written back as the read value's octets.
+        colon = bytes.fromhex("0e0e2c00613a620f1abac10f")  # the name "a:b"
+        read = await self.read(BDT, BDT4 + colon)
+        self.assertEqual(read.value[1]["address"], "a:b:47809")
+        with self.assertRaisesRegex(ValueError, r"^rows\[1\]: .*is neither"):
+            rb.PropertyValue.bdt(read.value)
+        await self.client.write_property(self.peer.address, PORT, BDT, read)
+        self.assertEqual(self.written_fields,
+                         self.read_fields + b"\x3e" + BDT4 + colon + b"\x3f")
 
     def test_rows_are_checked_and_named_by_index(self):
         good = dict(address="192.0.2.1:47808", broadcast_mask="255.255.255.255")
         for row, error, text in (
-            (dict(address="192.0.2.1:70000"), ValueError, "not a number from 0 to 65535"),
+            (dict(address="192.0.2.1:70000"), ValueError, "not plain decimal from 0 to 65535"),
+            (dict(address="192.0.2.1:+80"), ValueError, "not plain decimal"),
+            (dict(address="192.0.2.1:080"), ValueError, "not plain decimal"),
+            (dict(address="192.0.2.1:٨٠"), ValueError, "not plain decimal"),
             (dict(address="192.0.2.1"), ValueError, "has no port"),
             (dict(address="2001:db8::2:47808"), ValueError, "in brackets"),
-            (dict(address="h" * 254 + ":47808"), ValueError, "longer than 253"),
+            (dict(address="fe80::1"), ValueError, r"\[fe80::1\]:port"),
+            # Mistyped addresses aren't host names (the rule ForeignDevice
+            # targets follow): digits and dots alone, a leading zero, a space.
+            (dict(address="192.168.1.300:47808"), ValueError, "is neither"),
+            (dict(address="01.2.3.4:47808"), ValueError, "is neither"),
+            (dict(address=" 10.0.0.1:47808"), ValueError, "is neither"),
+            (dict(address="h" * 254 + ":47808"), ValueError, "is neither"),
             (dict(address="hub:1", broadcast_mask="255.255.0"), ValueError, "four dotted"),
             (dict(address="hub:1", mask="255.0.0.0"), ValueError, "unknown key 'mask'"),
             (dict(address=None), ValueError, "names its BBMD"),
@@ -182,8 +204,7 @@ class NetworkPortTableTests(unittest.IsolatedAsyncioTestCase):
                 if error is ValueError:
                     with self.assertRaisesRegex(error, r"rows\[1\]"):
                         rb.PropertyValue.bdt([good, row])
-        # A row may leave its mask out; a host name is everything before
-        # the last colon.
+        # A row may leave its mask out, and a host name builds as a name.
         built = rb.PropertyValue.bdt([dict(address="bbmd.example:47809")])
         self.assertEqual(built.value,
                          [dict(address="bbmd.example:47809", broadcast_mask=None)])
@@ -287,6 +308,18 @@ class LocalBbmdTableWriteTests(unittest.IsolatedAsyncioTestCase):
         address = await server.local_address()
         async with rb.BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=2000) as client:
             rows = (await client.read_property(address, PORT, BDT)).value
+            # The builder encodes these rows, but this B/IP BBMD refuses
+            # them when the table is written: a host name, an IPv6 address
+            # and an IPv4 address without a mask.
+            for odd in (dict(address="bbmd.example:47808", broadcast_mask="255.255.255.255"),
+                        dict(address="[2001:db8::2]:47808"),
+                        dict(address="127.0.0.4:47808")):
+                with self.subTest(row=odd):
+                    with self.assertRaises(rb.BacnetProtocolError) as raised:
+                        await client.write_property(address, PORT, BDT,
+                                                    rb.PropertyValue.bdt(rows + [odd]))
+                    self.assertEqual(raised.exception.error_code,
+                                     rb.ErrorCode.VALUE_OUT_OF_RANGE.to_raw())
             added = dict(address="127.0.0.3:47808", broadcast_mask="255.255.255.255")
             table = rb.PropertyValue.bdt(rows + [added])
             await client.write_property(address, PORT, BDT, table)

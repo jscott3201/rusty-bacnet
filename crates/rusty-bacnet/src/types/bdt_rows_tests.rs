@@ -8,7 +8,7 @@ use bacnet_types::constructed::{BACnetBDTEntry, BACnetHostAddress, BACnetHostNPo
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bytes::BytesMut;
 use pyo3::exceptions::{PyTypeError, PyValueError};
-use pyo3::types::PyBytes;
+use pyo3::types::{PyBytes, PyDict, PyList};
 
 use super::*;
 use crate::types::read_value::decode_read_value;
@@ -40,9 +40,14 @@ fn built(py: Python<'_>, rows: &CStr) -> PyResult<Vec<u8>> {
         .to_vec())
 }
 
+/// The longest host name the rule takes: dotted labels, 253 octets.
+fn longest_name() -> String {
+    let labels: Vec<String> = std::iter::repeat_n("a".repeat(63), 4).collect();
+    labels.join(".")[..253].to_owned()
+}
+
 #[test]
 fn rows_a_read_gives_build_its_octets_again() {
-    let name = "n".repeat(MAX_HOST_NAME_OCTETS);
     let tables = [
         vec![],
         vec![entry(
@@ -51,17 +56,20 @@ fn rows_a_read_gives_build_its_octets_again() {
             Some([255, 255, 255, 0]),
         )],
         vec![
+            // Rows a B/IP BBMD wouldn't take still build as given: an IPv6
+            // address with a mask, a name, an IPv4 address without a mask.
             entry(
                 BACnetHostAddress::Ip("2001:db8::2".parse().unwrap()),
                 0,
                 Some([255, 255, 255, 255]),
             ),
             entry(BACnetHostAddress::Name("hub.example".into()), 65535, None),
-            // A name may hold a colon, and the last one parts it from the
-            // port; one that isn't an IPv6 address is a name.
-            entry(BACnetHostAddress::Name("a:b".into()), 47809, None),
-            entry(BACnetHostAddress::Name("é.example".into()), 1, None),
-            entry(BACnetHostAddress::Name(name), 47808, Some([0, 0, 0, 0])),
+            entry(BACnetHostAddress::Name("10.example".into()), 1, None),
+            entry(
+                BACnetHostAddress::Name(longest_name()),
+                47808,
+                Some([0, 0, 0, 0]),
+            ),
             // The same row twice is a list a read can give.
             entry(BACnetHostAddress::Ip([10, 0, 0, 1].into()), 47808, None),
             entry(BACnetHostAddress::Ip([10, 0, 0, 1].into()), 47808, None),
@@ -79,6 +87,30 @@ fn rows_a_read_gives_build_its_octets_again() {
             assert!(value.getattr("value").unwrap().eq(&rows).unwrap());
             let rebuilt = value.getattr("octets").unwrap();
             assert_eq!(rebuilt.cast::<PyBytes>().unwrap().as_bytes(), octets);
+        });
+    }
+}
+
+/// A device's table can name a BBMD in a way the host-name rule doesn't
+/// take (a colon, a name past ASCII, digits and dots alone): the read keeps
+/// its octets, to be written back as they are, but its rows don't build.
+#[test]
+fn a_read_row_the_name_rule_refuses_does_not_build() {
+    Python::initialize();
+    for name in ["a:b", "é.example", "192.0.2.300"] {
+        let octets = octets(&[
+            entry(BACnetHostAddress::Ip([10, 0, 0, 1].into()), 47808, None),
+            entry(BACnetHostAddress::Name(name.into()), 47809, None),
+        ]);
+        Python::attach(|py| {
+            let read = decode_read_value(ObjectType::NETWORK_PORT, BDT, None, &octets).unwrap();
+            let read = Bound::new(py, read).unwrap();
+            let rows = read.getattr("value").unwrap();
+            let error = bdt(&rows).map(|_| ()).unwrap_err();
+            assert!(error.is_instance_of::<PyValueError>(py), "{name}: {error}");
+            assert!(error.to_string().contains("rows[1]: "), "{name}: {error}");
+            let kept = read.getattr("octets").unwrap();
+            assert_eq!(kept.cast::<PyBytes>().unwrap().as_bytes(), octets);
         });
     }
 }
@@ -102,18 +134,72 @@ fn a_row_may_leave_its_mask_out() {
     });
 }
 
+/// The ValueError text one row `{'address': address}` gives.
+fn address_refusal(py: Python<'_>, address: &str) -> String {
+    let row = PyDict::new(py);
+    row.set_item("address", address).unwrap();
+    let rows = PyList::new(py, [row]).unwrap();
+    let error = bdt(rows.as_any()).map(|_| ()).unwrap_err();
+    assert!(
+        error.is_instance_of::<PyValueError>(py),
+        "{address:?}: {error}"
+    );
+    error.to_string()
+}
+
+#[test]
+fn an_address_the_entry_cant_hold_is_refused_by_its_index() {
+    let too_long = format!("{}a:47808", longest_name());
+    let cases = [
+        ("192.0.2.1", "has no port"),
+        ("hub", "has no port"),
+        ("fe80::1", "write an IPv6 address as \"[fe80::1]:port\""),
+        ("2001:db8::2:47808", "write an IPv6 address in brackets"),
+        ("[fe80::1%2]:47808", "has an IPv6 zone"),
+        ("[fe80::1%eth0]:47808", "has an IPv6 zone"),
+        ("[2001:db8::2]", "\"[v6]:port\""),
+        ("[2001:db8::zz]:47808", "isn't an IPv6 address"),
+        (":47808", "has no host before the port"),
+        // Ports: plain decimal only.
+        ("192.0.2.1:65536", "not plain decimal from 0 to 65535"),
+        ("hub:-1", "not plain decimal"),
+        ("hub:+1", "not plain decimal"),
+        ("hub: 1", "not plain decimal"),
+        ("hub:1 ", "not plain decimal"),
+        ("hub:\u{0663}", "not plain decimal"),
+        ("hub:047808", "not plain decimal"),
+        ("hub:0080", "not plain decimal"),
+        ("hub:", "not plain decimal"),
+        // Hosts: an IPv4 address or a host name, never something that only
+        // looks like one.
+        (
+            "192.168.1.300:47808",
+            "is neither an IPv4 address nor a host name",
+        ),
+        ("01.2.3.4:47808", "is neither"),
+        (" 10.0.0.1:47808", "is neither"),
+        ("10.0.0.1 :47808", "is neither"),
+        ("a:b:47808", "is neither"),
+        ("bbmd.exämple:47808", "is neither"),
+        (too_long.as_str(), "is neither"),
+    ];
+    Python::initialize();
+    Python::attach(|py| {
+        for (address, expected) in cases {
+            let message = address_refusal(py, address);
+            assert!(message.contains("rows[0]: "), "{address:?}: {message}");
+            assert!(message.contains(expected), "{address:?}: {message}");
+        }
+    });
+}
+
 #[test]
 fn a_row_the_entry_cant_hold_is_refused_by_its_index() {
-    let long = format!(
-        "[{{'address': '192.0.2.1:1'}}, {{'address': '{}:47808'}}]",
-        "n".repeat(MAX_HOST_NAME_OCTETS + 1)
-    );
-    let long = std::ffi::CString::new(long).unwrap();
-    let cases: [(&CStr, bool, &str); 19] = [
+    let cases: [(&CStr, bool, &str); 7] = [
         (
-            c"[{'address': None}]",
+            c"[{'address': '192.0.2.1:1'}, {'address': None}]",
             true,
-            "rows[0]: a BDT entry names its BBMD",
+            "rows[1]: a BDT entry names its BBMD",
         ),
         (
             c"[{'broadcast_mask': None}]",
@@ -124,58 +210,6 @@ fn a_row_the_entry_cant_hold_is_refused_by_its_index() {
             c"[{'address': '192.0.2.1:1', 'mask': None}]",
             true,
             "rows[0] contains unknown key 'mask'",
-        ),
-        (
-            c"[{'address': '192.0.2.1'}]",
-            true,
-            "rows[0]: address \"192.0.2.1\" has no port",
-        ),
-        (c"[{'address': 'hub'}]", true, "has no port"),
-        (
-            c"[{'address': '192.0.2.1:65536'}]",
-            true,
-            "not a number from 0 to 65535",
-        ),
-        (
-            c"[{'address': 'hub:-1'}]",
-            true,
-            "not a number from 0 to 65535",
-        ),
-        (
-            c"[{'address': 'hub:+1'}]",
-            true,
-            "not a number from 0 to 65535",
-        ),
-        (
-            c"[{'address': 'hub:'}]",
-            true,
-            "not a number from 0 to 65535",
-        ),
-        (
-            c"[{'address': ':47808'}]",
-            true,
-            "has no host before the port",
-        ),
-        (
-            c"[{'address': '2001:db8::2:47808'}]",
-            true,
-            "write an IPv6 address in brackets",
-        ),
-        (
-            c"[{'address': '[fe80::1%2]:47808'}]",
-            true,
-            "has an IPv6 zone",
-        ),
-        (
-            c"[{'address': '[fe80::1%eth0]:47808'}]",
-            true,
-            "\"[v6]:port\"",
-        ),
-        (c"[{'address': '[2001:db8::2]'}]", true, "\"[v6]:port\""),
-        (
-            long.as_c_str(),
-            true,
-            "rows[1]: host name of 254 octets is longer than 253",
         ),
         (
             c"[{'address': 'hub:1', 'broadcast_mask': '255.255.0'}]",

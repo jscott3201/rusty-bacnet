@@ -2649,20 +2649,32 @@ class PropertyValue:
         """A Network Port's BBMD_Broadcast_Distribution_Table to write,
         built from rows in the form a whole read of it gives (#2710): each
         a ``BdtEntry`` mapping, ``address`` as ``"ip:port"``,
-        ``"[v6]:port"`` or ``"name:port"`` (everything before the last
-        colon is the name) and ``broadcast_mask`` dotted text, ``None`` or
-        left out. Each row is encoded with the stack's BDT entry codec;
-        the value is tagged ``"bdt"`` and ``.value`` gives the rows back,
-        so ``PropertyValue.bdt(read.value)`` equals a read the stack could
-        have encoded. A row the entry can't hold raises ValueError naming
-        it (``rows[2]: ...``): an ``address`` that is ``None`` or missing
-        (the list holds no entry without a host), a port past 65535, an
-        IPv6 address without brackets or with a zone, a host name of more
-        than 253 octets, a mask that isn't four dotted octets, or another
-        key. A row of the wrong type raises TypeError. A 2020 BBMD takes
-        its BDT this way, through WriteProperty and an ACTIVATE_CHANGES
-        reinitialize; ``BACnetClient.write_bdt`` stays the path for an
-        older one."""
+        ``"[v6]:port"`` or ``"name:port"`` and ``broadcast_mask`` dotted
+        text, ``None`` or left out. Each row is encoded with the stack's BDT
+        entry codec; the value is tagged ``"bdt"`` and ``.value`` gives the
+        rows back, so ``PropertyValue.bdt(read.value)`` equals a read the
+        stack could have encoded.
+
+        The entry form gives a B/IP BBMD a mask and a B/IPv6 one none; the
+        builder encodes each row's mask as given, whatever its address, and
+        leaves the rule to the device the table is written to. This stack's
+        own B/IP BBMD refuses, when the table is written (WriteProperty
+        VALUE_OUT_OF_RANGE), a row that names its BBMD by host name or IPv6
+        address, or that has no mask.
+
+        A row the entry can't hold raises ValueError naming it
+        (``rows[2]: ...``): an ``address`` that is ``None`` or missing (the
+        list holds no entry without a host), a port that isn't plain decimal
+        from 0 to 65535 (no sign, no leading zero), an IPv6 address without
+        brackets or with a zone, a host that is neither an IPv4 address nor
+        a host name (RFC 1123 labels, at most 253 octets, not digits and
+        dots alone, the rule ``ForeignDevice`` targets follow), a mask that
+        isn't four dotted octets, or another key. A row of the wrong type
+        raises TypeError. A read can show a name that rule refuses (one with
+        a colon, say): write such a table back as the read value itself.
+        A 2020 BBMD takes its BDT this way, through WriteProperty and an
+        ACTIVATE_CHANGES reinitialize; ``BACnetClient.write_bdt`` stays the
+        path for an older one."""
         ...
 
     @property
@@ -4595,9 +4607,9 @@ class BdtEntry(TypedDict):
     names no host. ``broadcast_mask`` is dotted text, ``None`` when the
     entry has none. The value's ``.octets`` are the exact form.
     ``PropertyValue.bdt(rows)`` builds a table to write from these rows
-    (#2710), taking everything before the last colon as a host name; a
-    row whose ``address`` is ``None`` doesn't build. Rows aren't accepted
-    as ``Bbmd(bdt=)`` input, which configures this device's own BBMD."""
+    (#2710); a row whose ``address`` is ``None``, or names a host the
+    host-name rule refuses, doesn't build. Rows aren't accepted as
+    ``Bbmd(bdt=)`` input, which configures this device's own BBMD."""
     address: str | None
     broadcast_mask: str | None
 

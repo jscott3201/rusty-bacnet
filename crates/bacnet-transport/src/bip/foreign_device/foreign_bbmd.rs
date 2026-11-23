@@ -114,10 +114,8 @@ impl FromStr for ForeignBbmd {
             }
             return Ok(Self::Address(SocketAddrV4::new(ip, port)));
         }
-        let numeric = host
-            .bytes()
-            .all(|octet| octet.is_ascii_digit() || octet == b'.');
-        if numeric || BbmdName::new(host, port).is_none() {
+        // The rule the Python BDT rows share (#2710).
+        if !crate::bbmd_lookup::is_bbmd_host_name(host) {
             return Err(refused());
         }
         Ok(Self::Name {
