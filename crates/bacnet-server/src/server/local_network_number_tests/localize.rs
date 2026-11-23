@@ -44,6 +44,7 @@ fn bound_routed(network: u16, octets: &[u8]) -> RecipientRoute {
         mac: mac(octets),
         router: mac(&ROUTER),
         freshness: BindingFreshness::Configured,
+        one_station: false,
     }
 }
 
@@ -148,6 +149,7 @@ fn into_confirmed_refuses_a_group_next_hop() {
         mac: mac(&PEER_C),
         router: mac(router),
         freshness: BindingFreshness::Configured,
+        one_station: false,
     };
     for (case, route, expected) in [
         (

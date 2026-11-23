@@ -439,7 +439,7 @@ async fn the_pacer_forgets_idle_destinations_and_stays_bounded() {
         router_mac: B,
         dest_network: 5,
         dest_mac: A,
-        arcnet: false,
+        one_station: false,
     });
     assert_ne!(routed, local(A));
 
@@ -449,7 +449,7 @@ async fn the_pacer_forgets_idle_destinations_and_stays_bounded() {
                 router_mac: B,
                 dest_network: 1,
                 dest_mac: &i.to_be_bytes(),
-                arcnet: false,
+                one_station: false,
             })
         })
     };

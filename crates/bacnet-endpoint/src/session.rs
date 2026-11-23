@@ -370,7 +370,7 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     source_audit: Option<Arc<crate::source_audit::SourceAudit>>,
     pub(crate) source_audit_bindings: Vec<(ObjectIdentifier, std::net::SocketAddrV4)>,
     pub(crate) source_audit_link_bindings: Vec<(ObjectIdentifier, bacnet_types::MacAddr)>,
-    pub(crate) source_audit_routed_bindings: Vec<(ObjectIdentifier, u16, bacnet_types::MacAddr)>,
+    pub(crate) source_audit_routed_bindings: RoutedBindings,
     source_recipient: Option<Arc<crate::source_audit::recipient::SourceRecipient>>,
     stop_exit: Option<Result<SessionExit, Error>>,
     ingress_stopped: bool,

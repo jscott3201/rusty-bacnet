@@ -167,7 +167,12 @@ When using a device instance number, the device must have been previously found 
 `create-object`, `delete-object` and `ack-alarm` (`ack`) take
 `DNET:instance` and `DNET:0xMAC`. When the device isn't in the discovery table
 yet, `DNET:instance` sends a Who-Is for that instance on the named network.
-`DNET:0xMAC` directs its Who-Is to the named station. The CLI waits up to
+`DNET:0xMAC` directs its Who-Is to the named station. A MAC that is a
+broadcast or group form on its network (`2:0xFF`, two octets starting `0x00`
+or `0xFF`, `0xFFFFFF`, six octets starting `FF:FF:FF:FF`) is refused as no
+station. Rust and Python reach an ARCNET station 255 or a gateway's two-octet
+virtual station by marking its address one station (#2738); the target
+grammar has no form for that mark yet. The CLI waits up to
 three seconds for a reply, then sends the service request through the router
 that relayed it. `read-range --all` keeps every metadata read and range request routed
 to that device while paging its log. `file-read` routes every stream or record

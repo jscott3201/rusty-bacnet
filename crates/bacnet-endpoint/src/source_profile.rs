@@ -1,15 +1,16 @@
 //! Complete source profile preflight, before mutation or ingress ownership.
 use super::*;
 use bacnet_objects::property_metadata::has_property;
-/// A builder's routed source Audit bindings: Device, network, MAC there.
-pub(crate) type RoutedBindings = Vec<(ObjectIdentifier, u16, bacnet_types::MacAddr)>;
+/// Routed source Audit bindings: each Device, its network, its MAC there
+/// and whether that address is marked one station (#2738).
+pub(crate) type RoutedBindings = Vec<(ObjectIdentifier, u16, bacnet_types::MacAddr, bool)>;
 
 /// Check a builder's link bindings against the node's own `local` MAC, and
 /// its routed ones, before any I/O, as [`EndpointSession::start`] will
 /// (#2357, #2371).
 pub(crate) fn check_link_bindings(
     bindings: &[(ObjectIdentifier, bacnet_types::MacAddr)],
-    routed: &[(ObjectIdentifier, u16, bacnet_types::MacAddr)],
+    routed: &[(ObjectIdentifier, u16, bacnet_types::MacAddr, bool)],
     local: &[u8],
 ) -> Result<(), Error> {
     crate::source_audit::recipient::SourceRoutes::for_link(
@@ -147,19 +148,64 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// here or by [`with_source_audit_device_binding`]. Route data only:
     /// provision the recipient on the Device itself.
     ///
+    /// A `mac` that is a broadcast or group form on its network (the one
+    /// octet `0xFF`, two octets starting `0x00` or `0xFF`, three of `0xFF`,
+    /// or six starting `FF:FF:FF:FF`; [`bacnet_npdu::RemoteBroadcast`]) is
+    /// taken, with a warning at start: a Reporter sending unconfirmed
+    /// records reaches it, one sending confirmed records has no route to it
+    /// (#2732). Where that address is one station on its network, bind it
+    /// with [`with_source_audit_routed_one_station_binding`] instead.
+    ///
     /// [`with_source_audit_device_binding`]: Self::with_source_audit_device_binding
+    /// [`with_source_audit_routed_one_station_binding`]: Self::with_source_audit_routed_one_station_binding
     ///
     /// # Panics
     /// Panics if startup has already consumed the session configuration.
     pub fn with_source_audit_routed_device_binding(
-        mut self,
+        self,
         device: ObjectIdentifier,
         network: u16,
         mac: bacnet_types::MacAddr,
     ) -> Self {
+        self.with_routed_binding(device, network, mac, false)
+    }
+
+    /// [`with_source_audit_routed_device_binding`], with the address marked
+    /// one station (#2738): an explicit opt-in for a Device at an address
+    /// that is a broadcast or group form on some links and a station on
+    /// others. A Reporter sending confirmed records then reaches the one
+    /// octet `0xFF` (station 255 on ARCNET) and two octets starting `0x00`
+    /// or `0xFF` (a gateway's virtual network numbering its stations in two
+    /// octets), but not `0x0000` or `0xFFFF`; three and six octets are
+    /// judged as unmarked ([`bacnet_npdu::RemoteBroadcast`] has the table).
+    /// The mark only lifts: the one octet `0x00` has a confirmed route
+    /// either way, and an ARCNET network's broadcast there is not caught.
+    /// [`start`](Self::start) refuses what it refuses of an unmarked
+    /// binding.
+    ///
+    /// [`with_source_audit_routed_device_binding`]: Self::with_source_audit_routed_device_binding
+    ///
+    /// # Panics
+    /// Panics if startup has already consumed the session configuration.
+    pub fn with_source_audit_routed_one_station_binding(
+        self,
+        device: ObjectIdentifier,
+        network: u16,
+        mac: bacnet_types::MacAddr,
+    ) -> Self {
+        self.with_routed_binding(device, network, mac, true)
+    }
+
+    fn with_routed_binding(
+        mut self,
+        device: ObjectIdentifier,
+        network: u16,
+        mac: bacnet_types::MacAddr,
+        one_station: bool,
+    ) -> Self {
         self.assert_configurable();
         self.source_audit_routed_bindings
-            .push((device, network, mac));
+            .push((device, network, mac, one_station));
         self
     }
 
@@ -172,8 +218,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         for (device, mac) in bindings {
             self = self.with_source_audit_device_binding(device, mac);
         }
-        for (device, network, mac) in routed {
-            self = self.with_source_audit_routed_device_binding(device, network, mac);
+        for (device, network, mac, one_station) in routed {
+            self = self.with_routed_binding(device, network, mac, one_station);
         }
         self
     }

@@ -300,59 +300,6 @@ async fn a_confirmed_request_to_a_remote_broadcast_form_is_refused_in_every_form
     client.stop().await.unwrap();
 }
 
-/// Marked ARCNET, a one-octet 0xFF is a station and takes a confirmed
-/// request, and 0x00, that network's broadcast, is refused; unmarked, 0x00
-/// is an MS/TP station and goes (#2709).
-#[tokio::test(start_paused = true)]
-async fn the_arcnet_mark_sends_to_255_and_refuses_0() {
-    let (mut client, sent, _inbound) = client_on(
-        DataLink::Mstp,
-        &[1],
-        no_groups(),
-        ClientOptions::default(),
-        0,
-    )
-    .await;
-    let router = [9];
-    let arcnet_255 = Station::routed(&router, NETWORK, &[0xFF]).arcnet();
-    assert!(arcnet_255.is_arcnet() && arcnet_255.check_confirmed().is_ok());
-    let result = client.confirmed_request(&arcnet_255, READ, &[0x0C]).await;
-    assert!(timed_out(&result), "{result:?}");
-    let refused = client
-        .confirmed_request(
-            &Station::routed(&router, NETWORK, &[0x00]).arcnet(),
-            READ,
-            &[0x0C],
-        )
-        .await;
-    assert!(
-        refused_with(&refused, "station 0, the broadcast of an ARCNET network"),
-        "{refused:?}"
-    );
-    let result = client
-        .confirmed_request(&Station::routed(&router, NETWORK, &[0x00]), READ, &[0x0C])
-        .await;
-    assert!(timed_out(&result), "{result:?}");
-    let dadrs: Vec<_> = sent
-        .frames()
-        .iter()
-        .map(|frame| frame.decode_npdu().destination.unwrap().mac_address)
-        .collect();
-    assert_eq!(
-        dadrs,
-        [MacAddr::from_slice(&[0xFF]), MacAddr::from_slice(&[0x00])]
-    );
-    // The mark goes with the station wherever it is reached from.
-    assert!(Station::remote(NETWORK, &[0xFF]).arcnet().is_arcnet());
-    assert!(
-        Station::routed_via_local_broadcast(NETWORK, &[0xFF])
-            .arcnet()
-            .is_arcnet()
-    );
-    assert!(!Station::local(&[0xFF]).arcnet().is_arcnet());
-    client.stop().await.unwrap();
-}
-
 /// An empty router names no router, so it is refused, not read as the
 /// local broadcast form.
 #[tokio::test(start_paused = true)]
@@ -507,3 +454,6 @@ async fn a_request_by_local_broadcast_to_this_network_goes_to_the_station() {
     assert!(frame.decode_npdu().destination.is_none());
     client.stop().await.unwrap();
 }
+
+#[path = "one_station_tests.rs"]
+mod one_station;

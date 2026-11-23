@@ -123,7 +123,20 @@ impl ScEndpointBuilder {
         network: u16,
         mac: MacAddr,
     ) -> Self {
-        self.source_audit_routed.push((device, network, mac));
+        self.source_audit_routed.push((device, network, mac, false));
+        self
+    }
+
+    /// [`source_audit_routed_device_binding`](Self::source_audit_routed_device_binding)
+    /// with the address marked one station (#2738); see
+    /// [`EndpointSession::with_source_audit_routed_one_station_binding`].
+    pub fn source_audit_routed_one_station_binding(
+        mut self,
+        device: ObjectIdentifier,
+        network: u16,
+        mac: MacAddr,
+    ) -> Self {
+        self.source_audit_routed.push((device, network, mac, true));
         self
     }
 

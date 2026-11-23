@@ -1,9 +1,9 @@
 //! The endpoints' source Audit Reporter keywords (#2348, #2357):
 //! `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` take the same ones, each
 //! binding address in its link's format, or a Device behind a router as
-//! `"network:0xMAC"` on any of them (#2371). They are parsed once at
-//! construction and kept for the rebuild at each start, as the object
-//! keywords are (#1867).
+//! `"network:0xMAC"` or a `RoutedTarget` on any of them (#2371, #2738). They
+//! are parsed once at construction and kept for the rebuild at each start,
+//! as the object keywords are (#1867).
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -20,7 +20,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 use crate::errors::to_py_err;
-use crate::types::PyObjectIdentifier;
+use crate::types::{PyObjectIdentifier, PyRoutedTarget};
 
 /// The endpoint's link, with what its bindings are checked against.
 #[derive(Clone, Copy, Debug)]
@@ -96,7 +96,7 @@ impl AuditLink {
             // The Rust session's routed rule: one station on another network.
             // The MAC's format is that network's link's, so only its length
             // is checked.
-            (_, Binding::Routed { network, mac }) => {
+            (_, Binding::Routed { network, mac, .. }) => {
                 if !(1..=0xFFFE).contains(network)
                     || !(1..=bacnet_npdu::MAX_MAC_LEN).contains(&mac.len())
                 {
@@ -172,6 +172,7 @@ fn routed(address: &str) -> Option<Option<Binding>> {
             .map(|(network, mac)| Binding::Routed {
                 network,
                 mac: MacAddr::from_slice(&mac),
+                one_station: false,
             }),
     )
 }
@@ -181,11 +182,55 @@ fn routed(address: &str) -> Option<Option<Binding>> {
 enum Binding {
     Bip(SocketAddrV4),
     Mac(MacAddr),
-    /// A station behind a router, on any link (#2371).
+    /// A station behind a router, on any link (#2371), its address marked
+    /// one station when a `RoutedTarget` says so (#2738).
     Routed {
         network: u16,
         mac: MacAddr,
+        one_station: bool,
     },
+}
+
+/// One `audit_device_bindings` address as Python gives it: a `str` in the
+/// link's format or a routed `"network:0xMAC"`, or a `RoutedTarget`, the
+/// one form that can mark the address one station (#2738). A
+/// `RoutedTarget`'s network and MAC were checked when it was made; a router
+/// on it is refused when the bindings are parsed.
+pub(crate) enum BindingAddress {
+    /// A `str`.
+    Text(String),
+    /// A `RoutedTarget`: its network, its MAC there, whether it names a
+    /// router, and its one-station mark.
+    Routed {
+        network: u16,
+        mac: MacAddr,
+        router: bool,
+        one_station: bool,
+    },
+}
+
+impl<'a, 'py> FromPyObject<'a, 'py> for BindingAddress {
+    type Error = PyErr;
+
+    fn extract(address: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        if let Ok(target) = address.cast::<PyRoutedTarget>() {
+            let target = target.get();
+            let (network, mac, router) = target.parts();
+            return Ok(Self::Routed {
+                network,
+                mac: MacAddr::from_slice(mac),
+                router: router.is_some(),
+                one_station: target.is_one_station(),
+            });
+        }
+        match address.cast::<pyo3::types::PyString>() {
+            Ok(text) => Ok(Self::Text(text.to_cow()?.into_owned())),
+            Err(_) => Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "an audit_device_bindings address must be a str or a RoutedTarget, not {}",
+                address.get_type().name()?
+            ))),
+        }
+    }
 }
 
 /// A validated source Reporter selection: the Reporter, the Device's Audit
@@ -212,7 +257,7 @@ impl SourceAuditKeywords {
     pub(super) fn parse(
         reporter: Option<PyObjectIdentifier>,
         recipient: Option<&Bound<'_, PyAny>>,
-        bindings: Option<Vec<(PyObjectIdentifier, String)>>,
+        bindings: Option<Vec<(PyObjectIdentifier, BindingAddress)>>,
         device_instance: u32,
         link: AuditLink,
         decides_mutations: bool,
@@ -280,12 +325,31 @@ impl SourceAuditKeywords {
                     "audit_device_bindings[{index}] must name a concrete Device"
                 )));
             }
-            let address = link.parse(&address).ok_or_else(|| {
-                PyValueError::new_err(format!(
-                    "audit_device_bindings[{index}] address must be {}",
-                    link.format()
-                ))
-            })?;
+            let address = match address {
+                BindingAddress::Text(address) => link.parse(&address).ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "audit_device_bindings[{index}] address must be {}",
+                        link.format()
+                    ))
+                })?,
+                // The session learns a routed binding's router (#2371).
+                BindingAddress::Routed { router: true, .. } => {
+                    return Err(PyValueError::new_err(format!(
+                        "audit_device_bindings[{index}] is a RoutedTarget with a router: the \
+                         session learns the router to a binding's network, so leave router out"
+                    )));
+                }
+                BindingAddress::Routed {
+                    network,
+                    mac,
+                    one_station,
+                    ..
+                } => Binding::Routed {
+                    network,
+                    mac,
+                    one_station,
+                },
+            };
             // The link's unicast rule, which the session applies to its
             // routes at start (#2348, #2357).
             link.refusal(
@@ -345,9 +409,22 @@ impl SourceAuditKeywords {
             .iter()
             .fold(session, |session, (device, address)| match address {
                 Binding::Mac(mac) => session.with_source_audit_device_binding(*device, mac.clone()),
-                Binding::Routed { network, mac } => {
+                Binding::Routed {
+                    network,
+                    mac,
+                    one_station: false,
+                } => {
                     session.with_source_audit_routed_device_binding(*device, *network, mac.clone())
                 }
+                Binding::Routed {
+                    network,
+                    mac,
+                    one_station: true,
+                } => session.with_source_audit_routed_one_station_binding(
+                    *device,
+                    *network,
+                    mac.clone(),
+                ),
                 Binding::Bip(_) => session,
             })
             .with_source_audit_reporter(self.reporter)

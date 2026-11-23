@@ -12,7 +12,7 @@ from pathlib import Path
 
 from rusty_bacnet import (AuditOperation, BACnetClient, BACnetServer, BacnetError, BipEndpoint,
                           MstpEndpoint, ObjectIdentifier, ObjectType, PropertyIdentifier,
-                          ReinitializedState, ScEndpoint, ScHub)
+                          ReinitializedState, RoutedTarget, ScEndpoint, ScHub)
 
 from openssl_fixture import require_openssl, site_authority
 
@@ -173,6 +173,50 @@ class RoutedBindingTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(make=make.__name__, repeated=True):
                 with self.assertRaisesRegex(ValueError, "repeats a Device"):
                     make(audit_device_bindings=[(LOGGER, "2:0x05"), (LOGGER, "3:0x05")])
+
+    def test_a_routed_target_binds_and_carries_the_one_station_mark(self):
+        # A RoutedTarget with no router is a routed binding, the form that can
+        # mark its address one station (#2738); the session learns the router.
+        for make in self.MAKERS:
+            for target in (RoutedTarget(2, b"\x05"), RoutedTarget(2, b"\xff", one_station=True),
+                           RoutedTarget(2, b"\x00\x05", one_station=True)):
+                with self.subTest(make=make.__name__, target=target):
+                    owner = make(audit_device_bindings=[(LOGGER, target)])
+                    owner.add_audit_reporter(1, "Source", audit_level="audit_all",
+                                             auditable_operations=RESET)
+                    self.assertEqual(owner._pending_registration_count(), 1)
+            with self.subTest(make=make.__name__, router=True), \
+                    self.assertRaisesRegex(ValueError, r"audit_device_bindings\[0\].*router"):
+                make(audit_device_bindings=[(LOGGER, RoutedTarget(2, b"\x05", router=b"\x0a"))])
+            with self.subTest(make=make.__name__, wrong_type=True), \
+                    self.assertRaisesRegex(TypeError, "a str or a RoutedTarget, not int"):
+                make(audit_device_bindings=[(LOGGER, 5)])
+            with self.subTest(make=make.__name__, repeated=True), \
+                    self.assertRaisesRegex(ValueError, "repeats a Device"):
+                make(audit_device_bindings=[(LOGGER, "2:0x05"), (LOGGER, RoutedTarget(3, b"\x05"))])
+
+    async def test_a_confirmed_reporter_reaches_a_device_bound_marked_one_station(self):
+        """A confirmed Reporter bound to a Device at 5:0xFF has no route to it
+        (CONFIGURATION_ERROR) unless the binding is marked one station
+        (#2738), when it reads NO_FAULT_DETECTED."""
+        client = BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=2000)
+        await client.__aenter__()
+        try:
+            for binding, reliability in (("5:0xff", 10), (RoutedTarget(5, b"\xff"), 10),
+                                         (RoutedTarget(5, b"\xff", one_station=True), 0),
+                                         (RoutedTarget(5, b"\xff\xff", one_station=True), 10)):
+                with self.subTest(binding=binding):
+                    owner = bip_endpoint(audit_device_bindings=[(LOGGER, binding)])
+                    owner.add_audit_reporter(1, "Source", audit_level="audit_all",
+                                             auditable_operations=RESET,
+                                             issue_confirmed_notifications=True)
+                    async with owner:
+                        read = await client.read_property(
+                            await owner.local_address(), REPORTER,
+                            PropertyIdentifier.RELIABILITY)
+                        self.assertEqual(read.value, reliability)
+        finally:
+            await client.stop()
 
     async def test_a_routed_binding_resolves_in_a_running_session(self):
         """The Reporter of a B/IP endpoint bound to a Device behind a router

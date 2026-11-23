@@ -109,7 +109,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// no router writes as a broadcast, but a crafted or misrelayed
     /// request can; a confirmed notification sent there would reach every
     /// station of that network. One from a group MAC on this link was
-    /// ignored on arrival (#1504).
+    /// ignored on arrival (#1504). The address can't carry the one-station
+    /// mark (#2738), so an ARCNET station 255 or a gateway's two-octet
+    /// virtual station subscribed for confirmed reports gets none; its
+    /// unconfirmed subscription is served.
     pub(in crate::server) fn admit_confirmed(
         handles: &CovFanoutHandles<'_, '_, T>,
         route: &CovSubscriptionSnapshot,
@@ -125,7 +128,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if let Some(station) = route
             .subscriber_network
             .as_ref()
-            .and_then(|source| BroadcastStation::of(source.network, &source.mac_address))
+            .and_then(|source| BroadcastStation::of(source.network, &source.mac_address, false))
         {
             counters
                 .confirmed_broadcast_subscriber

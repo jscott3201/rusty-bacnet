@@ -261,10 +261,12 @@ impl PyBipEndpoint {
     ///         writes: none (read-only), `"deny_all"` or a callable, never
     ///         `"permissive"`. `audit_device_bindings` is a list of
     ///         `(ObjectIdentifier, "ipv4:port")` routes to recipient
-    ///         Devices, or `"network:0xMAC"` for one behind a router
-    ///         (#2371). A Reporter identifier of another type, and other
-    ///         shapes construction can check, raise ValueError here; a
-    ///         Reporter that wasn't added raises BacnetError at start.
+    ///         Devices, or `"network:0xMAC"` for one behind a router, or a
+    ///         `RoutedTarget` with no router, which can mark the address
+    ///         `one_station=True` (#2371, #2738). A Reporter identifier of
+    ///         another type, and other shapes construction can check, raise
+    ///         ValueError here; a Reporter that wasn't added raises
+    ///         BacnetError at start.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -334,7 +336,12 @@ impl PyBipEndpoint {
         time_sync_policy: Option<&Bound<'_, PyDict>>,
         source_audit_reporter: Option<crate::types::PyObjectIdentifier>,
         audit_recipient: Option<&Bound<'_, PyAny>>,
-        audit_device_bindings: Option<Vec<(crate::types::PyObjectIdentifier, String)>>,
+        audit_device_bindings: Option<
+            Vec<(
+                crate::types::PyObjectIdentifier,
+                super::source_audit::BindingAddress,
+            )>,
+        >,
     ) -> PyResult<Self> {
         let server = super::server_role::ServerKeywords::parse(
             mutation_policy,

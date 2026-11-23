@@ -304,11 +304,16 @@ impl Forwarding {
     /// Configure Device `instance` as the local node at `mac`.
     pub(super) async fn bind_device(&self, instance: u32, mac: &[u8]) {
         let device = ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
+        self.bind(DeviceBinding::local(device, mac).unwrap()).await;
+    }
+
+    /// Configure `binding`.
+    pub(super) async fn bind(&self, binding: DeviceBinding) {
         self.services
             .device_bindings
             .write()
             .await
-            .insert_configured(DeviceBinding::local(device, mac).unwrap(), |_| false)
+            .insert_configured(binding, |_| false)
             .unwrap();
     }
 }

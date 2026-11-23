@@ -47,6 +47,7 @@ fn failure_ticket(
                 local_target: Some(bacnet_types::MacAddr::from_slice(&[1])),
                 remote: None,
                 freshness: None,
+                one_station: false,
             }),
             max_apdu: 1476,
         })

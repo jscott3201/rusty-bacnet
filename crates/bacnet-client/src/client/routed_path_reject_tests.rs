@@ -479,7 +479,7 @@ async fn a_reject_queued_before_the_request_went_out_is_not_its_own() {
         router_mac: &ROUTER,
         dest_network: DNET,
         dest_mac: &DADR,
-        arcnet: false,
+        one_station: false,
     };
     let lease = limits.acquire(&ROUTER, DNET).await.unwrap();
     let tsm_mac = target.transaction_peer().tsm_mac;

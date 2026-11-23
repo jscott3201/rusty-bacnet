@@ -27,6 +27,8 @@ use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 
 #[path = "remote_broadcast_cov_tests.rs"]
 mod cov;
+#[path = "one_station_recipient_tests.rs"]
+mod one_station;
 #[path = "remote_broadcast_router_app_tests.rs"]
 mod router_app;
 

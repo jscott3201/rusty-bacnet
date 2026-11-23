@@ -364,6 +364,7 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_disable_initiatio
             final_mac,
             router_mac,
             freshness: BindingFreshness::ObservedUntil(_),
+            one_station: false,
         } if final_mac.as_slice() == FINAL_PEER && router_mac.as_slice() == ROUTER
     ));
     drop(table);

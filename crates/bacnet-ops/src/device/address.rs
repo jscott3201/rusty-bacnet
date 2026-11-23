@@ -53,11 +53,12 @@ impl DeviceAddress {
     /// broadcast `0xFF`, two octets beginning `0x00` or `0xFF`, three
     /// octets of `0xFF`, and six beginning with four) name no one station,
     /// on this network or a remote one (#2709). The grammar has no form for
-    /// an ARCNET station 255: the low-level client's [`Station::arcnet`]
-    /// reaches one.
+    /// an address marked one station (#2738), such as an ARCNET station 255
+    /// or a gateway's two-octet virtual station: the low-level client's
+    /// [`Station::one_station`] reaches one.
     ///
     /// [`RemoteBroadcast`]: bacnet_client::client::RemoteBroadcast
-    /// [`Station::arcnet`]: bacnet_client::client::Station::arcnet
+    /// [`Station::one_station`]: bacnet_client::client::Station::one_station
     pub fn new(network: u16, mac: &[u8]) -> Result<Self, String> {
         if network == u16::MAX {
             return Err("network 65535 is every network, not a station's".into());
@@ -76,8 +77,17 @@ impl DeviceAddress {
             ));
         }
         if let Some(form) = bacnet_client::client::RemoteBroadcast::of(mac, false) {
+            // On a remote network the form may be one station's address
+            // there, which only the one-station mark lets through (#2738).
+            let marked = if network != 0 && form.lifted_by_one_station() {
+                "; a station at such an address needs the one-station mark, which the target \
+                 grammar can't write yet; Rust (Station::one_station) and Python \
+                 (RoutedTarget(..., one_station=True)) can"
+            } else {
+                ""
+            };
             return Err(format!(
-                "MAC 0x{} is {form}, not a station",
+                "MAC 0x{} is {form}, not a station{marked}",
                 crate::octets::hex_upper(mac)
             ));
         }
