@@ -322,7 +322,10 @@ async fn zero_send_attempts() -> std::io::Result<()> {
         .unwrap();
     // The control's answer, judged by its sender: a late datagram meant for
     // another test's process can land on `peer`'s fresh port (#2718).
-    let reply = super::sender::next_from(&peer, address.into()).await;
+    let answer = super::sender::next_from(&peer, address.into());
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(5), answer)
+        .await
+        .expect("the control's answer");
     assert_eq!(
         reply[1],
         0,

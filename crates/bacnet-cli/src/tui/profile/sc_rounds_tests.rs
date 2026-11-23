@@ -149,6 +149,50 @@ fn the_floor_and_the_cap_name_the_profiles_keys() {
     );
 }
 
+/// The profile refuses exactly what the transport refuses, over every
+/// edge of its rules, and always by the profile's key names: a rule the
+/// transport gains and the profile lacks fails here, as a disagreement or
+/// as the transport's own wording.
+#[test]
+fn every_reconnect_refusal_matches_the_transport_and_names_profile_keys() {
+    let files = tempfile::tempdir().unwrap();
+    let mut p = profile(files.path());
+    let edges = [0, 1, 999, 1_000, 1_001, 599_999, 600_000, 600_001, u64::MAX];
+    for initial in edges {
+        for max in edges {
+            for rounds in [None, Some(0), Some(1), Some(10), Some(u32::MAX)] {
+                let sc = p.sc_mut();
+                sc.reconnect_initial_delay_ms = initial;
+                sc.reconnect_max_delay_ms = max;
+                sc.reconnect_max_retries = Rounds(rounds);
+                let transport = p.sc.as_ref().unwrap().reconnect_policy().validate();
+                let profile = p.validate();
+                let case = format!("{initial} {max} {rounds:?}: {profile:?}");
+                assert_eq!(profile.is_ok(), transport.is_ok(), "{case}");
+                if let Err(error) = profile {
+                    assert!(error.starts_with("reconnect_"), "{case}");
+                    assert!(!error.contains("BACnet/SC"), "{case}");
+                }
+            }
+        }
+    }
+    let sc = p.sc_mut();
+    (sc.reconnect_initial_delay_ms, sc.reconnect_max_delay_ms) = (5_000, 4_000);
+    assert_eq!(
+        p.validate(),
+        Err(
+            "reconnect_initial_delay_ms must not exceed reconnect_max_delay_ms, \
+             got 5000 and 4000"
+                .into()
+        )
+    );
+    p.sc_mut().reconnect_max_delay_ms = 0;
+    assert_eq!(
+        p.validate(),
+        Err("reconnect_max_delay_ms must be greater than zero".into())
+    );
+}
+
 #[test]
 fn the_rounds_read_as_words() {
     for (rounds, said) in [

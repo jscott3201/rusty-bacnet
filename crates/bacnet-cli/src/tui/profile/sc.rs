@@ -214,23 +214,36 @@ impl Sc {
         Ok(())
     }
 
-    /// The backoff settings by the profile's own key names, so a file is
-    /// fixed where it is wrong: the floor unlimited recovery needs and the
-    /// cap on the longest delay (#2708), then the transport's own checks.
+    /// The backoff settings, refused by the profile's own key names so a
+    /// file is fixed where it is wrong (#2708): the transport's rules
+    /// (`ScReconnectConfig::validate`), in its order. The transport's check
+    /// runs last as a backstop; a test sweeps both over their edges, so a
+    /// rule the transport gains and this lacks fails there.
     fn check_reconnect(&self) -> Result<(), String> {
-        let floor = ScReconnectConfig::UNLIMITED_MIN_INITIAL_DELAY_MS;
-        if self.reconnect_max_retries.0.is_none() && self.reconnect_initial_delay_ms < floor {
+        let (initial, max) = (self.reconnect_initial_delay_ms, self.reconnect_max_delay_ms);
+        if initial == 0 {
+            return Err("reconnect_initial_delay_ms must be greater than zero".into());
+        }
+        if max == 0 {
+            return Err("reconnect_max_delay_ms must be greater than zero".into());
+        }
+        if initial > max {
             return Err(format!(
-                "reconnect_initial_delay_ms must be at least {floor} with \
-                 reconnect_max_retries = \"{UNLIMITED}\", got {}",
-                self.reconnect_initial_delay_ms
+                "reconnect_initial_delay_ms must not exceed reconnect_max_delay_ms, \
+                 got {initial} and {max}"
             ));
         }
         let cap = ScReconnectConfig::MAX_DELAY_MS;
-        if self.reconnect_max_delay_ms > cap {
+        if max > cap {
             return Err(format!(
-                "reconnect_max_delay_ms must be at most {cap} (10 minutes), got {}",
-                self.reconnect_max_delay_ms
+                "reconnect_max_delay_ms must be at most {cap} (10 minutes), got {max}"
+            ));
+        }
+        let floor = ScReconnectConfig::UNLIMITED_MIN_INITIAL_DELAY_MS;
+        if self.reconnect_max_retries.0.is_none() && initial < floor {
+            return Err(format!(
+                "reconnect_initial_delay_ms must be at least {floor} with \
+                 reconnect_max_retries = \"{UNLIMITED}\", got {initial}"
             ));
         }
         self.reconnect_policy()

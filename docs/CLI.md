@@ -479,8 +479,8 @@ reconnecting. The backoff (`reconnect_initial_delay_ms`,
 `reconnect_max_delay_ms`, at most 600000, ten minutes, the most Annex AB.6.1
 lets the reconnect wait grow to, and `reconnect_max_retries`) and the connect
 timeout (`connect_timeout_ms`, 1 to 600000, default 10000) can be set in the
-file, and a value out of range is a profile error naming its key; the editor offers the connect
-timeout and reconnect on/off. `--sc-failover-url`, `--sc-reconnect` and
+file, and a value out of range is a profile error naming its key; the editor
+offers the connect timeout and reconnect on/off. `--sc-failover-url`, `--sc-reconnect` and
 `--sc-connect-timeout` override a profile like the other flags, and give a
 flags-only session the same settings (reconnect stays off there unless one of
 the first two is given).

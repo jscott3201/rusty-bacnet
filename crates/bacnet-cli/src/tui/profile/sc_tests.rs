@@ -309,7 +309,10 @@ fn sc_validation_covers_urls_paths_and_failover() {
             |s| s.connect_timeout_ms = 0,
             "connect_timeout_ms must be 1 to",
         ),
-        (|s| s.reconnect_initial_delay_ms = 0, "reconnect settings"),
+        (
+            |s| s.reconnect_initial_delay_ms = 0,
+            "reconnect_initial_delay_ms must be greater than zero",
+        ),
         (
             |s| s.reconnect_initial_delay_ms = s.reconnect_max_delay_ms + 1,
             "must not exceed",

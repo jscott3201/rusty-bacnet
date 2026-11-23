@@ -267,6 +267,11 @@ fn the_command_takes_a_limit_or_clear() {
              path-limit 10.0.0.9:47808/2=480"
             .into())
     );
+    // A word after a whole ROUTER/NETWORK=SIZE is one too many.
+    assert_eq!(
+        PathLimit::parse(&["10.0.0.9:47808/2=128", "5"]),
+        Err(USAGE.into())
+    );
     assert_eq!(PathLimit::size("clear"), Ok(None));
     assert_eq!(PathLimit::size("480"), Ok(Some(480)));
     assert!(

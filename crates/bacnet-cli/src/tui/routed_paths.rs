@@ -71,7 +71,7 @@ impl PathLimit {
                 let limit = crate::routed_paths::parse_limit_arg(limit)?;
                 (limit.router, limit.network, Some(limit.max_npdu))
             }
-            [path, size] if size.parse::<u16>().is_ok() => {
+            [path, size] if !path.contains('=') && size.parse::<u16>().is_ok() => {
                 return Err(format!(
                     "'{path} {size}': a path takes its size after '=': \
                      path-limit {path}={size}"
