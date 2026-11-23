@@ -35,8 +35,9 @@ use crate::write::{WriteDenied, Written};
 
 /// Why a high-level call failed as a whole.
 ///
-/// A timeout and a failure of the link are both [`Unreachable`]: the device
-/// didn't answer, so it may not have seen the request. [`Refused`] is the
+/// A timeout, a failure of the link and a router's network-layer refusal
+/// are all [`Unreachable`]: the device didn't answer, so it may not have
+/// seen the request. [`Refused`] is the
 /// device's own Error, Reject or Abort PDU, and a request that timed out is
 /// never one, even when the low-level client reports the timeout as an
 /// abort. Not `Clone`: a link failure holds the operating system's error.
@@ -95,7 +96,9 @@ pub enum OpsError {
     },
     /// The device, or the way to it, didn't answer: the request timed out
     /// (the client's own timeout, or the transaction state machine giving
-    /// up on its retries), or the link failed.
+    /// up on its retries), the link failed, or a router on the way refused
+    /// it, its Reject-Message-To-Network ending it ([`Error::NetworkRejected`],
+    /// #2724), whose text names the router, the network and the reason.
     Unreachable {
         /// Where the request went.
         device: DeviceAddress,
@@ -208,8 +211,9 @@ impl OpsError {
         }
     }
 
-    /// True when the device, or the way to it, isn't answering: a timeout
-    /// or a link failure. Reading on would only fail the same way. Also
+    /// True when the device, or the way to it, isn't answering: a timeout,
+    /// a link failure or a router's network reject. Reading on would only
+    /// fail the same way. Also
     /// true for a [`Client`](Self::Client) error of that kind, which a
     /// conversion that names no device ([`From<Error>`]) leaves there. False
     /// for a [`ReadBack`](Self::ReadBack), whose write went through.

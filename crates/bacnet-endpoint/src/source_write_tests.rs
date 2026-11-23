@@ -85,10 +85,10 @@ async fn source_write_wire_identity_value_boundaries_and_terminal_results() {
 }
 
 /// A ComplexACK doesn't answer a WriteProperty, whose only acknowledgment
-/// is a SimpleACK (Clause 15.9): the write goes on waiting and is recorded
-/// as timed out.
+/// is a SimpleACK (Clause 15.9): the device's answer of the wrong kind ends
+/// the write at once, not as a success and not as a timeout, and its record
+/// says COMMUNICATION / OTHER, since whether it took is unknown (#2721).
 #[tokio::test(start_paused = true)]
-#[ignore = "#2721: the client takes a ComplexACK for a write's service as the write's success"]
 async fn source_write_complex_ack_cannot_finish_a_write() {
     write_terminals(&[(1, 5)]).await;
 }
@@ -163,6 +163,15 @@ async fn write_terminals(rows: &[(usize, u8)]) {
                 terminal == 0,
                 "{n} octets, terminal {terminal}"
             );
+            if terminal == 5 {
+                assert!(
+                    matches!(
+                        result,
+                        Err(bacnet_types::error::Error::UnexpectedAck { complex: true, .. })
+                    ),
+                    "{result:?}"
+                );
+            }
             let envelope = receive(&mut records).await;
             let (record, notification_id) = notification(&envelope, confirmed);
             assert_eq!(record.operation, AuditOperation::WRITE);
@@ -188,6 +197,7 @@ async fn write_terminals(rows: &[(usize, u8)]) {
                 1 => Some((ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)),
                 2 => Some((ErrorClass::COMMUNICATION, ErrorCode::REJECT_INVALID_TAG)),
                 3 => Some((ErrorClass::COMMUNICATION, ErrorCode::ABORT_BUFFER_OVERFLOW)),
+                5 => Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER)),
                 _ => Some((ErrorClass::COMMUNICATION, ErrorCode::TIMEOUT)),
             };
             assert_eq!(record.result, expected, "{n} octets, terminal {terminal}");

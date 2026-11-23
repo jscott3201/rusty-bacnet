@@ -220,6 +220,11 @@ pub struct SessionConfig {
     /// most [`MAX_MIN_REQUEST_INTERVAL_MS`](bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS),
     /// an hour; [`EndpointSession::new`] returns [`Error::Encoding`] past it.
     pub min_request_interval_ms: u64,
+    /// Whether the client role takes a Complex-ACK for a service
+    /// acknowledged with a Simple-ACK as a success (default `false`), as
+    /// [`ClientConfig::accept_complex_ack_for_simple_services`] says for
+    /// `BACnetClient` (#2721).
+    pub accept_complex_ack_for_simple_services: bool,
 }
 
 impl SessionConfig {
@@ -250,6 +255,7 @@ impl Default for SessionConfig {
             apdu_retries: 3,
             max_apdu_length: 480,
             min_request_interval_ms: 0,
+            accept_complex_ack_for_simple_services: false,
         }
     }
 }
@@ -428,6 +434,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             apdu_retries: config.apdu_retries,
             max_apdu_length: config.max_apdu_length,
             min_request_interval_ms: config.min_request_interval_ms,
+            accept_complex_ack_for_simple_services: config.accept_complex_ack_for_simple_services,
             ..ClientConfig::default()
         };
         let local_receive_capacity = transport.local_receive_apdu_capacity();

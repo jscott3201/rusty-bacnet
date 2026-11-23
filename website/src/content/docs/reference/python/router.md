@@ -168,7 +168,8 @@ derived from it. See "Selecting an interface" in docs/python-api.md.
 ports (#2716): the router carries nothing between two isolated ports and
 hides each from the other, while both still reach the ordinary ports.
 A request from one isolated port for one device behind another draws
-Reject-Message-To-Network, reason 1; a broadcast is dropped quietly. One
+Reject-Message-To-Network, reason 1, which a client raises at once as
+`BacnetNetworkRejectError` (#2724); a broadcast is dropped quietly. One
 isolated port alone changes nothing. It limits transit only and is no
 trust level for a port; see "Isolated ports" in docs/python-api.md.
 

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, ClientConfig};
 use bacnet_encoding::apdu::{Apdu, UnconfirmedRequest, encode_apdu};
-use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device_identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_objects::traits::BACnetObject;
@@ -178,6 +178,36 @@ impl Bus {
     /// link failure: nothing reaches the station.
     pub(crate) fn break_link(&self, n: u8) {
         self.broken.lock().unwrap().insert(n);
+    }
+
+    /// A router at station `n` with no route anywhere: every NPDU it hears
+    /// for one remote network draws its reject, reason 1 naming that
+    /// network, sent back to the station that sent it.
+    pub(super) fn rejecter(self: &Arc<Self>, n: u8) {
+        let station = MacAddr::from_slice(&mac(n));
+        let (inbox, mut rx) = mpsc::channel::<ReceivedNpdu>(256);
+        self.ports.lock().unwrap().push(Port {
+            mac: station.clone(),
+            inbox,
+            silent: false,
+        });
+        let bus = Arc::clone(self);
+        tokio::spawn(async move {
+            while let Some(frame) = rx.recv().await {
+                let Ok(npdu) = decode_npdu(frame.npdu.clone()) else {
+                    continue;
+                };
+                let Some(network) = npdu.destination.map(|to| to.network) else {
+                    continue;
+                };
+                if network == 0xFFFF {
+                    continue;
+                }
+                let [high, low] = network.to_be_bytes();
+                let reject = [0x01, 0x80, 0x03, 0x01, high, low];
+                bus.deliver(&station, &reject, Some(&frame.source_mac));
+            }
+        });
     }
 
     /// Broadcast an I-Am for `instance` from station `n`.

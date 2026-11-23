@@ -349,7 +349,7 @@ async fn confirmed_request_does_not_wrap_discovered_max_apdu_length() {
     });
 
     let result = client
-        .confirmed_request(&remote_mac, ConfirmedServiceChoice::READ_PROPERTY, &[0x01])
+        .confirmed_request(&remote_mac, ConfirmedServiceChoice::WRITE_PROPERTY, &[0x01])
         .await;
 
     assert!(result.unwrap().is_empty());

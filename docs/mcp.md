@@ -533,7 +533,13 @@ Nothing that needs traffic is offered.
 - Errors are `isError: true` results whose `error` says what happened:
   `invalid-argument`, `refused` (with `reason`, and `retry_after_s` when
   rate-limited) and `unknown-device` sent nothing; `bacnet` (the device's
-  Error, Reject or Abort, kebab-case names with their numbers), `timeout`
+  Error, Reject or Abort, kebab-case names with their numbers),
+  `network-reject` (a router on the way refused the request: `router` in
+  the link's own form, `refused_by` for a farther router that sent it,
+  `network`, `reason` in kebab case, `reason_number`, and `reached_device`,
+  `no` when the request sent one frame and `unknown` once a retry or a
+  segment went first, #2724), `timeout` (with `router_busy`, the router and
+  network, when a router said it was busy before the request timed out)
   and `failed` did. An unknown tool or arguments outside the schema are
   JSON-RPC errors (-32602), and so is a tool this configuration doesn't
   list (a passive server's read tools). A test checks every tool's

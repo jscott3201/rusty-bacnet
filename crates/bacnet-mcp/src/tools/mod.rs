@@ -284,6 +284,7 @@ fn out_of_budget(call: &Call, budget: Duration) -> ToolError {
         ToolError::Timeout {
             device: None,
             after_ms: u64::try_from((budget + GRACE).as_millis()).unwrap_or(u64::MAX),
+            busy: None,
         }
     }
 }

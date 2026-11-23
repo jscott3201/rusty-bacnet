@@ -548,7 +548,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             owner: &owner,
         };
 
-        let result = async {
+        let mut result = async {
             let mut segmented_response_started = false;
             'send: while next_seq < total_segments {
                 let window_start = next_seq;
@@ -755,10 +755,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
         .await;
         self.note_answer(limits.sized_by, &result);
-        if let Some(lease) = limits.routed_path_lease.as_ref()
-            && answered_by_peer(&result)
-        {
-            lease.mark_answered();
+        if let Some(lease) = limits.routed_path_lease.as_ref() {
+            self.settle_routed(lease, (&tsm_mac, invoke_id, &owner), &mut result);
         }
 
         #[cfg(test)]

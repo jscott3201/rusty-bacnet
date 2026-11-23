@@ -238,8 +238,10 @@ pub(super) fn decode(
 }
 
 /// Whether a request that ended with `result` reached its target, given
-/// that it registered a transaction. A peer's answer, a timeout, a
-/// transport failure while sending, and a request sent before the node's
+/// that it registered a transaction. A peer's answer (an acknowledgement
+/// of the wrong kind included, #2721), a timeout, a transport failure while
+/// sending, a router's refusal of a request that went out (#2724), and a
+/// request sent before the node's
 /// DeviceCommunicationControl withheld its retry did; a refusal before
 /// anything was sent, and a request whose transaction its client's or
 /// node's stop ended, did not.
@@ -251,6 +253,9 @@ pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
             Error::Remote(_)
                 | Error::Structured { .. }
                 | Error::RoutedPathTooLong { .. }
+                | Error::NetworkRejected(_)
+                | Error::RouterBusyTimeout(_)
+                | Error::UnexpectedAck { .. }
                 | Error::Timeout(_)
                 | Error::Transport(_)
                 | Error::Segmentation(_)
@@ -264,7 +269,12 @@ pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
 /// its COMMUNICATION code, and the client's own wait for an answer running
 /// out as TIMEOUT. The client reports that wait as an Abort for a TSM
 /// timeout, which a peer's Abort for that reason can't be told from; both
-/// say the device didn't answer in time. A request whose retry the node's
+/// say the device didn't answer in time, and so does a timeout after a
+/// router said it was busy (#2724). A router's network reject is the
+/// COMMUNICATION code Clause 18 gives its reason
+/// ([`NetworkReject::error_code`](bacnet_types::error::NetworkReject::error_code)).
+/// An acknowledgement of the wrong kind for the service (#2721), whose
+/// outcome is unknown, is OTHER. A request whose retry the node's
 /// DeviceCommunicationControl withheld is SERVICES, COMMUNICATION_DISABLED,
 /// the pair the standard uses for a device whose communication that
 /// control turned off.
@@ -279,12 +289,14 @@ pub(crate) fn audit_result(error: &Error) -> (ErrorClass, ErrorCode) {
             return (ErrorClass::SERVICES, ErrorCode::COMMUNICATION_DISABLED);
         }
         Error::Timeout(_)
+        | Error::RouterBusyTimeout(_)
         | Error::Remote(RemoteError::Abort {
             reason: AbortReason::TSM_TIMEOUT,
         }) => ErrorCode::TIMEOUT,
         Error::Remote(RemoteError::Abort { reason }) => abort_code(*reason),
         Error::Remote(RemoteError::Reject { reason }) => reject_code(*reason),
         Error::RoutedPathTooLong { .. } => ErrorCode::MESSAGE_TOO_LONG,
+        Error::NetworkRejected(reject) => reject.error_code(),
         _ => ErrorCode::OTHER,
     };
     (ErrorClass::COMMUNICATION, code)

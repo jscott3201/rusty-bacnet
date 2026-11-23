@@ -10,6 +10,11 @@ use bacnet_encoding::apdu::{AbortPdu, ErrorPdu, RejectPdu};
 use bacnet_types::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
 use bacnet_types::error::RemoteError;
 
+/// What a request ends with for `response`.
+fn confirmed_response_result(response: TsmResponse) -> Result<Bytes, Error> {
+    response.into_result()
+}
+
 /// An application-tagged ENUMERATED (tag 9) with the fewest content octets,
 /// written out by hand so the test does not lean on the encoder it checks.
 fn enumerated(value: u32) -> Vec<u8> {

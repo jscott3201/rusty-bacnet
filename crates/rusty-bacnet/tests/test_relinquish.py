@@ -641,7 +641,7 @@ class StubParityTests(unittest.TestCase):
 
     def test_the_write_policy_keyword_matches_the_stub(self) -> None:
         runtime = runtime_parameters(BACnetClient)
-        self.assertEqual(runtime[-2], ("write_policy", inspect.Parameter.KEYWORD_ONLY))
+        self.assertEqual(runtime[-3], ("write_policy", inspect.Parameter.KEYWORD_ONLY))
         self.assertIsNone(inspect.signature(BACnetClient).parameters["write_policy"].default)
         self.assertEqual(runtime, stub_parameters(stub_method("BACnetClient", "__init__")))
         self.assertEqual(runtime_parameters(WritePolicy), [])

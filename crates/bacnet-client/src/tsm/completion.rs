@@ -54,19 +54,21 @@ impl Tsm {
         )
     }
 
-    pub(crate) fn complete_network_path_too_long_for_owner(
+    /// End the transaction with a router's refusal: `response` is a
+    /// [`TsmResponse::Failed`] with the reject's error.
+    pub(crate) fn complete_network_refusal_for_owner(
         &mut self,
         source_mac: &[u8],
         invoke_id: u8,
         owner: &TransactionOwner,
-        dnet: u16,
+        response: TsmResponse,
     ) -> CompletionOutcome {
         self.complete_transaction_inner(
             source_mac,
             invoke_id,
             Some(owner),
             None,
-            TsmResponse::NetworkPathTooLong { dnet },
+            response,
             PendingRelease::Complete,
         )
     }
@@ -95,7 +97,7 @@ impl Tsm {
         invoke_id: u8,
         owner: Option<&TransactionOwner>,
         observed_service_choice: Option<ConfirmedServiceChoice>,
-        response: TsmResponse,
+        mut response: TsmResponse,
         release: PendingRelease,
     ) -> CompletionOutcome {
         let key = (MacAddr::from_slice(source_mac), invoke_id);
@@ -105,15 +107,16 @@ impl Tsm {
         if owner.is_some_and(|owner| !entry.get().owner.same_as(owner)) {
             return CompletionOutcome::NoTransaction;
         }
-        let requires_sent_all_segments = matches!(
-            &response,
-            TsmResponse::SimpleAck
-                | TsmResponse::ComplexAck { .. }
-                | TsmResponse::Remote {
+        // Which kind of answer this is, read once for both checks below.
+        let slot = super::ack_form::slot(&response);
+        let requires_sent_all_segments = super::ack_form::is_ack(slot)
+            || matches!(
+                &response,
+                TsmResponse::Remote {
                     error: RemoteError::Error { .. },
                     ..
                 }
-        );
+            );
         if requires_sent_all_segments
             && matches!(
                 entry.get().phase,
@@ -131,6 +134,13 @@ impl Tsm {
             && observed != expected
         {
             return CompletionOutcome::ServiceChoiceMismatch { expected, observed };
+        }
+        // The device's acknowledgement of this transaction in the other
+        // form than its service takes still ends the transaction, as any
+        // final acknowledgement does, but fails the request (#2721).
+        if super::ack_form::wrong(expected, slot) {
+            let accept = self.config.accept_complex_ack_for_simple_services;
+            super::ack_form::refuse(expected, slot, accept, &mut response);
         }
         let pending = entry.remove();
         let responder = pending.responder;

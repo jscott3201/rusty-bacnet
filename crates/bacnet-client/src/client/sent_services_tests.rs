@@ -441,7 +441,8 @@ async fn the_methods_send_exactly_the_listed_services() {
 }
 
 /// Every non-test source file of the crate, except the inbound dispatcher,
-/// which names the services the client receives.
+/// which names the services the client receives, and the table of which
+/// acknowledgement each service takes (#2721), which names every one.
 fn sending_sources() -> Vec<(std::path::PathBuf, String)> {
     fn walk(dir: &std::path::Path, out: &mut Vec<(std::path::PathBuf, String)>) {
         for entry in std::fs::read_dir(dir).unwrap() {
@@ -453,7 +454,10 @@ fn sending_sources() -> Vec<(std::path::PathBuf, String)> {
                 }
             } else if name.ends_with(".rs")
                 && !name.contains("test")
-                && !matches!(name.as_str(), "dispatch.rs" | "fake_device.rs")
+                && !matches!(
+                    name.as_str(),
+                    "dispatch.rs" | "fake_device.rs" | "ack_form.rs"
+                )
             {
                 out.push((path.clone(), std::fs::read_to_string(&path).unwrap()));
             }

@@ -114,7 +114,9 @@ fn progress_after_completion_is_not_published() {
         &mac(),
         invoke_id,
         Some(ConfirmedServiceChoice::READ_PROPERTY),
-        TsmResponse::SimpleAck,
+        TsmResponse::ComplexAck {
+            service_data: bytes::Bytes::new(),
+        },
     );
     // Segment activity that trails the completion finds no transaction.
     assert_eq!(
@@ -129,6 +131,6 @@ fn progress_after_completion_is_not_published() {
     assert!(!polls_ready(registration.progress.changed()));
     assert!(matches!(
         registration.response.try_recv(),
-        Ok(TsmResponse::SimpleAck)
+        Ok(TsmResponse::ComplexAck { .. })
     ));
 }

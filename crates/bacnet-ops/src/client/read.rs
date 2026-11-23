@@ -122,13 +122,15 @@ pub fn rpm_failure(error: &Error) -> RpmFailure {
 }
 
 /// True when `error`, a low-level client's error such as a [`Halt`]
-/// holds, says the device, or the way to it, isn't answering: a timeout or
-/// a transport failure. Reading on would only time out again. Only a
-/// timeout makes a following handle look for its device elsewhere
+/// holds, says the device, or the way to it, isn't answering: a timeout, a
+/// transport failure, or a router on the way that refused the request at
+/// the network layer ([`Error::NetworkRejected`], #2724). Reading on would
+/// only fail the same way. A timeout or a router's refusal makes a
+/// following handle look for its device elsewhere
 /// ([`Device`](crate::Device)). The high-level calls' errors say it with
 /// [`OpsError::unreachable`](crate::OpsError::unreachable).
 pub fn unreachable(error: &Error) -> bool {
-    timed_out(error) || matches!(error, Error::Transport(_))
+    timed_out(error) || matches!(error, Error::Transport(_) | Error::NetworkRejected(_))
 }
 
 /// True when `error` is the client's or the link's own failure of a
@@ -176,13 +178,14 @@ pub(crate) fn failed_locally(error: &Error) -> bool {
 
 /// True when `error`, a low-level client's error, says the request timed
 /// out: the client's own timeout, or the transaction state machine giving
-/// up on its retries. A transport failure is unreachable but not a
-/// timeout. The high-level calls' errors say it with
+/// up on its retries, also after a router said it was busy
+/// ([`Error::RouterBusyTimeout`], #2724). A transport failure, or a
+/// router's network reject, is unreachable but not a timeout. The high-level calls' errors say it with
 /// [`OpsError::timed_out`](crate::OpsError::timed_out).
 pub fn timed_out(error: &Error) -> bool {
     match error {
         Error::Remote(RemoteError::Abort { reason }) => *reason == AbortReason::TSM_TIMEOUT,
-        Error::Timeout(_) => true,
+        Error::Timeout(_) | Error::RouterBusyTimeout(_) => true,
         _ => false,
     }
 }
