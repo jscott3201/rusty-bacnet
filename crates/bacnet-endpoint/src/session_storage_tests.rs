@@ -159,6 +159,22 @@ async fn a_path_the_session_cannot_use_is_refused_at_start() {
         "{error}"
     );
 
+    // A serving session with no identity never starts, so a path on one is
+    // never dropped without a word.
+    let mut nameless = EndpointSession::new(
+        wire.port(NODE).build(),
+        SessionRole::Both,
+        SessionConfig::default(),
+    )
+    .unwrap()
+    .with_device_storage_path(&path);
+    let error = refused(&mut nameless).await;
+    assert!(
+        error.contains("needs the node's Device identity"),
+        "{error}"
+    );
+    assert!(!scratch.0.exists());
+
     let builder: ServerBuilder<TestTransport> =
         BACnetServer::generic_builder().device_storage_path(&path);
     let mut on_builder = EndpointSession::new(
