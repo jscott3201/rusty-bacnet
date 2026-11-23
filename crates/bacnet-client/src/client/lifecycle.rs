@@ -223,8 +223,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ) -> Self {
         // A client that takes no segments states no segment count either:
         // settled here once, so no request's header asks.
-        let receives_segments = config.receives_segments();
-        if !receives_segments {
+        if !config.receives_segments() {
             config.max_segments = None;
         }
         let network = Arc::clone(inbound.network());
@@ -303,10 +302,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let decode_warning_hook = Arc::clone(&decode_warning);
         #[cfg(test)]
         let response_warning_hook = Arc::clone(&response_warning);
-        #[cfg(test)]
-        let request_transfers = Arc::new(request_reassembly::RequestTransfersHook::default());
-        #[cfg(test)]
-        let request_transfers_dispatch = Arc::clone(&request_transfers);
 
         let device_purge_task = spawn_device_purge(
             Arc::clone(&device_table),
@@ -318,12 +313,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             // Dropped when this task ends, however it ends (#2612).
             let _routing_end = routing_end;
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
-            // The segmented requests the client answers (#2646): one
-            // pointer, empty until the first.
-            let mut requests = request_reassembly::RequestTransfers::new(
-                #[cfg(test)]
-                request_transfers_dispatch,
-            );
             let mut order = TurnOrder::default();
 
             loop {
@@ -430,30 +419,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     &decode_warning,
                                 );
                             }
-                            // A segmented request the client answers, and a
-                            // requester's Abort, take their own turns here
-                            // (#2646), so `dispatch_apdu` keeps its shape.
-                            Ok(Apdu::ConfirmedRequest(request)) if request.segmented => {
-                                Self::segmented_request(
-                                    request_reassembly::RequestSegmentContext {
-                                        network: network_dispatch,
-                                        tsm: &tsm_dispatch,
-                                        cov_tx: &cov_tx_dispatch,
-                                        event_tx: &event_tx_dispatch,
-                                        policy: &confirmed_cov_ack_policy,
-                                        decode_warning: &decode_warning,
-                                        response_warning: &response_warning,
-                                        limits: response_limits,
-                                    },
-                                    &mut requests,
-                                    received,
-                                    request,
-                                )
-                                .await;
-                            }
-                            Ok(Apdu::Abort(abort)) if !abort.sent_by_server => {
-                                Self::requester_abort(&requests, &received, &abort);
-                            }
                             Ok(decoded) => {
                                 Self::dispatch_apdu(
                                     DispatchContext {
@@ -541,13 +506,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             decode_warning: decode_warning_hook,
             #[cfg(test)]
             response_warning: response_warning_hook,
-            #[cfg(test)]
-            request_transfers,
             local_mac,
             routed_path_limits,
             group_source_request_drops,
             pacer,
-            receives_segments,
         }
     }
 
@@ -632,6 +594,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         join_owned_task(&mut self.dispatch_task).await;
         join_owned_task(&mut self.device_purge_task).await;
         self.tsm.lock().cancel_all_transactions();
+        // The segmented requests the client was reassembling end with it.
+        let reassembly = self.tsm.lock().request_reassembly.take();
+        if let Some(reassembly) = reassembly {
+            reassembly.end().await;
+        }
         // On a seat the node owns the network layer and stops it (#2617).
         if self.device_table.asking.seated {
             return Ok(());
@@ -655,6 +622,7 @@ impl<T: TransportPort> Drop for BACnetClient<T> {
         self.abort_owned_tasks();
         if let Some(mut tsm) = self.tsm.try_lock() {
             tsm.cancel_all_transactions();
+            tsm.request_reassembly = None;
         }
     }
 }

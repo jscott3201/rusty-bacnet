@@ -13,123 +13,120 @@
 //! receive is never told that it can't. A client that takes no segments
 //! answers the first segment with an Abort (SEGMENTATION_NOT_SUPPORTED).
 //!
-//! The transfers live in a table the dispatch task opens on the first one
-//! and shares with a timer task, both under a blocking lock no `.await`
-//! holds: the dispatch task feeds it segments and a requester's Aborts, and
-//! the timer task ends what has gone silent or stalled. Nothing of it is on
-//! the path of an unsegmented APDU: the dispatch loop gives a segmented
-//! request and a requester's Abort turns of their own, out of line, before
-//! `dispatch_apdu`, whose code is left as it was without them (an earlier
-//! shape that grew it cost every answer about 15 instructions); the loop
-//! holds one pointer, empty until the first transfer; and the timer is a
-//! task of its own, so the loop polls no timer for it (#1978 item 8). The
-//! table and its timer end with the dispatch task: on
-//! [`BACnetClient::stop`], on a drop, and when the node a seated client runs
-//! on stops.
+//! # Where it runs
+//!
+//! In a task of its own, the reassembly task, which the first segment
+//! starts and which owns the table and its timers. The dispatch task meets a
+//! segment, and a requester's Abort, only in the two branches of
+//! `dispatch_apdu` that always took them (the segment's Abort, the Abort it
+//! ignored): their bodies hand the PDU over, out of line and without
+//! waiting, and nothing else in the dispatch task changed. A request's plain
+//! path is the dev path, instruction for instruction (#2646 review: a shape
+//! that grew `dispatch_apdu` or its loop cost every answer 11 to 32
+//! instructions).
+//!
+//! The hand-over is one bounded queue, so a transfer's segments and a
+//! requester's Abort reach the table in the order the client received
+//! them. A full queue drops what doesn't fit and counts it: a segment
+//! draws an Abort (BUFFER_OVERFLOW), sent by a task spawned for it; an Abort
+//! is dropped, and its transfer ends by its timer.
+//!
+//! The client's transaction table keeps the queue's sender and the task's
+//! handle. The task holds the network layer weakly, so it never keeps the
+//! link up, and it ends when the client stops (which waits for it), when
+//! the client is dropped, when the node a seated client runs on stops, and
+//! when the layer is gone.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Weak;
 
 use bacnet_endpoint_core::segmented_request::{Opening, Receipt, Segment, SegmentedRequests};
 use bacnet_types::enums::AbortReason;
-use tokio::sync::Notify;
+use tokio::sync::mpsc::error::TrySendError;
 
 use super::*;
 
-/// The segmented requests the client answers: nothing until the first one,
-/// then one pointer to the table and its timer. The dispatch loop holds it
-/// beside the segmented answers' map, and reaches it only from the turns a
-/// segmented request and a requester's Abort take, ahead of
-/// `dispatch_apdu`, which keeps the shape it has without them.
-pub(super) struct RequestTransfers {
-    active: Option<Box<Active>>,
+/// Segments and Aborts waiting for the reassembly task. A burst bigger than
+/// this, faster than the task takes it, is dropped and counted.
+const QUEUE: usize = 64;
+
+/// What the dispatch task hands the reassembly task.
+pub(super) enum Handed {
+    /// One segment of a confirmed request, with its reply path.
+    Segment {
+        source_mac: MacAddr,
+        source_network: Option<NpduAddress>,
+        reply: InboundReply,
+        request: ConfirmedRequestPdu,
+    },
+    /// A requester's Abort (server bit clear).
+    Abort {
+        source_mac: MacAddr,
+        source_network: Option<NpduAddress>,
+        invoke_id: u8,
+        provenance: TransportProvenance,
+    },
+}
+
+/// The reassembly task, as the client's transaction table keeps it: its
+/// queue, its handle (dropping this aborts it) and what the queue dropped.
+pub(crate) struct RequestReassembly {
+    queue: mpsc::Sender<Handed>,
+    task: Option<JoinHandle<()>>,
+    /// Segments and Aborts a full queue dropped.
+    pub(crate) full_drops: u64,
+    /// The task's table, for tests to read.
     #[cfg(test)]
-    hook: Arc<RequestTransfersHook>,
+    pub(crate) table: Weak<SyncMutex<SegmentedRequests>>,
 }
 
-/// The table and the timer that ends its transfers.
-struct Active {
-    table: Arc<SyncMutex<SegmentedRequests>>,
-    /// Wakes the timer when a transfer opens: it sleeps with no deadline
-    /// while the table is empty.
-    wake: Arc<Notify>,
-    _timer: AbortOnDrop,
-}
-
-/// Aborts the timer task when the dispatch task's state drops, however the
-/// dispatch task ends.
-struct AbortOnDrop(JoinHandle<()>);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
-impl RequestTransfers {
-    /// None yet.
-    pub(super) fn new(#[cfg(test)] hook: Arc<RequestTransfersHook>) -> Self {
+impl RequestReassembly {
+    /// A reassembly whose task never takes from `queue`, for a test to
+    /// fill it.
+    #[cfg(test)]
+    pub(super) fn stalled(queue: mpsc::Sender<Handed>) -> Self {
         Self {
-            active: None,
-            #[cfg(test)]
-            hook,
+            queue,
+            task: None,
+            full_drops: 0,
+            table: Weak::new(),
         }
     }
 
-    /// The table, opened with its timer on first use.
-    fn open<T: TransportPort + 'static>(
-        &mut self,
-        network: &Arc<NetworkLayer<T>>,
-        segment_timeout: Duration,
-        max_segments: usize,
-    ) -> &Active {
-        #[cfg(test)]
-        let hook = &self.hook;
-        self.active.get_or_insert_with(|| {
-            let table = SegmentedRequests::new(segment_timeout).with_max_segments(max_segments);
-            let table = Arc::new(SyncMutex::new(table));
-            let wake = Arc::new(Notify::new());
-            #[cfg(test)]
-            {
-                *hook.table.lock().unwrap() = Some(Arc::downgrade(&table));
-            }
-            let timer = tokio::spawn(BACnetClient::<T>::end_stale_transfers(
-                Arc::downgrade(network),
-                Arc::downgrade(&table),
-                Arc::clone(&wake),
-            ));
-            Box::new(Active {
-                table,
-                wake,
-                _timer: AbortOnDrop(timer),
-            })
-        })
+    /// Abort the task and wait until it is gone, its table with it.
+    pub(super) async fn end(mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+            let _ = task.await;
+        }
     }
 }
 
-/// What answering a segmented request needs, borrowed from the dispatch
-/// task.
-pub(super) struct RequestSegmentContext<'a, T: TransportPort + 'static> {
-    pub(super) network: &'a Arc<NetworkLayer<T>>,
-    /// The client's transactions, whose segment timeout a new table takes.
+impl Drop for RequestReassembly {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+/// What starting the reassembly task and handing it a segment take,
+/// borrowed from `dispatch_apdu`.
+pub(super) struct HandOff<'a, T: TransportPort + 'static> {
     pub(super) tsm: &'a Arc<SyncMutex<Tsm>>,
+    pub(super) network: &'a Arc<NetworkLayer<T>>,
     pub(super) cov_tx: &'a broadcast::Sender<COVEvent>,
     pub(super) event_tx: &'a broadcast::Sender<ReceivedEventNotification>,
     pub(super) policy: &'a ConfirmedCOVNotificationAckPolicy,
-    pub(super) decode_warning: &'a WarnThrottle,
-    pub(super) response_warning: &'a WarnThrottle,
-    /// Whether the client receives segments, and how many of one request
-    /// it keeps.
     pub(super) limits: ResponseLimits,
 }
 
-/// One segment, where it came from and its reply path.
-struct RequestSegment<'a> {
-    source_mac: &'a [u8],
-    source_network: &'a Option<NpduAddress>,
-    reply: InboundReply,
-    request: ConfirmedRequestPdu,
+/// What the reassembly task publishes to and warns through.
+struct Outlets {
+    cov_tx: broadcast::Sender<COVEvent>,
+    event_tx: broadcast::Sender<ReceivedEventNotification>,
+    policy: ConfirmedCOVNotificationAckPolicy,
+    decode_warning: WarnThrottle,
+    response_warning: WarnThrottle,
 }
 
 /// Now, on tokio's clock, so a paused test steps the timers.
@@ -138,115 +135,215 @@ fn now() -> std::time::Instant {
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
-    /// A requester's Abort (server bit clear) ends the reassembly of its
-    /// request, if one is open (Clause 5.4.5.2), and draws nothing back.
-    /// The dispatch loop's own turn for it, ahead of `dispatch_apdu`, which
-    /// only logs such an Abort.
+    /// The body of `dispatch_apdu`'s branch for a segment of a confirmed
+    /// request, when the client receives segments: hand it to the
+    /// reassembly task, starting the task on the first one.
     #[cold]
     #[inline(never)]
-    pub(super) fn requester_abort(
-        transfers: &RequestTransfers,
-        received: &bacnet_network::layer::ReceivedApdu,
-        abort: &AbortPdu,
-    ) {
-        debug!(
-            invoke_id = abort.invoke_id,
-            "Abort PDU with server=FALSE ends its request's reassembly"
-        );
-        if let Some(active) = &transfers.active {
-            active.table.lock().abort(
-                &received.source_mac,
-                received.source_network.as_ref(),
-                abort.invoke_id,
-                received.provenance.clone(),
-            );
-        }
-    }
-
-    /// The dispatch loop's turn for one segment of a confirmed request
-    /// (see the [module docs](self)), ahead of `dispatch_apdu`. One
-    /// addressed to a group is ignored, as an unsegmented one is.
-    #[cold]
-    #[inline(never)]
-    pub(super) fn segmented_request<'a>(
-        context: RequestSegmentContext<'a, T>,
-        transfers: &'a mut RequestTransfers,
-        received: bacnet_network::layer::ReceivedApdu,
+    pub(super) fn hand_off_segment(
+        at: HandOff<'_, T>,
+        source_mac: &[u8],
+        source_network: &Option<NpduAddress>,
+        reply: InboundReply,
         request: ConfirmedRequestPdu,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(async move {
-            if received.is_group {
-                debug!(
-                    invoke_id = request.invoke_id,
-                    service = request.service_choice.to_raw(),
-                    "Ignoring group-addressed ConfirmedRequest"
-                );
+    ) {
+        let handed = Handed::Segment {
+            source_mac: MacAddr::from_slice(source_mac),
+            source_network: source_network.clone(),
+            reply,
+            request,
+        };
+        let mut tsm = at.tsm.lock();
+        let segment_timeout = tsm.segment_timeout();
+        let reassembly = tsm
+            .request_reassembly
+            .get_or_insert_with(|| Box::new(Self::start_reassembly(&at, segment_timeout)));
+        let refused = match reassembly.queue.try_send(handed) {
+            Ok(()) => return,
+            Err(TrySendError::Full(handed)) => {
+                reassembly.full_drops = reassembly.full_drops.saturating_add(1);
+                handed
+            }
+            // The task is gone with the layer; a stopped client's link
+            // sends nothing either.
+            Err(TrySendError::Closed(_)) => {
+                tsm.request_reassembly = None;
                 return;
             }
-            let reply = InboundReply::new(received.response_route(), received.reply_tx);
-            Self::receive_request_segment(
-                context,
-                transfers,
-                RequestSegment {
-                    source_mac: &received.source_mac,
-                    source_network: &received.source_network,
-                    reply,
-                    request,
-                },
-            )
-            .await;
-        })
-    }
-
-    /// Take one segment of a confirmed request.
-    async fn receive_request_segment(
-        context: RequestSegmentContext<'_, T>,
-        transfers: &mut RequestTransfers,
-        segment: RequestSegment<'_>,
-    ) {
-        let RequestSegment {
+        };
+        drop(tsm);
+        let Handed::Segment {
             source_mac,
             source_network,
             reply,
             request,
-        } = segment;
-        let network = context.network;
-        let invoke_id = request.invoke_id;
-        if !context.limits.segmented_response_accepted {
+        } = refused
+        else {
+            return;
+        };
+        let network = Arc::clone(at.network);
+        tokio::spawn(async move {
             Self::send_server_abort(
-                network,
-                source_mac,
-                source_network,
+                &network,
+                &source_mac,
+                &source_network,
                 reply,
-                invoke_id,
-                AbortReason::SEGMENTATION_NOT_SUPPORTED,
+                request.invoke_id,
+                AbortReason::BUFFER_OVERFLOW,
             )
             .await;
+        });
+    }
+
+    /// The body of `dispatch_apdu`'s branch for an Abort with the server
+    /// bit clear: hand it to the reassembly task, if one runs, to end the
+    /// transfer it names (Clause 5.4.5.2). It draws nothing back.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn hand_off_abort(
+        tsm: &Arc<SyncMutex<Tsm>>,
+        source_mac: &[u8],
+        source_network: &Option<NpduAddress>,
+        invoke_id: u8,
+        provenance: &TransportProvenance,
+    ) {
+        let mut tsm = tsm.lock();
+        let Some(reassembly) = tsm.request_reassembly.as_mut() else {
             return;
-        }
-        let segment_timeout = context.tsm.lock().segment_timeout();
-        let active = transfers.open(
-            network,
-            segment_timeout,
-            context.limits.max_reassembly_segments,
-        );
-        let receipt = {
-            let mut table = active.table.lock();
-            let was_empty = table.is_empty();
-            let receipt = table.receive(
-                Segment {
-                    source_mac,
-                    source_network: source_network.as_ref(),
-                    route: reply.route(),
-                    request: &request,
-                },
-                now(),
-            );
-            if was_empty && !table.is_empty() {
-                active.wake.notify_one();
-            }
-            receipt
         };
+        let handed = Handed::Abort {
+            source_mac: MacAddr::from_slice(source_mac),
+            source_network: source_network.clone(),
+            invoke_id,
+            provenance: provenance.clone(),
+        };
+        if reassembly.queue.try_send(handed).is_err() {
+            reassembly.full_drops = reassembly.full_drops.saturating_add(1);
+        }
+    }
+
+    /// Start the reassembly task.
+    fn start_reassembly(at: &HandOff<'_, T>, segment_timeout: Duration) -> RequestReassembly {
+        let (queue, received) = mpsc::channel(QUEUE);
+        let table = SegmentedRequests::new(segment_timeout)
+            .with_max_segments(at.limits.max_reassembly_segments);
+        let table = Arc::new(SyncMutex::new(table));
+        #[cfg(test)]
+        let weak = Arc::downgrade(&table);
+        let outlets = Outlets {
+            cov_tx: at.cov_tx.clone(),
+            event_tx: at.event_tx.clone(),
+            policy: Arc::clone(at.policy),
+            decode_warning: WarnThrottle::default(),
+            response_warning: WarnThrottle::default(),
+        };
+        let task = tokio::spawn(Self::reassemble(
+            Arc::downgrade(at.network),
+            received,
+            table,
+            outlets,
+        ));
+        RequestReassembly {
+            queue,
+            task: Some(task),
+            full_drops: 0,
+            #[cfg(test)]
+            table: weak,
+        }
+    }
+
+    /// The reassembly task: take each segment and Abort in turn, and end
+    /// each transfer when its timer is due.
+    async fn reassemble(
+        network: Weak<NetworkLayer<T>>,
+        mut queue: mpsc::Receiver<Handed>,
+        table: Arc<SyncMutex<SegmentedRequests>>,
+        outlets: Outlets,
+    ) {
+        loop {
+            let deadline = table.lock().next_deadline();
+            let handed = match deadline {
+                Some(at) => {
+                    tokio::select! {
+                        biased;
+                        handed = queue.recv() => handed,
+                        () = tokio::time::sleep_until(tokio::time::Instant::from_std(at)) => {
+                            let stalled = table.lock().expire(now());
+                            if let Some(network) = network.upgrade() {
+                                for opening in stalled {
+                                    Self::abort_opening(&network, opening, AbortReason::OTHER)
+                                        .await;
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                }
+                None => queue.recv().await,
+            };
+            let Some(handed) = handed else {
+                return;
+            };
+            let Some(network) = network.upgrade() else {
+                return;
+            };
+            match handed {
+                Handed::Segment {
+                    source_mac,
+                    source_network,
+                    reply,
+                    request,
+                } => {
+                    Self::receive_request_segment(
+                        &network,
+                        &table,
+                        &outlets,
+                        &source_mac,
+                        &source_network,
+                        reply,
+                        request,
+                    )
+                    .await;
+                }
+                Handed::Abort {
+                    source_mac,
+                    source_network,
+                    invoke_id,
+                    provenance,
+                } => {
+                    debug!(
+                        invoke_id,
+                        "A requester's Abort ends its request's reassembly"
+                    );
+                    table
+                        .lock()
+                        .abort(&source_mac, source_network.as_ref(), invoke_id, provenance);
+                }
+            }
+        }
+    }
+
+    /// Take one segment of a confirmed request.
+    #[allow(clippy::too_many_arguments)]
+    async fn receive_request_segment(
+        network: &Arc<NetworkLayer<T>>,
+        table: &SyncMutex<SegmentedRequests>,
+        outlets: &Outlets,
+        source_mac: &[u8],
+        source_network: &Option<NpduAddress>,
+        reply: InboundReply,
+        request: ConfirmedRequestPdu,
+    ) {
+        let invoke_id = request.invoke_id;
+        let receipt = table.lock().receive(
+            Segment {
+                source_mac,
+                source_network: source_network.as_ref(),
+                route: reply.route(),
+                request: &request,
+            },
+            now(),
+        );
         match receipt {
             // On MS/TP the reply sender drops unused, so the link answers
             // with Reply Postponed.
@@ -254,7 +351,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Receipt::Ack(ack) => {
                 if ack.negative_ack {
                     warn_throttled!(
-                        context.response_warning,
+                        outlets.response_warning,
                         invoke_id,
                         seq = ack.sequence_number,
                         "Asking again for segments of a confirmed request"
@@ -265,7 +362,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
             Receipt::Abort(reason) => {
                 warn_throttled!(
-                    context.response_warning,
+                    outlets.response_warning,
                     invoke_id,
                     reason = reason.to_raw(),
                     "Aborting a segmented confirmed request"
@@ -282,7 +379,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
             Receipt::Retired(opening) => {
                 warn_throttled!(
-                    context.response_warning,
+                    outlets.response_warning,
                     invoke_id,
                     "Aborting a segmented confirmed request whose segment changed route"
                 );
@@ -319,13 +416,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 {
                     Self::receive_confirmed_cov_notification(
                         network,
-                        context.cov_tx,
-                        context.policy,
+                        &outlets.cov_tx,
+                        &outlets.policy,
                         &source_mac,
                         &source_network,
                         answer,
                         request,
-                        context.decode_warning,
+                        &outlets.decode_warning,
                     )
                     .await;
                 } else if request.service_choice
@@ -333,12 +430,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 {
                     Self::receive_confirmed_event_notification(
                         network,
-                        context.event_tx,
+                        &outlets.event_tx,
                         &source_mac,
                         &source_network,
                         answer,
                         request,
-                        context.decode_warning,
+                        &outlets.decode_warning,
                     )
                     .await;
                 } else {
@@ -394,68 +491,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             reason,
         )
         .await;
-    }
-
-    /// The timer task: end each transfer when it is due, and sleep until
-    /// the next is. It holds the table and the layer weakly, so neither
-    /// outlives the dispatch task and the client for it, and ends once the
-    /// table is gone; the dispatch task's state aborts it before that.
-    async fn end_stale_transfers(
-        network: Weak<NetworkLayer<T>>,
-        table: Weak<SyncMutex<SegmentedRequests>>,
-        wake: Arc<Notify>,
-    ) {
-        loop {
-            let (stalled, next) = {
-                let Some(table) = table.upgrade() else {
-                    return;
-                };
-                let mut table = table.lock();
-                let stalled = table.expire(now());
-                (stalled, table.next_deadline())
-            };
-            if let Some(network) = network.upgrade() {
-                for opening in stalled {
-                    Self::abort_opening(&network, opening, AbortReason::OTHER).await;
-                }
-            }
-            match next {
-                Some(at) => {
-                    tokio::select! {
-                        () = tokio::time::sleep_until(tokio::time::Instant::from_std(at)) => {}
-                        () = wake.notified() => {}
-                    }
-                }
-                None => wake.notified().await,
-            }
-        }
-    }
-}
-
-/// Lets a test see the client's request transfers.
-#[cfg(test)]
-#[derive(Default)]
-pub(super) struct RequestTransfersHook {
-    table: std::sync::Mutex<Option<Weak<SyncMutex<SegmentedRequests>>>>,
-}
-
-#[cfg(test)]
-impl RequestTransfersHook {
-    /// The transfers in progress and their saved bytes; `None` before the
-    /// first transfer opened and once the table is gone.
-    pub(super) fn transfers(&self) -> Option<(usize, usize)> {
-        let table = self.table.lock().unwrap().as_ref()?.upgrade()?;
-        let table = table.lock();
-        Some((table.len(), table.saved_bytes()))
-    }
-
-    /// Whether a table was opened and is now gone.
-    pub(super) fn ended(&self) -> bool {
-        self.table
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|table| table.strong_count() == 0)
     }
 }
 

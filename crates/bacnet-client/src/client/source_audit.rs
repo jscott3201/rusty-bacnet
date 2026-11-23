@@ -340,13 +340,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             decode_warning: Arc::clone(&self.decode_warning),
             #[cfg(test)]
             response_warning: Arc::clone(&self.response_warning),
-            #[cfg(test)]
-            request_transfers: Arc::clone(&self.request_transfers),
             local_mac: self.local_mac.clone(),
             routed_path_limits: Arc::clone(&self.routed_path_limits),
             group_source_request_drops: Arc::clone(&self.group_source_request_drops),
             pacer: Arc::new(pacer),
-            receives_segments: self.receives_segments,
         };
         (runner, invoke_id)
     }

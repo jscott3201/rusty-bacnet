@@ -671,17 +671,11 @@ pub struct BACnetClient<T: TransportPort = AnyTransport> {
     /// The dispatch task's response-warning throttle, for tests to read.
     #[cfg(test)]
     response_warning: Arc<WarnThrottle>,
-    /// The dispatch task's segmented requests in progress, for tests to read.
-    #[cfg(test)]
-    request_transfers: Arc<request_reassembly::RequestTransfersHook>,
     local_mac: MacAddr,
     routed_path_limits: Arc<RoutedPathLimits>,
     /// See [`Self::group_source_request_drops`].
     group_source_request_drops: Arc<std::sync::atomic::AtomicU64>,
     pacer: Arc<pacing::RequestPacer>,
-    /// Whether `config.segmentation` receives segments, settled at start,
-    /// so a request's header copies a bool, as it did before the enum.
-    receives_segments: bool,
 }
 
 impl BACnetClient<BipTransport> {
@@ -951,7 +945,7 @@ mod object_mgmt;
 pub(crate) mod pacing;
 mod property;
 mod read_range;
-mod request_reassembly;
+pub(crate) mod request_reassembly;
 mod requests;
 mod response_admission;
 mod routed_path_limits;

@@ -147,6 +147,7 @@ impl Tsm {
             leasing: Some(Arc::clone(&coordinator)),
             restricted: false,
             diverted: false,
+            request_reassembly: None,
             coordinator: Some(coordinator),
         }
     }
@@ -591,6 +592,8 @@ impl Tsm {
         self.cancel_all_transactions();
         self.coordinator = None;
         self.leasing = None;
+        // The node has stopped: so does the reassembly task (#2646).
+        self.request_reassembly = None;
     }
 
     #[cfg(test)]

@@ -116,8 +116,28 @@ impl Lab {
 
     /// Prove the client sent nothing more so far: it answers an
     /// unsegmented ReadProperty, which it doesn't execute, with a Reject,
-    /// and that Reject is the next frame.
+    /// and that Reject is the next frame. Once the reassembly task runs, a
+    /// one-segment ReadProperty follows, which the task acknowledges and
+    /// rejects after everything handed to it before: segments go through
+    /// its queue, so the dispatch's answer alone proves nothing about them.
     async fn quiet(&mut self) {
+        self.dispatch_fence().await;
+        if self.table().is_none() {
+            return;
+        }
+        let read = ConfirmedServiceChoice::READ_PROPERTY;
+        let fence = segment(0xed, read, 0, 1, false, Bytes::from_static(&[0x0c]));
+        self.from(&PEER, &fence).await;
+        segment_ack(self.next(&PEER).await, 0xed, 0, false, 1);
+        let Apdu::Reject(reject) = self.next(&PEER).await else {
+            panic!("the reassembly task sent something before the fence's answer");
+        };
+        assert_eq!(reject.invoke_id, 0xed);
+    }
+
+    /// The dispatch task's half of [`Self::quiet`]: it has taken
+    /// everything sent before.
+    async fn dispatch_fence(&mut self) {
         let fence = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
             segmented: false,
             more_follows: false,
@@ -137,8 +157,18 @@ impl Lab {
         assert_eq!(reject.invoke_id, 0xee);
     }
 
+    /// The reassembly task's table, once the task runs.
+    fn table(&self) -> Option<std::sync::Weak<SyncMutex<SegmentedRequests>>> {
+        let tsm = self.client.tsm.lock();
+        Some(tsm.request_reassembly.as_ref()?.table.clone())
+    }
+
+    /// The transfers in progress and their saved bytes; `None` before the
+    /// first segment started the task, and once the table is gone.
     fn transfers(&self) -> Option<(usize, usize)> {
-        self.client.request_transfers.transfers()
+        let table = self.table()?.upgrade()?;
+        let table = table.lock();
+        Some((table.len(), table.saved_bytes()))
     }
 }
 
@@ -667,9 +697,13 @@ async fn a_stop_midway_leaves_nothing_behind() {
     lab.from(&PEER, &segments(17, COV, &cov_body(52), 8, 1)[0])
         .await;
     segment_ack(lab.next(&PEER).await, 17, 0, false, 1);
-    let hook = Arc::clone(&lab.client.request_transfers);
+    let table = lab.table().unwrap();
     lab.client.stop().await.unwrap();
-    assert!(hook.ended(), "the table is gone once stop returns");
+    assert!(
+        table.upgrade().is_none(),
+        "the table is gone once stop returns"
+    );
+    assert!(lab.table().is_none(), "and the task's handle");
     let sent = lab.log.len();
     tokio::time::sleep(Duration::from_secs(60)).await;
     assert_eq!(lab.log.len(), sent);
@@ -682,11 +716,11 @@ async fn a_drop_midway_leaves_nothing_behind() {
     lab.from(&PEER, &segments(18, COV, &cov_body(53), 8, 1)[0])
         .await;
     segment_ack(lab.next(&PEER).await, 18, 0, false, 1);
-    let hook = Arc::clone(&lab.client.request_transfers);
+    let table = lab.table().unwrap();
     let Lab { client, log, .. } = lab;
     drop(client);
     timeout(WAIT, async {
-        while !hook.ended() {
+        while table.upgrade().is_some() {
             tokio::task::yield_now().await;
         }
     })
@@ -695,4 +729,40 @@ async fn a_drop_midway_leaves_nothing_behind() {
     let sent = log.len();
     tokio::time::sleep(Duration::from_secs(60)).await;
     assert_eq!(log.len(), sent);
+}
+
+/// The hand-over never waits: a segment the reassembly queue has no room
+/// for draws an Abort (BUFFER_OVERFLOW), a requester's Abort is dropped,
+/// and each is counted.
+#[tokio::test]
+async fn what_a_full_queue_cannot_take_is_aborted_and_counted() {
+    let mut lab = lab(true).await;
+    let (queue, _never_read) = mpsc::channel(1);
+    lab.client.tsm.lock().request_reassembly = Some(Box::new(RequestReassembly::stalled(queue)));
+    // The first fills the queue; the second finds no room.
+    lab.from(&PEER, &segments(30, COV, &cov_body(62), 8, 1)[0])
+        .await;
+    lab.from(&PEER, &segments(31, COV, &cov_body(62), 8, 1)[0])
+        .await;
+    aborted(lab.next(&PEER).await, 31, AbortReason::BUFFER_OVERFLOW);
+    lab.from(
+        &PEER,
+        &Apdu::Abort(AbortPdu {
+            sent_by_server: false,
+            invoke_id: 30,
+            abort_reason: AbortReason::OTHER,
+        }),
+    )
+    .await;
+    lab.dispatch_fence().await;
+    let drops = lab
+        .client
+        .tsm
+        .lock()
+        .request_reassembly
+        .as_ref()
+        .unwrap()
+        .full_drops;
+    assert_eq!(drops, 2);
+    lab.client.stop().await.unwrap();
 }

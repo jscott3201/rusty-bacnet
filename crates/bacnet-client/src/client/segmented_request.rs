@@ -34,7 +34,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let pdu = Apdu::ConfirmedRequest(ConfirmedRequestPdu {
             segmented: true,
             more_follows: !is_last,
-            segmented_response_accepted: self.receives_segments,
+            segmented_response_accepted: self.config.receives_segments(),
             max_segments: self.config.max_segments,
             max_apdu_length: context.advertised_max_apdu,
             invoke_id: context.invoke_id,
