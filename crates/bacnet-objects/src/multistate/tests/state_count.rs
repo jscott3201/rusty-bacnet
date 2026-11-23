@@ -319,3 +319,66 @@ fn an_output_relinquish_default_alone_blocks_a_shrink_past_it() {
     assert_eq!(code(resize(&mut output, 3)), ErrorCode::VALUE_OUT_OF_RANGE);
     assert_eq!(snapshot(&output), before);
 }
+
+/// The application's count meets the cap a client's does (#2711): each
+/// constructor and `set_number_of_states` take 1 to MAX_NUMBER_OF_STATES,
+/// and refuse a count past it before State_Text holds a label per state.
+#[test]
+fn a_local_count_meets_the_cap_a_client_count_does() {
+    let past = MAX_NUMBER_OF_STATES + 1;
+    let refused = |result: Result<(), Error>, what: &str| match result {
+        Err(Error::OutOfRange(message)) => assert_eq!(
+            message,
+            format!("number_of_states must be at most {MAX_NUMBER_OF_STATES}"),
+            "{what}"
+        ),
+        other => panic!("{what}: expected OutOfRange, got {other:?}"),
+    };
+    let writable = crate::present_value_access::PresentValueAccess::Writable;
+    for states in [past, u32::MAX] {
+        refused(
+            MultiStateInputObject::new(1, "MSI-1", states).map(drop),
+            "input",
+        );
+        refused(
+            MultiStateOutputObject::new(1, "MSO-1", states).map(drop),
+            "output",
+        );
+        refused(
+            MultiStateValueObject::new(1, "MSV-1", states).map(drop),
+            "value",
+        );
+        refused(
+            MultiStateValueObject::with_access(1, "MSV-1", states, writable).map(drop),
+            "value with access",
+        );
+    }
+    // The cap itself is a count every constructor takes.
+    for object in all_three(MAX_NUMBER_OF_STATES) {
+        assert_eq!(
+            count(&*object),
+            PropertyValue::Unsigned(MAX_NUMBER_OF_STATES.into())
+        );
+    }
+    let mut input = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
+    let mut output = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
+    let mut value = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
+    for states in [past, u32::MAX] {
+        refused(input.set_number_of_states(states), "input setter");
+        refused(output.set_number_of_states(states), "output setter");
+        refused(value.set_number_of_states(states), "value setter");
+    }
+    assert_eq!(
+        snapshot(&input),
+        snapshot(&MultiStateInputObject::new(1, "MSI-1", 3).unwrap())
+    );
+    input.set_number_of_states(MAX_NUMBER_OF_STATES).unwrap();
+    output.set_number_of_states(MAX_NUMBER_OF_STATES).unwrap();
+    value.set_number_of_states(MAX_NUMBER_OF_STATES).unwrap();
+    for object in [&input as &dyn BACnetObject, &output, &value] {
+        assert_eq!(
+            count(object),
+            PropertyValue::Unsigned(MAX_NUMBER_OF_STATES.into())
+        );
+    }
+}

@@ -297,7 +297,9 @@ class RouterApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(cleanup, router.close)
         broken = rb.BACnetServer(BASE + 200, transport="router", router=router)
         broken.add_analog_input(0, "Same name", 62, 1.0)
-        broken.add_analog_input(1, "Same name", 62, 2.0)
+        # A second point of that name is refused at add_* (#2711); a File
+        # object's builder leaves the clash for the database at start.
+        broken.add_file(1, "Same name")
         with self.assertRaisesRegex(ValueError, "duplicate object name"):
             await broken.start()
         hosted = rb.BACnetServer(BASE + 201, transport="router", router=router)

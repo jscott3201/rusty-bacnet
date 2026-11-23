@@ -6,15 +6,62 @@
 //! the parameter keywords configure (#2410); the Value objects also take `present_value_access`,
 //! `value_source_tracking` (#1552) and the independently optional Audit
 //! policy.
+//!
+//! The nine builders register through the endpoints' path (#2711): each
+//! reads its arguments into a [`Point`], which [`BACnetServer::register_point`]
+//! checks as an endpoint checks it and builds with the same code.
 use super::super::*;
 use crate::algorithm_keywords::AlgorithmKeywords;
-use crate::object_options::{keep_reporting, present_value_access, provision_profile};
+use crate::object_options::{object_profile, present_value_access};
+use crate::points::{Point, PointKind, Storage, check_unique, value_keywords};
 use crate::types::PyBitString;
-use bacnet_types::enums::{EngineeringUnits, Polarity};
+use bacnet_types::enums::{ObjectType, Polarity};
+
+impl BACnetServer {
+    /// Keep `point`, built once with `storage`, for start (#2711). It
+    /// passes the endpoints' checks first: an instance an object may have,
+    /// then no identifier or name the Device or a registration already
+    /// has, each refused before the build, so a refused registration has
+    /// touched no storage file and leaves the others as they were. The
+    /// build then makes the object's own checks.
+    fn register_point(&self, point: Point, storage: Storage<'_>) -> PyResult<()> {
+        let (kind, instance, name) = point.identity();
+        crate::points::check_identifier(kind, instance)?;
+        let mut pending = self.lock_pending()?;
+        self.check_takes_objects()?;
+        let device = (
+            ObjectType::DEVICE,
+            self.device_instance,
+            self.device_name.as_str(),
+        );
+        let kept = pending.iter().map(|object| {
+            let identifier = object.object_identifier();
+            (
+                identifier.object_type(),
+                identifier.instance_number(),
+                object.object_name(),
+            )
+        });
+        check_unique(kind, instance, name, std::iter::once(device).chain(kept))?;
+        let object = point.build(storage)?;
+        pending.push(object);
+        Ok(())
+    }
+}
 
 #[pymethods]
 impl BACnetServer {
     /// Add an Analog Input object to the server (before starting).
+    ///
+    /// `present_value` must be finite: NaN or an infinity raises
+    /// BacnetProtocolError VALUE_OUT_OF_RANGE, as on the endpoints.
+    ///
+    /// The nine analog, binary and multi-state builders check each
+    /// registration as the endpoints' builders do (#2711), before anything
+    /// is kept: instance 4194303 or past raises BacnetError, an object
+    /// identifier or name the Device or an earlier registration already has
+    /// raises ValueError, and a refused registration leaves the others for
+    /// start. A multi-state builder takes 1 to 1024 states.
     ///
     /// `storage_path` (a `str`) keeps the reporting settings a peer writes
     /// (Notification_Class, Event_Enable, Notify_Type,
@@ -87,29 +134,24 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let parameters = AlgorithmKeywords::analog(
-            high_limit,
-            low_limit,
-            deadband,
-            limit_enable,
-            time_delay,
-            time_delay_normal,
-        );
-        let mut ai = keep_reporting(
-            || {
-                let mut ai =
-                    AnalogInputObject::new(instance, name, EngineeringUnits::from_raw(units))?;
-                parameters.apply(&mut ai)?;
-                Ok(ai)
+        let point = Point::new(
+            instance,
+            name,
+            PointKind::AnalogInput {
+                units,
+                present_value,
             },
-            storage_path,
-            clear_written_reporting,
-            AnalogInputObject::with_reporting_persistence,
-            AnalogInputObject::clear_written_reporting,
-        )?;
-        ai.set_present_value(present_value);
-        provision_profile(tags, profile_location, profile_name, |p| ai.set_profile(p))?;
-        self.push_pending(Box::new(ai))
+            object_profile(tags, profile_location, profile_name)?,
+            AlgorithmKeywords::analog(
+                high_limit,
+                low_limit,
+                deadband,
+                limit_enable,
+                time_delay,
+                time_delay_normal,
+            ),
+        );
+        self.register_point(point, storage(storage_path, clear_written_reporting))
     }
 
     /// Add an Analog Output object to the server (before starting).
@@ -139,28 +181,24 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let parameters = AlgorithmKeywords::analog(
-            high_limit,
-            low_limit,
-            deadband,
-            limit_enable,
-            time_delay,
-            time_delay_normal,
-        );
-        let mut ao = keep_reporting(
-            || {
-                let mut ao =
-                    AnalogOutputObject::new(instance, name, EngineeringUnits::from_raw(units))?;
-                parameters.apply(&mut ao)?;
-                Ok(ao)
+        let point = Point::new(
+            instance,
+            name,
+            PointKind::AnalogOutput {
+                units,
+                present_value: None,
             },
-            storage_path,
-            clear_written_reporting,
-            AnalogOutputObject::with_reporting_persistence,
-            AnalogOutputObject::clear_written_reporting,
-        )?;
-        provision_profile(tags, profile_location, profile_name, |p| ao.set_profile(p))?;
-        self.push_pending(Box::new(ao))
+            object_profile(tags, profile_location, profile_name)?,
+            AlgorithmKeywords::analog(
+                high_limit,
+                low_limit,
+                deadband,
+                limit_enable,
+                time_delay,
+                time_delay_normal,
+            ),
+        );
+        self.register_point(point, storage(storage_path, clear_written_reporting))
     }
 
     /// Add a Binary Input object to the server (before starting).
@@ -192,21 +230,17 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let parameters = AlgorithmKeywords::binary(alarm_value, time_delay, time_delay_normal);
-        let mut bi = keep_reporting(
-            || {
-                let mut bi = BinaryInputObject::new(instance, name)?;
-                bi.set_polarity(Polarity::from_raw(polarity))?;
-                parameters.apply(&mut bi)?;
-                Ok(bi)
+        let point = Point::new(
+            instance,
+            name,
+            PointKind::BinaryInput {
+                polarity: Polarity::from_raw(polarity),
+                present_value: None,
             },
-            storage_path,
-            clear_written_reporting,
-            BinaryInputObject::with_reporting_persistence,
-            BinaryInputObject::clear_written_reporting,
-        )?;
-        provision_profile(tags, profile_location, profile_name, |p| bi.set_profile(p))?;
-        self.push_pending(Box::new(bi))
+            object_profile(tags, profile_location, profile_name)?,
+            AlgorithmKeywords::binary(alarm_value, time_delay, time_delay_normal),
+        );
+        self.register_point(point, storage(storage_path, clear_written_reporting))
     }
 
     /// Add a Binary Output object to the server (before starting).
@@ -237,21 +271,17 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let parameters = AlgorithmKeywords::delays(time_delay, time_delay_normal);
-        let mut bo = keep_reporting(
-            || {
-                let mut bo = BinaryOutputObject::new(instance, name)?;
-                bo.set_polarity(Polarity::from_raw(polarity))?;
-                parameters.apply(&mut bo)?;
-                Ok(bo)
+        let point = Point::new(
+            instance,
+            name,
+            PointKind::BinaryOutput {
+                polarity: Polarity::from_raw(polarity),
+                present_value: None,
             },
-            storage_path,
-            clear_written_reporting,
-            BinaryOutputObject::with_reporting_persistence,
-            BinaryOutputObject::clear_written_reporting,
-        )?;
-        provision_profile(tags, profile_location, profile_name, |p| bo.set_profile(p))?;
-        self.push_pending(Box::new(bo))
+            object_profile(tags, profile_location, profile_name)?,
+            AlgorithmKeywords::delays(time_delay, time_delay_normal),
+        );
+        self.register_point(point, storage(storage_path, clear_written_reporting))
     }
 
     /// Add a Multi-State Input object to the server (before starting).
@@ -278,20 +308,17 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let parameters = AlgorithmKeywords::multistate(alarm_values, time_delay, time_delay_normal);
-        let mut msi = keep_reporting(
-            || {
-                let mut msi = MultiStateInputObject::new(instance, name, number_of_states)?;
-                parameters.apply(&mut msi)?;
-                Ok(msi)
+        let point = Point::new(
+            instance,
+            name,
+            PointKind::MultiStateInput {
+                number_of_states,
+                present_value: None,
             },
-            storage_path,
-            clear_written_reporting,
-            MultiStateInputObject::with_reporting_persistence,
-            MultiStateInputObject::clear_written_reporting,
-        )?;
-        provision_profile(tags, profile_location, profile_name, |p| msi.set_profile(p))?;
-        self.push_pending(Box::new(msi))
+            object_profile(tags, profile_location, profile_name)?,
+            AlgorithmKeywords::multistate(alarm_values, time_delay, time_delay_normal),
+        );
+        self.register_point(point, storage(storage_path, clear_written_reporting))
     }
 
     /// Add a Multi-State Output object to the server (before starting).
@@ -317,20 +344,17 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let parameters = AlgorithmKeywords::delays(time_delay, time_delay_normal);
-        let mut mso = keep_reporting(
-            || {
-                let mut mso = MultiStateOutputObject::new(instance, name, number_of_states)?;
-                parameters.apply(&mut mso)?;
-                Ok(mso)
+        let point = Point::new(
+            instance,
+            name,
+            PointKind::MultiStateOutput {
+                number_of_states,
+                present_value: None,
             },
-            storage_path,
-            clear_written_reporting,
-            MultiStateOutputObject::with_reporting_persistence,
-            MultiStateOutputObject::clear_written_reporting,
-        )?;
-        provision_profile(tags, profile_location, profile_name, |p| mso.set_profile(p))?;
-        self.push_pending(Box::new(mso))
+            object_profile(tags, profile_location, profile_name)?,
+            AlgorithmKeywords::delays(time_delay, time_delay_normal),
+        );
+        self.register_point(point, storage(storage_path, clear_written_reporting))
     }
 
     /// Add a Multi-State Value object to the server (before starting).
@@ -362,22 +386,19 @@ impl BACnetServer {
         clear_written_reporting: bool,
     ) -> PyResult<()> {
         let access = self::present_value_access(present_value_access, value_source_tracking)?;
-        let parameters = AlgorithmKeywords::multistate(alarm_values, time_delay, time_delay_normal);
-        let mut msv = keep_reporting(
-            || {
-                let mut msv =
-                    MultiStateValueObject::with_access(instance, name, number_of_states, access)?;
-                parameters.apply(&mut msv)?;
-                Ok(msv)
+        let point = Point::new(
+            instance,
+            name,
+            PointKind::MultiStateValue {
+                number_of_states,
+                access,
+                value_source_tracking,
+                present_value: None,
             },
-            storage_path,
-            clear_written_reporting,
-            MultiStateValueObject::with_reporting_persistence,
-            MultiStateValueObject::clear_written_reporting,
-        )?;
-        msv.set_value_source_tracking(value_source_tracking);
-        provision_profile(tags, profile_location, profile_name, |p| msv.set_profile(p))?;
-        self.push_pending(Box::new(msv))
+            object_profile(tags, profile_location, profile_name)?,
+            AlgorithmKeywords::multistate(alarm_values, time_delay, time_delay_normal),
+        );
+        self.register_point(point, storage(storage_path, clear_written_reporting))
     }
 
     /// Add an Analog Value object to the server (before starting).
@@ -422,40 +443,32 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let access = self::present_value_access(present_value_access, value_source_tracking)?;
-        let audit_policy = crate::object_audit_policy::parse(
+        let value = value_keywords(
+            present_value_access,
+            value_source_tracking,
             audit_level,
             auditable_operations,
             audit_priority_filter,
         )?;
-        let parameters = AlgorithmKeywords::analog(
-            high_limit,
-            low_limit,
-            deadband,
-            limit_enable,
-            time_delay,
-            time_delay_normal,
-        );
-        let mut obj = keep_reporting(
-            || {
-                let mut obj = AnalogValueObject::with_access(
-                    instance,
-                    name,
-                    EngineeringUnits::from_raw(units),
-                    access,
-                )?;
-                parameters.apply(&mut obj)?;
-                Ok(obj)
+        let point = Point::new(
+            instance,
+            name,
+            PointKind::AnalogValue {
+                units,
+                value,
+                present_value: None,
             },
-            storage_path,
-            clear_written_reporting,
-            AnalogValueObject::with_reporting_persistence,
-            AnalogValueObject::clear_written_reporting,
-        )?;
-        obj.set_audit_policy(audit_policy);
-        obj.set_value_source_tracking(value_source_tracking);
-        provision_profile(tags, profile_location, profile_name, |p| obj.set_profile(p))?;
-        self.push_pending(Box::new(obj))
+            object_profile(tags, profile_location, profile_name)?,
+            AlgorithmKeywords::analog(
+                high_limit,
+                low_limit,
+                deadband,
+                limit_enable,
+                time_delay,
+                time_delay_normal,
+            ),
+        );
+        self.register_point(point, storage(storage_path, clear_written_reporting))
     }
 
     /// Add a Binary Value object to the server (before starting).
@@ -489,27 +502,28 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let access = self::present_value_access(present_value_access, value_source_tracking)?;
-        let audit_policy = crate::object_audit_policy::parse(
+        let value = value_keywords(
+            present_value_access,
+            value_source_tracking,
             audit_level,
             auditable_operations,
             audit_priority_filter,
         )?;
-        let parameters = AlgorithmKeywords::binary(alarm_value, time_delay, time_delay_normal);
-        let mut bv = keep_reporting(
-            || {
-                let mut bv = BinaryValueObject::with_access(instance, name, access)?;
-                parameters.apply(&mut bv)?;
-                Ok(bv)
+        let point = Point::new(
+            instance,
+            name,
+            PointKind::BinaryValue {
+                value,
+                present_value: None,
             },
-            storage_path,
-            clear_written_reporting,
-            BinaryValueObject::with_reporting_persistence,
-            BinaryValueObject::clear_written_reporting,
-        )?;
-        bv.set_audit_policy(audit_policy);
-        bv.set_value_source_tracking(value_source_tracking);
-        provision_profile(tags, profile_location, profile_name, |p| bv.set_profile(p))?;
-        self.push_pending(Box::new(bv))
+            object_profile(tags, profile_location, profile_name)?,
+            AlgorithmKeywords::binary(alarm_value, time_delay, time_delay_normal),
+        );
+        self.register_point(point, storage(storage_path, clear_written_reporting))
     }
+}
+
+/// The `storage_path` and `clear_written_reporting` keywords.
+fn storage(path: Option<&str>, clear: bool) -> Storage<'_> {
+    Storage { path, clear }
 }

@@ -7,31 +7,10 @@
 //! keeps the parsed parameters for the rebuild at start. The application's
 //! own changes to its objects, and its own resets' Audit records, go
 //! through `await endpoint.server()` (#2617).
-
-use pyo3::prelude::*;
-
-use crate::endpoint::common::ValueKeywords;
-use crate::object_options::present_value_access;
-
-/// The Value keywords, checked the way the server's Value builders check
-/// them.
-pub(super) fn value_keywords(
-    access: &str,
-    value_source_tracking: bool,
-    audit_level: Option<&str>,
-    auditable_operations: Option<&Bound<'_, PyAny>>,
-    audit_priority_filter: Option<&Bound<'_, PyAny>>,
-) -> PyResult<ValueKeywords> {
-    Ok(ValueKeywords {
-        access: present_value_access(access, value_source_tracking)?,
-        value_source_tracking,
-        audit_policy: crate::object_audit_policy::parse(
-            audit_level,
-            auditable_operations,
-            audit_priority_filter,
-        )?,
-    })
-}
+//!
+//! The nine point builders read their arguments into the
+//! [`Point`](crate::points::Point) `BACnetServer`'s builders read theirs
+//! into, and pass the same checks (#2711).
 
 /// Generate the shared methods on one endpoint owner. Invoked in the
 /// owner's own module, so the expansion reaches its private `lifecycle` and
@@ -43,7 +22,10 @@ macro_rules! endpoint_builders {
             /// Add an Analog Input object (before start).
             ///
             /// `present_value` (a finite number, default 0.0) sets
-            /// Present_Value directly.
+            /// Present_Value directly; NaN or an infinity raises
+            /// BacnetProtocolError VALUE_OUT_OF_RANGE. Every point builder
+            /// checks its registration as `BACnetServer.add_analog_input`
+            /// says, with the same code (#2711).
             ///
             /// `tags`, `profile_location` and `profile_name` provision the
             /// optional Tags, Profile_Location and Profile_Name rows, as on
@@ -73,17 +55,15 @@ macro_rules! endpoint_builders {
                 time_delay: Option<u32>,
                 time_delay_normal: Option<u32>,
             ) -> PyResult<()> {
-                let pending = $crate::endpoint::common::PendingObject::AnalogInput {
+                self.push_pending($crate::endpoint::common::PendingObject::Point($crate::points::Point::new(
                     instance,
-                    name: name.to_string(),
-                    units,
-                    present_value,
-                    profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
-                    parameters: $crate::algorithm_keywords::AlgorithmKeywords::analog(
+                    name,
+                    $crate::points::PointKind::AnalogInput { units, present_value },
+                    $crate::object_options::object_profile(tags, profile_location, profile_name)?,
+                    $crate::algorithm_keywords::AlgorithmKeywords::analog(
                         high_limit, low_limit, deadband, limit_enable, time_delay, time_delay_normal,
                     ),
-                };
-                self.push_pending(pending)
+                )))
             }
 
             /// Add an Analog Value object (before start).
@@ -129,24 +109,22 @@ macro_rules! endpoint_builders {
                 time_delay: Option<u32>,
                 time_delay_normal: Option<u32>,
             ) -> PyResult<()> {
-                let pending = $crate::endpoint::common::PendingObject::AnalogValue {
+                let value = $crate::points::value_keywords(
+                    present_value_access,
+                    value_source_tracking,
+                    audit_level,
+                    auditable_operations,
+                    audit_priority_filter,
+                )?;
+                self.push_pending($crate::endpoint::common::PendingObject::Point($crate::points::Point::new(
                     instance,
-                    name: name.to_string(),
-                    present_value,
-                    units,
-                    value: $crate::endpoint::builders::value_keywords(
-                        present_value_access,
-                        value_source_tracking,
-                        audit_level,
-                        auditable_operations,
-                        audit_priority_filter,
-                    )?,
-                    profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
-                    parameters: $crate::algorithm_keywords::AlgorithmKeywords::analog(
+                    name,
+                    $crate::points::PointKind::AnalogValue { units, value, present_value },
+                    $crate::object_options::object_profile(tags, profile_location, profile_name)?,
+                    $crate::algorithm_keywords::AlgorithmKeywords::analog(
                         high_limit, low_limit, deadband, limit_enable, time_delay, time_delay_normal,
                     ),
-                };
-                self.push_pending(pending)
+                )))
             }
 
             /// Add a Binary Input object (before start).
@@ -176,17 +154,16 @@ macro_rules! endpoint_builders {
                 time_delay: Option<u32>,
                 time_delay_normal: Option<u32>,
             ) -> PyResult<()> {
-                let pending = $crate::endpoint::common::PendingObject::BinaryInput {
+                let polarity = bacnet_types::enums::Polarity::from_raw(polarity);
+                self.push_pending($crate::endpoint::common::PendingObject::Point($crate::points::Point::new(
                     instance,
-                    name: name.to_string(),
-                    present_value,
-                    polarity: bacnet_types::enums::Polarity::from_raw(polarity),
-                    profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
-                    parameters: $crate::algorithm_keywords::AlgorithmKeywords::binary(
+                    name,
+                    $crate::points::PointKind::BinaryInput { polarity, present_value },
+                    $crate::object_options::object_profile(tags, profile_location, profile_name)?,
+                    $crate::algorithm_keywords::AlgorithmKeywords::binary(
                         alarm_value, time_delay, time_delay_normal,
                     ),
-                };
-                self.push_pending(pending)
+                )))
             }
 
             /// Add a Binary Value object (before start).
@@ -227,23 +204,22 @@ macro_rules! endpoint_builders {
                 time_delay: Option<u32>,
                 time_delay_normal: Option<u32>,
             ) -> PyResult<()> {
-                let pending = $crate::endpoint::common::PendingObject::BinaryValue {
+                let value = $crate::points::value_keywords(
+                    present_value_access,
+                    value_source_tracking,
+                    audit_level,
+                    auditable_operations,
+                    audit_priority_filter,
+                )?;
+                self.push_pending($crate::endpoint::common::PendingObject::Point($crate::points::Point::new(
                     instance,
-                    name: name.to_string(),
-                    present_value,
-                    value: $crate::endpoint::builders::value_keywords(
-                        present_value_access,
-                        value_source_tracking,
-                        audit_level,
-                        auditable_operations,
-                        audit_priority_filter,
-                    )?,
-                    profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
-                    parameters: $crate::algorithm_keywords::AlgorithmKeywords::binary(
+                    name,
+                    $crate::points::PointKind::BinaryValue { value, present_value },
+                    $crate::object_options::object_profile(tags, profile_location, profile_name)?,
+                    $crate::algorithm_keywords::AlgorithmKeywords::binary(
                         alarm_value, time_delay, time_delay_normal,
                     ),
-                };
-                self.push_pending(pending)
+                )))
             }
 
             /// Add an Analog Output object before startup.
@@ -274,14 +250,15 @@ macro_rules! endpoint_builders {
                 time_delay: Option<u32>,
                 time_delay_normal: Option<u32>,
             ) -> PyResult<()> {
-                self.push_pending($crate::endpoint::common::PendingObject::AnalogOutput {
+                self.push_pending($crate::endpoint::common::PendingObject::Point($crate::points::Point::new(
                     instance,
-                    name: name.to_string(),
-                    present_value,
-                    units,
-                    profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
-                    parameters: $crate::algorithm_keywords::AlgorithmKeywords::analog(high_limit, low_limit, deadband, limit_enable, time_delay, time_delay_normal),
-                })
+                    name,
+                    $crate::points::PointKind::AnalogOutput { units, present_value },
+                    $crate::object_options::object_profile(tags, profile_location, profile_name)?,
+                    $crate::algorithm_keywords::AlgorithmKeywords::analog(
+                        high_limit, low_limit, deadband, limit_enable, time_delay, time_delay_normal,
+                    ),
+                )))
             }
 
             /// Add a Binary Output object before startup.
@@ -307,20 +284,21 @@ macro_rules! endpoint_builders {
                 time_delay: Option<u32>,
                 time_delay_normal: Option<u32>,
             ) -> PyResult<()> {
-                self.push_pending($crate::endpoint::common::PendingObject::BinaryOutput {
+                let polarity = bacnet_types::enums::Polarity::from_raw(polarity);
+                self.push_pending($crate::endpoint::common::PendingObject::Point($crate::points::Point::new(
                     instance,
-                    name: name.to_string(),
-                    present_value,
-                    polarity: bacnet_types::enums::Polarity::from_raw(polarity),
-                    profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
-                    parameters: $crate::algorithm_keywords::AlgorithmKeywords::delays(time_delay, time_delay_normal),
-                })
+                    name,
+                    $crate::points::PointKind::BinaryOutput { polarity, present_value },
+                    $crate::object_options::object_profile(tags, profile_location, profile_name)?,
+                    $crate::algorithm_keywords::AlgorithmKeywords::delays(time_delay, time_delay_normal),
+                )))
             }
 
             /// Add a Multi-state Input object before startup.
             ///
             /// `present_value` sets Present_Value directly. `None` keeps the
-            /// object type's default.
+            /// object type's default. The three multi-state builders take 1
+            /// to 1024 states; another count raises BacnetError.
             #[pyo3(signature = (
                 instance, name, number_of_states, *, present_value=None,
                 tags=None, profile_location=None, profile_name=None,
@@ -340,14 +318,15 @@ macro_rules! endpoint_builders {
                 time_delay: Option<u32>,
                 time_delay_normal: Option<u32>,
             ) -> PyResult<()> {
-                self.push_pending($crate::endpoint::common::PendingObject::MultiStateInput {
+                self.push_pending($crate::endpoint::common::PendingObject::Point($crate::points::Point::new(
                     instance,
-                    name: name.to_string(),
-                    present_value,
-                    number_of_states,
-                    profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
-                    parameters: $crate::algorithm_keywords::AlgorithmKeywords::multistate(alarm_values, time_delay, time_delay_normal),
-                })
+                    name,
+                    $crate::points::PointKind::MultiStateInput { number_of_states, present_value },
+                    $crate::object_options::object_profile(tags, profile_location, profile_name)?,
+                    $crate::algorithm_keywords::AlgorithmKeywords::multistate(
+                        alarm_values, time_delay, time_delay_normal,
+                    ),
+                )))
             }
 
             /// Add a Multi-state Output object before startup.
@@ -374,14 +353,13 @@ macro_rules! endpoint_builders {
                 time_delay: Option<u32>,
                 time_delay_normal: Option<u32>,
             ) -> PyResult<()> {
-                self.push_pending($crate::endpoint::common::PendingObject::MultiStateOutput {
+                self.push_pending($crate::endpoint::common::PendingObject::Point($crate::points::Point::new(
                     instance,
-                    name: name.to_string(),
-                    present_value,
-                    number_of_states,
-                    profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
-                    parameters: $crate::algorithm_keywords::AlgorithmKeywords::delays(time_delay, time_delay_normal),
-                })
+                    name,
+                    $crate::points::PointKind::MultiStateOutput { number_of_states, present_value },
+                    $crate::object_options::object_profile(tags, profile_location, profile_name)?,
+                    $crate::algorithm_keywords::AlgorithmKeywords::delays(time_delay, time_delay_normal),
+                )))
             }
 
             /// Add a Multi-state Value before startup.
@@ -415,16 +393,24 @@ macro_rules! endpoint_builders {
                 time_delay: Option<u32>,
                 time_delay_normal: Option<u32>,
             ) -> PyResult<()> {
-                self.push_pending($crate::endpoint::common::PendingObject::MultiStateValue {
-                    instance,
-                    name: name.to_string(),
-                    present_value,
-                    number_of_states,
-                    access: $crate::object_options::present_value_access(present_value_access, value_source_tracking)?,
+                let access = $crate::object_options::present_value_access(
+                    present_value_access,
                     value_source_tracking,
-                    profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
-                    parameters: $crate::algorithm_keywords::AlgorithmKeywords::multistate(alarm_values, time_delay, time_delay_normal),
-                })
+                )?;
+                self.push_pending($crate::endpoint::common::PendingObject::Point($crate::points::Point::new(
+                    instance,
+                    name,
+                    $crate::points::PointKind::MultiStateValue {
+                        number_of_states,
+                        access,
+                        value_source_tracking,
+                        present_value,
+                    },
+                    $crate::object_options::object_profile(tags, profile_location, profile_name)?,
+                    $crate::algorithm_keywords::AlgorithmKeywords::multistate(
+                        alarm_values, time_delay, time_delay_normal,
+                    ),
+                )))
             }
 
             /// Add an Audit Reporter object (before start), for

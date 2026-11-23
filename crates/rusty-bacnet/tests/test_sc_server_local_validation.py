@@ -28,10 +28,13 @@ class ServerLocalValidationTests(MtlsFixture):
                     sc_client_cert=self.path("server.pem"),
                     sc_client_key=self.path("server.key"),
                 )
-                name = "duplicate" if collision == "pending_names" else "Selected Device"
-                node.add_analog_input(0, name, 64, 72.5)
+                # A point builder refuses a name in use at the call (#2711);
+                # a File object's builder leaves the clash to the database.
                 if collision == "pending_names":
-                    node.add_binary_input(1, name)
+                    node.add_analog_input(0, "duplicate", 64, 72.5)
+                    node.add_file(1, "duplicate")
+                else:
+                    node.add_file(0, "Selected Device")
                 try:
                     caught = None
                     try:

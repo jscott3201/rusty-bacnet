@@ -8,22 +8,19 @@ use bacnet_types::error::RemoteError;
 use std::net::Ipv4Addr;
 
 use bacnet_endpoint::identity::{DeviceIdentity, build_database_with_extra};
-use bacnet_objects::audit::ObjectAuditPolicy;
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::object_profile::{FileTagsPersistence, ObjectProfile};
-use bacnet_objects::present_value_access::PresentValueAccess;
+use bacnet_objects::object_profile::FileTagsPersistence;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::{AuditOperationFlags, BACnetPriorityFilter};
 use bacnet_types::constructed::ReadAccessSpecification;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::enums::{AuditLevel, ErrorClass, ErrorCode, Segmentation};
-use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::exceptions::PyValueError;
 use pyo3::{PyErr, PyResult};
 
-use crate::algorithm_keywords::AlgorithmKeywords;
 use crate::errors::to_py_err;
 use crate::group_members;
+use crate::points::{Point, Storage, check_identifier, check_unique};
 use crate::types::{PyReadAccessSpec, PySegmentation};
 
 /// Parse an IPv4 string at construction time (ValueError before bind).
@@ -206,100 +203,16 @@ pub(crate) fn build_database(
 // settles. Boxes are built fresh; failed/cancelled attempts restore the params
 // only after releasing the corresponding resources.
 
-/// The Value-object keywords a pending registration keeps for its rebuilds
-/// (#1552, #1867): how Present_Value is written, whether Value_Source is
-/// served, and the optional Audit policy.
-#[derive(Clone, Debug)]
-pub(crate) struct ValueKeywords {
-    pub(crate) access: PresentValueAccess,
-    pub(crate) value_source_tracking: bool,
-    pub(crate) audit_policy: ObjectAuditPolicy,
-}
-
 /// Pending object parameters: one entry per pre-start `add_*` call.
 ///
 /// `Clone` so a failed/cancelled start restores the exact registration set
 /// for retry. Built into boxes at start time; the `add_*` call builds one
-/// first, so a bad registration fails there. `profile` is the parsed
-/// `tags`/`profile_location`/`profile_name` keywords (#1867), and
-/// `parameters` the event algorithm parameter keywords (#2410).
+/// first, so a bad registration fails there. A point is the shape
+/// `BACnetServer` registers and builds too (#2711, [`crate::points`]).
 #[derive(Clone, Debug)]
 pub(crate) enum PendingObject {
-    AnalogInput {
-        instance: u32,
-        name: String,
-        units: u32,
-        present_value: f32,
-        profile: Option<ObjectProfile>,
-        parameters: AlgorithmKeywords,
-    },
-    AnalogValue {
-        instance: u32,
-        name: String,
-        units: u32,
-        value: ValueKeywords,
-        present_value: Option<f32>,
-        profile: Option<ObjectProfile>,
-        parameters: AlgorithmKeywords,
-    },
-    AnalogOutput {
-        instance: u32,
-        name: String,
-        units: u32,
-        present_value: Option<f32>,
-        profile: Option<ObjectProfile>,
-        parameters: AlgorithmKeywords,
-    },
-    BinaryInput {
-        instance: u32,
-        name: String,
-        polarity: bacnet_types::enums::Polarity,
-        present_value: Option<u32>,
-        profile: Option<ObjectProfile>,
-        parameters: AlgorithmKeywords,
-    },
-    BinaryOutput {
-        instance: u32,
-        name: String,
-        polarity: bacnet_types::enums::Polarity,
-        present_value: Option<u32>,
-        profile: Option<ObjectProfile>,
-        parameters: AlgorithmKeywords,
-    },
-    BinaryValue {
-        instance: u32,
-        name: String,
-        value: ValueKeywords,
-        present_value: Option<u32>,
-        profile: Option<ObjectProfile>,
-        parameters: AlgorithmKeywords,
-    },
-    MultiStateInput {
-        instance: u32,
-        name: String,
-        number_of_states: u32,
-        present_value: Option<u32>,
-        profile: Option<ObjectProfile>,
-        parameters: AlgorithmKeywords,
-    },
-    MultiStateOutput {
-        instance: u32,
-        name: String,
-        number_of_states: u32,
-        present_value: Option<u32>,
-        profile: Option<ObjectProfile>,
-        parameters: AlgorithmKeywords,
-    },
-    MultiStateValue {
-        instance: u32,
-        name: String,
-        number_of_states: u32,
-        access: PresentValueAccess,
-        value_source_tracking: bool,
-        present_value: Option<u32>,
-        profile: Option<ObjectProfile>,
-        parameters: AlgorithmKeywords,
-    },
+    /// One of the nine point builders' registrations.
+    Point(Point),
     Group {
         instance: u32,
         name: String,
@@ -320,38 +233,34 @@ mod pending_build;
 
 /// Validate the fresh object before admission, then check the entire identity
 /// and pending set under the same lock that seals registrations at startup.
+/// A point passes the checks `BACnetServer` makes of it (#2711).
 pub(super) fn register_pending<S>(
     lifecycle: &super::lifecycle::Lifecycle<S, PendingObject>,
     identity: &DeviceIdentity,
     candidate: PendingObject,
 ) -> PyResult<()> {
     let (kind, instance, _) = candidate.identity();
-    ObjectIdentifier::new_addressable(kind, instance).map_err(to_py_err)?;
+    check_identifier(kind, instance)?;
     candidate.build()?;
     lifecycle
         .with_open_registrations(|objects| {
             let (_, _, name) = candidate.identity();
-            let check = |other_kind, other_instance, other_name: &str| -> PyResult<()> {
-                if (kind, instance) == (other_kind, other_instance) {
-                    return Err(PyValueError::new_err(format!(
-                        "duplicate object identifier: {kind:?} {instance}"
-                    )));
-                }
-                if name == other_name {
-                    return Err(PyValueError::new_err(format!(
-                        "duplicate object name: {name}"
-                    )));
-                }
-                Ok(())
-            };
-            check(ObjectType::DEVICE, identity.instance(), identity.name())?;
-            for port in identity.network_ports() {
-                check(ObjectType::NETWORK_PORT, port.instance, &port.object_name())?;
-            }
-            for object in objects.iter() {
-                let (kind, instance, name) = object.identity();
-                check(kind, instance, name)?;
-            }
+            let ports: Vec<(u32, String)> = identity
+                .network_ports()
+                .iter()
+                .map(|port| (port.instance, port.object_name()))
+                .collect();
+            let device = (ObjectType::DEVICE, identity.instance(), identity.name());
+            let ports = ports
+                .iter()
+                .map(|(instance, name)| (ObjectType::NETWORK_PORT, *instance, name.as_str()));
+            let kept = objects.iter().map(PendingObject::identity);
+            check_unique(
+                kind,
+                instance,
+                name,
+                std::iter::once(device).chain(ports).chain(kept),
+            )?;
             objects.push(candidate);
             Ok(())
         })

@@ -32,6 +32,7 @@ mod mstp_py;
 mod mutation_policy;
 mod object_audit_policy;
 mod object_options;
+mod points;
 mod py_async;
 mod read_range;
 mod registration_dicts;

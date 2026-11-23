@@ -7579,7 +7579,17 @@ class BACnetServer:
 
     # --- Analog objects ---
     def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
-        """``tags``, ``profile_location`` and ``profile_name`` provision the
+        """The nine analog, binary and multi-state builders check each
+        registration as the endpoints' builders do (#2711), before anything
+        is kept: instance 4194303 or past raises BacnetError, and an object
+        identifier or name the Device or an earlier registration already
+        has raises ValueError. A refused registration leaves the others for
+        start and touches no ``storage_path`` file. ``present_value`` must
+        be finite: NaN or an infinity raises BacnetProtocolError
+        VALUE_OUT_OF_RANGE. A multi-state builder takes 1 to 1024 states;
+        another count raises BacnetError.
+
+        ``tags``, ``profile_location`` and ``profile_name`` provision the
         optional Tags, Profile_Location and Profile_Name rows; each is served
         only when given. Tags takes writes over the network, the other two
         are read-only. A tag name with a semicolon, a tag value that isn't
@@ -10215,7 +10225,9 @@ class BipEndpoint:
         """Register an Analog Input before start.
 
         ``present_value`` (a finite number, default 0.0) sets Present_Value
-        directly.
+        directly; NaN or an infinity raises BacnetProtocolError
+        VALUE_OUT_OF_RANGE. Every point builder checks its registration as
+        ``BACnetServer.add_analog_input`` says, with the same code (#2711).
 
         Profile keywords as on ``BACnetServer.add_analog_input``: each
         provisions its optional row, served only when given. The parameter
@@ -10241,7 +10253,8 @@ class BipEndpoint:
         """Register a Multi-state Input before start.
 
         ``present_value`` sets Present_Value directly. ``None`` keeps the
-        object type's default."""
+        object type's default. The three multi-state builders take 1 to
+        1024 states; another count raises BacnetError."""
         ...
 
     def add_multistate_output(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
@@ -10501,7 +10514,9 @@ class ScEndpoint:
         """Register an Analog Input before start.
 
         ``present_value`` (a finite number, default 0.0) sets Present_Value
-        directly.
+        directly; NaN or an infinity raises BacnetProtocolError
+        VALUE_OUT_OF_RANGE. Every point builder checks its registration as
+        ``BACnetServer.add_analog_input`` says, with the same code (#2711).
 
         Profile keywords as on ``BACnetServer.add_analog_input``: each
         provisions its optional row, served only when given. The parameter
@@ -10527,7 +10542,8 @@ class ScEndpoint:
         """Register a Multi-state Input before start.
 
         ``present_value`` sets Present_Value directly. ``None`` keeps the
-        object type's default."""
+        object type's default. The three multi-state builders take 1 to
+        1024 states; another count raises BacnetError."""
         ...
 
     def add_multistate_output(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
@@ -10771,7 +10787,9 @@ class MstpEndpoint:
         """Register an Analog Input before start.
 
         ``present_value`` (a finite number, default 0.0) sets Present_Value
-        directly.
+        directly; NaN or an infinity raises BacnetProtocolError
+        VALUE_OUT_OF_RANGE. Every point builder checks its registration as
+        ``BACnetServer.add_analog_input`` says, with the same code (#2711).
 
         Profile keywords as on ``BACnetServer.add_analog_input``: each
         provisions its optional row, served only when given. The parameter
@@ -10797,7 +10815,8 @@ class MstpEndpoint:
         """Register a Multi-state Input before start.
 
         ``present_value`` sets Present_Value directly. ``None`` keeps the
-        object type's default."""
+        object type's default. The three multi-state builders take 1 to
+        1024 states; another count raises BacnetError."""
         ...
 
     def add_multistate_output(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:

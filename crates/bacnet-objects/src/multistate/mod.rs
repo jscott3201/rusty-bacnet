@@ -123,17 +123,26 @@ fn read_alarm_values(detector: &ChangeOfStateDetector) -> PropertyValue {
     )
 }
 
-/// Reject a `number_of_states` of zero.
+/// Check a state count the application gives, by a constructor or
+/// `set_number_of_states`: 1 to [`MAX_NUMBER_OF_STATES`], the count a
+/// client may give too (#2711).
 ///
 /// Every multi-state object starts `PRESENT_VALUE` (and, for Output/Value, the
 /// relinquish default) at 1, and accepts writes only in `1..=number_of_states`.
-/// With zero states that initial value is out of range with no attainable value,
-/// so the constructors centralize this guard here.
-fn require_nonzero_states(number_of_states: u32) -> Result<(), Error> {
+/// With zero states that initial value is out of range with no attainable value.
+/// State_Text keeps a label per state, so a count past the cap would
+/// allocate one for each (four billion abort the process).
+fn require_state_count(number_of_states: u32) -> Result<(), Error> {
     if number_of_states == 0 {
         return Err(Error::OutOfRange(
             "number_of_states must be at least 1".into(),
         ));
+    }
+    if number_of_states > MAX_NUMBER_OF_STATES {
+        return Err(Error::OutOfRange(common::numbered_name(
+            "number_of_states must be at most ",
+            MAX_NUMBER_OF_STATES,
+        )));
     }
     Ok(())
 }
@@ -159,7 +168,7 @@ fn resize_state_text(
     state_text: &mut Vec<String>,
     number_of_states: u32,
 ) -> Result<(), Error> {
-    require_nonzero_states(number_of_states)?;
+    require_state_count(number_of_states)?;
     let new_len = number_of_states as usize;
     if new_len < state_text.len() {
         state_text.truncate(new_len);
@@ -177,10 +186,11 @@ fn resize_state_text(
 /// write changes it instead (#1443).
 const CREATION_ONLY: &[PropertyIdentifier] = &[PropertyIdentifier::NUMBER_OF_STATES];
 
-/// The most states a client may give a multi-state object, by a CreateObject
-/// initial value or by State_Text written whole. State_Text keeps a label
-/// for every state, so the count a client picks is bounded like the other
-/// tables a client sizes.
+/// The most states a multi-state object may have: the count a client gives
+/// it, by a CreateObject initial value or by State_Text written whole, and
+/// the count the application gives a constructor or `set_number_of_states`
+/// (#2711). State_Text keeps a label for every state, so the count is
+/// bounded like the other tables a client sizes.
 pub const MAX_NUMBER_OF_STATES: u32 = 1024;
 
 /// Check a state count a client asks for, given the `current` one and
@@ -448,9 +458,10 @@ struct MultiStateProperties {
 }
 
 impl MultiStateProperties {
-    /// `number_of_states` states labelled `State 1` on; zero is refused.
+    /// `number_of_states` states labelled `State 1` on; zero, or a count
+    /// past [`MAX_NUMBER_OF_STATES`], is refused.
     fn new(number_of_states: u32) -> Result<Self, Error> {
-        require_nonzero_states(number_of_states)?;
+        require_state_count(number_of_states)?;
         Ok(Self {
             number_of_states,
             state_text: default_state_text(number_of_states),
@@ -559,13 +570,16 @@ macro_rules! impl_multistate {
             /// commands, Relinquish_Default, Feedback_Value and Alarm_Values
             /// of a type that has them) are not repaired. On an object
             /// keeping its reporting settings, a State_Text a write saved
-            /// wins, and with it its count: zero is still refused, and the
-            /// saved texts stay, until `clear_written_reporting` (#2414).
+            /// wins, and with it its count: a count outside 1 to
+            /// [`MAX_NUMBER_OF_STATES`](crate::multistate::MAX_NUMBER_OF_STATES)
+            /// is still refused, and the saved texts stay, until
+            /// `clear_written_reporting` (#2414). Such a count is
+            /// `Error::OutOfRange` on any object (#2711).
             pub fn set_number_of_states(
                 &mut self,
                 number_of_states: u32,
             ) -> Result<(), bacnet_types::error::Error> {
-                $crate::multistate::require_nonzero_states(number_of_states)?;
+                $crate::multistate::require_state_count(number_of_states)?;
                 #[cfg(feature = "event-reporting")]
                 if self.kept_over_setter(bacnet_types::enums::PropertyIdentifier::STATE_TEXT) {
                     return Ok(());

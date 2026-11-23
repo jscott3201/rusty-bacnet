@@ -318,6 +318,16 @@ def add_analog_input(
 ) -> None
 ```
 
+The nine analog, binary and multi-state builders check each
+registration as the endpoints' builders do (#2711), before anything
+is kept: instance 4194303 or past raises BacnetError, and an object
+identifier or name the Device or an earlier registration already
+has raises ValueError. A refused registration leaves the others for
+start and touches no `storage_path` file. `present_value` must
+be finite: NaN or an infinity raises BacnetProtocolError
+VALUE\_OUT\_OF\_RANGE. A multi-state builder takes 1 to 1024 states;
+another count raises BacnetError.
+
 `tags`, `profile_location` and `profile_name` provision the
 optional Tags, Profile\_Location and Profile\_Name rows; each is served
 only when given. Tags takes writes over the network, the other two

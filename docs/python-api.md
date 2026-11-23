@@ -4217,10 +4217,12 @@ Async BACnet server that hosts objects and responds to remote requests.
 
 `device_instance` takes 0 to 4194302. Instance 4194303 is reserved, since no
 object may have it (Clause 12.1.1), so the constructor raises `ValueError` for
-it or anything larger (#2171). At `start()`, an added object the database
-won't take raises `ValueError`: "duplicate object name" for a name already
-held, "object refused" for any other reason, such as an object at instance
-4194303.
+it or anything larger (#2171). The nine analog, binary and multi-state
+builders check each registration at the call, as the endpoints' builders do
+(see [Point registration checks](#point-registration-checks)). For the other
+builders, an added object the database won't take raises `ValueError` at
+`start()`: "duplicate object name" for a name already held, "object refused"
+for any other reason, such as an object at instance 4194303.
 
 ### Constructor
 
@@ -4324,6 +4326,32 @@ server.add_multistate_input(instance=1, name="Mode", number_of_states=4)
 server.add_multistate_output(instance=1, name="Speed", number_of_states=3)
 server.add_multistate_value(instance=1, name="Season", number_of_states=4)
 ```
+
+#### Point registration checks
+
+These nine builders, on `BACnetServer` and on each endpoint, read their
+arguments into one registration and check it with the same code (#2711).
+The checks run at the call, before anything is kept:
+
+- An instance of 4194303 or more raises `BacnetError`: no object may have
+  4194303 (#2171).
+- An object identifier or a name the Device or an earlier registration
+  already has raises `ValueError` ("duplicate object identifier" or
+  "duplicate object name"). On an endpoint its declared Network Ports
+  count too.
+- A value the object refuses raises from the builder as the object refuses
+  it: a NaN or infinite Analog Input `present_value` is
+  `BacnetProtocolError` VALUE_OUT_OF_RANGE, as are the parameter keywords'
+  refusals below.
+- A multi-state builder takes 1 to 1024 states, the same cap a peer's
+  CreateObject or State_Text write meets; another count raises
+  `BacnetError`.
+
+A refused registration keeps nothing and leaves the earlier ones for
+start. On `BACnetServer` it also leaves any `storage_path` file alone,
+since the checks come before the object is built. The other
+`BACnetServer` builders still leave a duplicate name or identifier to
+`start()`.
 
 #### Keeping written reporting settings
 
@@ -7642,7 +7670,9 @@ noncommandable Values take the initial value as a local application update.
 A Binary Input given no value keeps its unset physical-input state.
 An object name and its type/instance pair must each be unique across the
 Device, its Network Ports and the pending objects. An invalid addition raises
-at the builder call and preserves earlier registrations.
+at the builder call and preserves earlier registrations. `BACnetServer`'s
+builders make the same checks with the same code; see
+[Point registration checks](#point-registration-checks).
 
 The endpoint's server serves those objects as a standalone server serves
 its own, and a peer writes them as far as the endpoint's `mutation_policy`

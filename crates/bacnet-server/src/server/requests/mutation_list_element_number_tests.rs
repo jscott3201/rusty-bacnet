@@ -93,7 +93,7 @@ async fn add_list_element_names_the_value_that_does_not_fit() {
     let fixture = Fixture::new(None);
     let msi = oid(ObjectType::MULTI_STATE_INPUT, 1);
     let alarm_values = PropertyIdentifier::ALARM_VALUES;
-    fill_msi_alarm_values(&fixture, 100..1123).await;
+    fill_msi_alarm_values(&fixture, 1023).await;
     let stored = fixture.read(msi, alarm_values).await;
     for (what, elements, element) in [
         ("two new values", &[0x21, 7, 0x21, 8][..], 2),

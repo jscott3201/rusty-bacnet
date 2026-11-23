@@ -12,10 +12,8 @@ use bacnet_objects::access_control::{
     AccessUserObject, AccessZoneObject, CredentialDataInputObject,
 };
 use bacnet_objects::accumulator::{AccumulatorObject, PulseConverterObject};
-use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::audit::{AuditLogObject, AuditReporterObject, FileAuditLogPersistence};
 use bacnet_objects::averaging::AveragingObject;
-use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::command::CommandObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -28,9 +26,6 @@ use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
 use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject};
 use bacnet_objects::load_control::{FileLoadControlPersistence, LoadControlObject};
 use bacnet_objects::loop_obj::LoopObject;
-use bacnet_objects::multistate::{
-    MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
-};
 use bacnet_objects::notification_class::{FileNotificationClassPersistence, NotificationClass};
 use bacnet_objects::program::ProgramObject;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
