@@ -2,11 +2,13 @@
 //! object's Present_Value is written and whether its source is tracked, the
 //! optional Tags, Profile_Location and Profile_Name rows, and the
 //! `storage_path` and `clear_written_reporting` that keep the reporting
-//! settings and Description a peer writes (#2331, #2364).
+//! settings and Description a peer writes (#2331, #2364), and the servers'
+//! and endpoints' `device_storage_path`, which keeps what a peer writes to
+//! the Device (#2730).
 
 use std::sync::Arc;
 
-use bacnet_objects::object_profile::ObjectProfile;
+use bacnet_objects::object_profile::{FileTagsPersistence, ObjectProfile};
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::write_config::{FileWriteConfigPersistence, WriteConfigPersistence};
 use bacnet_types::error::Error;
@@ -109,4 +111,17 @@ pub(crate) fn keep_reporting<T>(
         object = open().map_err(to_py_err)?;
     }
     Ok(object)
+}
+
+/// The Device's storage at `device_storage_path` (#2730), opened at
+/// construction: a relative path is resolved against the current directory
+/// now, so a later change of directory doesn't move the saves, and an empty
+/// one raises as an object's `storage_path` does. `None` without a path.
+pub(crate) fn device_storage(path: Option<String>) -> PyResult<Option<FileTagsPersistence>> {
+    path.map(|path| {
+        let path = std::path::PathBuf::from(path);
+        let path = std::path::absolute(&path).unwrap_or(path);
+        FileTagsPersistence::new(path).map_err(to_py_err)
+    })
+    .transpose()
 }

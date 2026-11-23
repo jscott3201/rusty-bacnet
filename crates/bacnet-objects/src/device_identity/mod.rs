@@ -428,12 +428,7 @@ impl DeviceIdentity {
     /// database's own ([`ObjectDatabase::object_list`]): the Device, then the
     /// ports.
     pub fn build_database(&self) -> Result<ObjectDatabase, Error> {
-        let mut device = DeviceObject::new(DeviceConfig {
-            identity: self.clone(),
-            firmware_revision: env!("CARGO_PKG_VERSION").into(),
-            application_software_version: env!("CARGO_PKG_VERSION").into(),
-            ..DeviceConfig::default()
-        })?;
+        let mut device = DeviceObject::new(stock_config(self))?;
         device.set_services_supported(&self.services);
         device.set_device_uuid(self.device_uuid);
 
@@ -475,12 +470,43 @@ pub fn build_database_with_extra(
     identity: &DeviceIdentity,
     extra: Vec<Box<dyn crate::traits::BACnetObject>>,
 ) -> Result<ObjectDatabase, Error> {
-    let mut device = DeviceObject::new(DeviceConfig {
+    let device = DeviceObject::new(stock_config(identity))?;
+    assemble(identity, device, extra)
+}
+
+/// [`build_database_with_extra`], with the Device built on `persistence`
+/// ([`DeviceObject::with_tags_persistence`]), so it keeps what peers write
+/// to it across a restart (#2730): a written Description and, where the
+/// server lets peers write the clock's zone, a written UTC_Offset and
+/// Daylight_Savings_Status. The Device has no Tags row, as one built
+/// without storage has none. Fails as `with_tags_persistence` does on
+/// storage it can't load.
+pub fn build_database_with_tags_persistence(
+    identity: &DeviceIdentity,
+    persistence: alloc::sync::Arc<dyn crate::object_profile::TagsPersistence>,
+    extra: Vec<Box<dyn crate::traits::BACnetObject>>,
+) -> Result<ObjectDatabase, Error> {
+    let device = DeviceObject::with_tags_persistence(stock_config(identity), persistence)?;
+    assemble(identity, device, extra)
+}
+
+/// The stock Device's configuration for `identity`.
+fn stock_config(identity: &DeviceIdentity) -> DeviceConfig {
+    DeviceConfig {
         identity: identity.clone(),
         firmware_revision: env!("CARGO_PKG_VERSION").into(),
         application_software_version: env!("CARGO_PKG_VERSION").into(),
         ..DeviceConfig::default()
-    })?;
+    }
+}
+
+/// The database holding `device`, given `identity`'s services and UUID, the
+/// identity's ports and `extra`, refusing a repeated identifier.
+fn assemble(
+    identity: &DeviceIdentity,
+    mut device: DeviceObject,
+    extra: Vec<Box<dyn crate::traits::BACnetObject>>,
+) -> Result<ObjectDatabase, Error> {
     device.set_services_supported(&identity.services);
     device.set_device_uuid(identity.device_uuid);
     let device_oid = device.object_identifier();

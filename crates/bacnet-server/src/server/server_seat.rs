@@ -304,6 +304,7 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
                     .as_ref()
                     .is_some_and(|policy| policy.decides_mutations()),
             reinitialize_handler: self.config.on_reinitialize.is_some(),
+            device_storage: self.config.device_storage_path.is_some(),
         }
     }
 
@@ -374,6 +375,8 @@ pub struct NodeBuilderFacts {
     pub decides_mutations: bool,
     /// A ReinitializeDevice handler is set.
     pub reinitialize_handler: bool,
+    /// A Device storage path is set (#2730).
+    pub device_storage: bool,
 }
 
 /// Follow the node's Number owner for target Audit: each publication may

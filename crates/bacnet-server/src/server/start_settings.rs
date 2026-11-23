@@ -18,12 +18,14 @@ pub(in crate::server) struct StartSettings {
 
 /// Check `config` and put its Audit Reporters in order; check `configured`
 /// against the link's group rule `is_group`; check the Device's segment
-/// timeout and every policy and budget the request owner holds.
+/// timeout and every policy and budget the request owner holds. A Device
+/// storage path no builder took is refused (#2730).
 pub(in crate::server) fn settle(
     config: &mut ServerConfig,
     configured: Vec<DeviceBinding>,
     is_group: impl Fn(&[u8]) -> bool,
 ) -> Result<StartSettings, Error> {
+    crate::server::device_storage::refuse_unused_path(config, "a database a start is given")?;
     if let Some(profile) = &mut config.audit_reporters {
         profile.canonicalize()?;
     }

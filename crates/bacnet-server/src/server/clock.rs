@@ -235,19 +235,27 @@ impl super::ScServerBuilder {
 /// The zone the clock starts in: `zone`, with each half a peer wrote that
 /// the local Device's storage keeps over it while peers may write the zone
 /// (#2395). With the opt-in off a half held is left unapplied, in storage,
-/// and named in a warning.
+/// and named in a warning. With it on, a Device without storage gets a
+/// warning that a written zone won't outlast the server (#2730).
 pub(super) fn start_zone(
     db: &mut ObjectDatabase,
     zone: ClockConfig,
     writable: bool,
 ) -> ClockConfig {
-    let written = db
+    let device = db
         .local_device()
         .identifier()
         .and_then(|device| db.get_mut(&device))
         .and_then(|device| device.device_authority_internal())
-        .map(|device| device.written_zone())
-        .unwrap_or_default();
+        .map(|device| (device.written_zone(), device.has_storage()));
+    let written = device.map(|(written, _)| written).unwrap_or_default();
+    if writable && device.is_some_and(|(_, stored)| !stored) {
+        tracing::warn!(
+            "Peers may write the Device's zone, but the Device has no storage: a written \
+             UTC_Offset or Daylight_Savings_Status lasts until the server stops \
+             (device_storage_path keeps it)"
+        );
+    }
     if written.is_empty() {
         return zone;
     }

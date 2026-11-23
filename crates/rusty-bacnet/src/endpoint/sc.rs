@@ -67,7 +67,7 @@ impl ScEndpointConfig {
         )
         .map_err(|e| PyRuntimeError::new_err(format!("TLS config error: {e}")))?;
         let boxes = build_pending_boxes(&objects)?;
-        let mut db = build_database(&config.identity, boxes)?;
+        let mut db = build_database(&config.identity, boxes, config.server.device_storage())?;
         if let Some(source) = &config.source_audit {
             source.provision(&config.identity, &mut db)?;
         }
@@ -190,6 +190,8 @@ impl PyScEndpoint {
     ///         (default None), as on `BipEndpoint` (#2617): without
     ///         `mutation_policy` the server is read-only, and without
     ///         `time_sync_policy` time synchronization is off.
+    ///     device_storage_path: Keyword-only (default None), as on
+    ///         `BipEndpoint` (#2730).
     ///     source_audit_reporter / audit_recipient / audit_device_bindings:
     ///         Keyword-only, as on `BipEndpoint` (#2348, #2357), each binding
     ///         address a VMAC as `local_address()` gives it
@@ -230,6 +232,7 @@ impl PyScEndpoint {
         mutation_policy=None,
         cov_policy=None,
         time_sync_policy=None,
+        device_storage_path=None,
         source_audit_reporter=None,
         audit_recipient=None,
         audit_device_bindings=None,
@@ -263,6 +266,7 @@ impl PyScEndpoint {
         mutation_policy: Option<&Bound<'_, PyAny>>,
         cov_policy: Option<&Bound<'_, PyDict>>,
         time_sync_policy: Option<&Bound<'_, PyDict>>,
+        device_storage_path: Option<String>,
         source_audit_reporter: Option<crate::types::PyObjectIdentifier>,
         audit_recipient: Option<&Bound<'_, PyAny>>,
         audit_device_bindings: Option<
@@ -283,7 +287,8 @@ impl PyScEndpoint {
             on_reinitialize,
             after_reinitialize,
             reinit_password,
-        )?;
+        )?
+        .with_device_storage_path(device_storage_path)?;
         if queue_capacity == 0 {
             return Err(PyValueError::new_err(
                 "queue_capacity must be greater than zero",

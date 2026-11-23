@@ -100,7 +100,7 @@ impl BipEndpointConfig {
         probe.set_share_wildcard_port(config.share_wildcard_port);
         probe.check_bind().map_err(to_py_err)?;
         let boxes = build_pending_boxes(&objects)?;
-        let mut db = build_database(&config.identity, boxes)?;
+        let mut db = build_database(&config.identity, boxes, config.server.device_storage())?;
         if let Some(source) = &config.source_audit {
             source.provision(&config.identity, &mut db)?;
         }
@@ -249,6 +249,14 @@ impl PyBipEndpoint {
     ///         every valid request). Unlike `BACnetServer()`'s default,
     ///         time synchronization is off on an endpoint unless asked for,
     ///         whatever its `mutation_policy` (#2617).
+    ///     device_storage_path: Keyword-only (default None). The file the
+    ///         Device keeps what peers write to it in (#2730), as
+    ///         `BACnetServer`'s keyword of the same name: with a
+    ///         `mutation_policy` that lets peers write, a written
+    ///         Description survives a restart. A relative path is resolved
+    ///         here; an empty one raises BacnetError; a file that can't be
+    ///         read or loaded raises BacnetError at `start()`, naming the
+    ///         path.
     ///     source_audit_reporter / audit_recipient / audit_device_bindings:
     ///         Keyword-only (#2348). `source_audit_reporter` is the
     ///         `ObjectIdentifier` of an Audit Reporter added with
@@ -299,6 +307,7 @@ impl PyBipEndpoint {
         mutation_policy=None,
         cov_policy=None,
         time_sync_policy=None,
+        device_storage_path=None,
         source_audit_reporter=None,
         audit_recipient=None,
         audit_device_bindings=None
@@ -334,6 +343,7 @@ impl PyBipEndpoint {
         mutation_policy: Option<&Bound<'_, PyAny>>,
         cov_policy: Option<&Bound<'_, PyDict>>,
         time_sync_policy: Option<&Bound<'_, PyDict>>,
+        device_storage_path: Option<String>,
         source_audit_reporter: Option<crate::types::PyObjectIdentifier>,
         audit_recipient: Option<&Bound<'_, PyAny>>,
         audit_device_bindings: Option<
@@ -351,7 +361,8 @@ impl PyBipEndpoint {
             on_reinitialize,
             after_reinitialize,
             reinit_password,
-        )?;
+        )?
+        .with_device_storage_path(device_storage_path)?;
         let mode = crate::bip_options::bip_mode("bip", bbmd, foreign_device)?;
         let interface_ip = crate::bip_options::interface_ipv4(py, interface)?;
         let multicast = crate::bip_options::bip_multicast(
