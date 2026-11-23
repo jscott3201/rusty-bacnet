@@ -5,14 +5,17 @@ use bacnet_types::enums::PropertyIdentifier as P;
 
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
-    PropertyMetadata,
+    PropertyMetadata, PropertyPresenceCondition,
     PropertyWriteCapability::{Always, ReadOnly},
 };
+
+/// Present only on a Device that segments, which requires it (#2617).
+const SEGMENTING: Option<PropertyPresenceCondition> = Some(PropertyPresenceCondition::Segmentation);
 
 // The full implemented set, ordered by raw identifier. Conditional rows keep
 // their optional base code; effective sets below select only readable rows.
 const BASE: &[PropertyMetadata] = &[
-    PropertyMetadata::new(P::APDU_SEGMENT_TIMEOUT, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::APDU_SEGMENT_TIMEOUT, Optional, SEGMENTING, ReadOnly),
     PropertyMetadata::new(P::APDU_TIMEOUT, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(
         P::APPLICATION_SOFTWARE_VERSION,
@@ -49,7 +52,7 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::PROTOCOL_REVISION, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::ACTIVE_COV_SUBSCRIPTIONS, Optional, None, ReadOnly),
     PropertyMetadata::new(P::DATABASE_REVISION, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::MAX_SEGMENTS_ACCEPTED, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::MAX_SEGMENTS_ACCEPTED, Optional, SEGMENTING, ReadOnly),
     PropertyMetadata::new(P::LAST_RESTART_REASON, Optional, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
     // Table 12-13 footnote 18: included below only for a declared Multiple

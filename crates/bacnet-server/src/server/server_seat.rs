@@ -444,8 +444,8 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
     ///   (`cov_retry_timeout_ms`, `notification_retries`); and, on a node
     ///   with a client role, Protocol_Services_Supported listing I-Am,
     ///   I-Have and both COV notifications beside the server's services.
-    ///   Segmentation_Supported is the identity's, which the server follows;
-    ///   the node's client keeps its own segmentation settings for now;
+    ///   Segmentation_Supported is the identity's, which the server follows,
+    ///   as the endpoint's session has its client do too;
     /// - target Audit routes its recipient by the number the node publishes.
     ///
     /// Fails, before it changes anything, on a builder that had a transport

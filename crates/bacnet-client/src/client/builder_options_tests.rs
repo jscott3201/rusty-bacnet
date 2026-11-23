@@ -180,6 +180,8 @@ fn assert_apdu_tuning(config: &ClientConfig) {
     assert_eq!(config.apdu_retries, 7);
     assert_eq!(config.max_segments, Some(8));
     assert!(!config.segmented_response_accepted);
+    assert!(!config.segmented_requests);
+    assert_eq!(config.apdu_segment_timeout_ms, Some(1_500));
     assert_eq!(config.proposed_window_size, 4);
 }
 
@@ -191,6 +193,8 @@ async fn generic_builder_sets_apdu_tuning_options() {
         .apdu_retries(7)
         .max_segments(Some(8))
         .segmented_response_accepted(false)
+        .segmented_requests(false)
+        .apdu_segment_timeout_ms(1_500)
         .proposed_window_size(4)
         .build()
         .await
@@ -208,6 +212,8 @@ async fn bip_builder_sets_apdu_tuning_options() {
         .apdu_retries(7)
         .max_segments(Some(8))
         .segmented_response_accepted(false)
+        .segmented_requests(false)
+        .apdu_segment_timeout_ms(1_500)
         .proposed_window_size(4)
         .build()
         .await
@@ -215,6 +221,17 @@ async fn bip_builder_sets_apdu_tuning_options() {
 
     assert_apdu_tuning(&client.config);
     client.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn builder_rejects_a_zero_segment_timeout() {
+    let (transport, _peer_transport) = LoopbackTransport::pair(vec![0x10], vec![0x11]);
+    let result = BACnetClient::generic_builder()
+        .transport(transport)
+        .apdu_segment_timeout_ms(0)
+        .build()
+        .await;
+    assert!(result.is_err());
 }
 
 #[tokio::test]

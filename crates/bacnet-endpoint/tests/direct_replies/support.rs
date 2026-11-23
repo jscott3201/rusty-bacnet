@@ -230,9 +230,13 @@ pub fn unsupported(invoke: u8) -> Apdu {
     confirmed(ConfirmedServiceChoice::from_raw(254), invoke, Bytes::new())
 }
 /// The endpoint's Device: a session with a server role runs a full server,
-/// which serves the node's identity (#2617).
+/// which serves the node's identity (#2617). It doesn't segment, so an
+/// answer too long for the requester draws the Abort these tests send back
+/// over each kind of reply path.
 pub fn node() -> bacnet_endpoint::DeviceIdentity {
-    bacnet_endpoint::DeviceIdentity::new(1001, 42).unwrap()
+    bacnet_endpoint::DeviceIdentity::new(1001, 42)
+        .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
 }
 pub fn csv_oid() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::CHARACTERSTRING_VALUE, 1).unwrap()

@@ -10,7 +10,9 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 fn an_enrollment_on_the_device_revision_sees_it_move() {
     let mut db = ObjectDatabase::new();
     let device = DeviceObject::new(DeviceConfig {
-        identity: bacnet_objects::DeviceIdentity::new(9, 0).unwrap(),
+        identity: bacnet_objects::DeviceIdentity::new(9, 0)
+            .unwrap()
+            .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION),
         ..DeviceConfig::default()
     })
     .unwrap();

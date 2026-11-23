@@ -79,26 +79,28 @@ pub(crate) fn parse_device_uuid(
     }
 }
 
-/// Map an optional segmentation override (default: NO_SEGMENTATION, the proven value).
+/// Map an optional segmentation override (default: SEGMENTED_BOTH, the
+/// identity's default, which both of the endpoint's roles follow, #2617).
 pub(crate) fn parse_segmentation(segmentation: Option<PySegmentation>) -> Segmentation {
     segmentation
         .map(|s| s.to_rust())
-        .unwrap_or(Segmentation::NO_SEGMENTATION)
+        .unwrap_or(Segmentation::SEGMENTED_BOTH)
 }
 
 /// Build the single validated DeviceIdentity (builder-time only).
 ///
-/// All Encoding failures (instance range, receive ceiling, duplicate ports) map
-/// to ValueError before any bind/dial. No post-start mutation exists. The
-/// identity keeps its default service list: the full server lists the
-/// services it executes in the Device's Protocol_Services_Supported
-/// whatever the identity says (#2617).
+/// All Encoding failures (instance range, receive ceiling, segmentation and
+/// its segment timeout, duplicate ports) map to ValueError before any
+/// bind/dial. No post-start mutation exists. The identity keeps its default
+/// service list: the full server lists the services it executes in the
+/// Device's Protocol_Services_Supported whatever the identity says (#2617).
 pub(crate) fn build_identity(
     device_instance: u32,
     device_name: &str,
     vendor_id: u16,
     max_apdu: u16,
     segmentation: Segmentation,
+    apdu_segment_timeout_ms: u64,
     device_uuid: [u8; 16],
 ) -> PyResult<DeviceIdentity> {
     let identity = DeviceIdentity::new(device_instance, vendor_id)
@@ -106,7 +108,23 @@ pub(crate) fn build_identity(
     let identity = identity
         .with_max_apdu(max_apdu)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let identity = identity.with_segmentation(segmentation);
+    let identity = identity
+        .with_segmentation(segmentation)
+        .with_apdu_segment_timeout_ms(apdu_segment_timeout_ms);
+    // An unknown mode, or a zero segment timeout while segmenting, is the
+    // identity's own refusal; four segment timeouts must also be a deadline
+    // the clock can hold, as `BACnetServer` checks (#2617).
+    identity
+        .validate()
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let representable = apdu_segment_timeout_ms
+        .checked_mul(4)
+        .and_then(|ms| std::time::Instant::now().checked_add(std::time::Duration::from_millis(ms)));
+    if representable.is_none() {
+        return Err(PyValueError::new_err(
+            "apdu_segment_timeout_ms is too large: four of it must fit the clock",
+        ));
+    }
     let identity = identity.with_device_uuid(device_uuid);
     let identity = identity.with_name(device_name.to_string());
     Ok(identity)

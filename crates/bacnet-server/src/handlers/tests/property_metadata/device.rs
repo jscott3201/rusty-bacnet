@@ -20,7 +20,7 @@ impl ClockReader for TestClock {
 #[test]
 fn rpm_device_property_metadata_pics_and_database_are_exact() {
     // Independent effective-set fixtures; no expected set comes from metadata.
-    let required = [
+    let always_required = [
         P::APDU_TIMEOUT,
         P::APPLICATION_SOFTWARE_VERSION,
         P::DEVICE_ADDRESS_BINDING,
@@ -65,6 +65,14 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
         Segmentation::SEGMENTED_RECEIVE,
         Segmentation::SEGMENTED_BOTH,
     ] {
+        // A Device that segments must have Max_Segments_Accepted and
+        // APDU_Segment_Timeout (Table 12-13 footnote 1), so they count as
+        // required there (#2617).
+        let mut required = always_required.to_vec();
+        if segmentation_supported != Segmentation::NO_SEGMENTATION {
+            required.extend([P::APDU_SEGMENT_TIMEOUT, P::MAX_SEGMENTS_ACCEPTED]);
+            required.sort_by_key(|p| p.to_raw());
+        }
         let mut db = ObjectDatabase::new();
         let mut object = DeviceObject::new(DeviceConfig {
             identity: bacnet_objects::DeviceIdentity::new(77, 0)
@@ -88,9 +96,6 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
                 P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
                 P::DEVICE_UUID,
             ];
-            if segmentation_supported != Segmentation::NO_SEGMENTATION {
-                optional.extend([P::APDU_SEGMENT_TIMEOUT, P::MAX_SEGMENTS_ACCEPTED]);
-            }
             if state == 1 {
                 optional.extend([
                     P::LOCAL_DATE,
@@ -100,7 +105,7 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
                 ]);
             }
             optional.sort_by_key(|p| p.to_raw());
-            let mut all = required.to_vec();
+            let mut all = required.clone();
             all.extend(&optional);
             all.sort_by_key(|p| p.to_raw());
             assert_eq!(db.find_by_type(ObjectType::DEVICE), vec![oid]);
@@ -172,7 +177,7 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
             );
             for row in metadata.iter() {
                 assert_eq!(
-                    row.conformance.is_required(),
+                    row.is_required(),
                     required.contains(&row.property_identifier)
                 );
                 assert_eq!(

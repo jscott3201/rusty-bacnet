@@ -223,14 +223,17 @@ impl Responder {
     ///
     /// It refuses an identity that claims segmentation support: the core
     /// aborts every segmented request and every reply too long for one APDU,
-    /// so an I-Am naming segmentation would overstate it. Give it
-    /// `Segmentation::NO_SEGMENTATION`, the [`DeviceIdentity`] default. It also refuses
+    /// so an I-Am naming segmentation would overstate it. The
+    /// [`DeviceIdentity`] default segments both ways, so give it
+    /// [`with_segmentation`](DeviceIdentity::with_segmentation)`(Segmentation::NO_SEGMENTATION)`
+    /// (#2617). It also refuses
     /// a `read_work` of zero, which no ReadProperty fits, and an RPM budget
     /// [`ReadPropertyMultipleBudget::validate`] refuses.
     pub fn new(identity: DeviceIdentity, limits: Limits) -> Result<Self, Error> {
         if identity.segmentation() != Segmentation::NO_SEGMENTATION {
             return Err(Error::Encoding(
-                "bacnet-device-core segments neither way: the Device identity must claim no segmentation"
+                "bacnet-device-core segments neither way: build the Device identity \
+                 .with_segmentation(Segmentation::NO_SEGMENTATION)"
                     .into(),
             ));
         }

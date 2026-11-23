@@ -158,8 +158,22 @@ pub struct ClientConfig {
     pub max_segments: Option<u8>,
     /// Whether this client accepts segmented responses.
     pub segmented_response_accepted: bool,
+    /// Whether this client sends a confirmed request too long for one APDU
+    /// as segments (default `true`). Off, such a request fails before
+    /// anything is sent, with [`SegmentationError::LocalCannotTransmit`](bacnet_types::error::SegmentationError::LocalCannotTransmit).
+    /// An endpoint session's client follows its Device's
+    /// Segmentation_Supported (#2617).
+    pub segmented_requests: bool,
     /// Proposed window size for segmented transfers (1-127, default 1).
     pub proposed_window_size: u8,
+    /// The segment timeout in milliseconds (Clause 5.3): how long a
+    /// segmented request waits for each Segment-ACK before it sends its
+    /// window again, and, four times over, how long a segmented answer may
+    /// pause between segments. `None` (the default) takes
+    /// [`apdu_timeout_ms`](Self::apdu_timeout_ms); zero fails the build. An
+    /// endpoint session's client takes its Device's APDU_Segment_Timeout
+    /// (#2617).
+    pub apdu_segment_timeout_ms: Option<u64>,
     /// Least time, in milliseconds, from the latest confirmed request sent
     /// to a destination finishing (reply, error or cancellation) to the next
     /// being sent; while it is still outstanding, the next waits that long
@@ -215,7 +229,9 @@ impl Default for ClientConfig {
             max_apdu_length: 1476,
             max_segments: None,
             segmented_response_accepted: true,
+            segmented_requests: true,
             proposed_window_size: 1,
+            apdu_segment_timeout_ms: None,
             min_request_interval_ms: 0,
             accept_complex_ack_for_simple_services: false,
         }
@@ -241,7 +257,7 @@ pub(crate) fn new_coordinated_tsm(
     Tsm::new_coordinated(
         TsmConfig {
             apdu_timeout_ms: config.apdu_timeout_ms,
-            apdu_segment_timeout_ms: config.apdu_timeout_ms,
+            apdu_segment_timeout_ms: config.segment_timeout_ms(),
             apdu_retries: config.apdu_retries,
             accept_complex_ack_for_simple_services: config.accept_complex_ack_for_simple_services,
         },

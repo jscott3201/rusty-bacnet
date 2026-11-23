@@ -101,6 +101,7 @@ fn confirmed(service: ConfirmedServiceChoice, body: &[u8]) -> Bytes {
 fn reply_to(apdu: Bytes) -> Apdu {
     let identity = DeviceIdentity::new(DEVICE, 0x105)
         .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
         .with_services(SERVICES);
     let mut db = build_database_with_extra(&identity, vec![Box::new(Legacy)]).unwrap();
     let mut responder = Responder::new(identity, Limits::default()).unwrap();

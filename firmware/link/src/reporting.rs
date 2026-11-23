@@ -612,7 +612,9 @@ fn device() -> Result<(DeviceIdentity, ObjectDatabase), Error> {
         .chain(clock::SERVICES)
         .copied()
         .collect();
-    let identity = DeviceIdentity::new(DEVICE, VENDOR)?.with_services(&services);
+    let identity = DeviceIdentity::new(DEVICE, VENDOR)?
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
+        .with_services(&services);
     let mut extra: Vec<Box<dyn BACnetObject>> = Vec::new();
     for (instance, value) in (1..).zip(ANALOG_VALUES) {
         let name = if instance == 1 { "AI-1" } else { "AI-2" };

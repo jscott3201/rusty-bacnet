@@ -107,7 +107,9 @@ impl BACnetObject for Resizable {
 /// elements always), MSV-1 (three states), CH-1 (no members, one control
 /// group) and the [`Resizable`] array holding two elements.
 fn database() -> ObjectDatabase {
-    let identity = DeviceIdentity::new(1234, 0).unwrap();
+    let identity = DeviceIdentity::new(1234, 0)
+        .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION);
     let mut channel = ChannelObject::new(1, "CH-1", 1).unwrap();
     channel.set_control_groups(vec![7]).unwrap();
     build_database_with_extra(

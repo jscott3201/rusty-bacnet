@@ -38,6 +38,21 @@ acknowledgments are answered. Time synchronization is off on every
 endpoint until `time_sync_policy` turns it on, whatever the
 `mutation_policy`: a default that differs from `BACnetServer()`'s.
 
+`segmentation` (default `Segmentation.SEGMENTED_BOTH`, #2617) is the
+Device's Segmentation\_Supported, and both roles do what it says: the
+server reassembles segmented requests and sends long answers in segments,
+and `client()` takes segmented answers and sends a long request in
+segments, each only where the value allows it. A request that would
+need segments the endpoint doesn't send fails before anything goes out.
+`Segmentation.NO_SEGMENTATION` keeps every request and answer to one
+APDU, for a constrained link or a peer that can't segment.
+`BACnetServer()` keeps its own default of `NO_SEGMENTATION`. The
+keyword-only `apdu_segment_timeout_ms` (default 5000, positive when
+segmenting) is the Device's APDU\_Segment\_Timeout, which both roles use
+while they segment. Known gap: `client()` still aborts a segmented
+ConfirmedCOVNotification (#2646), though the Device says it takes
+segments.
+
 `device_instance` takes 0 to 4194302. Instance 4194303 is reserved, as
 no object may have it, so it, or anything larger, raises ValueError at
 construction (#2171).
@@ -73,6 +88,7 @@ def __init__(
     apdu_retries: int = 3,
     registered_network_port: Optional[int] = None,
     *,
+    apdu_segment_timeout_ms: int = 5000,
     read_work_limit: int = 256,
     share_port_by_address: bool = False,
     share_wildcard_port: bool = False,
@@ -621,7 +637,9 @@ Broadcast one I-Am consistent with the composed identity.
 SC endpoint: one hub connection that both initiates and executes.
 
 `sc_device_uuid` is the single durable lifetime identity for both the
-hub dial and DEVICE\_UUID. Lifecycle mirrors `BipEndpoint`.
+hub dial and DEVICE\_UUID. Lifecycle, `segmentation` (default
+`SEGMENTED_BOTH`) and `apdu_segment_timeout_ms` mirror
+`BipEndpoint`.
 `device_instance` takes 0 to 4194302, as there: 4194303 or more raises
 ValueError at construction (#2171).
 
@@ -651,6 +669,7 @@ def __init__(
     network_port_instance: int = 2,
     max_apdu: int = 1476,
     segmentation: Optional[Segmentation] = None,
+    apdu_segment_timeout_ms: int = 5000,
     queue_capacity: int = 256,
     read_work_limit: int = 256,
     min_request_interval_ms: int = 0,
@@ -1116,7 +1135,8 @@ or after close.
 MS/TP endpoint: one serial owner that both initiates and executes.
 
 Opens a real serial device via `TokioSerialPort` like the current
-wrappers. Lifecycle mirrors `BipEndpoint`.
+wrappers. Lifecycle, `segmentation` (default `SEGMENTED_BOTH`) and
+`apdu_segment_timeout_ms` mirror `BipEndpoint`.
 `device_instance` takes 0 to 4194302, as there: 4194303 or more raises
 ValueError at construction (#2171).
 
@@ -1145,6 +1165,7 @@ def __init__(
     apdu_timeout_ms: int = 6000,
     apdu_retries: int = 3,
     *,
+    apdu_segment_timeout_ms: int = 5000,
     read_work_limit: int = 256,
     min_request_interval_ms: int = 0,
     mstp_extended_frames: bool = False,

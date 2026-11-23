@@ -494,11 +494,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`DeviceIdentity`](crate::identity::DeviceIdentity), omitting the database
     /// requests stock generation after receive-capacity resolution. Explicitly
     /// supplied databases, including empty ones, are preserved. Their selected
-    /// Device must match the resolved identity and declare segmentation
-    /// NO_SEGMENTATION, as the session's identity must for now. The session
-    /// retains ownership even in `ClientOnly` mode; with a server role it
-    /// hands the database to its server at start, and shares it from then
-    /// on.
+    /// Device must match the resolved identity, its segmentation included.
+    /// The session retains ownership even in `ClientOnly` mode; with a
+    /// server role it hands the database to its server at start, and shares
+    /// it from then on.
     ///
     /// # Panics
     /// Panics if startup has already consumed the session configuration.
@@ -572,8 +571,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Composes the single Device identity (before start).
     ///
     /// Truth direction: identity overrides the standalone `SessionConfig`
-    /// 480 default for the client role max-APDU; timers/retries stay from
-    /// `SessionConfig`. Startup resolves the ceiling against the owned link.
+    /// 480 default for the client role max-APDU, and the client follows the
+    /// identity's segmentation (see [`client`](Self::client)); timers and
+    /// retries stay from `SessionConfig`. Startup resolves the ceiling
+    /// against the owned link.
     /// An absent database requests stock generation; an explicitly supplied
     /// database is preserved and its selected Device must match the resolved
     /// identity. Sessions without an identity keep the 480 default.
@@ -584,6 +585,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.assert_configurable();
         self.client_config.max_apdu_length = identity.max_apdu_length();
         self.config.max_apdu_length = identity.max_apdu_length();
+        crate::identity::apply_segmentation(&identity, &mut self.client_config);
         self.identity = Some(identity);
         self
     }

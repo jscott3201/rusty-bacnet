@@ -102,6 +102,7 @@ impl BACnetObject for Permissive {
 fn database() -> ObjectDatabase {
     let identity = DeviceIdentity::new(DEVICE, 0x105)
         .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
         .with_services(SERVICES);
     let ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let bv = BinaryValueObject::with_access(1, "BV-1", PresentValueAccess::Writable).unwrap();
@@ -136,7 +137,9 @@ fn database() -> ObjectDatabase {
 }
 
 fn responder() -> Responder {
-    let identity = DeviceIdentity::new(DEVICE, 0x105).unwrap();
+    let identity = DeviceIdentity::new(DEVICE, 0x105)
+        .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION);
     Responder::new(identity, Limits::default()).unwrap()
 }
 

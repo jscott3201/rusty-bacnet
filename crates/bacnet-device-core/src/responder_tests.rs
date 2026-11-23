@@ -73,6 +73,7 @@ impl BACnetObject for Lenient {
 fn identity() -> DeviceIdentity {
     DeviceIdentity::new(DEVICE, 0x105)
         .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
         .with_name("core-device")
         .with_services(SERVICES)
 }
@@ -213,11 +214,23 @@ fn new_refuses_segmentation_and_a_zero_work_limit() {
         bacnet_types::enums::Segmentation::SEGMENTED_RECEIVE,
     ] {
         let claims = identity().with_segmentation(segmentation);
+        let refused = Responder::new(claims, Limits::default()).unwrap_err();
+        // The refusal names the setting that fixes it (#2617).
         assert!(
-            Responder::new(claims, Limits::default()).is_err(),
-            "{segmentation:?}"
+            refused
+                .to_string()
+                .contains(".with_segmentation(Segmentation::NO_SEGMENTATION)"),
+            "{segmentation:?}: {refused}"
         );
     }
+    // The identity's own default segments both ways, so it is refused too.
+    assert!(
+        Responder::new(
+            DeviceIdentity::new(DEVICE, 0x105).unwrap(),
+            Limits::default()
+        )
+        .is_err()
+    );
     assert!(Responder::new(identity(), Limits::new(0)).is_err());
     assert!(Responder::new(identity(), Limits::new(1)).is_ok());
 }
@@ -492,7 +505,9 @@ fn announced(db: &mut ObjectDatabase, apdu: Bytes) -> Option<ObjectIdentifier> {
 fn who_is_and_who_has_name_the_identity_device_beside_a_second_one() {
     let mut db = database();
     let second = bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {
-        identity: DeviceIdentity::new(5, 0x105).unwrap(),
+        identity: DeviceIdentity::new(5, 0x105)
+            .unwrap()
+            .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION),
         ..Default::default()
     });
     db.add(Box::new(second.unwrap())).unwrap();

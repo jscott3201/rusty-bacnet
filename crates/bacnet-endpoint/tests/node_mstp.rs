@@ -440,3 +440,7 @@ variants!(prompt_impl: node_prompt_tokio, node_prompt_dedicated, node_prompt_ext
 variants!(postponed_impl: node_postponed_tokio, node_postponed_dedicated, node_postponed_extended_tokio, node_postponed_extended_dedicated);
 variants!(one_pool_impl: node_one_pool_tokio, node_one_pool_dedicated, node_one_pool_extended_tokio, node_one_pool_extended_dedicated);
 variants!(who_is_impl: node_who_is_tokio, node_who_is_dedicated, node_who_is_extended_tokio, node_who_is_extended_dedicated);
+
+/// The node segments on MS/TP, both roles, both ways (#2617, part 3c).
+#[path = "node_mstp/segmentation.rs"]
+mod segmentation;

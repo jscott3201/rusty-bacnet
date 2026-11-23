@@ -1071,8 +1071,8 @@ default identity. Endpoint generation requires an explicit `.device(identity)`;
 an identity-free endpoint invents no Device. For both, an explicit
 `.database(ObjectDatabase::new())` stays empty and emits no I-Am until the
 configured Device identifier exists. The full-server default is Device 1,
-vendor 0, APDU 1476, unsegmented, with a 5000 ms segment timeout; standard
-MS/TP resolves to 480.
+vendor 0, APDU 1476, segmented both ways (#2617) with a 5000 ms segment
+timeout; standard MS/TP resolves to 480.
 
 A supplied database is preserved, including custom Device and backup/profile
 state. Its initially selected Device must match the resolved identifier,
@@ -1105,6 +1105,8 @@ Endpoint sessions also keep the raw receive ceiling and floor their request
 headers. The existing standalone `ClientConfig` accepts only table values, so
 `bacnet_endpoint::identity::client_config` floors the configuration itself for
 that adapter; a raw 1474 identity produces standalone client capacity 1024.
+It also gives the client the identity's segmentation, as an endpoint
+session's client has it (#2617).
 
 Built-in B/IP, B/IPv6, Ethernet and SC declare local APDU 1476; MS/TP declares 480,
 or 1476 with extended frames on (`MstpConfig::extended_frames`).
@@ -9412,7 +9414,9 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   as the class does.
 
 `Responder::new` refuses an identity that claims segmentation support, since
-the core aborts every segmented request and every reply too long for one APDU,
+the core aborts every segmented request and every reply too long for one APDU
+(`DeviceIdentity::new` segments both ways by default, so build the core's
+identity `.with_segmentation(Segmentation::NO_SEGMENTATION)`, #2617),
 a `read_work` limit of zero, and an RPM budget with a zero limit. `Limits`
 holds the ReadProperty work limit and, set with `Limits::with_rpm`, the
 `ReadPropertyMultipleBudget`: an RPM past its result rows is aborted with
@@ -14307,10 +14311,18 @@ session.stop().await?; // stops the server, then the link
   server rejects a ConfirmedCOVNotification the Device lists, and a full
   client on a `ServerOnly` session executes services the Device doesn't
   list. Following the attached client would cost every ReadProperty a read
-  of shared state. Segmentation_Supported is the identity's and the server
-  follows it; the full client keeps its own segmentation settings for now
-  (a later step of #2617), and it can't reassemble a segmented
-  ConfirmedCOVNotification, which it aborts.
+  of shared state. Segmentation_Supported, Max_Segments_Accepted and
+  APDU_Segment_Timeout are the identity's (segmented both ways by default),
+  and both roles follow them (#2617): the server reassembles and segments as
+  the identity allows, and the client accepts segmented answers and states
+  more than 64 segments only when the Device receives segments, sends
+  segmented requests only when it transmits them
+  (`SegmentationError::LocalCannotTransmit` otherwise, before anything is
+  sent), and takes the identity's segment timeout. Each segment, Segment-ACK
+  and Abort reaches the role whose transaction it is, by its PDU type, the
+  side that sent it and the invoke ID the role leased. Known gap: the
+  client still aborts a segmented ConfirmedCOVNotification (#2646), though
+  the Device says it receives segments.
 - DeviceCommunicationControl binds the whole node (Clause 16.1). While the
   server holds a DISABLE_INITIATION it accepted, nothing on the node
   initiates but I-Am answers to Who-Is and audit notifications, and nothing

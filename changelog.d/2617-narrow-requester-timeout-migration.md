@@ -5,4 +5,5 @@ section: Migration notes
   client gives up waiting for fails with an Abort `Error::Remote` whose
   reason is `TSM_TIMEOUT`, where the narrow requester returned
   `Error::Timeout`; a long request is segmented and a segmented answer
-  reassembled, where it refused both.
+  reassembled as the identity allows (both by default), where it refused
+  both.

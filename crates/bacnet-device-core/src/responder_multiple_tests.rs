@@ -39,6 +39,7 @@ fn bv(instance: u32) -> ObjectIdentifier {
 fn database() -> ObjectDatabase {
     let identity = DeviceIdentity::new(DEVICE, 0x105)
         .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
         .with_services(SERVICES);
     let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     ai.set_present_value(21.5);
@@ -51,7 +52,13 @@ fn database() -> ObjectDatabase {
 }
 
 fn responder_with(limits: Limits) -> Responder {
-    Responder::new(DeviceIdentity::new(DEVICE, 0x105).unwrap(), limits).unwrap()
+    Responder::new(
+        DeviceIdentity::new(DEVICE, 0x105)
+            .unwrap()
+            .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION),
+        limits,
+    )
+    .unwrap()
 }
 
 fn confirmed(service: ConfirmedServiceChoice, body: &[u8], segmented: bool) -> Bytes {
@@ -354,7 +361,11 @@ fn rpm_segmentation_is_refused() {
 
 #[test]
 fn new_refuses_a_zero_rpm_budget() {
-    let identity = || DeviceIdentity::new(DEVICE, 0x105).unwrap();
+    let identity = || {
+        DeviceIdentity::new(DEVICE, 0x105)
+            .unwrap()
+            .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
+    };
     for budget in [
         ReadPropertyMultipleBudget {
             max_result_elements: 0,

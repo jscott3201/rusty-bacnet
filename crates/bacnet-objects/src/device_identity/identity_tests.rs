@@ -32,7 +32,8 @@ fn a_new_identity_takes_the_endpoint_defaults() {
     assert_eq!(identity.instance(), 1001);
     assert_eq!(identity.vendor_id(), 42);
     assert_eq!(identity.max_apdu_length(), 1476);
-    assert_eq!(identity.segmentation(), Segmentation::NO_SEGMENTATION);
+    // Segmented both ways by default (#2617).
+    assert_eq!(identity.segmentation(), Segmentation::SEGMENTED_BOTH);
     assert_eq!(identity.apdu_segment_timeout_ms(), 5000);
     assert_eq!(identity.services(), &[ServiceSupported::READ_PROPERTY]);
     assert!(identity.network_ports().is_empty());
@@ -135,9 +136,13 @@ fn validate_refuses_an_unknown_segmentation_and_a_zero_segment_timeout() {
     assert!(encoding_message(zero.validate()).contains("APDU_Segment_Timeout"));
     // Without segmentation the timeout isn't served, so zero is fine.
     identity()
+        .with_segmentation(Segmentation::NO_SEGMENTATION)
         .with_apdu_segment_timeout_ms(0)
         .validate()
         .unwrap();
+    // The default segments, so it needs one.
+    let zero = identity().with_apdu_segment_timeout_ms(0);
+    assert!(encoding_message(zero.validate()).contains("APDU_Segment_Timeout"));
 
     // The fields are private to the crate, but a stale one is still caught.
     let mut small = identity();
@@ -212,7 +217,7 @@ fn validate_device_accepts_the_devices_own_build_and_names_each_mismatch() {
 
 #[test]
 fn a_device_without_segmentation_is_not_asked_for_a_segment_timeout() {
-    let identity = identity();
+    let identity = identity().with_segmentation(Segmentation::NO_SEGMENTATION);
     let db = built_device(&identity);
     let device = db.get(&identity.device_oid()).unwrap();
     // The stock Device serves no APDU_Segment_Timeout without segmentation,

@@ -126,6 +126,10 @@ pub enum PropertyPresenceCondition {
     /// requires Min_Pres_Value and Max_Pres_Value (Table 12-75 footnote 4,
     /// #2192).
     PresentValueWritableInService,
+    /// The device segments in at least one direction, which requires its
+    /// Device's Max_Segments_Accepted and APDU_Segment_Timeout and is the
+    /// only case that admits them (Table 12-13 footnote 1, #2617).
+    Segmentation,
 }
 
 /// The write capability implemented by an object's property-write routes.
@@ -226,6 +230,7 @@ impl PropertyMetadata {
                         | PropertyPresenceCondition::Ipv6Port
                         | PropertyPresenceCondition::CovReporting
                         | PropertyPresenceCondition::PresentValueWritableInService
+                        | PropertyPresenceCondition::Segmentation
                 )
             )
     }

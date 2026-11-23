@@ -49,7 +49,9 @@ fn database() -> ObjectDatabase {
         })
         .unwrap();
     build_database_with_extra(
-        &DeviceIdentity::new(77, 0).unwrap(),
+        &DeviceIdentity::new(77, 0)
+            .unwrap()
+            .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION),
         vec![
             Box::new(AnalogInputObject::new(1, "AI-1", EngineeringUnits::NO_UNITS).unwrap()),
             Box::new(group),

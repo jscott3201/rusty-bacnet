@@ -313,6 +313,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .min(target_transport_max_apdu)
             .min(routed_path_max_apdu.unwrap_or(u16::MAX));
         if unsegmented_apdu_size > remote_max_apdu as usize {
+            // A client that sends no segments (a node whose Device says so,
+            // #2617) refuses first, whatever the peer takes.
+            self.config.check_segmented_request()?;
             // Clause 12.11: a NO_SEGMENTATION or SEGMENTED_TRANSMIT peer
             // accepts exactly one segment — only unsegmented requests — and
             // Clause 18's SEGMENTATION_NOT_SUPPORTED abort is the certain

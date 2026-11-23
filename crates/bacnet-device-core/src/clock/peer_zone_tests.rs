@@ -34,6 +34,7 @@ fn device() -> ObjectIdentifier {
 fn responder(writable: bool) -> (Responder, ObjectDatabase) {
     let identity = DeviceIdentity::new(DEVICE, 0x105)
         .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
         .with_services(SERVICES);
     let mut db = identity.build_database().unwrap();
     let clock = DeviceClock::new(

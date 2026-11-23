@@ -211,6 +211,86 @@ async fn authoritative_local_no_segmentation_refuses_segmented_request() {
     peer_transport.stop().await.unwrap();
 }
 
+/// A client that sends no segmented requests (an endpoint session's, whose
+/// Device doesn't transmit them, #2617) refuses one that needs segments
+/// before anything is sent, even to a peer that takes them; one that fits
+/// in an APDU still goes.
+#[tokio::test]
+async fn a_client_that_sends_no_segments_refuses_a_request_that_needs_them() {
+    let client_mac = vec![0x01];
+    let peer_mac = vec![0x02];
+    let (client_transport, mut peer_transport) =
+        LoopbackTransport::pair(client_mac.clone(), peer_mac.clone());
+    let mut peer_rx = peer_transport.start().await.unwrap();
+    let config = super::ClientConfig {
+        apdu_timeout_ms: 1000,
+        segmented_requests: false,
+        ..super::ClientConfig::default()
+    };
+    let client = std::sync::Arc::new(BACnetClient::start(config, client_transport).await.unwrap());
+    client.device_table.lock().upsert(local_peer(
+        1234,
+        &peer_mac,
+        PEER_MAX_APDU,
+        Segmentation::SEGMENTED_BOTH,
+    ));
+
+    let err = client
+        .confirmed_request(
+            &peer_mac,
+            ConfirmedServiceChoice::WRITE_PROPERTY,
+            &oversized_data(OVERSIZED),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            Error::Segmentation(bacnet_types::error::SegmentationError::LocalCannotTransmit)
+        ),
+        "{err}"
+    );
+    assert_no_frame_reaches(&mut peer_rx).await;
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
+
+    // A request that fits goes unsegmented.
+    let small = std::sync::Arc::clone(&client);
+    let peer_for_small = peer_mac.clone();
+    let request = tokio::spawn(async move {
+        small
+            .confirmed_request(
+                &peer_for_small,
+                ConfirmedServiceChoice::WRITE_PROPERTY,
+                &oversized_data(20),
+            )
+            .await
+    });
+    let received = timeout(Duration::from_secs(2), peer_rx.recv())
+        .await
+        .expect("the small request is sent")
+        .unwrap();
+    let npdu = decode_npdu(received.npdu).unwrap();
+    let Apdu::ConfirmedRequest(sent) = apdu::decode_apdu(npdu.payload).unwrap() else {
+        panic!("expected a Confirmed-Request");
+    };
+    assert!(!sent.segmented);
+    send_local_reply(
+        &peer_transport,
+        &client_mac,
+        Apdu::SimpleAck(SimpleAck {
+            invoke_id: sent.invoke_id,
+            service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
+        }),
+    )
+    .await;
+    timeout(Duration::from_secs(2), request)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    peer_transport.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn authoritative_local_transmit_only_refuses_segmented_request() {
     let client_mac = vec![0x01];

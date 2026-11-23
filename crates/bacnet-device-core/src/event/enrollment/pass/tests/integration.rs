@@ -103,6 +103,7 @@ pub(super) fn setup_qualified_reference(
         let device = DeviceObject::new(DeviceConfig {
             identity: bacnet_objects::DeviceIdentity::new(*instance, 0)
                 .expect("valid Device identity")
+                .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
                 .with_name(format!("Device-{instance}")),
             ..DeviceConfig::default()
         })

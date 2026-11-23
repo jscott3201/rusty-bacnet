@@ -110,6 +110,7 @@ fn device_at(
 ) -> Device {
     let identity = DeviceIdentity::new(9, 0x105)
         .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
         .with_services(SERVICES);
     let mut class = NotificationClass::new(0, "NC-0").unwrap();
     class.priority = priority;
@@ -456,7 +457,9 @@ fn a_local_acknowledgement_of_the_wrong_state_is_refused() {
 
 #[test]
 fn a_fault_pass_without_a_sweep_is_refused() {
-    let identity = DeviceIdentity::new(9, 0x105).unwrap();
+    let identity = DeviceIdentity::new(9, 0x105)
+        .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION);
     let responder = Responder::new(identity, crate::responder::Limits::default()).unwrap();
     let config = ReportConfig::default().with_fault_detection(Duration::from_secs(10));
     assert!(Reporter::new(responder, config).is_err());
@@ -515,6 +518,7 @@ fn the_fault_pass_commits_the_fault_and_reports_it_settled() {
     const FAULT: u8 = 0x40;
     let identity = DeviceIdentity::new(9, 0x105)
         .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
         .with_services(SERVICES);
     let mut class = NotificationClass::new(0, "NC-0").unwrap();
     class.add_destination(address_destination(false)).unwrap();
