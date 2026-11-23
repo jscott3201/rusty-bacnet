@@ -687,7 +687,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
 /// Whether `service` is a confirmed COV notification, of one object or of
 /// several (Clauses 13.7 and 13.17).
-fn is_confirmed_cov_notification(service: ConfirmedServiceChoice) -> bool {
+pub(super) fn is_confirmed_cov_notification(service: ConfirmedServiceChoice) -> bool {
     service == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION
         || service == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE
 }
@@ -695,14 +695,6 @@ fn is_confirmed_cov_notification(service: ConfirmedServiceChoice) -> bool {
 /// Whether `service` is a ConfirmedEventNotification (Clause 13.8).
 pub(super) fn is_confirmed_event_notification(service: ConfirmedServiceChoice) -> bool {
     service == ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION
-}
-
-/// Whether the client executes a confirmed request for `service`, so
-/// reassembles one that comes segmented (#2646): a COV notification of
-/// either form, or a ConfirmedEventNotification. Beside a server role only
-/// the COV notifications reach that far.
-pub(super) fn executes_segmented(service: ConfirmedServiceChoice) -> bool {
-    is_confirmed_cov_notification(service) || is_confirmed_event_notification(service)
 }
 
 /// Whether a confirmed COV notification is the several-object form

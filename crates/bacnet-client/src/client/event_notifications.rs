@@ -75,8 +75,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// operator acknowledgment or durable application processing. A confirmed
     /// notification that comes in segments is reassembled first, when the
     /// client receives segments, and then published and acknowledged once
-    /// (#2646); beside a server role the server answers it, and the client
-    /// publishes only one that came whole. Stopping the client ends
+    /// (#2646). Beside a server role the server answers it, and the client
+    /// publishes only one that came whole (known gap, tracked separately).
+    /// Stopping the client ends
     /// dispatch; dropping it closes the channel after queued messages.
     pub fn event_notifications(&self) -> broadcast::Receiver<ReceivedEventNotification> {
         self.event_tx.subscribe()

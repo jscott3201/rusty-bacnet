@@ -147,7 +147,8 @@ so its requests and the server role's notifications never collide, and
 `bacnet_ops::Client::over` takes it as it is. Beside a server role the client
 answers only the COV notifications of its own subscriptions; the server
 answers everything else, a ConfirmedEventNotification among them, which the
-client hears a copy of. The session has the one owner of the local network
+client hears a copy of; known gap, tracked separately: not of one that comes
+in segments. The session has the one owner of the local network
 number. With a source Audit Reporter the session audits the client's reads and
 writes, each owned by the session once admitted (#2617); an audited write whose
 value isn't whole application data is refused before it is sent, where an

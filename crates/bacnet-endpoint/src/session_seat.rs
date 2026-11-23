@@ -88,7 +88,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// **Who answers what.** Beside a server role the client answers only
     /// the COV notifications of its own subscriptions; the server answers
     /// a ConfirmedEventNotification, and the client still publishes it to
-    /// its `event_notifications()`. A session with no server role leaves
+    /// its `event_notifications()`. Known gap, tracked separately: one that
+    /// comes in segments the server reassembles and answers, and the client
+    /// doesn't publish it. A session with no server role leaves
     /// the client to answer as a standalone one does, acknowledgment
     /// included.
     ///

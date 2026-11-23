@@ -14069,9 +14069,9 @@ assert!(client.who_is(Broadcast::Global, None).await.is_err());
 - Beside a server role the client answers only the COV notifications of its
   own subscriptions; the session's server
   ([below](#full-server-on-an-endpoint)) acknowledges a
-  ConfirmedEventNotification, of which the client hears a copy. A session
-  with no server role leaves the client to answer as a standalone client
-  does.
+  ConfirmedEventNotification, of which the client hears a copy (known gap,
+  tracked separately: not of one that comes in segments). A session with no
+  server role leaves the client to answer as a standalone client does.
 - The session has the one owner of the local network number: the client asks
   What-Is-Network-Number on first need and never answers one.
 - The node is one device: a DeviceCommunicationControl the session's server
@@ -14256,7 +14256,8 @@ session.stop().await?; // stops the server, then the link
 - Who answers what: the server answers every request but a
   ConfirmedCOVNotification or ConfirmedCOVNotificationMultiple, which is the
   full client's. It acknowledges a
-  ConfirmedEventNotification, of which the full client hears a copy. Both
+  ConfirmedEventNotification, of which the full client hears a copy, unless
+  it came in segments (known gap, tracked separately). Both
   hear every unconfirmed request. An answer goes to the role whose lease it
   answers, from the session's one pool of invoke IDs, and a requester's
   Abort or Segment-ACK to the server.

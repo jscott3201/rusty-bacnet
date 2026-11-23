@@ -554,3 +554,31 @@ fn a_routed_peer_keeps_one_transfer_whichever_router_brings_it() {
     assert_eq!(&done.opening.source_mac[..], &[1]);
     assert_eq!(done.opening.source_network, Some(behind));
 }
+
+#[test]
+fn a_stated_segment_count_caps_a_request_but_never_past_the_sequence_space() {
+    let now = Instant::now();
+    let peer = Peer::new(1);
+    let mut table = SegmentedRequests::new(TSEG).with_max_segments(2);
+    acked(
+        peer.send(&mut table, &segment(1, 0, 1, true, b"a"), now),
+        false,
+        0,
+        1,
+    );
+    acked(
+        peer.send(&mut table, &segment(1, 1, 1, true, b"b"), now),
+        false,
+        1,
+        1,
+    );
+    aborted(
+        peer.send(&mut table, &segment(1, 2, 1, false, b"c"), now),
+        AbortReason::BUFFER_OVERFLOW,
+    );
+    assert_eq!((table.len(), table.saved_bytes()), (0, 0));
+    let wide = SegmentedRequests::new(TSEG).with_max_segments(1000);
+    assert_eq!(wide.limits.segments, MAX_SEGMENTS);
+    let none = SegmentedRequests::new(TSEG).with_max_segments(0);
+    assert_eq!(none.limits.segments, 1);
+}

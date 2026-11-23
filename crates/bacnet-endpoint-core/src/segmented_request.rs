@@ -34,19 +34,27 @@
 //! Fixed, and the full server's: [`MAX_TRANSFERS`] transfers at once,
 //! [`MAX_TRANSFERS_PER_PEER`] of them from one peer, [`MAX_SAVED_BYTES`] of
 //! saved segments across them, [`MAX_SEGMENTS`] segments in one request
-//! (the sequence number's range: one more would overwrite segment zero).
-//! A new transfer past the first two draws BUFFER_OVERFLOW or
-//! OUT_OF_RESOURCES; a segment past the last two ends its transfer with
-//! BUFFER_OVERFLOW.
+//! (the sequence number's range: one more would overwrite segment zero), or
+//! fewer where the role states a smaller count
+//! ([`SegmentedRequests::with_max_segments`]). A new transfer past the
+//! first two draws BUFFER_OVERFLOW or OUT_OF_RESOURCES; a segment past the
+//! last two ends its transfer with BUFFER_OVERFLOW.
 //!
 //! # Timers
 //!
-//! A transfer that hears nothing for four segment timeouts ends without a
-//! word, as Clause 5.4.5.2 has it: the requester has given up by then. One
-//! that hears only duplicates and gaps for [`PROGRESS_TIMEOUT`] ends with an
-//! Abort (OTHER), so a peer can't hold a slot by repeating itself.
-//! [`SegmentedRequests::expire`] applies both; the caller runs it at
-//! [`SegmentedRequests::next_deadline`].
+//! Two clocks run on each transfer, and the first to run out ends it:
+//!
+//! - silence: past four segment timeouts with no segment at all, it ends
+//!   without a word, as Clause 5.4.5.2 has it (the requester has given up);
+//! - progress: [`PROGRESS_TIMEOUT`] with no new segment saved, whatever
+//!   else came, and it ends with an Abort (OTHER), so a peer can't hold a
+//!   slot by repeating itself.
+//!
+//! A requester that goes quiet midway starts both at once. With a segment
+//! timeout under 4 s, silence ends the transfer first, without a word; from
+//! 4 s up, the Device default of 5 s among them, the progress clock does,
+//! and the requester gets the Abort. [`SegmentedRequests::expire`] applies
+//! both; the caller runs it at [`SegmentedRequests::next_deadline`].
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -243,6 +251,14 @@ impl SegmentedRequests {
     /// over with nothing heard (Clause 5.4.5.2).
     pub fn new(segment_timeout: Duration) -> Self {
         Self::with_limits(segment_timeout, Limits::FIXED)
+    }
+
+    /// Take at most `segments` segments in one request, the count the role
+    /// states it accepts, where that is fewer than [`MAX_SEGMENTS`]; a
+    /// request with more ends with BUFFER_OVERFLOW. At least one.
+    pub fn with_max_segments(mut self, segments: usize) -> Self {
+        self.limits.segments = segments.clamp(1, MAX_SEGMENTS);
+        self
     }
 
     pub(crate) fn with_limits(segment_timeout: Duration, limits: Limits) -> Self {
@@ -567,3 +583,7 @@ fn same_transfer_elsewhere(other: &TransferKey, key: &TransferKey) -> bool {
 #[cfg(test)]
 #[path = "segmented_request_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "segmented_request_origin_tests.rs"]
+mod origin_tests;

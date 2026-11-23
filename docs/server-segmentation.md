@@ -60,9 +60,14 @@ session's client also reassembles a segmented COV notification of either form
 (`bacnet_endpoint_core::segmented_request`): it acknowledges segment zero at
 once with the window the requester proposed, then each full window and the
 last segment, all with the server bit set, and answers the whole notification
-as one that came in one APDU. A standalone client does the same for every
-confirmed notification it executes, unless its `ClientConfig::segmentation`
-receives no segments.
+as one that came in one APDU. A standalone client, or one on a session with no
+server role, reassembles every segmented confirmed request the same way,
+unless its `ClientConfig::segmentation` receives no segments: it executes a
+notification and rejects any other service as unrecognized, as it does an
+unsegmented one. A requester that stops midway meets the first of two clocks:
+with a segment timeout under 4 s the transfer ends silently after four of
+them; from 4 s up (the Device default is 5 s) the 16 s no-progress limit comes
+first, and the requester gets an Abort (OTHER).
 
 The Python full server accepts keyword-only `segmentation_supported` (default
 `Segmentation.SEGMENTED_BOTH`, as the Rust server's, since #2617) and

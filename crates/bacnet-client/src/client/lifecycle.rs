@@ -319,6 +319,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             let _routing_end = routing_end;
             let mut seg_state = request_reassembly::ReceiveState::new(
                 segment_timeout,
+                response_limits.max_reassembly_segments,
                 #[cfg(test)]
                 request_transfers_dispatch,
             );

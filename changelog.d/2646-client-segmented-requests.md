@@ -1,7 +1,6 @@
 ---
 section: Fixed
 ---
-- **Wire:** A client that receives segments (the default, and an endpoint session's client
-  when its Device does) reassembles a segmented COV, COV-multiple or event notification and
-  answers it once; it used to abort the first segment. A requester's Abort ends the transfer
-  (#2646).
+- **Wire:** A client that receives segments reassembles a segmented confirmed request instead of
+  aborting it, then answers as it does an unsegmented one; a requester's Abort ends the transfer.
+  Beside a server role the client takes only COV notifications this way (#2646).

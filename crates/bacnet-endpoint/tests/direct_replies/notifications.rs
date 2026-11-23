@@ -3,7 +3,7 @@ use bacnet_client::client::{ClientOptions, ConfirmedCOVNotificationResponse};
 use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_services::{common::BACnetPropertyValue, cov::COVNotificationRequest};
 use bacnet_types::{
-    enums::{AbortReason, ConfirmedServiceChoice, ObjectType, PropertyIdentifier, RejectReason},
+    enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier, RejectReason},
     primitives::ObjectIdentifier,
 };
 use bytes::{Bytes, BytesMut};
@@ -86,7 +86,7 @@ async fn client_cov_ack_reject_silence_and_stale_application_delivery() {
 }
 
 #[tokio::test]
-async fn client_event_ack_malformed_reject_and_segmented_abort() {
+async fn client_event_ack_malformed_reject_and_segmented_reject() {
     let ca = TestCa::new();
     let (mut f, port) = Fixture::new(&ca).await;
     let mut client = BACnetClient::start(ClientConfig::default(), port)
@@ -127,9 +127,12 @@ async fn client_event_ack_malformed_reject_and_segmented_abort() {
     let Apdu::ConfirmedRequest(request) = unsupported(72) else {
         unreachable!()
     };
+    // One segment of a service the client doesn't execute: reassembled,
+    // acknowledged, then rejected as an unsegmented one is, each answer on
+    // the original socket (#2646).
     let segmented = Apdu::ConfirmedRequest(ConfirmedRequest {
         segmented: true,
-        more_follows: true,
+        more_follows: false,
         sequence_number: Some(0),
         proposed_window_size: Some(1),
         ..request
@@ -137,7 +140,10 @@ async fn client_event_ack_malformed_reject_and_segmented_abort() {
     let admitted = f.capture(&mut peer, &segmented, None).await;
     f.feed(admitted).await;
     assert!(
-        matches!(f.response(&peer).await.1, Apdu::Abort(r) if r.invoke_id == 72 && r.sent_by_server && r.abort_reason == AbortReason::SEGMENTATION_NOT_SUPPORTED)
+        matches!(f.response(&peer).await.1, Apdu::SegmentAck(a) if a.invoke_id == 72 && a.sent_by_server && a.sequence_number == 0)
+    );
+    assert!(
+        matches!(f.response(&peer).await.1, Apdu::Reject(r) if r.invoke_id == 72 && r.reject_reason == RejectReason::UNRECOGNIZED_SERVICE)
     );
     client.stop().await.unwrap();
     f.listener.stop().await;

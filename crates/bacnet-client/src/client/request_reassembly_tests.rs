@@ -32,6 +32,11 @@ struct Lab {
 }
 
 async fn lab(segments: bool) -> Lab {
+    lab_stating(segments, None).await
+}
+
+/// A client that states `max_segments` in its requests.
+async fn lab_stating(segments: bool, max_segments: Option<u8>) -> Lab {
     let (input, rx) = mpsc::channel(512);
     let transport = TestTransport::builder()
         .local_mac(&CLIENT)
@@ -46,6 +51,7 @@ async fn lab(segments: bool) -> Lab {
             Segmentation::SEGMENTED_TRANSMIT
         })
         .apdu_segment_timeout_ms(TSEG_MS)
+        .max_segments(max_segments)
         .build()
         .await
         .unwrap();
@@ -475,29 +481,89 @@ async fn a_client_that_takes_no_segments_aborts_the_first_segment() {
     lab.client.stop().await.unwrap();
 }
 
-/// A segmented request for a service the client doesn't execute keeps the
-/// Abort it always drew.
+/// A segmented request for a service the client doesn't execute is
+/// reassembled and then rejected as unrecognized, as an unsegmented one is
+/// (Clause 18.9): the peer isn't told the client takes no segments.
 #[tokio::test]
-async fn a_segmented_request_the_client_does_not_execute_is_aborted() {
+async fn a_segmented_request_the_client_does_not_execute_is_rejected_whole() {
     let mut lab = lab(true).await;
-    lab.from(
-        &PEER,
-        &segment(
-            13,
-            ConfirmedServiceChoice::READ_PROPERTY,
-            0,
-            1,
-            true,
-            Bytes::from_static(&[0x0c]),
-        ),
-    )
-    .await;
+    let read = Bytes::from_static(&[0x0c, 0x02, 0x00, 0x00, 0x01, 0x19, 0x4d]);
+    let parts = segments(13, ConfirmedServiceChoice::READ_PROPERTY, &read, 4, 1);
+    assert_eq!(parts.len(), 2);
+    for (seq, part) in parts.iter().enumerate() {
+        lab.from(&PEER, part).await;
+        segment_ack(lab.next(&PEER).await, 13, seq as u8, false, 1);
+    }
+    let Apdu::Reject(reject) = lab.next(&PEER).await else {
+        panic!("expected a Reject");
+    };
+    assert_eq!(
+        (reject.invoke_id, reject.reject_reason),
+        (13, RejectReason::UNRECOGNIZED_SERVICE)
+    );
+    lab.quiet().await;
+    assert_eq!(lab.transfers(), Some((0, 0)));
+    lab.client.stop().await.unwrap();
+}
+
+/// The requester didn't hear the last Segment-ACK or the answer and sends
+/// the last segment again: its transfer is over, so the segment draws an
+/// Abort (Clause 5.4.5.1), and the notification isn't published again.
+#[tokio::test]
+async fn the_last_segment_sent_again_after_the_answer_draws_an_abort() {
+    let mut lab = lab(true).await;
+    let mut events = lab.client.cov_notifications();
+    let parts = segments(19, COV, &cov_body(54), 8, 1);
+    for (seq, part) in parts.iter().enumerate() {
+        lab.from(&PEER, part).await;
+        segment_ack(lab.next(&PEER).await, 19, seq as u8, false, 1);
+    }
+    simple_ack(lab.next(&PEER).await, 19, COV);
+    lab.from(&PEER, parts.last().unwrap()).await;
     aborted(
         lab.next(&PEER).await,
-        13,
-        AbortReason::SEGMENTATION_NOT_SUPPORTED,
+        19,
+        AbortReason::INVALID_APDU_IN_THIS_STATE,
     );
-    assert_eq!(lab.transfers(), None);
+    lab.quiet().await;
+    assert_eq!(
+        events.recv().await.unwrap().subscriber_process_identifier(),
+        54
+    );
+    assert!(events.try_recv().is_err(), "published once");
+    lab.client.stop().await.unwrap();
+}
+
+/// A client that states it takes four segments keeps no more of one
+/// request: the fifth ends the transfer with BUFFER_OVERFLOW, while four
+/// complete.
+#[tokio::test]
+async fn the_segment_count_the_client_states_caps_a_request() {
+    let mut lab = lab_stating(true, Some(4)).await;
+    let mut events = lab.client.cov_notifications();
+    let (_, body) = multiple_body(55, 8);
+    let five = segments(20, COV_MULTIPLE, &body, body.len().div_ceil(5), 1);
+    assert_eq!(five.len(), 5);
+    for (seq, part) in five.iter().enumerate().take(4) {
+        lab.from(&PEER, part).await;
+        segment_ack(lab.next(&PEER).await, 20, seq as u8, false, 1);
+    }
+    lab.from(&PEER, &five[4]).await;
+    aborted(lab.next(&PEER).await, 20, AbortReason::BUFFER_OVERFLOW);
+    assert_eq!(lab.transfers(), Some((0, 0)));
+
+    let four = segments(21, COV_MULTIPLE, &body, body.len().div_ceil(4), 1);
+    assert_eq!(four.len(), 4);
+    for (seq, part) in four.iter().enumerate() {
+        lab.from(&PEER, part).await;
+        segment_ack(lab.next(&PEER).await, 21, seq as u8, false, 1);
+    }
+    simple_ack(lab.next(&PEER).await, 21, COV_MULTIPLE);
+    assert_eq!(
+        events.recv().await.unwrap().subscriber_process_identifier(),
+        55
+    );
+    assert!(events.try_recv().is_err(), "only the four-segment one");
     lab.client.stop().await.unwrap();
 }
 

@@ -4,12 +4,14 @@
 //! ConfirmedCOVNotificationMultiple and ConfirmedEventNotification (beside a
 //! server role, the COV notifications only). A notifier may send any of them
 //! as segments, a COV-multiple with many values most of all. When the client
-//! receives segments ([`ClientConfig::segmentation`]), it
-//! reassembles such a request on the answering side's rules
-//! ([`SegmentedRequests`], the full server's) and then executes it as one
-//! that came whole: the same decoding, publishing and answer. Otherwise, and
-//! for a segmented request of any other service, it answers the first
-//! segment with an Abort (SEGMENTATION_NOT_SUPPORTED), as it always has.
+//! receives segments ([`ClientConfig::segmentation`]), it reassembles a
+//! segmented request on the answering side's rules ([`SegmentedRequests`],
+//! the full server's) and then answers it as one that came whole: it
+//! executes a notification (the same decoding, publishing and answer), and
+//! rejects any other service as unrecognized, as it does an unsegmented one
+//! (Clause 18.9). A peer that segments to a device declaring segmented
+//! receive is never told that it can't. A client that takes no segments
+//! answers the first segment with an Abort (SEGMENTATION_NOT_SUPPORTED).
 //!
 //! The transfers live in a table the dispatch task opens on the first one
 //! and shares with a timer task, both under a blocking lock no `.await`
@@ -31,11 +33,7 @@ use tokio::sync::Notify;
 use super::*;
 
 /// The dispatch task's reassembly state: the segmented answers to the
-/// client's own requests, then the segmented requests it executes.
-///
-/// `repr(C)` keeps `responses` first, so the path of an unsegmented answer
-/// reaches it through the very pointer it did when it was the whole state.
-#[repr(C)]
+/// client's own requests, and the segmented requests it answers.
 pub(super) struct ReceiveState {
     /// Segmented Complex-ACKs under reassembly, by peer, invoke ID and
     /// provenance.
@@ -45,15 +43,18 @@ pub(super) struct ReceiveState {
 }
 
 impl ReceiveState {
-    /// Empty state for a client whose segment timeout is `segment_timeout`.
+    /// Empty state for a client whose segment timeout is `segment_timeout`
+    /// and that keeps at most `max_segments` segments of one request.
     pub(super) fn new(
         segment_timeout: Duration,
+        max_segments: usize,
         #[cfg(test)] hook: Arc<RequestTransfersHook>,
     ) -> Self {
         Self {
             responses: HashMap::new(),
             requests: RequestTransfers {
                 segment_timeout,
+                max_segments,
                 active: None,
                 #[cfg(test)]
                 hook,
@@ -67,6 +68,9 @@ pub(super) struct RequestTransfers {
     /// The client's segment timeout: four of them without a segment end a
     /// transfer.
     segment_timeout: Duration,
+    /// The most segments one request may take: the count the client
+    /// states in its requests, at most 256.
+    max_segments: usize,
     active: Option<Active>,
     #[cfg(test)]
     hook: Arc<RequestTransfersHook>,
@@ -111,11 +115,12 @@ impl RequestTransfers {
 
     /// The table, opened with its timer on first use.
     fn open<T: TransportPort + 'static>(&mut self, network: &Arc<NetworkLayer<T>>) -> &Active {
-        let segment_timeout = self.segment_timeout;
+        let (segment_timeout, max_segments) = (self.segment_timeout, self.max_segments);
         #[cfg(test)]
         let hook = &self.hook;
         self.active.get_or_insert_with(|| {
-            let table = Arc::new(SyncMutex::new(SegmentedRequests::new(segment_timeout)));
+            let table = SegmentedRequests::new(segment_timeout).with_max_segments(max_segments);
+            let table = Arc::new(SyncMutex::new(table));
             let wake = Arc::new(Notify::new());
             #[cfg(test)]
             {
@@ -177,7 +182,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         } = segment;
         let network = context.network;
         let invoke_id = request.invoke_id;
-        if !context.receives || !dispatch::executes_segmented(request.service_choice) {
+        if !context.receives {
             Self::send_server_abort(
                 network,
                 source_mac,
@@ -273,7 +278,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 );
                 // Its answer goes back the way its first segment came.
                 let answer = InboundReply::new(route, None);
-                if dispatch::is_confirmed_event_notification(request.service_choice) {
+                if dispatch::is_confirmed_cov_notification(request.service_choice) {
+                    Self::receive_confirmed_cov_notification(
+                        network,
+                        context.cov_tx,
+                        context.policy,
+                        &source_mac,
+                        &source_network,
+                        answer,
+                        request,
+                        context.decode_warning,
+                    )
+                    .await;
+                } else if dispatch::is_confirmed_event_notification(request.service_choice) {
                     Self::receive_confirmed_event_notification(
                         network,
                         context.event_tx,
@@ -285,15 +302,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     )
                     .await;
                 } else {
-                    Self::receive_confirmed_cov_notification(
+                    Self::send_confirmed_request_reject(
                         network,
-                        context.cov_tx,
-                        context.policy,
                         &source_mac,
                         &source_network,
                         answer,
-                        request,
-                        context.decode_warning,
+                        invoke_id,
+                        RejectReason::UNRECOGNIZED_SERVICE,
                     )
                     .await;
                 }

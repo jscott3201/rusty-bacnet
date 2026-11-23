@@ -166,7 +166,7 @@ pub struct ClientConfig {
     ///
     /// While it receives segments (SEGMENTED_BOTH or SEGMENTED_RECEIVE) its
     /// requests state that it accepts a segmented answer, and it reassembles
-    /// a confirmed request its sender segments before it executes it
+    /// a confirmed request its sender segments before it answers it
     /// (#2646); otherwise such a request's first segment draws an Abort
     /// (SEGMENTATION_NOT_SUPPORTED). While it transmits them (SEGMENTED_BOTH
     /// or SEGMENTED_TRANSMIT) it sends a request too long for one APDU as
