@@ -475,6 +475,8 @@ impl BACnetServer<BipTransport> {
 
 mod clock;
 mod command_runs;
+#[doc(hidden)]
+pub mod device_storage;
 mod reinitialize;
 mod time_sync_policy;
 pub use reinitialize::{ReinitializeContext, ReinitializeHandler};

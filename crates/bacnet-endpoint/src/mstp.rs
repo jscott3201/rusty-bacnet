@@ -97,6 +97,7 @@ pub struct MstpEndpointBuilder<S: SerialPort> {
     role: SessionRole,
     session: SessionConfig,
     database: Option<ObjectDatabase>,
+    device_storage_path: Option<std::path::PathBuf>,
     identity: Option<crate::identity::DeviceIdentity>,
     source_audit_bindings: Vec<(ObjectIdentifier, MacAddr)>,
     source_audit_routed: crate::session::RoutedBindings,
@@ -126,6 +127,7 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
             role: SessionRole::Both,
             session: SessionConfig::default(),
             database: None,
+            device_storage_path: None,
             identity: None,
             source_audit_bindings: Vec::new(),
             source_audit_routed: Vec::new(),
@@ -290,6 +292,14 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         self
     }
 
+    /// Keeps what peers write to the Device the session builds in the file
+    /// at `path` (#2730); see
+    /// [`EndpointSession::with_device_storage_path`].
+    pub fn device_storage_path(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.device_storage_path = Some(path.into());
+        self
+    }
+
     /// Composes the single Device identity.
     ///
     /// At start, its requested ceiling resolves against the transport's
@@ -338,11 +348,18 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     ///
     /// Validates the configuration first, then takes the serial port by
     /// value: a second call returns `"MS/TP endpoint serial owner is missing"`.
+    /// Source Audit route data or a Device storage path, which a bare
+    /// transport would discard, require `build_session()`.
     pub fn build_transport(mut self) -> Result<MstpTransport<S>, Error> {
         self.validate_only()?;
         if !self.source_audit_bindings.is_empty() || !self.source_audit_routed.is_empty() {
             return Err(Error::Encoding(
                 "source Audit route data requires build_session()".into(),
+            ));
+        }
+        if self.device_storage_path.is_some() {
+            return Err(Error::Encoding(
+                "a Device storage path requires build_session()".into(),
             ));
         }
         let config = self.config();
@@ -386,6 +403,7 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         let role = self.role;
         let session = self.session.clone();
         let database = self.database.take();
+        let device_storage_path = self.device_storage_path.take();
         let identity = self.identity.take();
         let transport = self.build_transport()?;
         let diagnostics = transport.diagnostics();
@@ -393,6 +411,9 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         endpoint.mstp_diagnostics = Some(diagnostics);
         if let Some(db) = database {
             endpoint = endpoint.with_database(db);
+        }
+        if let Some(path) = device_storage_path {
+            endpoint = endpoint.with_device_storage_path(path);
         }
         if let Some(id) = identity {
             endpoint = endpoint.device(id);

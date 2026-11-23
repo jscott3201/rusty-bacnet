@@ -69,8 +69,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// session without a server role ([`SessionRole::ClientOnly`]); a
     /// server role, with this builder or the default, without a Device
     /// identity ([`device`](Self::device)); a builder with a
-    /// transport, a database (give it to the session) or a registered
-    /// Network Port (name it on the session) of its own, or with device
+    /// transport, a database (give it to the session), a registered
+    /// Network Port or a Device storage path (name either on the session)
+    /// of its own, or with device
     /// settings that contradict the session's as above; a builder whose
     /// settings a server's start would refuse, which the session checks as
     /// the server will get them (policies and budgets, device bindings,
@@ -235,6 +236,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             return refused(
                 "the builder names a registered Network Port: name it on the session \
                  (with_registered_network_port), which reserves and publishes it",
+            );
+        }
+        if facts.device_storage {
+            return refused(
+                "the builder names a Device storage path: name it on the session \
+                 (with_device_storage_path), which builds the node's Device",
             );
         }
         if self.source_audit_reporter.is_some() && facts.audit_reporters {

@@ -67,6 +67,7 @@ pub struct ScEndpointBuilder {
     role: SessionRole,
     session: SessionConfig,
     database: Option<ObjectDatabase>,
+    device_storage_path: Option<std::path::PathBuf>,
     identity: Option<crate::identity::DeviceIdentity>,
     vmac: Vmac,
     device_uuid: [u8; 16],
@@ -88,6 +89,7 @@ impl ScEndpointBuilder {
             role: SessionRole::Both,
             session: SessionConfig::default(),
             database: None,
+            device_storage_path: None,
             identity: None,
             vmac,
             device_uuid,
@@ -168,6 +170,14 @@ impl ScEndpointBuilder {
     /// [`device`](Self::device) so I-Am vs ReadProperty agree.
     pub fn database(mut self, db: ObjectDatabase) -> Self {
         self.database = Some(db);
+        self
+    }
+
+    /// Keeps what peers write to the Device the session builds in the file
+    /// at `path` (#2730); see
+    /// [`EndpointSession::with_device_storage_path`].
+    pub fn device_storage_path(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.device_storage_path = Some(path.into());
         self
     }
 
@@ -422,6 +432,9 @@ impl ScEndpointBuilder {
         endpoint.sc_link = Some(link);
         if let Some(db) = self.database.take() {
             endpoint = endpoint.with_database(db);
+        }
+        if let Some(path) = self.device_storage_path.take() {
+            endpoint = endpoint.with_device_storage_path(path);
         }
         if let Some(id) = self.identity.take() {
             endpoint = endpoint.device(id);

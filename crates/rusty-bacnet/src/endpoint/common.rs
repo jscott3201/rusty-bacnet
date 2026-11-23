@@ -162,12 +162,22 @@ pub(crate) fn with_sc_port(
 /// parity: `ObjectDatabase::add` reports `Error::protocol(PROPERTY,
 /// DUPLICATE_NAME)`, never an Encoding string). So does an object whose
 /// identifier the Device, a port or another object already has (OBJECT /
-/// OBJECT_IDENTIFIER_ALREADY_EXISTS, #2250).
+/// OBJECT_IDENTIFIER_ALREADY_EXISTS, #2250). With `device_storage_path`, the
+/// Device keeps what peers write to it in that file (#2730); a file that
+/// can't be read or loaded raises, naming the path.
 pub(crate) fn build_database(
     identity: &DeviceIdentity,
     extra: Vec<Box<dyn BACnetObject>>,
+    device_storage_path: Option<&str>,
 ) -> PyResult<ObjectDatabase> {
-    build_database_with_extra(identity, extra).map_err(|e| match &e {
+    let built =
+        match crate::object_options::device_storage(device_storage_path, identity.device_oid())? {
+            Some(storage) => bacnet_objects::device_identity::build_database_with_tags_persistence(
+                identity, storage, extra,
+            ),
+            None => build_database_with_extra(identity, extra),
+        };
+    built.map_err(|e| match &e {
         bacnet_types::error::Error::Remote(RemoteError::Error { class, code })
             if *class == ErrorClass::PROPERTY && *code == ErrorCode::DUPLICATE_NAME =>
         {
@@ -414,7 +424,7 @@ mod build_database_tests {
                 "duplicate object identifier",
             ),
         ] {
-            let Err(error) = build_database(&identity, extra) else {
+            let Err(error) = build_database(&identity, extra, None) else {
                 panic!("{expected}: the database must be refused");
             };
             Python::attach(|py| {

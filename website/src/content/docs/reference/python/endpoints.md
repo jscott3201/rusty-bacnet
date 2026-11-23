@@ -102,6 +102,7 @@ def __init__(
     mutation_policy: Literal["permissive", "deny_all"] | MutationHandler | None = None,
     cov_policy: CovPolicy | None = None,
     time_sync_policy: TimeSyncPolicy | None = None,
+    device_storage_path: Optional[str] = None,
     source_audit_reporter: Optional[ObjectIdentifier] = None,
     audit_recipient: Optional[AuditRecipientInput] = None,
     audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str | RoutedTarget]]] = None,
@@ -128,6 +129,14 @@ request). The application changes its objects through
 as on a standalone server, and records its own resets through that
 server's `report_device_reset_local()`. `ScEndpoint` and
 `MstpEndpoint` take all three too.
+
+`device_storage_path` (#2730): the file in which the endpoint's
+Device keeps what peers write to it, as `BACnetServer`'s keyword
+of the same name: with a `mutation_policy` that lets peers write,
+a written Description survives a restart. Without it, such a write
+lasts until `close()`. An empty path raises ValueError; a file
+that can't be read or loaded raises at `start()`, naming the path.
+`ScEndpoint` and `MstpEndpoint` take it too.
 
 `source_audit_reporter` / `audit_recipient` /
 `audit_device_bindings` (#2348): the Audit Reporter, added with
@@ -686,6 +695,7 @@ def __init__(
     mutation_policy: Literal["permissive", "deny_all"] | MutationHandler | None = None,
     cov_policy: CovPolicy | None = None,
     time_sync_policy: TimeSyncPolicy | None = None,
+    device_storage_path: Optional[str] = None,
     source_audit_reporter: Optional[ObjectIdentifier] = None,
     audit_recipient: Optional[AuditRecipientInput] = None,
     audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str | RoutedTarget]]] = None,
@@ -697,8 +707,8 @@ def __init__(
 
 `read_work_limit`, `min_request_interval_ms`,
 `on_reinitialize`, `after_reinitialize`, `reinit_password`,
-`mutation_policy`, `cov_policy` and `time_sync_policy` are as
-for `BipEndpoint`.
+`mutation_policy`, `cov_policy`, `time_sync_policy` and
+`device_storage_path` are as for `BipEndpoint`.
 
 `source_audit_reporter` / `audit_recipient` /
 `audit_device_bindings`: as on `BipEndpoint` (#2357), each
@@ -1187,6 +1197,7 @@ def __init__(
     mutation_policy: Literal["permissive", "deny_all"] | MutationHandler | None = None,
     cov_policy: CovPolicy | None = None,
     time_sync_policy: TimeSyncPolicy | None = None,
+    device_storage_path: Optional[str] = None,
     source_audit_reporter: Optional[ObjectIdentifier] = None,
     audit_recipient: Optional[AuditRecipientInput] = None,
     audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str | RoutedTarget]]] = None,
@@ -1195,8 +1206,8 @@ def __init__(
 
 `read_work_limit`, `min_request_interval_ms`,
 `on_reinitialize`, `after_reinitialize`, `reinit_password`,
-`mutation_policy`, `cov_policy` and `time_sync_policy` are as
-for `BipEndpoint`. Here
+`mutation_policy`, `cov_policy`, `time_sync_policy` and
+`device_storage_path` are as for `BipEndpoint`. Here
 `after_reinitialize` runs once the SimpleACK is queued, before the
 token sends it: stopping the endpoint at once can drop the reply, so
 wait a short while first.

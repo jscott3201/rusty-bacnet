@@ -7408,6 +7408,7 @@ class BACnetServer:
         utc_offset_minutes: int = 0,
         daylight_savings: bool = False,
         clock_zone_writable: bool = False,
+        device_storage_path: Optional[str] = None,
         share_port_by_address: bool = False,
         share_wildcard_port: bool = False,
         segmentation_supported: Segmentation = Segmentation.NO_SEGMENTATION,
@@ -7502,9 +7503,24 @@ class BACnetServer:
         ``set_clock_zone`` does, and an Audit Reporter monitoring the Device
         reports it like any write. UTC_Offset takes a multiple of 15 within
         -1440..=1440 (else VALUE_OUT_OF_RANGE), Daylight_Savings_Status a
-        BOOLEAN. The Device has no storage here, so a written zone lasts
-        until ``set_clock_zone``, which is newer, or ``stop()``; the next
-        ``start()`` uses the constructor's zone.
+        BOOLEAN. Without ``device_storage_path`` a written zone lasts until
+        ``set_clock_zone``, which is newer, or ``stop()``; the next
+        ``start()`` uses the constructor's zone. With it, the written half
+        is kept and wins over the constructor's zone at the next start.
+
+        ``device_storage_path`` (keyword-only, default None): the file in
+        which the Device keeps what peers write to it (#2730): a written
+        Description, and with ``clock_zone_writable`` a written UTC_Offset
+        and Daylight_Savings_Status. Each such write is saved before it is
+        answered, and the next server started on the same path serves it
+        again. Without it the writes are answered and served until
+        ``stop()``, then lost. The Device has no Tags row. A missing file or
+        directory starts with nothing kept; ``start()`` raises, naming the
+        path, for a file it can't read or load (damaged, another Device's,
+        or from a newer release), and leaves the file alone. A write whose
+        save fails is refused with DEVICE / OPERATIONAL_PROBLEM. One server
+        at a time per path; an empty path raises ValueError. The full rules
+        are in docs/rust-api.md, "The Device's storage".
 
         ``bbmd`` / ``foreign_device`` (at most one, else ValueError): run
         the device as a BBMD (B/IP only), or register it with a BBMD on
@@ -9517,7 +9533,10 @@ class BACnetServer:
         the clock; timestamps already recorded stay. A request sees the old
         pair or the new, never one of each. Both properties stay read-only
         to a peer unless the constructor's ``clock_zone_writable`` is True;
-        a peer's write then moves the clock the same way.
+        a peer's write then moves the clock the same way. With
+        ``device_storage_path`` too, this change, newer, drops a half a peer
+        wrote from the file first; a save that fails raises and changes
+        nothing.
 
         An offset outside that range or off the 15-minute grid raises
         ValueError when called, and an int past 16 bits OverflowError;
@@ -10095,6 +10114,7 @@ class BipEndpoint:
         mutation_policy: Literal["permissive", "deny_all"] | MutationHandler | None = None,
         cov_policy: CovPolicy | None = None,
         time_sync_policy: TimeSyncPolicy | None = None,
+        device_storage_path: Optional[str] = None,
         source_audit_reporter: Optional[ObjectIdentifier] = None,
         audit_recipient: Optional[AuditRecipientInput] = None,
         audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str | RoutedTarget]]] = None,
@@ -10119,6 +10139,14 @@ class BipEndpoint:
         as on a standalone server, and records its own resets through that
         server's ``report_device_reset_local()``. ``ScEndpoint`` and
         ``MstpEndpoint`` take all three too.
+
+        ``device_storage_path`` (#2730): the file in which the endpoint's
+        Device keeps what peers write to it, as ``BACnetServer``'s keyword
+        of the same name: with a ``mutation_policy`` that lets peers write,
+        a written Description survives a restart. Without it, such a write
+        lasts until ``close()``. An empty path raises ValueError; a file
+        that can't be read or loaded raises at ``start()``, naming the path.
+        ``ScEndpoint`` and ``MstpEndpoint`` take it too.
 
         ``source_audit_reporter`` / ``audit_recipient`` /
         ``audit_device_bindings`` (#2348): the Audit Reporter, added with
@@ -10429,6 +10457,7 @@ class ScEndpoint:
         mutation_policy: Literal["permissive", "deny_all"] | MutationHandler | None = None,
         cov_policy: CovPolicy | None = None,
         time_sync_policy: TimeSyncPolicy | None = None,
+        device_storage_path: Optional[str] = None,
         source_audit_reporter: Optional[ObjectIdentifier] = None,
         audit_recipient: Optional[AuditRecipientInput] = None,
         audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str | RoutedTarget]]] = None,
@@ -10438,8 +10467,8 @@ class ScEndpoint:
     ) -> None:
         """``read_work_limit``, ``min_request_interval_ms``,
         ``on_reinitialize``, ``after_reinitialize``, ``reinit_password``,
-        ``mutation_policy``, ``cov_policy`` and ``time_sync_policy`` are as
-        for ``BipEndpoint``.
+        ``mutation_policy``, ``cov_policy``, ``time_sync_policy`` and
+        ``device_storage_path`` are as for ``BipEndpoint``.
 
         ``source_audit_reporter`` / ``audit_recipient`` /
         ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
@@ -10692,14 +10721,15 @@ class MstpEndpoint:
         mutation_policy: Literal["permissive", "deny_all"] | MutationHandler | None = None,
         cov_policy: CovPolicy | None = None,
         time_sync_policy: TimeSyncPolicy | None = None,
+        device_storage_path: Optional[str] = None,
         source_audit_reporter: Optional[ObjectIdentifier] = None,
         audit_recipient: Optional[AuditRecipientInput] = None,
         audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str | RoutedTarget]]] = None,
     ) -> None:
         """``read_work_limit``, ``min_request_interval_ms``,
         ``on_reinitialize``, ``after_reinitialize``, ``reinit_password``,
-        ``mutation_policy``, ``cov_policy`` and ``time_sync_policy`` are as
-        for ``BipEndpoint``. Here
+        ``mutation_policy``, ``cov_policy``, ``time_sync_policy`` and
+        ``device_storage_path`` are as for ``BipEndpoint``. Here
         ``after_reinitialize`` runs once the SimpleACK is queued, before the
         token sends it: stopping the endpoint at once can drop the reply, so
         wait a short while first.

@@ -166,6 +166,9 @@ pub struct BACnetServer {
     /// Whether a peer may write the Device's UTC_Offset and
     /// Daylight_Savings_Status (`clock_zone_writable`, #2395).
     clock_zone_writable: bool,
+    /// The file that keeps what peers write to the Device
+    /// (`device_storage_path`, #2730).
+    device_storage_path: Option<String>,
     audit_notification_sink: Option<AuditNotificationSink>,
     audit_reporters: Option<server::AuditReportersConfig>,
     audit_recipient: std::sync::Mutex<Option<bacnet_types::constructed::BACnetRecipient>>,

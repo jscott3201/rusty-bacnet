@@ -39,6 +39,9 @@ pub(crate) struct ServerKeywords {
     time_sync: TimeSyncPolicy,
     /// `on_reinitialize`, `after_reinitialize` and `reinit_password`.
     reinitialize: EndpointReinitialize,
+    /// `device_storage_path`: the file the Device keeps what peers write to
+    /// it in (#2730).
+    device_storage_path: Option<String>,
 }
 
 impl ServerKeywords {
@@ -73,7 +76,22 @@ impl ServerKeywords {
                 },
             },
             reinitialize,
+            device_storage_path: None,
         })
+    }
+
+    /// These keywords with `device_storage_path` (#2730), which an empty
+    /// path refuses as `BACnetServer`'s keyword of the same name does.
+    pub(crate) fn with_device_storage_path(mut self, path: Option<String>) -> PyResult<Self> {
+        crate::object_options::check_device_storage_path(path.as_deref())?;
+        self.device_storage_path = path;
+        Ok(self)
+    }
+
+    /// The file the Device each start builds keeps what peers write to it
+    /// in, if any.
+    pub(crate) fn device_storage_path(&self) -> Option<&str> {
+        self.device_storage_path.as_deref()
     }
 
     /// Whether the server's policy decides every mutation, as the session

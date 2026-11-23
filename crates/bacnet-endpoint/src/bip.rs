@@ -65,6 +65,7 @@ pub struct BipEndpointBuilder {
     role: SessionRole,
     session: SessionConfig,
     database: Option<ObjectDatabase>,
+    device_storage_path: Option<std::path::PathBuf>,
     registered_network_port: Option<ObjectIdentifier>,
     identity: Option<crate::identity::DeviceIdentity>,
     source_audit_bindings: Vec<(ObjectIdentifier, SocketAddrV4)>,
@@ -92,6 +93,7 @@ impl BipEndpointBuilder {
             role: SessionRole::Both,
             session: SessionConfig::default(),
             database: None,
+            device_storage_path: None,
             registered_network_port: None,
             identity: None,
             source_audit_bindings: Vec::new(),
@@ -165,6 +167,14 @@ impl BipEndpointBuilder {
     /// [`device`](Self::device) so Device readback agrees with I-Am.
     pub fn database(mut self, db: ObjectDatabase) -> Self {
         self.database = Some(db);
+        self
+    }
+
+    /// Keeps what peers write to the Device the session builds in the file
+    /// at `path` (#2730); see
+    /// [`EndpointSession::with_device_storage_path`].
+    pub fn device_storage_path(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.device_storage_path = Some(path.into());
         self
     }
 
@@ -279,12 +289,17 @@ impl BipEndpointBuilder {
     ///
     /// Returns a typed [`Error::Encoding`] when any session-owned
     /// configuration is set, since a bare transport would discard it: a
-    /// Network Port registration or source Audit route data. Those require
-    /// [`build_session`](Self::build_session).
+    /// Network Port registration, source Audit route data or a Device
+    /// storage path. Those require [`build_session`](Self::build_session).
     pub fn build_transport(self) -> Result<BipTransport, Error> {
         if self.registered_network_port.is_some() {
             return Err(Error::Encoding(
                 "Network Port registration requires build_session()".into(),
+            ));
+        }
+        if self.device_storage_path.is_some() {
+            return Err(Error::Encoding(
+                "a Device storage path requires build_session()".into(),
             ));
         }
         if !self.source_audit_bindings.is_empty() || !self.source_audit_routed.is_empty() {
@@ -381,11 +396,15 @@ impl BipEndpointBuilder {
         let role = self.role;
         let session = self.session.clone();
         let database = self.database.take();
+        let device_storage_path = self.device_storage_path.take();
         let identity = self.identity.take();
         let registered_network_port = self.registered_network_port.take();
         let mut endpoint = EndpointSession::new(transport(self)?, role, session)?;
         if let Some(db) = database {
             endpoint = endpoint.with_database(db);
+        }
+        if let Some(path) = device_storage_path {
+            endpoint = endpoint.with_device_storage_path(path);
         }
         if let Some(id) = identity {
             endpoint = endpoint.device(id);

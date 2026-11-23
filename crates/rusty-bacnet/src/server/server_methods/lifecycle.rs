@@ -65,6 +65,12 @@ impl BACnetServer {
             .with_segmentation(self.segmentation_supported)
             .with_apdu_segment_timeout_ms(self.apdu_segment_timeout_ms);
         identity.validate().map_err(to_py_err)?;
+        // Before anything is drained, so a file that can't be loaded leaves
+        // the registrations for the next start (#2730).
+        let device_storage = crate::object_options::device_storage(
+            self.device_storage_path.as_deref(),
+            identity.device_oid(),
+        )?;
         let mut builder = server::BACnetServer::generic_builder().device(identity.clone());
         if let Some(instance) = self.registered_network_port {
             let oid = bacnet_types::primitives::ObjectIdentifier::new(
@@ -231,10 +237,16 @@ impl BACnetServer {
 
             // Validate the generated Device and entire pending DB before SC I/O.
             let identity = identity.resolve(local_capacity).map_err(to_py_err)?;
-            let mut device = DeviceObject::new(DeviceConfig {
+            let config = DeviceConfig {
                 identity,
                 ..DeviceConfig::default()
-            })
+            };
+            // With `device_storage_path`, the Device keeps what peers write
+            // to it there (#2730).
+            let mut device = match device_storage {
+                Some(storage) => DeviceObject::with_tags_persistence(config, storage),
+                None => DeviceObject::new(config),
+            }
             .map_err(to_py_err)?;
             if let Some(recipient) = audit_recipient {
                 device

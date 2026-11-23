@@ -2,11 +2,13 @@
 //! object's Present_Value is written and whether its source is tracked, the
 //! optional Tags, Profile_Location and Profile_Name rows, and the
 //! `storage_path` and `clear_written_reporting` that keep the reporting
-//! settings and Description a peer writes (#2331, #2364).
+//! settings and Description a peer writes (#2331, #2364), and the servers'
+//! and endpoints' `device_storage_path`, which keeps what a peer writes to
+//! the Device (#2730).
 
 use std::sync::Arc;
 
-use bacnet_objects::object_profile::ObjectProfile;
+use bacnet_objects::object_profile::{ObjectProfile, TagsPersistence};
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::write_config::{FileWriteConfigPersistence, WriteConfigPersistence};
 use bacnet_types::error::Error;
@@ -109,4 +111,31 @@ pub(crate) fn keep_reporting<T>(
         object = open().map_err(to_py_err)?;
     }
     Ok(object)
+}
+
+/// Refuse an empty `device_storage_path` at construction (#2730).
+pub(crate) fn check_device_storage_path(path: Option<&str>) -> PyResult<()> {
+    match path {
+        Some("") => Err(PyValueError::new_err(
+            "device_storage_path must not be empty",
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// The Device's storage in the file at `path` (#2730), opened and loaded
+/// once for `device`, so a file that can't be read or loaded raises before
+/// a start changes anything; `None` without a path. Its errors name the
+/// path.
+pub(crate) fn device_storage(
+    path: Option<&str>,
+    device: bacnet_types::primitives::ObjectIdentifier,
+) -> PyResult<Option<Arc<dyn TagsPersistence>>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let storage = bacnet_server::server::device_storage::device_storage(std::path::Path::new(path))
+        .map_err(to_py_err)?;
+    storage.load(device).map_err(to_py_err)?;
+    Ok(Some(storage))
 }
