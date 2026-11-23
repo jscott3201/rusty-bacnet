@@ -47,6 +47,18 @@ pub(super) type EncodeFor<'a> = &'a (dyn Fn(u32) -> Result<Bytes, Error> + Send 
 /// notification's lanes send.
 pub(super) type AdmitsRoute = Arc<dyn Fn(&RecipientRoute) -> bool + Send + Sync>;
 
+/// Which send to one recipient [`BACnetServer::send_on_route`] makes.
+#[derive(Clone, Copy)]
+enum Pass<'r> {
+    /// The first. A Device recipient's binding is read again should a
+    /// confirmed one wait for an invoke ID (#2569).
+    First(Option<&'r BACnetRecipient>),
+    /// The second, once a Device recipient's binding lapsed or moved while
+    /// the first waited for an invoke ID: that wait was counted, so another
+    /// is not, and the binding is not read again.
+    Rebound,
+}
+
 /// One event notification on its way to its recipients.
 pub(super) struct OutboundNotification<'a> {
     /// The notification class, named in diagnostics.
@@ -88,7 +100,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let class = outbound.notification_class;
         let route = Self::recipient_route(ctx, recipient, class).await?;
         let rebind = matches!(recipient, BACnetRecipient::Device(_)).then_some(recipient);
-        Self::send_on_route(ctx, outbound, route, process_id, confirmed, rebind).await
+        let pass = Pass::First(rebind);
+        Self::send_on_route(ctx, outbound, route, process_id, confirmed, pass).await
     }
 
     /// `recipient`'s route, localized, or `None` when its device's look
@@ -173,7 +186,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 budget: None,
             };
             let route = Self::recipient_route(&ctx, recipient, again.notification_class).await?;
-            Self::send_on_route(&ctx, &again, route, process_id, true, None).await
+            Self::send_on_route(&ctx, &again, route, process_id, true, Pass::Rebound).await
         })
     }
 
@@ -242,15 +255,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// resolved and localized route, confirmed or not as it asks: the second
     /// half of [`Self::send_to_recipient`]. For a confirmed one whose worker
     /// started, a receiver that resolves once its first attempt is handed to
-    /// the network. `rebind` is the Device recipient whose binding is read
-    /// again should a confirmed one wait for an invoke ID (#2569).
+    /// the network. `pass` says which send this is ([`Pass`]).
     async fn send_on_route(
         ctx: &EventDelivery<'_, T>,
         outbound: &OutboundNotification<'_>,
         route: RecipientRoute,
         process_id: u32,
         confirmed: bool,
-        rebind: Option<&BACnetRecipient>,
+        pass: Pass<'_>,
     ) -> Option<oneshot::Receiver<()>> {
         let &EventDelivery {
             db: _,
@@ -382,13 +394,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // destinations' notifications that waited first (#2563).
             // Should DCC restrict initiation meanwhile, the first attempt
             // withdraws it, uncounted.
-            let mut waited = false;
+            // A second pass's wait was counted with the first's (#2569).
+            let (mut waited, rebind) = match pass {
+                Pass::First(rebind) => (false, rebind),
+                Pass::Rebound => (true, None),
+            };
+            let counted = waited;
             let reservation = notification_transactions.reserve_waiting(
                 canonical_peer,
                 ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
                 || {
                     waited = true;
-                    suppressions.record(EventSuppression::ConfirmedWaitedForInvokeId);
+                    if !counted {
+                        suppressions.record(EventSuppression::ConfirmedWaitedForInvokeId);
+                    }
                     debug!("Every invoke ID is leased; the EventNotification waits for one");
                 },
             );

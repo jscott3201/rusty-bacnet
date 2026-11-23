@@ -137,3 +137,67 @@ async fn a_binding_moved_to_a_broadcast_form_is_skipped_and_counted() {
     drop(leases);
     h.server.stop().await.unwrap();
 }
+
+/// The confirmed event notifications first sent to `mac`: one per invoke
+/// ID, retries left out.
+fn first_sends_to(h: &Harness, mac: &[u8]) -> usize {
+    let log = h.server.test_network().transport().sent();
+    let mut invoke_ids = Vec::new();
+    for frame in log.frames() {
+        if let Apdu::ConfirmedRequest(request) = frame.apdu()
+            && request.service_choice == ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION
+            && frame.mac.as_slice() == mac
+            && !invoke_ids.contains(&request.invoke_id)
+        {
+            invoke_ids.push(request.invoke_id);
+        }
+    }
+    invoke_ids.len()
+}
+
+/// Device 9's binding lapses while its alarm waits for an ID, Device 10's
+/// alarm waiting behind it. The first ID to come back goes to Device 9's,
+/// which gives it back to look for the device, and Device 10's takes it.
+/// Device 9 answers, and its alarm waits again, uncounted, since its wait
+/// was counted once. It moves while it waits, but the binding is read again
+/// once only: the alarm goes where it answered first, with no third look.
+#[tokio::test(start_paused = true)]
+async fn a_rerouted_notification_waits_again_uncounted_and_once() {
+    let mut h = start_for_and(ServerConfig::default(), &[(9, true)], &[], |db| {
+        let mut nc = bacnet_objects::notification_class::NotificationClass::new(1, "NC-1").unwrap();
+        let mut to_device = destination_for(BACnetRecipient::Device(device(10)), true);
+        to_device.process_identifier = 10;
+        nc.add_destination(to_device).unwrap();
+        db.add(Box::new(nc)).unwrap();
+        add_av2(db, 1);
+    })
+    .await;
+    deliver(&h, &i_am(9), &DEVICE_9, None).await;
+    h.settle().await;
+    let transactions = Arc::clone(&h.server.notification_transactions);
+    let mut leases = transactions.lease_every_invoke_id();
+    h.write_pv(85.0, 0).await;
+    until("Device 9's wait", || waited(&h) == 1).await;
+    tokio::time::sleep(OBSERVED_BINDING_TTL).await;
+    tokio::join!(h.write_local_to(av2(), 85.0), async {
+        assert_eq!(next_who_is(&h).await, (everywhere(), targeted(10)));
+        deliver(&h, &i_am(10), &DEVICE_10, None).await;
+        until("Device 10's wait", || waited(&h) == 2).await;
+    });
+    drop(leases.pop());
+    until("Device 10's alarm", || first_sends_to(&h, &DEVICE_10) == 1).await;
+    assert_eq!(next_who_is(&h).await, (None, targeted(9)));
+    deliver(&h, &i_am(9), &DEVICE_9, None).await;
+    let second_wait = || transactions.waiting_for_ids() == 1;
+    until("Device 9's second wait", second_wait).await;
+    deliver(&h, &i_am(9), &MOVED, None).await;
+    h.settle().await;
+    drop(leases.pop());
+    until("Device 9's alarm", || first_sends_to(&h, &DEVICE_9) == 1).await;
+    assert_eq!(first_sends_to(&h, &MOVED), 0, "no third look");
+    assert_eq!(waited(&h), 2, "Device 9's wait counted once");
+    assert_eq!(counted(&h), (0, 0));
+    assert!(next_who_is_none(&h));
+    drop(leases);
+    h.server.stop().await.unwrap();
+}
