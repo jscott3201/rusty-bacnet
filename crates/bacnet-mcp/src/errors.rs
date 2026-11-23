@@ -101,7 +101,7 @@ impl ToolError {
             }
             | OpsError::Client(Error::NetworkRejected(reject)) => Self::NetworkReject {
                 device,
-                reject: *reject,
+                reject: **reject,
             },
             error if error.timed_out() => {
                 let (after, busy) = match error {
@@ -114,7 +114,7 @@ impl ToolError {
                         source: Error::RouterBusyTimeout(busy),
                         ..
                     }
-                    | OpsError::Client(Error::RouterBusyTimeout(busy)) => (0, Some(*busy)),
+                    | OpsError::Client(Error::RouterBusyTimeout(busy)) => (0, Some(**busy)),
                     _ => (0, None),
                 };
                 Self::Timeout {
@@ -360,7 +360,7 @@ mod tests {
         );
         let sorted = |reject| OpsError::Unreachable {
             device: DeviceAddress::new(7, &[5]).unwrap(),
-            source: Error::NetworkRejected(reject),
+            source: Error::NetworkRejected(Box::new(reject)),
         };
         let tool = ToolError::device(9, &sorted(reject));
         assert_eq!(tool, ToolError::NetworkReject { device: 9, reject });
@@ -401,7 +401,7 @@ mod tests {
         );
         let error = OpsError::Unreachable {
             device: DeviceAddress::new(7, &[5]).unwrap(),
-            source: Error::RouterBusyTimeout(busy),
+            source: Error::RouterBusyTimeout(Box::new(busy)),
         };
         assert!(error.timed_out());
         let tool = ToolError::device(9, &error);

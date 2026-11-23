@@ -26,10 +26,12 @@ use crate::enums::{AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, R
 
 mod decode;
 mod encode;
+#[cfg(feature = "std")]
 mod network_reject;
 mod remote;
 pub use decode::{DecodeError, DecodingKind, RangeError};
 pub use encode::{EncodeError, SegmentationError};
+#[cfg(feature = "std")]
 pub use network_reject::NetworkReject;
 #[cfg(feature = "alloc")]
 use remote::ProtocolText;
@@ -206,9 +208,13 @@ pub enum Error {
     /// ([`Error::RouterBusyTimeout`] when they run out), reason 3 answers a
     /// network message and never a request, and reason 4 is
     /// [`Error::RoutedPathTooLong`]. Whether the device can have received
-    /// the request is [`NetworkReject::single_frame`].
+    /// the request is [`NetworkReject::single_frame`]. Only with `std`,
+    /// which the client needs; the reject is boxed so the rare refusal
+    /// widens no `Result<_, Error>` (on a 32-bit target the error stays 48
+    /// octets).
+    #[cfg(feature = "std")]
     #[error("{0}")]
-    NetworkRejected(NetworkReject),
+    NetworkRejected(Box<NetworkReject>),
 
     /// A routed confirmed request ran out of retries with no answer after
     /// the router it went through said, with a reject of reason 2, that it
@@ -216,9 +222,11 @@ pub enum Error {
     /// client's TSM_TIMEOUT abort is, and the low-level crates' and the
     /// bindings' timeout handling treat it as one; the reject names the
     /// router and the network. Whether the device received the request is
-    /// unknown, as after any timeout.
+    /// unknown, as after any timeout. Only with `std`, boxed as
+    /// [`Error::NetworkRejected`] is.
+    #[cfg(feature = "std")]
     #[error("BACnet abort: tsm-timeout; on the way, {}", .0.what())]
-    RouterBusyTimeout(NetworkReject),
+    RouterBusyTimeout(Box<NetworkReject>),
 
     /// The device acknowledged a confirmed request with the other kind of
     /// acknowledgement than its service takes (#2721): a Complex-ACK for a

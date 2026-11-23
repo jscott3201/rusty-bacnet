@@ -455,6 +455,7 @@ fn unsupported_transport_display_names_both_data_links() {
 /// A network reject names the router in its link's own address form, the
 /// network, and the reason by name beside its number; a reason the
 /// standard doesn't name by its number alone (#2724).
+#[cfg(feature = "std")]
 #[test]
 fn network_reject_display_names_router_network_and_reason() {
     use bacnet_npdu::{Mac, RejectMessageReason as R};
@@ -510,13 +511,14 @@ fn network_reject_display_names_router_network_and_reason() {
         assert_eq!(reject.what().to_string(), text);
         assert_eq!(reject.to_string(), format!("{text}{later}"));
         assert_eq!(
-            Error::NetworkRejected(reject).to_string(),
+            Error::NetworkRejected(Box::new(reject)).to_string(),
             format!("{text}{later}")
         );
     }
 }
 
 /// Each reason's COMMUNICATION code, as an audit record's Result carries it.
+#[cfg(feature = "std")]
 #[test]
 fn network_reject_error_codes_follow_the_reason() {
     use bacnet_npdu::{Mac, RejectMessageReason as R};
@@ -567,6 +569,7 @@ fn unexpected_ack_display_names_the_service_and_both_kinds() {
 /// one relayed from a farther router names that router beside the one it
 /// came through; a busy reject a request then timed out after reads as the
 /// timeout it is, naming the router (#2724).
+#[cfg(feature = "std")]
 #[test]
 fn network_reject_says_whether_the_device_can_have_the_request() {
     use bacnet_npdu::{Mac, RejectMessageReason as R};
@@ -598,7 +601,7 @@ fn network_reject_says_whether_the_device_can_have_the_request() {
         R::ROUTER_BUSY,
     );
     assert_eq!(
-        Error::RouterBusyTimeout(busy).to_string(),
+        Error::RouterBusyTimeout(Box::new(busy)).to_string(),
         "BACnet abort: tsm-timeout; on the way, Reject-Message-To-Network from router mstp:2: \
          busy for network 7 (router-busy, reason 2)"
     );

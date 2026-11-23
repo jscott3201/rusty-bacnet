@@ -160,7 +160,7 @@ impl Rig {
 
 fn rejected(result: Result<Bytes, Error>) -> NetworkReject {
     match result {
-        Err(Error::NetworkRejected(reject)) => reject,
+        Err(Error::NetworkRejected(reject)) => *reject,
         other => panic!("expected a network reject, got {other:?}"),
     }
 }
@@ -440,12 +440,12 @@ async fn a_request_by_local_broadcast_takes_no_reject() {
 #[test]
 fn an_audit_record_carries_the_reasons_code() {
     use crate::client::source_audit_targets::{attempted, audit_result};
-    let error = Error::NetworkRejected(NetworkReject::new(
+    let error = Error::NetworkRejected(Box::new(NetworkReject::new(
         bacnet_npdu::Mac::from_array(ROUTER),
         None,
         DNET,
         RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-    ));
+    )));
     assert_eq!(
         audit_result(&error),
         (ErrorClass::COMMUNICATION, ErrorCode::NOT_ROUTER_TO_DNET)
@@ -510,7 +510,7 @@ async fn a_reject_queued_before_the_request_went_out_is_not_its_own() {
         panic!("expected a network reject")
     };
     assert_eq!(
-        reject,
+        *reject,
         NetworkReject::new(
             bacnet_npdu::Mac::from_array(ROUTER),
             Some(DataLink::Mstp),

@@ -370,7 +370,8 @@ endpoint's data link cannot carry, such as a BBMD request through an
 
 `Error::RoutedPathTooLong { dnet }` identifies the destination network from a
 matching network-layer rejection; it does not claim an exact supported length.
-`Error::NetworkRejected(NetworkReject)` is a routed request the router it went
+`Error::NetworkRejected(Box<NetworkReject>)` (with `std`, as the client builds
+it; boxed so the rare refusal widens no `Result`) is a routed request the router it went
 through refused at the network layer, its reason one that ends a request at
 once (#2724): `NetworkReject` holds the router's MAC (`router`, a
 `bacnet_npdu::Mac`), the client's `link`, the `network`, the `reason` (a
@@ -387,7 +388,7 @@ request never reached the device"; `router()` writes the router alone,
 `what()` the text without the last clause, and `error_code()` gives the
 COMMUNICATION code Clause 18 pairs with the reason (`NOT_ROUTER_TO_DNET` for
 reason 1), which a source audit record carries.
-`Error::RouterBusyTimeout(NetworkReject)` is a routed request that ran out of
+`Error::RouterBusyTimeout(Box<NetworkReject>)` is a routed request that ran out of
 retries after its router said, with a reason-2 reject, that it was busy for
 the network: a timeout, which `bacnet_ops::raw::timed_out` and the bindings
 treat as the TSM_TIMEOUT abort it stands for, whose text adds the router and
@@ -13403,8 +13404,8 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Timeout(duration)` | APDU retry exhausted |
 | `Error::RoutedPathTooLong { dnet }` | Router rejected the active message as too long for DNET |
 | `Error::UnexpectedAck { service, complex }` | The device acknowledged the request with the other kind of acknowledgement than its service takes: a Complex-ACK for a service acknowledged with a Simple-ACK (`complex` true, such as WriteProperty), or the reverse (#2721). The request failed at once and nothing more was sent; whether the device carried it out is unknown |
-| `Error::NetworkRejected(NetworkReject)` | The router a routed request went through refused it, sending back a Reject-Message-To-Network (no route, an addressing error, other); names the router in the link's form, the network and the reason, and says whether the device can have received it |
-| `Error::RouterBusyTimeout(NetworkReject)` | A routed request timed out after its router said it was busy for the network: a timeout, naming that router |
+| `Error::NetworkRejected(Box<NetworkReject>)` | The router a routed request went through refused it, sending back a Reject-Message-To-Network (no route, an addressing error, other); names the router in the link's form, the network and the reason, and says whether the device can have received it |
+| `Error::RouterBusyTimeout(Box<NetworkReject>)` | A routed request timed out after its router said it was busy for the network: a timeout, naming that router |
 | `Error::RoutedPathCapacityExceeded { capacity }` | No routed-path entry can be allocated without discarding protected safety state |
 | `Error::UnsupportedTransport { required, actual }` | The client's data link cannot carry the operation (a BBMD helper on a non-B/IP transport) |
 | `Error::Decoding(DecodeError)` | Malformed received data, with its offset and `DecodingKind` |

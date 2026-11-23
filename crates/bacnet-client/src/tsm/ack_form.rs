@@ -77,19 +77,32 @@ const fn listed(set: u64, service: ConfirmedServiceChoice) -> bool {
 
 /// The acknowledgement `response` would complete a request for `service`
 /// with is the wrong kind for it: `Some(true)` for a Complex-ACK the
-/// service doesn't take (unless `accept_complex` lets it), `Some(false)`
-/// for a Simple-ACK. `None` for the right kind, any other response, and a
-/// service that takes either.
+/// service doesn't take, `Some(false)` for a Simple-ACK. `None` for the
+/// right kind, any other response, and a service that takes either. One
+/// bit test on every acknowledgement; [`refuse`] does the rest.
 #[inline]
-pub(super) fn wrong_kind(
+pub(super) fn wrong_kind(service: ConfirmedServiceChoice, response: &TsmResponse) -> Option<bool> {
+    let complex = match response {
+        TsmResponse::SimpleAck => false,
+        TsmResponse::ComplexAck { .. } => true,
+        _ => return None,
+    };
+    listed(if complex { SIMPLE } else { COMPLEX }, service).then_some(complex)
+}
+
+/// Make `response`, an acknowledgement of the wrong kind for `service`,
+/// the request's failure, unless it is a Complex-ACK and the client takes
+/// those (`accept_complex`, read only here).
+#[cold]
+#[inline(never)]
+pub(super) fn refuse(
     service: ConfirmedServiceChoice,
-    response: &TsmResponse,
+    complex: bool,
     accept_complex: bool,
-) -> Option<bool> {
-    match response {
-        TsmResponse::SimpleAck if listed(COMPLEX, service) => Some(false),
-        TsmResponse::ComplexAck { .. } if !accept_complex && listed(SIMPLE, service) => Some(true),
-        _ => None,
+    response: &mut TsmResponse,
+) {
+    if !(complex && accept_complex) {
+        *response = TsmResponse::UnexpectedAck { service, complex };
     }
 }
 
@@ -115,5 +128,16 @@ mod tests {
         }
         assert_eq!(COMPLEX.count_ones(), 12);
         assert_eq!(SIMPLE.count_ones(), 18);
+    }
+
+    /// Every answer moves through the response channel and the request
+    /// future by value, so a completion stays as small as the
+    /// acknowledgements and the device's errors make it: a router's reject
+    /// is boxed (#2724).
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_completion_stays_small() {
+        assert!(core::mem::size_of::<TsmResponse>() <= 40);
+        assert!(core::mem::size_of::<Result<TsmResponse, bacnet_types::error::Error>>() <= 64);
     }
 }

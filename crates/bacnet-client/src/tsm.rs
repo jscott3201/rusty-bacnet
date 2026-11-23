@@ -85,7 +85,8 @@ pub enum TsmResponse {
     },
     /// The router the request went through refused it at the network
     /// layer for another reason that ends a request at once (#2724).
-    NetworkRejected(bacnet_types::error::NetworkReject),
+    /// Boxed, so the rare refusal leaves every completion small.
+    NetworkRejected(Box<bacnet_types::error::NetworkReject>),
     /// The device acknowledged the request with the other kind of
     /// acknowledgement than its service takes (#2721).
     UnexpectedAck {

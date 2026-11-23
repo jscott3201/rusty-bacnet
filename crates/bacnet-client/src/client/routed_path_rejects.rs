@@ -201,7 +201,7 @@ impl RoutedPathLimits {
             &active.tsm_mac,
             active.invoke_id,
             &active.owner,
-            TsmResponse::NetworkRejected(refusal),
+            TsmResponse::NetworkRejected(Box::new(refusal)),
         );
     }
 
@@ -372,14 +372,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             }
             Err(Error::Timeout(_)) => {
                 if let Some(busy) = lease.take_busy() {
-                    *response = Err(Error::RouterBusyTimeout(busy));
+                    *response = Err(Error::RouterBusyTimeout(Box::new(busy)));
                 }
             }
             Err(Error::Remote(RemoteError::Abort { reason }))
                 if *reason == AbortReason::TSM_TIMEOUT =>
             {
                 if let Some(busy) = lease.take_busy() {
-                    *response = Err(Error::RouterBusyTimeout(busy));
+                    *response = Err(Error::RouterBusyTimeout(Box::new(busy)));
                 }
             }
             answered if answered_by_peer(answered) => lease.mark_answered(),

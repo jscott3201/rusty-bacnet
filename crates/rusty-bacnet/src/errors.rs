@@ -205,7 +205,7 @@ pub fn to_py_err(err: Error) -> PyErr {
         }
         // The client's timeout after a router said it was busy (#2724): the
         // abort a timeout raises, naming that router and the network.
-        Error::RouterBusyTimeout(busy) => {
+        Error::RouterBusyTimeout(ref busy) => {
             let py_err = BacnetAbortError::new_err(err.to_string());
             let _ = crate::py_async::attach(|py| {
                 set_enum_attr(
@@ -213,7 +213,7 @@ pub fn to_py_err(err: Error) -> PyErr {
                     "reason",
                     AbortReason::TSM_TIMEOUT,
                 );
-                set_busy(py_err.value(py).as_any(), &busy);
+                set_busy(py_err.value(py).as_any(), busy);
                 Ok(())
             });
             py_err

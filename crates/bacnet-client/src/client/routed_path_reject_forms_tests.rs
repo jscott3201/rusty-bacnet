@@ -176,7 +176,7 @@ async fn a_busy_router_then_silence_is_a_timeout_naming_it() {
         (DNET, RejectMessageReason::ROUTER_BUSY)
     );
     assert!(
-        Error::RouterBusyTimeout(busy)
+        Error::RouterBusyTimeout(busy.clone())
             .to_string()
             .contains("router mstp:2: busy for network 100"),
     );

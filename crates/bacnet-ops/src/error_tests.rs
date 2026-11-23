@@ -52,12 +52,12 @@ fn a_network_reject_is_unreachable_never_refused_or_timed_out() {
     use bacnet_npdu::{Mac, RejectMessageReason};
     use bacnet_types::error::NetworkReject;
     let error = || {
-        Error::NetworkRejected(NetworkReject::new(
+        Error::NetworkRejected(Box::new(NetworkReject::new(
             Mac::from_array([2]),
             Some(bacnet_types::data_link::DataLink::Mstp),
             7,
             RejectMessageReason::NOT_DIRECTLY_CONNECTED,
-        ))
+        )))
     };
     let text = error().to_string();
     assert!(crate::client::unreachable(&error()));
@@ -91,7 +91,7 @@ fn a_busy_timeout_is_a_timeout() {
         7,
         RejectMessageReason::ROUTER_BUSY,
     );
-    let error = Error::RouterBusyTimeout(busy);
+    let error = Error::RouterBusyTimeout(Box::new(busy));
     let text = error.to_string();
     assert!(crate::client::timed_out(&error));
     let sorted = OpsError::at(&at(), error);
