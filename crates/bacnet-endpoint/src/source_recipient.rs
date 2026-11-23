@@ -111,29 +111,38 @@ impl SourceRoutes {
         Ok(routes)
     }
     /// Add routed bindings, each a Device behind a router by its network
-    /// number and its MAC there (#2371). Refused with SERVICES /
-    /// SERVICE_REQUEST_DENIED unless [`routed_unicast`]: network 0, the
-    /// global network 65535, an empty MAC or one past 18 octets. One whose
-    /// MAC is a broadcast or group form on its network is taken, with a
+    /// number and its MAC there (#2371), and whether that address is marked
+    /// one station (#2738). Refused with SERVICES / SERVICE_REQUEST_DENIED
+    /// unless [`routed_unicast`]: network 0, the global network 65535, an
+    /// empty MAC or one past 18 octets. One whose MAC is a broadcast or
+    /// group form on its network, as its mark has it, is taken, with a
     /// warning: a reporter sending unconfirmed records reaches it, one
     /// sending confirmed records has no route to it (#2732).
     pub(crate) fn bind_routed(
         mut self,
-        bindings: &[(ObjectIdentifier, u16, MacAddr)],
+        bindings: &[(ObjectIdentifier, u16, MacAddr, bool)],
     ) -> Result<Self, Error> {
-        for (device, network, mac) in bindings {
+        for (device, network, mac, one_station) in bindings {
             if !routed_unicast(*network, mac) {
                 return Err(denied());
             }
             let route = SourceRoute::Routed {
                 network: *network,
                 mac: mac.clone(),
+                one_station: *one_station,
             };
             if let Some(form) = route.broadcast_form() {
                 let hex: String = mac.iter().map(|octet| format!("{octet:02X}")).collect();
+                let way = if *one_station {
+                    ", even marked one station"
+                } else if form.lifted_by_one_station() {
+                    "; if it is one station there, bind it marked one station"
+                } else {
+                    ""
+                };
                 tracing::warn!(
                     device = device.instance_number(),
-                    address = %format_args!("{network}:0x{hex}, {form}"),
+                    address = %format_args!("{network}:0x{hex}, {form}{way}"),
                     "Source Audit Device is bound at a broadcast or group address on its \
                      network: a reporter sending confirmed records has no route to it"
                 );
@@ -195,7 +204,7 @@ impl SourceRoutes {
         let mac = match recipient {
             BACnetRecipient::Device(device) => match self.devices.get(device)? {
                 SourceRoute::Direct(mac) => mac,
-                SourceRoute::Routed { network, mac } if here(*network) => mac,
+                SourceRoute::Routed { network, mac, .. } if here(*network) => mac,
                 routed => return Some(routed.clone()),
             },
             BACnetRecipient::Address(address) if here(address.network_number) => {

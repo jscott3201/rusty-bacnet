@@ -97,8 +97,12 @@ pub struct EventNotificationCounters {
     /// length and octets since that link is unknown here (#2732): the one
     /// octet `0xFF` (an MS/TP broadcast), two octets starting `0x00` or
     /// `0xFF` (a LonTalk broadcast or group), three of `0xFF`, or six
-    /// starting `FF:FF:FF:FF`. A recipient can't say its network is ARCNET,
-    /// so ARCNET station 255 counts here too. Clause 6.3 lets only
+    /// starting `FF:FF:FF:FF`. An Address recipient can't carry the
+    /// one-station mark, so an ARCNET station 255 or a gateway's two-octet
+    /// virtual station named by its address counts here too; a Device
+    /// binding marked one station ([`DeviceBinding::one_station`], #2738)
+    /// takes such a station out, but for `0x0000`, `0xFFFF` and the marked
+    /// one octet `0x00`. Clause 6.3 lets only
     /// unconfirmed requests be broadcast, and sending one unconfirmed would
     /// drop the acknowledgment the destination asks for. No invoke ID is
     /// reserved for them.

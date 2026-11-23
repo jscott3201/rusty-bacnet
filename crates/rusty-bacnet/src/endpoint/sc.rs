@@ -193,7 +193,7 @@ impl PyScEndpoint {
     ///         Keyword-only, as on `BipEndpoint` (#2348, #2357), each binding
     ///         address a VMAC as `local_address()` gives it
     ///         (`"xx:xx:xx:xx:xx:xx"`) or as twelve hex digits, or a routed
-    ///         `"network:0xMAC"` (#2371). An address
+    ///         `"network:0xMAC"` or `RoutedTarget` (#2371, #2738). An address
     ///         `audit_recipient` takes another node's VMAC: never the
     ///         broadcast or all-zero VMAC or this endpoint's own.
     ///     reconnect / sc_failover_hub / sc_connect_timeout_ms: Keyword-only
@@ -262,7 +262,12 @@ impl PyScEndpoint {
         time_sync_policy: Option<&Bound<'_, PyDict>>,
         source_audit_reporter: Option<crate::types::PyObjectIdentifier>,
         audit_recipient: Option<&Bound<'_, PyAny>>,
-        audit_device_bindings: Option<Vec<(crate::types::PyObjectIdentifier, String)>>,
+        audit_device_bindings: Option<
+            Vec<(
+                crate::types::PyObjectIdentifier,
+                super::source_audit::BindingAddress,
+            )>,
+        >,
         reconnect: Option<PyRef<'_, crate::sc_reconnect::PyScReconnect>>,
         sc_failover_hub: Option<String>,
         sc_connect_timeout_ms: Option<u64>,

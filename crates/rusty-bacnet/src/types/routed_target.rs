@@ -8,7 +8,7 @@ use pyo3::types::{PyBool, PyString};
 use super::*;
 
 /// A station on another BACnet network: `RoutedTarget(network, address,
-/// router=None, *, arcnet=False)`, in that order.
+/// router=None, *, one_station=False)`, in that order.
 ///
 /// `network` is the station's network number, an `int` from 1 to 65534
 /// (ValueError outside it, OverflowError outside 0 to 65535, TypeError for a
@@ -24,21 +24,26 @@ use super::*;
 /// (#2709): `b"\xff"` (MS/TP's broadcast), two octets beginning `0x00` or
 /// `0xFF` (LonTalk's broadcast and groups), three octets of `0xFF` (no
 /// device's VMAC) and six beginning with four (the B/IP limited broadcast at
-/// any port, an Ethernet group, BACnet/SC's broadcast). `arcnet=True` says the
-/// network is ARCNET, whose broadcast is 0 and where 255 is a station: a
-/// call then goes to `b"\xff"` and refuses `b"\x00"`; it takes a one-octet
-/// address only. `router`, when given, is the next hop's address on the
-/// local link, in the same forms or as `bytes`, such as a routed
-/// `DiscoveredDevice`'s `mac_address`; a call refuses one that is a
+/// any port, an Ethernet group, BACnet/SC's broadcast). `one_station=True`
+/// marks the address one station on its network (#2738), for the forms that
+/// are a station on some links: a call then goes to `b"\xff"` (station 255
+/// on ARCNET) and to two octets starting `0x00` or `0xFF` (a gateway's
+/// virtual network numbering its stations in two octets), but not to
+/// `b"\x00\x00"` or `b"\xff\xff"`; a marked one-octet address is read as
+/// ARCNET's, so `b"\x00"`, its broadcast, is refused instead, and three and
+/// six octets are checked as unmarked. `router`, when given, is the next
+/// hop's address on the local link, in the same forms or as `bytes`, such
+/// as a routed `DiscoveredDevice`'s `mac_address`; a call refuses one that is a
 /// broadcast or group address on the local link (#2722). Without an
 /// explicit next hop the client reuses its learned route, or learns one
 /// from a Who-Is addressed to this station, then one to its network if
-/// nothing answers (an ARCNET station 255 only from its row).
+/// nothing answers (a marked station at a form bacnet-ops refuses, such as
+/// `b"\xff"`, only from its row).
 /// Invalid addresses raise ValueError, or TypeError for a type that is neither `str`
 /// nor `bytes`; a call in another order fails too, since `network` takes an
 /// `int`.
 ///
-/// Frozen; compares and hashes by its network, octets and ARCNET mark,
+/// Frozen; compares and hashes by its network, octets and one-station mark,
 /// however they were written; copies and pickles.
 #[pyclass(
     name = "RoutedTarget",
@@ -53,7 +58,7 @@ pub(crate) struct PyRoutedTarget {
     network: u16,
     address: Vec<u8>,
     router: Option<Vec<u8>>,
-    arcnet: bool,
+    one_station: bool,
 }
 
 impl PyRoutedTarget {
@@ -64,8 +69,8 @@ impl PyRoutedTarget {
             Some(router) => Station::routed(router, network, mac),
             None => Station::remote(network, mac),
         };
-        if self.arcnet {
-            station.arcnet()
+        if self.one_station {
+            station.one_station()
         } else {
             station
         }
@@ -76,9 +81,9 @@ impl PyRoutedTarget {
         (self.network, &self.address, self.router.as_deref())
     }
 
-    /// Whether the station's network is marked ARCNET.
-    pub(crate) fn is_arcnet(&self) -> bool {
-        self.arcnet
+    /// Whether the address is marked one station.
+    pub(crate) fn is_one_station(&self) -> bool {
+        self.one_station
     }
 }
 
@@ -108,14 +113,14 @@ fn mac(value: &Bound<'_, PyAny>, what: &str) -> PyResult<Vec<u8>> {
 #[pymethods]
 impl PyRoutedTarget {
     /// Check and keep the station's network and MAC, the router's MAC, and
-    /// the ARCNET mark.
+    /// the one-station mark.
     #[new]
-    #[pyo3(signature = (network, address, router=None, *, arcnet=false))]
+    #[pyo3(signature = (network, address, router=None, *, one_station=false))]
     fn new(
         network: &Bound<'_, PyAny>,
         address: &Bound<'_, PyAny>,
         router: Option<&Bound<'_, PyAny>>,
-        arcnet: bool,
+        one_station: bool,
     ) -> PyResult<Self> {
         // `True` is an `int` to Python, but no network number.
         if network.is_instance_of::<PyBool>() {
@@ -131,19 +136,11 @@ impl PyRoutedTarget {
             )));
         }
         let address = mac(address, "address")?;
-        // ARCNET's MAC is one octet (Clause 8).
-        if arcnet && address.len() != 1 {
-            return Err(PyValueError::new_err(format!(
-                "RoutedTarget arcnet=True takes a one-octet address (an ARCNET station), got {} \
-                 octets",
-                address.len()
-            )));
-        }
         Ok(Self {
             network,
             address,
             router: router.map(|router| mac(router, "router")).transpose()?,
-            arcnet,
+            one_station,
         })
     }
 
@@ -165,11 +162,12 @@ impl PyRoutedTarget {
         self.router.clone()
     }
 
-    /// Whether the station's network is marked ARCNET: its `b"\xff"` is a
-    /// station and `b"\x00"` the broadcast.
+    /// Whether the address is marked one station: `b"\xff"` and two
+    /// octets starting `0x00` or `0xFF` (but `b"\x00\x00"` and `b"\xff\xff"`)
+    /// are a station, and `b"\x00"` ARCNET's broadcast.
     #[getter]
-    fn arcnet(&self) -> bool {
-        self.arcnet
+    fn one_station(&self) -> bool {
+        self.one_station
     }
 
     fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
@@ -180,9 +178,13 @@ impl PyRoutedTarget {
             Some(router) => octets(router)?,
             None => "None".to_owned(),
         };
-        let arcnet = if self.arcnet { ", arcnet=True" } else { "" };
+        let mark = if self.one_station {
+            ", one_station=True"
+        } else {
+            ""
+        };
         Ok(format!(
-            "RoutedTarget(network={}, address={}, router={router}{arcnet})",
+            "RoutedTarget(network={}, address={}, router={router}{mark})",
             self.network,
             octets(&self.address)?
         ))
@@ -190,16 +192,17 @@ impl PyRoutedTarget {
 
     /// Copy and pickle as a call to the constructor with the octets, so a
     /// copy is equal and checked again: `RoutedTarget` itself, or with the
-    /// ARCNET mark a `functools.partial` of it that passes `arcnet=True`.
+    /// one-station mark a `functools.partial` of it that passes
+    /// `one_station=True`.
     #[allow(clippy::type_complexity)]
     fn __reduce__<'py>(
         slf: &Bound<'py, Self>,
     ) -> PyResult<(Bound<'py, PyAny>, (u16, Vec<u8>, Option<Vec<u8>>))> {
         let this = slf.get();
         let py = slf.py();
-        let make = if this.arcnet {
+        let make = if this.one_station {
             let kwargs = pyo3::types::PyDict::new(py);
-            kwargs.set_item("arcnet", true)?;
+            kwargs.set_item("one_station", true)?;
             py.import("functools")?
                 .getattr("partial")?
                 .call((slf.get_type(),), Some(&kwargs))?

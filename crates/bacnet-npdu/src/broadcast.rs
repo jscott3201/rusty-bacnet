@@ -14,12 +14,12 @@ use core::fmt;
 /// Each length maps to the links that use it (Table 6-2):
 ///
 /// - One octet: MS/TP, whose broadcast is `0xFF`, and ARCNET, whose
-///   broadcast is `0x00` and where `0xFF` is a station. Only a caller that
-///   knows the network is ARCNET can say which ([`RemoteBroadcast::of`]'s
-///   `arcnet`).
-/// - Two octets: LonTalk alone. A first octet of `0x00` is a broadcast and
-///   one of `0xFF` a group (Figure 6-4); a unicast's first octet, its
-///   subnet, runs from `0x01` to `0xFE`.
+///   broadcast is `0x00` and where `0xFF` is a station.
+/// - Two octets: LonTalk, where a first octet of `0x00` is a broadcast (the
+///   second octet naming the subnet, or `0x00` the whole domain) and one of
+///   `0xFF` a group (Figure 6-4); a unicast's first octet, its subnet, runs
+///   from `0x01` to `0xFE`. A gateway's virtual network may number its
+///   stations in two octets too, `0x0001` and up.
 /// - Three octets: a VMAC (B/IPv6, ZigBee; Clause H.7.2), whose top bit is
 ///   never set, so three octets of `0xFF` are no device's.
 /// - Six octets: B/IP, Ethernet and BACnet/SC. One whose first four octets
@@ -29,17 +29,50 @@ use core::fmt;
 ///
 /// Seven octets are a LonTalk subnet and Neuron ID, one device, and other
 /// lengths are taken as one station too.
+///
+/// # The one-station mark
+///
+/// Two of the forms are also an ordinary station on some network: the one
+/// octet `0xFF` is station 255 on ARCNET, and a gateway that numbers its
+/// stations in two octets has stations starting `0x00` or `0xFF`. Only the
+/// caller can know, so it says so with a mark on the address meaning "this
+/// address is one station" ([`RemoteBroadcast::of`]'s `one_station`, #2738).
+/// Unmarked, an address is checked as above, the safe default. What each
+/// length refuses:
+///
+/// | MAC | unmarked | marked one station |
+/// |-----|----------|--------------------|
+/// | one octet `0xFF` | [`MstpBroadcast`](Self::MstpBroadcast) | a station (ARCNET 255) |
+/// | one octet `0x00` | a station (MS/TP 0) | [`ArcnetBroadcast`](Self::ArcnetBroadcast) |
+/// | two octets `0x0001` to `0x00FF` | [`LonTalkBroadcast`](Self::LonTalkBroadcast) | a station |
+/// | two octets `0xFF00` to `0xFFFE` | [`LonTalkGroup`](Self::LonTalkGroup) | a station |
+/// | two octets `0x0000` | [`LonTalkBroadcast`](Self::LonTalkBroadcast) | the same |
+/// | two octets `0xFFFF` | [`LonTalkGroup`](Self::LonTalkGroup) | the same |
+/// | three octets `0xFFFFFF` | [`NoVmac`](Self::NoVmac) | the same |
+/// | six octets `FF:FF:FF:FF:..` | [`SixOctetBroadcast`](Self::SixOctetBroadcast) | the same |
+///
+/// Marked, a one-octet address is read as ARCNET's, the only link where
+/// `0xFF` is a station, so its broadcast `0x00` is refused instead. A
+/// two-octet address keeps two values out of the mark's reach: `0x0000`,
+/// LonTalk's broadcast to the whole domain, and `0xFFFF`, all ones, the
+/// broadcast or no device's address on every link with a fixed MAC length
+/// but ARCNET; a numbering of stations in two octets has no need of either.
+/// Three and six octets are a VMAC or a six-octet link's MAC, whose
+/// broadcast forms are no station on any network, so the mark changes
+/// nothing for them. [`lifted_by_one_station`](Self::lifted_by_one_station)
+/// says which forms the mark lifts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum RemoteBroadcast {
-    /// The one octet `0xFF`: the broadcast on an MS/TP network (Clause 9),
-    /// whose stations are 0 to 254; on an ARCNET network, a station.
+    /// The one octet `0xFF`, unmarked: the broadcast on an MS/TP network
+    /// (Clause 9), whose stations are 0 to 254; on an ARCNET network, a
+    /// station.
     MstpBroadcast,
-    /// The one octet `0x00` on a network the caller knows is ARCNET: its
-    /// broadcast (Clause 8).
+    /// The one octet `0x00` on an address marked one station, read as
+    /// ARCNET's: its broadcast (Clause 8).
     ArcnetBroadcast,
     /// Two octets, the first `0x00`: a LonTalk broadcast, the second octet
-    /// naming the subnet.
+    /// naming the subnet, or `0x00` the whole domain.
     LonTalkBroadcast {
         /// The second octet.
         subnet: u8,
@@ -60,20 +93,38 @@ pub enum RemoteBroadcast {
 
 impl RemoteBroadcast {
     /// The form `mac`, a station's MAC on a remote network, takes, if it is
-    /// one; `arcnet` when the caller knows the network is ARCNET. A few
-    /// comparisons on the slice, nothing more.
+    /// one; `one_station` when the caller has marked the address one station
+    /// (the table in the type's docs). A few comparisons on the slice,
+    /// nothing more.
     #[must_use]
-    pub fn of(mac: &[u8], arcnet: bool) -> Option<Self> {
+    pub fn of(mac: &[u8], one_station: bool) -> Option<Self> {
         match *mac {
-            [0xFF] if !arcnet => Some(Self::MstpBroadcast),
-            [0x00] if arcnet => Some(Self::ArcnetBroadcast),
-            [0x00, subnet] => Some(Self::LonTalkBroadcast { subnet }),
-            [0xFF, group] => Some(Self::LonTalkGroup { group }),
+            [0xFF] if !one_station => Some(Self::MstpBroadcast),
+            [0x00] if one_station => Some(Self::ArcnetBroadcast),
+            [0x00, subnet] if !one_station || subnet == 0x00 => {
+                Some(Self::LonTalkBroadcast { subnet })
+            }
+            [0xFF, group] if !one_station || group == 0xFF => Some(Self::LonTalkGroup { group }),
             [0xFF, 0xFF, 0xFF] => Some(Self::NoVmac),
             [0xFF, 0xFF, 0xFF, 0xFF, hi, lo] => Some(Self::SixOctetBroadcast {
                 port: u16::from_be_bytes([hi, lo]),
             }),
             _ => None,
+        }
+    }
+
+    /// Whether marking the address one station takes it out of this form
+    /// ([`RemoteBroadcast::of`]): the one octet `0xFF`, and two octets
+    /// starting `0x00` or `0xFF` other than `0x0000` and `0xFFFF`. A caller
+    /// that refuses an unmarked address in such a form can name the mark
+    /// as the way to reach a station there.
+    #[must_use]
+    pub const fn lifted_by_one_station(self) -> bool {
+        match self {
+            Self::MstpBroadcast => true,
+            Self::LonTalkBroadcast { subnet } => subnet != 0x00,
+            Self::LonTalkGroup { group } => group != 0xFF,
+            Self::ArcnetBroadcast | Self::NoVmac | Self::SixOctetBroadcast { .. } => false,
         }
     }
 }
@@ -82,11 +133,16 @@ impl fmt::Display for RemoteBroadcast {
     /// What the form is, decoded for each link that uses its length.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Self::MstpBroadcast => f.write_str(
-                "station 255, the broadcast of an MS/TP network (on an ARCNET network, where \
-                 255 is a station, mark the station ARCNET)",
+            Self::MstpBroadcast => {
+                f.write_str("station 255, the broadcast of an MS/TP network (a station on ARCNET)")
+            }
+            Self::ArcnetBroadcast => f.write_str(
+                "station 0, the broadcast of an ARCNET network (a one-octet address marked one \
+                 station is read as ARCNET's)",
             ),
-            Self::ArcnetBroadcast => f.write_str("station 0, the broadcast of an ARCNET network"),
+            Self::LonTalkBroadcast { subnet: 0x00 } => {
+                f.write_str("a LonTalk broadcast to the whole domain")
+            }
             Self::LonTalkBroadcast { subnet } => {
                 write!(f, "a LonTalk broadcast (subnet {subnet})")
             }
@@ -110,23 +166,43 @@ mod tests {
 
     #[test]
     fn each_length_names_its_broadcast_forms_and_nothing_else() {
-        let cases: [(&[u8], bool, Option<RemoteBroadcast>); 22] = [
+        let cases: [(&[u8], bool, Option<RemoteBroadcast>); 36] = [
             (&[0xFF], false, Some(MstpBroadcast)),
-            // Marked ARCNET: 255 is a station and 0 the broadcast.
+            // Marked one station: 255 is a station (ARCNET's) and 0 the
+            // broadcast.
             (&[0xFF], true, None),
             (&[0x00], true, Some(ArcnetBroadcast)),
             (&[0x00], false, None),
             (&[0xFE], false, None),
-            // Two octets are LonTalk: 0x00 and 0xFF first are no unicast.
+            (&[0xFE], true, None),
+            // Two octets are LonTalk: 0x00 and 0xFF first are no unicast,
+            // unless marked one station, but for 0x0000 and 0xFFFF.
             (&[0x00, 0x05], false, Some(LonTalkBroadcast { subnet: 5 })),
+            (&[0x00, 0x05], true, None),
+            (&[0x00, 0x01], true, None),
+            (
+                &[0x00, 0xFF],
+                false,
+                Some(LonTalkBroadcast { subnet: 0xFF }),
+            ),
+            (&[0x00, 0xFF], true, None),
             (&[0x00, 0x00], false, Some(LonTalkBroadcast { subnet: 0 })),
+            (&[0x00, 0x00], true, Some(LonTalkBroadcast { subnet: 0 })),
             (&[0xFF, 0x07], false, Some(LonTalkGroup { group: 7 })),
+            (&[0xFF, 0x07], true, None),
+            (&[0xFF, 0x00], true, None),
+            (&[0xFF, 0xFE], true, None),
+            (&[0xFF, 0xFF], false, Some(LonTalkGroup { group: 0xFF })),
             (&[0xFF, 0xFF], true, Some(LonTalkGroup { group: 0xFF })),
             (&[0x01, 0x00], false, None),
             (&[0xFE, 0x7F], false, None),
+            (&[0xFE, 0x7F], true, None),
+            // Three and six octets: the mark changes nothing.
             (&[0xFF, 0xFF, 0xFF], false, Some(NoVmac)),
+            (&[0xFF, 0xFF, 0xFF], true, Some(NoVmac)),
             (&[0x7F, 0xFF, 0xFF], false, None),
             (&[0xFF; 6], false, Some(SixOctetBroadcast { port: 0xFFFF })),
+            (&[0xFF; 6], true, Some(SixOctetBroadcast { port: 0xFFFF })),
             (
                 &[0xFF, 0xFF, 0xFF, 0xFF, 0xBA, 0xC0],
                 false,
@@ -137,16 +213,47 @@ mod tests {
             (&[0xE0, 0x00, 0x00, 0x01, 0xBA, 0xC0], false, None),
             // Seven octets are a LonTalk Neuron ID: one device.
             (&[0xFF; 7], false, None),
+            (&[0xFF; 7], true, None),
             (&[0xFF; 18], false, None),
             (&[0x00; 4], false, None),
             (&[], false, None),
         ];
-        for (mac, arcnet, form) in cases {
+        for (mac, one_station, form) in cases {
             assert_eq!(
-                RemoteBroadcast::of(mac, arcnet),
+                RemoteBroadcast::of(mac, one_station),
                 form,
-                "{mac:02X?} arcnet {arcnet}"
+                "{mac:02X?} one_station {one_station}"
             );
+        }
+    }
+
+    /// Over every one- and two-octet MAC, the mark refuses exactly the
+    /// unmarked forms it doesn't lift, plus ARCNET's broadcast `0x00`.
+    #[test]
+    fn the_mark_refuses_the_unmarked_forms_it_does_not_lift() {
+        let check = |mac: &[u8]| {
+            let unmarked = RemoteBroadcast::of(mac, false);
+            let expected = if mac == [0x00] {
+                Some(ArcnetBroadcast)
+            } else {
+                unmarked.filter(|form| !form.lifted_by_one_station())
+            };
+            assert_eq!(RemoteBroadcast::of(mac, true), expected, "{mac:02X?}");
+        };
+        for octet in 0..=u8::MAX {
+            check(&[octet]);
+        }
+        for value in 0..=u16::MAX {
+            check(&value.to_be_bytes());
+        }
+        for mac in [
+            &[0xFF, 0xFF, 0xFF][..],
+            &[0xFF; 6],
+            &[0xFF, 0xFF, 0xFF, 0xFF, 0, 1],
+        ] {
+            let form = RemoteBroadcast::of(mac, false).unwrap();
+            assert!(!form.lifted_by_one_station(), "{mac:02X?}");
+            assert_eq!(RemoteBroadcast::of(mac, true), Some(form));
         }
     }
 }

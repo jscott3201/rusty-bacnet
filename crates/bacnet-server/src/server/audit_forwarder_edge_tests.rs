@@ -141,6 +141,37 @@ async fn audit_forwarding_to_a_parent_bound_at_a_remote_broadcast_form_never_sen
     }
 }
 
+/// #2738: the same parent bound marked one station gets the confirmed copy
+/// through its router at each form the mark lifts, its DNET and DADR naming
+/// the station; at a form the mark doesn't lift nothing goes, as unmarked.
+#[tokio::test(start_paused = true)]
+async fn audit_forwarding_to_a_parent_bound_marked_one_station() {
+    use crate::server::event_recipient_route::broadcast_station_tests::{LIFTED, MARKED_FORMS};
+    let lifted = LIFTED.into_iter().map(|mac| (mac, true));
+    for (mac, sent) in lifted.chain(MARKED_FORMS.into_iter().map(|mac| (mac, false))) {
+        let binding = DeviceBinding::routed(oid(ObjectType::DEVICE, 20), 200, mac, [2])
+            .unwrap()
+            .one_station();
+        let mut f = fixture(Some(parent()), Some(binding)).await;
+        f.unconfirmed(payload(false)).await;
+        settle().await;
+        if sent {
+            assert_eq!(f.requests().len(), 1, "{mac:02X?}");
+            let wire = f.wire.sent.lock().unwrap()[0].clone();
+            let to = decode_npdu(wire).unwrap().destination.unwrap();
+            assert_eq!((to.network, to.mac_address.as_slice()), (200, mac));
+        } else {
+            assert!(f.requests().is_empty(), "{mac:02X?}");
+            assert_eq!(
+                f.reliability().await,
+                PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw()),
+                "{mac:02X?}"
+            );
+        }
+        f.server.stop().await.unwrap();
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn audit_forwarding_observed_binding_and_local_alias_do_not_send() {
     let mut f = fixture(Some(parent()), None).await;

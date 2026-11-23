@@ -58,8 +58,8 @@ class RoutedTargetTests(unittest.TestCase):
         self.assertEqual(positional.router, bytes([10, 0, 0, 1, 0xBA, 0xC0]))
         self.assertIsNone(rb.RoutedTarget(5, b"\x0a").router)
         self.assertEqual(list(inspect.signature(rb.RoutedTarget).parameters),
-                         ["network", "address", "router", "arcnet"])
-        self.assertIs(inspect.signature(rb.RoutedTarget).parameters["arcnet"].kind,
+                         ["network", "address", "router", "one_station"])
+        self.assertIs(inspect.signature(rb.RoutedTarget).parameters["one_station"].kind,
                       inspect.Parameter.KEYWORD_ONLY)
 
     def test_each_address_form_is_the_mac_it_names(self):
@@ -90,7 +90,7 @@ class RoutedTargetTests(unittest.TestCase):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 rb.RoutedTarget(*args)
         # The string forms spell an MS/TP station, so 255, its broadcast, is
-        # refused; as bytes it may be an ARCNET station (whose broadcast is 0).
+        # refused; as bytes it may be an ARCNET station, marked one station.
         for args in ((5, "255"), (5, b"\x0a", "mstp:255")):
             with self.subTest(args=args), self.assertRaisesRegex(ValueError, "broadcast"):
                 rb.RoutedTarget(*args)
@@ -126,12 +126,13 @@ class RoutedTargetTests(unittest.TestCase):
         self.assertNotEqual(target, rb.RoutedTarget(6, "127.0.0.1:47808", router=b"\x0a"))
         self.assertNotEqual(target, "127.0.0.1:47808")
 
-    def test_the_arcnet_mark_copies_pickles_and_takes_one_octet(self):
-        target = rb.RoutedTarget(5, b"\xff", router=b"\x0a", arcnet=True)
-        self.assertTrue(target.arcnet)
-        self.assertFalse(rb.RoutedTarget(5, b"\xff").arcnet)
-        self.assertEqual(repr(target),
-                         r"RoutedTarget(network=5, address=b'\xff', router=b'\n', arcnet=True)")
+    def test_the_one_station_mark_copies_pickles_and_takes_any_address(self):
+        target = rb.RoutedTarget(5, b"\xff", router=b"\x0a", one_station=True)
+        self.assertTrue(target.one_station)
+        self.assertFalse(rb.RoutedTarget(5, b"\xff").one_station)
+        self.assertEqual(
+            repr(target),
+            r"RoutedTarget(network=5, address=b'\xff', router=b'\n', one_station=True)")
         self.assertEqual(eval(repr(target), {"RoutedTarget": rb.RoutedTarget}), target)
         self.assertNotEqual(target, rb.RoutedTarget(5, b"\xff", router=b"\x0a"))
         copies = [copy.copy(target), copy.deepcopy(target)] + [
@@ -140,13 +141,16 @@ class RoutedTargetTests(unittest.TestCase):
         for copied in copies:
             self.assertIs(type(copied), rb.RoutedTarget)
             self.assertEqual(copied, target)
-            self.assertTrue(copied.arcnet)
-        # ARCNET's MAC is one octet; the mark is keyword-only.
-        for address in (b"\x0a\x0b", "127.0.0.1:47808"):
-            with self.subTest(address=address), self.assertRaisesRegex(ValueError, "one-octet"):
-                rb.RoutedTarget(5, address, arcnet=True)
+            self.assertTrue(copied.one_station)
+        # Any address takes the mark: it changes only the one- and two-octet
+        # forms. The mark is keyword-only, and the old name is gone.
+        for address in (b"\x00\x05", b"\xff\x07", "127.0.0.1:47808", b"\x0a"):
+            with self.subTest(address=address):
+                self.assertTrue(rb.RoutedTarget(5, address, one_station=True).one_station)
         with self.assertRaises(TypeError):
             rb.RoutedTarget(5, b"\xff", None, True)
+        with self.assertRaises(TypeError):
+            rb.RoutedTarget(5, b"\xff", arcnet=True)
 
     def test_stub_matches_runtime(self):
         classes = stub_classes(installed_stub())
@@ -364,36 +368,52 @@ class RoutedWireTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.role.read_property("5:0a", AI_1, P.PRESENT_VALUE), 5)
         self.assertEqual(self.requests, [])
 
-    async def test_a_remote_broadcast_address_is_refused_and_arcnet_255_goes(self):
+    async def test_a_remote_broadcast_address_is_refused_and_a_marked_station_goes(self):
         # A station address that is its network's broadcast: refused on
         # every call, with a router named or not, before anything is sent or
-        # looked up (#2709).
-        for address in (b"\xff", b"\x00\x05", b"\xff\x07", b"\xff" * 3, b"\xff" * 6,
-                        b"\xff\xff\xff\xff\xba\xc0"):
+        # looked up (#2709). Where the one-station mark would let it
+        # through, the error says so (#2738).
+        lifted = (b"\xff", b"\x00\x05", b"\xff\x07")
+        for address in lifted + (b"\xff" * 3, b"\xff" * 6, b"\xff\xff\xff\xff\xba\xc0"):
             for router in (self.router.address, None):
                 target = rb.RoutedTarget(5, address, router=router)
                 for name, call in calls(self.role, target).items():
                     with self.subTest(address=address, router=router, method=name), \
                             self.assertRaisesRegex(rb.BacnetError,
-                                                   "carries only an unconfirmed request"):
+                                                   "carries only an unconfirmed request") as raised:
                         await asyncio.wait_for(call(), 5)
+                    self.assertEqual("mark it one station (one_station)" in str(raised.exception),
+                                     address in lifted)
         self.assertEqual(self.requests, [])
-        # Marked ARCNET, 255 is a station there and 0 the broadcast.
-        arcnet = rb.RoutedTarget(5, b"\xff", router=self.router.address, arcnet=True)
-        value = await asyncio.wait_for(self.role.read_property(arcnet, AI_1, P.PRESENT_VALUE), 5)
-        self.assertEqual(value, rb.PropertyValue.unsigned(0))
-        [request] = self.requests
-        self.assertEqual((request["dnet"], request["dadr"]), (5, b"\xff"))
-        with self.assertRaisesRegex(rb.BacnetError, "broadcast of an ARCNET network"):
-            await asyncio.wait_for(self.role.read_property(
-                rb.RoutedTarget(5, b"\x00", router=self.router.address, arcnet=True),
-                AI_1, P.PRESENT_VALUE), 5)
-        # With no router, an ARCNET station 255 is reached through its row
-        # alone: none here, so a lookup error that says to name the router.
-        with self.assertRaisesRegex(rb.BacnetLookupError, "name its router"):
-            await asyncio.wait_for(self.role.read_property(
-                rb.RoutedTarget(5, b"\xff", arcnet=True), AI_1, P.PRESENT_VALUE), 5)
-        self.assertEqual(len(self.requests), 1)
+        # Marked one station, 255 and the two-octet forms are a station there.
+        for address in lifted + (b"\x00\x01", b"\xff\xfe"):
+            self.requests.clear()
+            marked = rb.RoutedTarget(5, address, router=self.router.address, one_station=True)
+            with self.subTest(address=address):
+                value = await asyncio.wait_for(
+                    self.role.read_property(marked, AI_1, P.PRESENT_VALUE), 5)
+                self.assertEqual(value, rb.PropertyValue.unsigned(0))
+                [request] = self.requests
+                self.assertEqual((request["dnet"], request["dadr"]), (5, address))
+        # Marked, 0 is ARCNET's broadcast, and 0x0000 and 0xFFFF stay refused.
+        self.requests.clear()
+        for address, form in ((b"\x00", "broadcast of an ARCNET network"),
+                              (b"\x00\x00", "whole domain"), (b"\xff\xff", "group 255"),
+                              (b"\xff" * 3, "VMAC 0xFFFFFF")):
+            with self.subTest(address=address), \
+                    self.assertRaisesRegex(rb.BacnetError, f"{form}.*even marked one station"):
+                await asyncio.wait_for(self.role.read_property(
+                    rb.RoutedTarget(5, address, router=self.router.address, one_station=True),
+                    AI_1, P.PRESENT_VALUE), 5)
+        # With no router, a marked station at such a form is reached through
+        # its row alone: none here, so a lookup error that says to name the
+        # router.
+        for address in (b"\xff", b"\x00\x05"):
+            with self.subTest(address=address), \
+                    self.assertRaisesRegex(rb.BacnetLookupError, "name its router"):
+                await asyncio.wait_for(self.role.read_property(
+                    rb.RoutedTarget(5, address, one_station=True), AI_1, P.PRESENT_VALUE), 5)
+        self.assertEqual(self.requests, [])
 
     async def test_a_wrong_address_type_raises_at_the_call(self):
         made = calls(self.role, 7)

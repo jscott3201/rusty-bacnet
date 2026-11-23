@@ -36,6 +36,7 @@ fn routed(network: u16, mac: &[u8]) -> Result<SourceRoutes, Error> {
             oid(ObjectType::DEVICE, 999),
             network,
             MacAddr::from_slice(mac),
+            false,
         )])
     })
 }
@@ -61,7 +62,7 @@ fn a_routed_binding_names_one_station_on_another_network() {
     assert!(
         SourceRoutes::for_link(&[(device, MacAddr::from_slice(&[4]))], other(&SESSION))
             .unwrap()
-            .bind_routed(&[(device, REMOTE, MacAddr::from_slice(&STATION))])
+            .bind_routed(&[(device, REMOTE, MacAddr::from_slice(&STATION), false)])
             .is_err()
     );
 }
@@ -79,6 +80,7 @@ fn a_routed_binding_on_this_network_goes_direct() {
             Some(SourceRoute::Routed {
                 network: REMOTE,
                 mac: MacAddr::from_slice(mac),
+                one_station: false,
             })
         );
         let number = bacnet_network::network_number::LocalNetworkNumber::default();

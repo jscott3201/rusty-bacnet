@@ -1419,8 +1419,8 @@ A station on another BACnet network (#2612), where `BACnetClient`'s
 `subscribe_cov_property`, `unsubscribe_cov_property` and
 `subscribe_cov_property_multiple` take an `address` (#2617, #2613,
 \#2588); the other typed calls take a local address only:
-`RoutedTarget(network, address, router=None, *, arcnet=False)`, in
-that order. A `str` address always names a station on the local link.
+`RoutedTarget(network, address, router=None, *, one_station=False)`,
+in that order. A `str` address always names a station on the local link.
 
 `network` is the station's network number, an `int` from 1 to 65534
 (ValueError outside it, OverflowError outside 0 to 65535, TypeError for
@@ -1438,10 +1438,15 @@ a group on its network (#2709): `b"\xff"` (MS/TP's broadcast), two
 octets beginning `0x00` or `0xFF` (a LonTalk broadcast or group),
 three octets of `0xFF` (no device's VMAC), or six beginning with four
 (the B/IP limited broadcast at any port, an Ethernet group, BACnet/SC's
-broadcast). `arcnet=True` marks the network as ARCNET, whose
-broadcast is 0 and where 255 is a station: a call then goes to
-`b"\xff"` and refuses `b"\x00"`. It takes a one-octet address only
-(ValueError otherwise), and with no `router` the station is reached
+broadcast). `one_station=True` marks the address one station on its
+network (#2738), for the forms that are a station on some links: a call
+then goes to `b"\xff"` (station 255 on ARCNET) and to two octets
+beginning `0x00` or `0xFF` (a gateway's virtual network numbering
+its stations in two octets), but not to `b"\x00\x00"` or
+`b"\xff\xff"`. A marked one-octet address is read as ARCNET's, so
+`b"\x00"`, its broadcast, raises instead; three and six octets are
+checked as unmarked, and the mark changes nothing for other addresses.
+With no `router`, a marked station at one of those forms is reached
 through its discovery-table row alone. A `router` that is a broadcast
 or group address on the local link raises BacnetError when a call is
 made, before anything is sent.
@@ -1466,15 +1471,15 @@ once it knows the number, is sent to directly either way. Other values raise Val
 other than `str` or `bytes` TypeError, and so does a call in another
 order, since `network` takes an `int`.
 
-Frozen; compares and hashes by its network and octets, however they were
-written; copies and pickles.
+Frozen; compares and hashes by its network, octets and one-station mark,
+however they were written; copies and pickles.
 
 Properties:
 
 - `network: int`
 - `address: bytes`: The station's MAC on its network.
 - `router: bytes | None`: The router's MAC on the local link, or None for the route the client knows.
-- `arcnet: bool`: Whether the station's network is marked ARCNET: its `b"\xff"` is a station and `b"\x00"` the broadcast.
+- `one_station: bool`: Whether the address is marked one station: `b"\xff"` and two octets beginning `0x00` or `0xFF` (but `b"\x00\x00"` and `b"\xff\xff"`) are a station, and `b"\x00"` ARCNET's broadcast.
 
 ### RoutedTarget.__init__
 
@@ -1485,7 +1490,7 @@ def __init__(
     address: str | bytes,
     router: str | bytes | None = None,
     *,
-    arcnet: bool = False,
+    one_station: bool = False,
 ) -> None
 ```
 

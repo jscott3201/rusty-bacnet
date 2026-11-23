@@ -630,6 +630,71 @@ async fn channel_member_in_a_device_at_a_remote_broadcast_form_is_never_sent() {
     assert!(sent_writes(&h).is_empty() && sent_reads(&h).is_empty());
 }
 
+/// #2738: the same binding marked one station takes the member's
+/// ReadProperty and WriteProperty at each form the mark lifts, and the
+/// distribution succeeds; at a form the mark doesn't lift neither is sent.
+#[tokio::test(start_paused = true)]
+async fn channel_member_in_a_device_bound_marked_one_station() {
+    use super::event_recipient_route::broadcast_station_tests::{LIFTED, MARKED_FORMS};
+    let bind = |h: &Harness, mac: &[u8]| {
+        let binding = DeviceBinding::routed(device(10), 5, mac, PEER)
+            .unwrap()
+            .one_station();
+        let bindings = std::sync::Arc::clone(&h.server.device_bindings);
+        async move {
+            bindings
+                .write()
+                .await
+                .insert_configured(binding, |_| false)
+                .unwrap();
+        }
+    };
+    for mac in LIFTED {
+        let mut h = start().await;
+        bind(&h, mac).await;
+        write_channel(&mut h, 6, &PropertyValue::Real(80.0), Some(8))
+            .await
+            .unwrap();
+        // The answers come back through the router, from 5 at `mac`.
+        let source = || {
+            Some(NpduAddress {
+                network: 5,
+                mac_address: MacAddr::from_slice(mac),
+            })
+        };
+        let read = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(read) = sent_reads(&h).pop() {
+                    return read;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("a ReadProperty to Device 10");
+        let answer = read_ack(read.0, &read.1, &PropertyValue::Real(0.0));
+        deliver(&h, &answer, &PEER, source()).await;
+        let (invoke_id, _) = next_request(&h, ao(1)).await;
+        deliver(&h, &ack(invoke_id), &PEER, source()).await;
+        assert_eq!(
+            settled(&mut h, 6).await,
+            WriteStatus::SUCCESSFUL,
+            "{mac:02X?}"
+        );
+        h.server.stop().await.unwrap();
+    }
+    for mac in MARKED_FORMS {
+        let mut h = start().await;
+        bind(&h, mac).await;
+        write_channel(&mut h, 6, &PropertyValue::Real(80.0), Some(8))
+            .await
+            .unwrap();
+        assert_eq!(settled(&mut h, 6).await, WriteStatus::FAILED, "{mac:02X?}");
+        assert!(sent_writes(&h).is_empty() && sent_reads(&h).is_empty());
+        h.server.stop().await.unwrap();
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn write_group_distribution_writes_a_member_in_another_device() {
     let mut h = start().await;

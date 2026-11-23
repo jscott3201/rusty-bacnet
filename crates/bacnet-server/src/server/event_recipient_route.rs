@@ -19,46 +19,55 @@ const GLOBAL_BROADCAST_NETWORK: u16 = 0xFFFF;
 /// unconfirmed one still may.
 ///
 /// The forms are read from the MAC's length and octets alone, since the
-/// far network's data link is unknown here. A recipient, a device binding
-/// or a COV subscriber can't say its network is ARCNET, as a client's
-/// target can (`Station::arcnet`), so the one octet `0xFF` is always taken
-/// as the MS/TP broadcast: ARCNET station 255 gets no confirmed request
-/// from the server.
+/// far network's data link is unknown here, as the address's one-station
+/// mark has them (#2738). Only a routed Device binding can carry the mark
+/// ([`DeviceBinding::one_station`]): a Recipient_List address, an Audit
+/// recipient's address and a COV subscriber's address (taken from the
+/// request) can't, nor can a binding learned from an I-Am, so each of them
+/// is checked unmarked: the one octet `0xFF` is the MS/TP broadcast there,
+/// and two octets starting `0x00` or `0xFF` a LonTalk broadcast or group.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct BroadcastStation {
     network: u16,
     mac: MacAddr,
     form: RemoteBroadcast,
+    one_station: bool,
 }
 
 impl BroadcastStation {
     /// The station at `mac` on `network`, a remote network, when that MAC
-    /// is a broadcast or group form; `None` for one station. A few
+    /// is a broadcast or group form, `one_station` saying whether the
+    /// address is marked one station; `None` for one station. A few
     /// comparisons on the slice.
-    pub(super) fn of(network: u16, mac: &[u8]) -> Option<Self> {
-        RemoteBroadcast::of(mac, false).map(|form| Self {
+    pub(super) fn of(network: u16, mac: &[u8], one_station: bool) -> Option<Self> {
+        RemoteBroadcast::of(mac, one_station).map(|form| Self {
             network,
             mac: MacAddr::from_slice(mac),
             form,
+            one_station,
         })
     }
 }
 
 impl fmt::Display for BroadcastStation {
-    /// The address as the CLI writes it (`5:0xFF`), then what the MAC is.
+    /// The address as the CLI writes it (`5:0xFF`), then what the MAC is,
+    /// and for an unmarked form the mark lifts, how one station there is
+    /// named.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:0x", self.network)?;
         for octet in &self.mac {
             write!(f, "{octet:02X}")?;
         }
-        match self.form {
-            // The form's own text tells a client how to mark an ARCNET
-            // station, which a recipient can't do.
-            RemoteBroadcast::MstpBroadcast => f.write_str(
-                ", station 255, the broadcast of an MS/TP network (ARCNET station 255 can't \
-                 be named here)",
-            ),
-            form => write!(f, ", {form}"),
+        write!(f, ", {}", self.form)?;
+        if self.one_station {
+            f.write_str(", even marked one station")
+        } else if self.form.lifted_by_one_station() {
+            f.write_str(
+                "; only a routed Device binding marked one station names a station at such \
+                 an address: a recipient's or a subscriber's address can't be marked",
+            )
+        } else {
+            Ok(())
         }
     }
 }
@@ -91,6 +100,9 @@ pub(super) enum RecipientRoute {
         mac: MacAddr,
         router: MacAddr,
         freshness: BindingFreshness,
+        /// The binding's address is marked one station
+        /// ([`DeviceBinding::one_station`], #2738).
+        one_station: bool,
     },
     ContradictoryGlobal,
     UnknownDevice,
@@ -119,6 +131,9 @@ pub(super) struct ConfirmedRecipientRoute {
     pub(super) local_target: Option<MacAddr>,
     pub(super) remote: Option<(u16, MacAddr, Option<MacAddr>)>,
     pub(super) freshness: Option<BindingFreshness>,
+    /// The remote station's address is marked one station: a routed Device
+    /// binding's mark (#2738); never for a local route or an address.
+    pub(super) one_station: bool,
 }
 
 impl ConfirmedRecipientRoute {
@@ -129,7 +144,7 @@ impl ConfirmedRecipientRoute {
     /// check ([`RecipientRoute::into_unicast`]).
     pub(super) fn broadcast_station(&self) -> Option<BroadcastStation> {
         let (network, mac, _) = self.remote.as_ref()?;
-        BroadcastStation::of(*network, mac)
+        BroadcastStation::of(*network, mac, self.one_station)
     }
 
     /// Whether a notification, `confirmed` or not, may take this route: an
@@ -217,11 +232,13 @@ impl RecipientRoute {
                 final_mac,
                 router_mac,
                 freshness,
+                one_station,
             } => Self::BoundRoutedUnicast {
                 network,
                 mac: final_mac,
                 router: router_mac,
                 freshness,
+                one_station,
             },
             DeviceResolution::Unknown => Self::UnknownDevice,
             DeviceResolution::Stale => Self::StaleDevice,
@@ -265,30 +282,34 @@ impl RecipientRoute {
         self,
         is_group: impl Fn(&[u8]) -> bool,
     ) -> Result<ConfirmedRecipientRoute, ConfirmedRouteRefusal> {
-        let (canonical_peer, local_target, remote, freshness) = match self {
-            Self::LocalUnicast(mac) => (canonical_direct_peer(&mac), Some(mac), None, None),
+        let (canonical_peer, local_target, remote, freshness, one_station) = match self {
+            Self::LocalUnicast(mac) => (canonical_direct_peer(&mac), Some(mac), None, None, false),
             Self::BoundLocalUnicast { mac, freshness } => (
                 canonical_direct_peer(&mac),
                 Some(mac),
                 None,
                 Some(freshness),
+                false,
             ),
             Self::RemoteUnicast { network, mac } => (
                 canonical_routed_peer(network, &mac),
                 None,
                 Some((network, mac, None)),
                 None,
+                false,
             ),
             Self::BoundRoutedUnicast {
                 network,
                 mac,
                 router,
                 freshness,
+                one_station,
             } => (
                 canonical_routed_peer(network, &mac),
                 None,
                 Some((network, mac, Some(router))),
                 Some(freshness),
+                one_station,
             ),
             _ => return Err(ConfirmedRouteRefusal::NotOneDevice),
         };
@@ -303,6 +324,7 @@ impl RecipientRoute {
             local_target,
             remote,
             freshness,
+            one_station,
         })
     }
 

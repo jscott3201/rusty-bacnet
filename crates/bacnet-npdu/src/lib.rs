@@ -24,7 +24,8 @@
 //!   inline.
 //! - [`RemoteBroadcast`]: the DADR forms that name a broadcast or a group
 //!   on a remote network rather than one station, which a confirmed request
-//!   may not go to.
+//!   may not go to; the caller's one-station mark lifts the ones that are
+//!   a station on some network.
 //!
 //! The other network-layer messages' payloads, the routing table and the
 //! router itself are `bacnet-router-core`'s.

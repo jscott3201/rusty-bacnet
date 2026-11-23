@@ -3,26 +3,31 @@
 use super::*;
 
 /// Each form `RemoteBroadcast` names (its own tests are bacnet-npdu's) is
-/// refused, and a station's MAC of each length goes.
+/// refused, as the one-station mark has them (#2738), and a station's MAC
+/// of each length goes.
 #[test]
 fn a_confirmed_request_refuses_exactly_the_remote_broadcast_forms() {
-    let refused: [(&[u8], bool); 9] = [
+    let refused: [(&[u8], bool); 11] = [
         (&[0xFF], false),
         (&[0x00], true),
         (&[0x00, 0x05], false),
         (&[0xFF, 0x07], false),
+        (&[0x00, 0x00], true),
+        (&[0xFF, 0xFF], true),
         (&[0xFF, 0xFF, 0xFF], false),
+        (&[0xFF, 0xFF, 0xFF], true),
         (&[0xFF; 6], false),
         (&[0xFF, 0xFF, 0xFF, 0xFF, 0xBA, 0xC0], false),
         (&[0xFF, 0xFF, 0xFF, 0xFF, 0xBA, 0xC0], true),
-        (&[0x00, 0x05], true),
     ];
-    for (mac, arcnet) in refused {
-        let checked = check_remote_station(7, mac, arcnet);
-        assert!(checked.is_err(), "{mac:02X?} arcnet {arcnet}");
+    for (mac, one_station) in refused {
+        let checked = check_remote_station(7, mac, one_station);
+        assert!(checked.is_err(), "{mac:02X?} one_station {one_station}");
     }
-    let stations: [(&[u8], bool); 8] = [
+    let stations: [(&[u8], bool); 10] = [
         (&[0xFF], true),
+        (&[0x00, 0x05], true),
+        (&[0xFF, 0x07], true),
         (&[0x00], false),
         (&[0x01, 0x05], false),
         (&[0x3F, 0xFF, 0xFF], false),
@@ -31,9 +36,12 @@ fn a_confirmed_request_refuses_exactly_the_remote_broadcast_forms() {
         (&[0xFF; 7], false),
         (&[0xFF; 18], false),
     ];
-    for (mac, arcnet) in stations {
-        let checked = check_remote_station(7, mac, arcnet);
-        assert!(checked.is_ok(), "{mac:02X?} arcnet {arcnet}: {checked:?}");
+    for (mac, one_station) in stations {
+        let checked = check_remote_station(7, mac, one_station);
+        assert!(
+            checked.is_ok(),
+            "{mac:02X?} one_station {one_station}: {checked:?}"
+        );
     }
 }
 
@@ -48,7 +56,7 @@ fn a_remote_broadcast_refusal_says_which_form_and_what_to_use() {
         text.contains("7:0xFF on network 7 is station 255"),
         "{text}"
     );
-    assert!(text.contains("mark the station ARCNET"), "{text}");
+    assert!(text.contains("mark it one station (one_station)"), "{text}");
     assert!(text.contains("only an unconfirmed request"), "{text}");
     let decoded: [(u16, &[u8], &str); 3] = [
         (

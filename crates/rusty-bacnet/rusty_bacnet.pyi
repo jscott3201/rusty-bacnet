@@ -9817,8 +9817,8 @@ class RoutedTarget:
     ``subscribe_cov_property``, ``unsubscribe_cov_property`` and
     ``subscribe_cov_property_multiple`` take an ``address`` (#2617, #2613,
     #2588); the other typed calls take a local address only:
-    ``RoutedTarget(network, address, router=None, *, arcnet=False)``, in
-    that order. A ``str`` address always names a station on the local link.
+    ``RoutedTarget(network, address, router=None, *, one_station=False)``,
+    in that order. A ``str`` address always names a station on the local link.
 
     ``network`` is the station's network number, an ``int`` from 1 to 65534
     (ValueError outside it, OverflowError outside 0 to 65535, TypeError for
@@ -9836,10 +9836,15 @@ class RoutedTarget:
     octets beginning ``0x00`` or ``0xFF`` (a LonTalk broadcast or group),
     three octets of ``0xFF`` (no device's VMAC), or six beginning with four
     (the B/IP limited broadcast at any port, an Ethernet group, BACnet/SC's
-    broadcast). ``arcnet=True`` marks the network as ARCNET, whose
-    broadcast is 0 and where 255 is a station: a call then goes to
-    ``b"\\xff"`` and refuses ``b"\\x00"``. It takes a one-octet address only
-    (ValueError otherwise), and with no ``router`` the station is reached
+    broadcast). ``one_station=True`` marks the address one station on its
+    network (#2738), for the forms that are a station on some links: a call
+    then goes to ``b"\\xff"`` (station 255 on ARCNET) and to two octets
+    beginning ``0x00`` or ``0xFF`` (a gateway's virtual network numbering
+    its stations in two octets), but not to ``b"\\x00\\x00"`` or
+    ``b"\\xff\\xff"``. A marked one-octet address is read as ARCNET's, so
+    ``b"\\x00"``, its broadcast, raises instead; three and six octets are
+    checked as unmarked, and the mark changes nothing for other addresses.
+    With no ``router``, a marked station at one of those forms is reached
     through its discovery-table row alone. A ``router`` that is a broadcast
     or group address on the local link raises BacnetError when a call is
     made, before anything is sent.
@@ -9864,8 +9869,8 @@ class RoutedTarget:
     other than ``str`` or ``bytes`` TypeError, and so does a call in another
     order, since ``network`` takes an ``int``.
 
-    Frozen; compares and hashes by its network and octets, however they were
-    written; copies and pickles.
+    Frozen; compares and hashes by its network, octets and one-station mark,
+    however they were written; copies and pickles.
     """
 
     def __init__(
@@ -9874,7 +9879,7 @@ class RoutedTarget:
         address: str | bytes,
         router: str | bytes | None = None,
         *,
-        arcnet: bool = False,
+        one_station: bool = False,
     ) -> None: ...
     @property
     def network(self) -> int: ...
@@ -9888,9 +9893,11 @@ class RoutedTarget:
         client knows."""
         ...
     @property
-    def arcnet(self) -> bool:
-        """Whether the station's network is marked ARCNET: its ``b"\\xff"``
-        is a station and ``b"\\x00"`` the broadcast."""
+    def one_station(self) -> bool:
+        """Whether the address is marked one station: ``b"\\xff"`` and two
+        octets beginning ``0x00`` or ``0xFF`` (but ``b"\\x00\\x00"`` and
+        ``b"\\xff\\xff"``) are a station, and ``b"\\x00"`` ARCNET's
+        broadcast."""
         ...
 
 
@@ -10075,7 +10082,7 @@ class BipEndpoint:
         time_sync_policy: TimeSyncPolicy | None = None,
         source_audit_reporter: Optional[ObjectIdentifier] = None,
         audit_recipient: Optional[AuditRecipientInput] = None,
-        audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
+        audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str | RoutedTarget]]] = None,
     ) -> None:
         """``mutation_policy`` (#2617): who may change the endpoint's
         objects, as ``BACnetServer``'s keyword of the same name takes it:
@@ -10112,7 +10119,14 @@ class BipEndpoint:
         The bindings are ``(Device identifier, "ipv4:port")``
         routes to recipient Devices, or ``"network:0xMAC"`` for one behind a
         router on that network (#2371; network 1 to 65534, MAC 1 to 18
-        octets). A Reporter identifier of another type and
+        octets), or a ``RoutedTarget`` with no ``router`` for one there, the
+        form that can mark the address ``one_station=True`` (#2738; the
+        session learns the router, so one with a ``router`` raises
+        ValueError). A confirmed Reporter has no route to a Device bound at a
+        broadcast or group form on its network (``b"\\xff"``, two octets
+        beginning ``0x00`` or ``0xFF``, and the rest ``RoutedTarget`` lists)
+        and reads a configuration error; marked one station, it reaches
+        those ``RoutedTarget`` lifts. A Reporter identifier of another type and
         the other shapes construction can check raise ValueError; a Reporter
         that wasn't added raises BacnetError at start. ``ScEndpoint`` and
         ``MstpEndpoint`` take them too, each binding address in its link's
@@ -10399,7 +10413,7 @@ class ScEndpoint:
         time_sync_policy: TimeSyncPolicy | None = None,
         source_audit_reporter: Optional[ObjectIdentifier] = None,
         audit_recipient: Optional[AuditRecipientInput] = None,
-        audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
+        audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str | RoutedTarget]]] = None,
         reconnect: Optional[ScReconnect] = None,
         sc_failover_hub: str | None = None,
         sc_connect_timeout_ms: int | None = None,
@@ -10413,7 +10427,7 @@ class ScEndpoint:
         ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
         binding address a VMAC as ``local_address()`` gives it
         (``"xx:xx:xx:xx:xx:xx"``) or as twelve hex digits, or a routed
-        ``"network:0xMAC"``. An address
+        ``"network:0xMAC"`` or ``RoutedTarget``. An address
         ``audit_recipient`` takes another node's VMAC: never the broadcast
         or all-zero VMAC or this endpoint's own.
 
@@ -10660,7 +10674,7 @@ class MstpEndpoint:
         time_sync_policy: TimeSyncPolicy | None = None,
         source_audit_reporter: Optional[ObjectIdentifier] = None,
         audit_recipient: Optional[AuditRecipientInput] = None,
-        audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
+        audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str | RoutedTarget]]] = None,
     ) -> None:
         """``read_work_limit``, ``min_request_interval_ms``,
         ``on_reinitialize``, ``after_reinitialize``, ``reinit_password``,
@@ -10689,7 +10703,8 @@ class MstpEndpoint:
         ``source_audit_reporter`` / ``audit_recipient`` /
         ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
         binding address a station in decimal digits, as ``local_address()``
-        gives it (``"2"``), or a routed ``"network:0xMAC"``. An address
+        gives it (``"2"``), or a routed ``"network:0xMAC"`` or
+        ``RoutedTarget``. An address
         ``audit_recipient`` takes another station: never 255 or this
         endpoint's own."""
         ...

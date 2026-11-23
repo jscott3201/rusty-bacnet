@@ -70,7 +70,15 @@ fn only_a_station_is_an_address() {
             &[0xFF, 0xFF, 0xFF, 0xFF, 0xBA, 0xC0],
         ] {
             let refused = DeviceAddress::new(network, mac).unwrap_err();
-            assert!(refused.ends_with(", not a station"), "{refused}");
+            assert!(refused.contains(", not a station"), "{refused}");
+            // Only a remote 0xFF may be one station there (ARCNET's 255),
+            // which the mark the grammar can't write would let through
+            // (#2738).
+            assert_eq!(
+                refused.contains("needs the one-station mark"),
+                network != 0 && mac == [0xFF],
+                "{refused}"
+            );
         }
     }
     // Two octets are LonTalk's, a remote network's only: a first octet of
@@ -78,7 +86,8 @@ fn only_a_station_is_an_address() {
     let refused = DeviceAddress::new(5, &[0x00, 0x05]).unwrap_err();
     assert_eq!(
         refused,
-        "MAC 0x0005 is a LonTalk broadcast (subnet 5), not a station"
+        "MAC 0x0005 is a LonTalk broadcast (subnet 5), not a station; a station at such an \
+         address needs the one-station mark, which the target grammar has no form for"
     );
     assert!(DeviceAddress::new(5, &[0xFF, 0x07]).is_err());
     assert!("5:0xFFFFFFFFFFFF".parse::<DeviceAddress>().is_err());

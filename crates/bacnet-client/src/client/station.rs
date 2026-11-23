@@ -25,13 +25,14 @@ use bacnet_types::constructed::BACnetAddress;
 /// A [`BACnetAddress`] and a MAC are stations too, and a call takes them as
 /// they are; this type adds a router named by the caller, the one local
 /// broadcast that reaches a network while no router to it is known, and
-/// the ARCNET mark ([`Station::arcnet`]). The four forms are all there are,
-/// so a caller can match every one.
+/// the one-station mark ([`Station::one_station`]). The four forms are all
+/// there are, so a caller can match every one.
 ///
 /// A remote station's MAC is checked against the forms a router delivers
 /// to every station of its network, or to a group of them
 /// ([`RemoteBroadcast`]): a confirmed request to one is refused before
-/// anything is sent (#2709).
+/// anything is sent (#2709), unless the address is marked one station and
+/// the mark lifts its form (#2738).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Station {
     /// A station on this link, at its MAC.
@@ -47,8 +48,8 @@ pub enum Station {
         network: u16,
         /// Its MAC on that network.
         mac: MacAddr,
-        /// Its network is ARCNET ([`Station::arcnet`]).
-        arcnet: bool,
+        /// Its address is marked one station ([`Station::one_station`]).
+        one_station: bool,
     },
     /// A station on another network, through the router at `router` on this
     /// link, with no table lookup. A network this client has learned is its
@@ -61,8 +62,8 @@ pub enum Station {
         network: u16,
         /// Its MAC on that network.
         mac: MacAddr,
-        /// Its network is ARCNET ([`Station::arcnet`]).
-        arcnet: bool,
+        /// Its address is marked one station ([`Station::one_station`]).
+        one_station: bool,
     },
     /// A station on another network, reached by one broadcast on this link
     /// whose NPDU names the station's network and MAC, for when no router
@@ -76,8 +77,8 @@ pub enum Station {
         network: u16,
         /// Its MAC on that network.
         mac: MacAddr,
-        /// Its network is ARCNET ([`Station::arcnet`]).
-        arcnet: bool,
+        /// Its address is marked one station ([`Station::one_station`]).
+        one_station: bool,
     },
 }
 
@@ -106,7 +107,7 @@ impl Station {
         Self::Remote {
             network,
             mac: MacAddr::from_slice(mac),
-            arcnet: false,
+            one_station: false,
         }
     }
 
@@ -116,7 +117,7 @@ impl Station {
             router: MacAddr::from_slice(router),
             network,
             mac: MacAddr::from_slice(mac),
-            arcnet: false,
+            one_station: false,
         }
     }
 
@@ -130,25 +131,30 @@ impl Station {
         Self::RoutedViaLocalBroadcast {
             network,
             mac: MacAddr::from_slice(mac),
-            arcnet: false,
+            one_station: false,
         }
     }
 
-    /// This station, marked as on an ARCNET network (Clause 8): an explicit
-    /// opt-in (#2709). There a one-octet MAC of `0xFF` is a station and
-    /// `0x00` the network's broadcast, the other way round from MS/TP, the
-    /// other link with one-octet MACs. The client can't see a remote
-    /// network's link, so by default it refuses a confirmed request to a
-    /// one-octet `0xFF`; marked ARCNET, it sends one and refuses `0x00`
-    /// instead. A station on this link is returned unchanged.
+    /// This station, its address marked one station: an explicit opt-in
+    /// (#2738) for a remote address that is a broadcast or group form on
+    /// some links and a station on others. The client can't see a remote
+    /// network's link, so by default it refuses a confirmed request to every
+    /// [`RemoteBroadcast`] form. Marked, it sends one to the one octet
+    /// `0xFF` (station 255 on ARCNET, Clause 8) and to two octets starting
+    /// `0x00` or `0xFF` (a gateway's virtual network that numbers its
+    /// stations in two octets), but for `0x0000` and `0xFFFF`. A marked
+    /// one-octet address is read as ARCNET's, so `0x00`, its broadcast, is
+    /// refused instead; three and six octets are checked as unmarked
+    /// (the table in [`RemoteBroadcast`]'s docs). A station on this link is
+    /// returned unchanged: the link's own group rule judges its MAC.
     #[must_use]
-    pub fn arcnet(self) -> Self {
+    pub fn one_station(self) -> Self {
         match self {
             Self::Local { mac } => Self::Local { mac },
             Self::Remote { network, mac, .. } => Self::Remote {
                 network,
                 mac,
-                arcnet: true,
+                one_station: true,
             },
             Self::Routed {
                 router,
@@ -159,24 +165,24 @@ impl Station {
                 router,
                 network,
                 mac,
-                arcnet: true,
+                one_station: true,
             },
             Self::RoutedViaLocalBroadcast { network, mac, .. } => Self::RoutedViaLocalBroadcast {
                 network,
                 mac,
-                arcnet: true,
+                one_station: true,
             },
         }
     }
 
-    /// Whether the station is marked as on an ARCNET network
-    /// ([`Station::arcnet`]).
-    pub fn is_arcnet(&self) -> bool {
+    /// Whether the station's address is marked one station
+    /// ([`Station::one_station`]); never for a station on this link.
+    pub fn is_one_station(&self) -> bool {
         match self {
             Self::Local { .. } => false,
-            Self::Remote { arcnet, .. }
-            | Self::Routed { arcnet, .. }
-            | Self::RoutedViaLocalBroadcast { arcnet, .. } => *arcnet,
+            Self::Remote { one_station, .. }
+            | Self::Routed { one_station, .. }
+            | Self::RoutedViaLocalBroadcast { one_station, .. } => *one_station,
         }
     }
 
@@ -184,7 +190,8 @@ impl Station {
     /// is sent that need no link: a MAC that names one station; for a remote
     /// one a network a router carries to one station (1 to 65534) and a MAC
     /// of at most [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) octets that is
-    /// none of [`RemoteBroadcast`]'s forms; and a named router that isn't
+    /// none of [`RemoteBroadcast`]'s forms, as the one-station mark has them
+    /// ([`Station::one_station`]); and a named router that isn't
     /// empty. Each typed call makes them itself. A caller that looks a
     /// station up before calling (the Python binding, bacnet-ops) makes them
     /// first, so a refused station is never asked for or remembered as one.
@@ -201,24 +208,24 @@ impl Station {
             Self::Remote {
                 network,
                 mac,
-                arcnet,
+                one_station,
             }
             | Self::RoutedViaLocalBroadcast {
                 network,
                 mac,
-                arcnet,
+                one_station,
             } => {
                 check_station(*network, mac)?;
-                send_checks::check_remote_station(*network, mac, *arcnet)
+                send_checks::check_remote_station(*network, mac, *one_station)
             }
             Self::Routed {
                 router,
                 network,
                 mac,
-                arcnet,
+                one_station,
             } => {
                 check_station(*network, mac)?;
-                send_checks::check_remote_station(*network, mac, *arcnet)?;
+                send_checks::check_remote_station(*network, mac, *one_station)?;
                 send_checks::check_router_named(router)
             }
         }
@@ -235,7 +242,7 @@ impl From<BACnetAddress> for Station {
             network => Self::Remote {
                 network,
                 mac: address.mac_address,
-                arcnet: false,
+                one_station: false,
             },
         }
     }
@@ -251,7 +258,7 @@ impl From<&DiscoveredDevice> for Station {
                 router: device.mac_address.clone(),
                 network,
                 mac: mac.clone(),
-                arcnet: false,
+                one_station: false,
             },
             _ => Self::Local {
                 mac: device.mac_address.clone(),
@@ -525,13 +532,13 @@ mod sealed {
                 Station::Remote {
                     network,
                     mac,
-                    arcnet,
+                    one_station,
                 } => {
                     client
                         .confirmed_at(
                             *network,
                             mac,
-                            *arcnet,
+                            *one_station,
                             service_choice,
                             service_data,
                             attributes,
@@ -542,7 +549,7 @@ mod sealed {
                     router,
                     network,
                     mac,
-                    arcnet,
+                    one_station,
                 } => {
                     // An empty router would be the local broadcast form's
                     // mark below: it names no router.
@@ -551,7 +558,7 @@ mod sealed {
                         router_mac: router,
                         dest_network: *network,
                         dest_mac: mac,
-                        arcnet: *arcnet,
+                        one_station: *one_station,
                     };
                     client
                         .confirmed_request_inner(target, service_choice, service_data, attributes)
@@ -560,13 +567,13 @@ mod sealed {
                 Station::RoutedViaLocalBroadcast {
                     network,
                     mac,
-                    arcnet,
+                    one_station,
                 } => {
                     let target = ConfirmedTarget::Routed {
                         router_mac: VIA_LOCAL_BROADCAST,
                         dest_network: *network,
                         dest_mac: mac,
-                        arcnet: *arcnet,
+                        one_station: *one_station,
                     };
                     client
                         .confirmed_request_inner(target, service_choice, service_data, attributes)
@@ -634,8 +641,8 @@ pub(super) enum ConfirmedTarget<'a> {
         router_mac: &'a [u8],
         dest_network: u16,
         dest_mac: &'a [u8],
-        /// The station's network is ARCNET ([`Station::arcnet`]).
-        arcnet: bool,
+        /// Its address is marked one station ([`Station::one_station`]).
+        one_station: bool,
     },
 }
 
@@ -695,14 +702,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         &self,
         network: u16,
         mac: &[u8],
-        arcnet: bool,
+        one_station: bool,
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
         attributes: Attributes<'_>,
     ) -> Result<Bytes, Error> {
         if network != 0 && Some(network) != self.network.local_network_number().get() {
             check_station(network, mac)?;
-            send_checks::check_remote_station(network, mac, arcnet)?;
+            send_checks::check_remote_station(network, mac, one_station)?;
         }
         match self.route_to(network, mac)? {
             Route::Local => {
@@ -716,7 +723,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     router_mac: &router,
                     dest_network: network,
                     dest_mac: mac,
-                    arcnet,
+                    one_station,
                 };
                 self.confirmed_request_inner(target, service_choice, service_data, attributes)
                     .await
@@ -867,14 +874,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Station::Remote {
                 network,
                 mac,
-                arcnet,
+                one_station,
             } => match self.route_to(network, &mac)? {
                 Route::Local => Ok(Station::Local { mac }),
                 Route::Via(router) => Ok(Station::Routed {
                     router,
                     network,
                     mac,
-                    arcnet,
+                    one_station,
                 }),
             },
             other => Ok(other),

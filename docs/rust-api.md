@@ -4234,19 +4234,32 @@ say where each skip counts. An Audit Reporter that sends confirmed
 notifications reads CONFIGURATION_ERROR while its recipient is bound so.
 
 The forms are read from the MAC alone, since the far network's link is
-unknown here, and a recipient, a binding or a subscriber's address can't say
-which link that is, as a client's `Station::arcnet()` target can. Two kinds of
-real station are caught by that:
+unknown here. Two kinds of real station share them: ARCNET's station 255 is
+the one octet `0xFF`, and a gateway's virtual network may number its stations
+in two octets starting `0x00` or `0xFF`. A routed Device binding can say its
+address is one station (#2738):
 
-- ARCNET station 255. A one-octet `0xFF`, written as a recipient or binding,
-  or taken from a source (a COV subscriber, a binding observed from an
-  I-Am), is read as the MS/TP broadcast, so that station gets unconfirmed
-  notifications only.
-- A two-octet address starting `0x00` or `0xFF` is read as a LonTalk
-  broadcast or group, so a gateway's virtual network that numbers its
-  stations that way can't be a confirmed recipient.
+```rust
+use bacnet_server::server::DeviceBinding;
 
-There is no opt-in for either yet.
+// Station 255 on network 3, an ARCNET network, behind the router at `router_mac`.
+let arcnet_255 = DeviceBinding::routed(device, 3, [0xFF], router_mac)?.one_station();
+server_builder = server_builder.device_binding(arcnet_255)?;
+```
+
+Marked, every confirmed request the server starts toward that device (event
+notifications and a Notification Forwarder's copies to a Device recipient,
+Channel and Command writes, audit notifications and Audit Log forwarding)
+goes to the one octet `0xFF` and to two octets starting `0x00` or `0xFF`, but
+not to `0x0000` or `0xFFFF`. A marked one-octet address is read as ARCNET's,
+so `0x00`, its broadcast, gets none; three and six octets are judged as
+unmarked. `bacnet_npdu::RemoteBroadcast` has the table, and an endpoint
+session's source Audit binding takes the same mark
+(`with_source_audit_routed_one_station_binding`). Without the mark nothing
+changes. Three addresses can't carry it and stay unconfirmed-only at those
+forms: a Recipient_List or Audit recipient Address (name the Device and bind
+it marked instead), a COV subscriber's address, taken from its request, and a
+binding observed from an I-Am.
 
 A reply goes back to the link-layer MAC its request came from, so a
 confirmed request from a group address would get its answer, any segment
@@ -10889,15 +10902,16 @@ client.confirmed_request(&behind, ConfirmedServiceChoice::READ_PROPERTY, &reques
 // No router to network 2 known yet: one broadcast on this link that names the
 // station; the router serving network 2 passes it on.
 let unknown_route = Station::routed_via_local_broadcast(2, &[0x05]);
-// Station 255 on an ARCNET network, an explicit opt-in (see below).
-let arcnet = Station::routed(&router_mac, 3, &[0xFF]).arcnet();
+// Station 255 on an ARCNET network, its address marked one station (see below).
+let arcnet_255 = Station::routed(&router_mac, 3, &[0xFF]).one_station();
 ```
 
 `Station` is the one address type: `Local { mac }`, `Remote { network, mac,
-arcnet }` (the router from the table, as a `BACnetAddress`), `Routed { router,
-network, mac, arcnet }` and `RoutedViaLocalBroadcast { network, mac, arcnet }`
-(no router known: each attempt goes by one broadcast on this link whose NPDU
-names the station, takes no routed path lease and learns no route).
+one_station }` (the router from the table, as a `BACnetAddress`), `Routed {
+router, network, mac, one_station }` and `RoutedViaLocalBroadcast { network,
+mac, one_station }` (no router known: each attempt goes by one broadcast on
+this link whose NPDU names the station, takes no routed path lease and learns
+no route).
 
 A confirmed request on another network is checked before anything is sent
 or looked up, whatever form names it, and fails with `Error::Encoding`
@@ -10914,9 +10928,16 @@ naming the address in its link's form (#2722, #2709):
   group), three octets of `0xFF` (no device's VMAC), or six beginning with
   four of `0xFF` (the B/IP limited broadcast at any port, an Ethernet group
   MAC, BACnet/SC's broadcast). `RemoteBroadcast::of`, in `bacnet-npdu` and
-  re-exported here, names the form. On an ARCNET network 255 is a station
-  and 0 the broadcast: mark the station with `.arcnet()` to send to `0xFF`
-  (and have `0x00` refused).
+  re-exported here, names the form. Two of them are a station on some
+  networks: ARCNET's station 255 is `0xFF`, and a gateway may number its
+  virtual stations in two octets. Mark such a station `.one_station()`
+  (#2738) and a confirmed request goes to `0xFF` and to two octets starting
+  `0x00` or `0xFF`, but not `0x0000` or `0xFFFF`; a marked one-octet address
+  is read as ARCNET's, so `0x00`, its broadcast, is refused instead, and
+  three and six octets are checked as unmarked. The refusal of an unmarked
+  form the mark lifts names the mark. The target grammar of the CLI, TUI and
+  MCP and `bacnet_ops::DeviceAddress` have no form for a marked address; a
+  `Station` reaches one.
 
 Unconfirmed requests are left alone: a remote broadcast carries those, and
 `Broadcast::Network(n)` sends one. `Station::check_confirmed` makes the
@@ -12640,9 +12661,10 @@ fixes them, and the warning logged with each skip gives the finer reason:
   another port (#1493). Also an Address, or a Device binding, on another
   network whose MAC there is a broadcast or group form (#2732): `5:0xFF`, a
   two-octet LonTalk broadcast or group, `0xFFFFFF`, or six octets starting
-  `FF:FF:FF:FF`, judged by length since that network's link is unknown here;
-  its warning names the address and the form, at most once every ten
-  seconds. Clause 6.3 allows only unconfirmed requests there, and sending one
+  `FF:FF:FF:FF`, judged by length since that network's link is unknown here,
+  as a binding's one-station mark has them (#2738); its warning names the
+  address and the form, at most once every ten seconds. Clause 6.3 allows
+  only unconfirmed requests there, and sending one
   unconfirmed would lose the acknowledgment, so the entry is skipped before
   any invoke ID is reserved. An unconfirmed notification still goes to such
   an address.
@@ -14543,7 +14565,10 @@ same rule.
 
 A Device behind a router binds on any link, B/IP included (#2371), with
 `EndpointSession::with_source_audit_routed_device_binding(device, network, mac)`
-or each builder's `source_audit_routed_device_binding(device, network, mac)`.
+or each builder's `source_audit_routed_device_binding(device, network, mac)`;
+`with_source_audit_routed_one_station_binding` (and each builder's
+`source_audit_routed_one_station_binding`) binds one whose address is marked
+one station, as a server's `DeviceBinding::one_station` does (#2738).
 The network must be 1 to 65534 (0 names the local network and 65535 every
 network) and the MAC 1 to 18 octets; its length isn't checked against this
 link, since the remote network's link may differ. `start` and the builders

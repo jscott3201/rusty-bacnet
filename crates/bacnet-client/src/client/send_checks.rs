@@ -18,27 +18,54 @@ use super::*;
 
 /// The DADR forms a confirmed request to a remote station refuses: the
 /// network layer's vocabulary, so the server's own confirmed sends can
-/// refuse them too. [`Station::arcnet`] is this client's `arcnet`.
+/// refuse them too. [`Station::one_station`] is this client's `one_station`.
 pub use bacnet_npdu::RemoteBroadcast;
 
 /// Refuse a confirmed request to `mac` on `network` when the MAC is a
-/// [`RemoteBroadcast`] form (#2709). Free unless the MAC is one, two,
-/// three or six octets.
+/// [`RemoteBroadcast`] form (#2709), as `one_station`, the station's mark
+/// (#2738), has them. Free unless the MAC is one, two, three or six
+/// octets.
 #[inline]
-pub(super) fn check_remote_station(network: u16, mac: &[u8], arcnet: bool) -> Result<(), Error> {
-    match RemoteBroadcast::of(mac, arcnet) {
+pub(super) fn check_remote_station(
+    network: u16,
+    mac: &[u8],
+    one_station: bool,
+) -> Result<(), Error> {
+    match RemoteBroadcast::of(mac, one_station) {
         None => Ok(()),
-        Some(form) => Err(remote_broadcast_refused(network, mac, form)),
+        Some(form) => Err(remote_broadcast_refused(network, mac, form, one_station)),
     }
 }
 
+/// The refusal, decoded: the station as the target grammar writes it, the
+/// form, and, for an unmarked address the mark would let through, the
+/// mark as the way to a station there.
 #[cold]
 #[inline(never)]
-fn remote_broadcast_refused(network: u16, mac: &[u8], form: RemoteBroadcast) -> Error {
+fn remote_broadcast_refused(
+    network: u16,
+    mac: &[u8],
+    form: RemoteBroadcast,
+    one_station: bool,
+) -> Error {
+    let station = station::station_text(network, mac);
+    let marked = if one_station {
+        ", even marked one station"
+    } else {
+        ""
+    };
+    let way = if !one_station && form.lifted_by_one_station() {
+        format!(
+            ". If {station} is one station on its network (ARCNET's station 255, or a station \
+             a gateway numbers in two octets), mark it one station (one_station)"
+        )
+    } else {
+        String::new()
+    };
     Error::Encoding(format!(
-        "a confirmed request goes to one station, and {} on network {network} is {form}; \
-         a remote broadcast or multicast carries only an unconfirmed request",
-        station::station_text(network, mac)
+        "a confirmed request goes to one station, and {station} on network {network} is \
+         {form}{marked}; a remote broadcast or multicast carries only an unconfirmed \
+         request{way}"
     ))
 }
 

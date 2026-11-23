@@ -88,7 +88,7 @@ def __init__(
     time_sync_policy: TimeSyncPolicy | None = None,
     source_audit_reporter: Optional[ObjectIdentifier] = None,
     audit_recipient: Optional[AuditRecipientInput] = None,
-    audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
+    audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str | RoutedTarget]]] = None,
 ) -> None
 ```
 
@@ -127,7 +127,14 @@ peer redirects the audit trail unasked: none (read-only),
 The bindings are `(Device identifier, "ipv4:port")`
 routes to recipient Devices, or `"network:0xMAC"` for one behind a
 router on that network (#2371; network 1 to 65534, MAC 1 to 18
-octets). A Reporter identifier of another type and
+octets), or a `RoutedTarget` with no `router` for one there, the
+form that can mark the address `one_station=True` (#2738; the
+session learns the router, so one with a `router` raises
+ValueError). A confirmed Reporter has no route to a Device bound at a
+broadcast or group form on its network (`b"\xff"`, two octets
+beginning `0x00` or `0xFF`, and the rest `RoutedTarget` lists)
+and reads a configuration error; marked one station, it reaches
+those `RoutedTarget` lifts. A Reporter identifier of another type and
 the other shapes construction can check raise ValueError; a Reporter
 that wasn't added raises BacnetError at start. `ScEndpoint` and
 `MstpEndpoint` take them too, each binding address in its link's
@@ -662,7 +669,7 @@ def __init__(
     time_sync_policy: TimeSyncPolicy | None = None,
     source_audit_reporter: Optional[ObjectIdentifier] = None,
     audit_recipient: Optional[AuditRecipientInput] = None,
-    audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
+    audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str | RoutedTarget]]] = None,
     reconnect: Optional[ScReconnect] = None,
     sc_failover_hub: str | None = None,
     sc_connect_timeout_ms: int | None = None,
@@ -678,7 +685,7 @@ for `BipEndpoint`.
 `audit_device_bindings`: as on `BipEndpoint` (#2357), each
 binding address a VMAC as `local_address()` gives it
 (`"xx:xx:xx:xx:xx:xx"`) or as twelve hex digits, or a routed
-`"network:0xMAC"`. An address
+`"network:0xMAC"` or `RoutedTarget`. An address
 `audit_recipient` takes another node's VMAC: never the broadcast
 or all-zero VMAC or this endpoint's own.
 
@@ -1161,7 +1168,7 @@ def __init__(
     time_sync_policy: TimeSyncPolicy | None = None,
     source_audit_reporter: Optional[ObjectIdentifier] = None,
     audit_recipient: Optional[AuditRecipientInput] = None,
-    audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
+    audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str | RoutedTarget]]] = None,
 ) -> None
 ```
 
@@ -1192,7 +1199,8 @@ out of range raises ValueError here.
 `source_audit_reporter` / `audit_recipient` /
 `audit_device_bindings`: as on `BipEndpoint` (#2357), each
 binding address a station in decimal digits, as `local_address()`
-gives it (`"2"`), or a routed `"network:0xMAC"`. An address
+gives it (`"2"`), or a routed `"network:0xMAC"` or
+`RoutedTarget`. An address
 `audit_recipient` takes another station: never 255 or this
 endpoint's own.
 
