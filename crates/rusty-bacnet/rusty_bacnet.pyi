@@ -5436,11 +5436,10 @@ class BACnetClient:
         one Who-Is when no address claims the instance (#2561): this
         network alone, ``"global"`` for every network, or a network number
         from 1 to 65534. A target that names its network (``"5:1234"``)
-        asks there whatever this says. On ``transport="router"``, which has
-        no network of its own, ``"local"`` raises ValueError and None asks
-        nowhere: a bare instance the client hasn't heard from raises
-        ``BacnetLookupError``. Another name or number raises ValueError,
-        another type TypeError.
+        asks there whatever this says. On ``transport="router"``, which is
+        on each of the router's networks, ``"local"`` asks every one of
+        them (#2601). Another name or number raises ValueError, another
+        type TypeError.
 
         ``accept_complex_ack_for_simple_services`` (default False): a device
         that acknowledges a request whose service takes a Simple-ACK, such
@@ -5459,8 +5458,9 @@ class BACnetClient:
         router starts, or when a client already took it, entry raises
         RuntimeError. Requests go out through the router's table, so name
         each device by its network: discover it, then use the
-        ``_from_device`` / ``_to_device`` methods. A send to an ``ip:port``
-        names no network and raises BacnetError. Once the router closes,
+        ``_from_device`` / ``_to_device`` methods. The local scope is each
+        of the router's networks (#2601). A send to an ``ip:port`` names no
+        one of them and raises BacnetError. Once the router closes,
         each request fails at once with BacnetTransportError (errno
         ENOTCONN); stop the client as usual. With
         ``application="client_and_server"`` the APDU timeout must be under
@@ -5617,10 +5617,9 @@ class BACnetClient:
         ...
 
     @property
-    def resolve_scope(self) -> Literal["local", "global"] | int | None:
+    def resolve_scope(self) -> Literal["local", "global"] | int:
         """Where a ``device()`` handle made from a bare instance asks for
-        it, as ``resolve_scope=`` set it; None on ``transport="router"``
-        given none, which asks nowhere."""
+        it, as ``resolve_scope=`` set it."""
         ...
 
     def device(
@@ -5809,9 +5808,12 @@ class BACnetClient:
         number, or text that names a device instance or a routed target,
         raises ``ValueError``, and another type ``TypeError``, before
         anything is sent; a station the client's link can't reach raises
-        ``ValueError`` on await. A client on ``transport="router"`` has no
-        network of its own, so its Who-Is names a network, or every one: a
-        local or directed one raises ``ValueError`` saying so.
+        ``ValueError`` on await. A client on ``transport="router"`` is on
+        each of the router's networks, so ``"local"`` sends one Who-Is to
+        each, which the router delivers there and passes no further, and
+        the devices answer as routed devices on their networks (#2601); a
+        station's address names no one of those networks and raises
+        ``ValueError``, where a ``RoutedTarget`` names its network.
 
         Give ``low`` and ``high`` together or not at all, each from
         0 to 4194303: one alone, ``low`` above ``high``, or a limit
@@ -5865,9 +5867,9 @@ class BACnetClient:
         address, asked by unicast (#2561). Another number, or text that
         names a device instance or a routed target, raises ``ValueError``,
         and another type ``TypeError``, before anything is sent. A client on
-        ``transport="router"`` has no network of its own, so its Who-Has
-        names a network, or every one: a local or directed one raises
-        ``ValueError`` saying so.
+        ``transport="router"`` is on each of the router's networks:
+        ``"local"`` asks every one of them (#2601), and a station's address,
+        which names no one of them, raises ``ValueError``.
 
         Give ``low`` and ``high`` together or not at all, each from
         0 to 4194303: one alone, ``low`` above ``high``, or a limit
@@ -7435,7 +7437,11 @@ class BACnetServer:
         reach both with only this server's answer sent; confirmed audit
         notifications reach this server alone. Unconfirmed requests reach
         both. A start refused before the server runs, such as for a
-        duplicate object name, leaves the share for the next start.
+        duplicate object name, leaves the share for the next start. Its
+        local broadcasts, such as its I-Am and an unconfirmed event
+        notification to a local-broadcast recipient, go to each of the
+        router's networks, isolated ports included (#2601); a recipient
+        that names one network's number reaches that network alone.
         ``apdu_segment_timeout_ms`` must be under 60000. ``router`` without
         ``transport="router"``, or the reverse, raises ValueError.
 
@@ -10954,13 +10960,66 @@ class BacnetRouterCloseError(BacnetError):
     """A settled cleanup failure. The router retains it and prevents restart."""
     failures: tuple[RouterCleanupFailure, ...]
 
+class RouterControlTotals(TypedDict):
+    """One wire-control class's decisions since the router started:
+    ``deny_total`` counts every denial, ``policy_deny_total`` those the
+    hardened policy made with no authorizer to ask."""
+    allow_total: int
+    deny_total: int
+    policy_deny_total: int
+
+class RouterControlCounters(TypedDict):
+    """The router's wire-control decisions by class, the Rust
+    ``ControlDecisionCounters`` field names: route announcements
+    (``i_am``), routing-table answers (``init_ack``), updates
+    (``init_mgmt``) and queries from another network (``init_query``),
+    flow control (``busy``, ``available``), rejects and I-Could-Be-Router
+    offers."""
+    i_am: RouterControlTotals
+    init_ack: RouterControlTotals
+    init_mgmt: RouterControlTotals
+    busy: RouterControlTotals
+    available: RouterControlTotals
+    reject: RouterControlTotals
+    i_could_be: RouterControlTotals
+    init_query: RouterControlTotals
+
+class RouterCounters(TypedDict):
+    """``BACnetRouter.counters()``: every Rust router ``Counters`` field
+    under its own name, totals since this start that saturate at 2**64-1
+    and name no peer, and the wire-control decisions under ``control``."""
+    address_length_drops: int
+    global_broadcast_dadr_drops: int
+    broadcast_pdu_type_drops: int
+    group_dadr_drops: int
+    malformed: int
+    bad_messages: int
+    unknown_port: int
+    hop_count_drops: int
+    denied: int
+    unroutable_rejects: int
+    rejects: int
+    solicitations: int
+    write_failures: int
+    egress_too_long: int
+    refused: int
+    undrained: int
+    busy_announced: int
+    available_announced: int
+    duplicate_drops: int
+    own_source_drops: int
+    not_next_hop: int
+    originated: int
+    isolated_drops: int
+    isolated_refusals: int
+    control: RouterControlCounters
+
 class BACnetRouter:
     """Own B/IP forwarding across one to 255 uniquely numbered ports.
 
-    This binding has no other transport types or route administration. It
-    uses native RouterOptions defaults, including their permissive
-    wire-control policy. The first asynchronous method binds the object to
-    the running asyncio loop; another loop raises RuntimeError.
+    This binding has no other transport types and no wire-control
+    authorizer. The first asynchronous method binds the object to the
+    running asyncio loop; another loop raises RuntimeError.
 
     Keyword-only ``application`` shares the router's own application entity
     (#2071): None (the default) only forwards; ``"client"`` gives the whole
@@ -10984,13 +11043,48 @@ class BACnetRouter:
         ports: Sequence[BipRouterPort],
         *,
         application: Optional[Literal["client", "client_and_server"]] = None,
+        remote_table_updates: bool = False,
+        next_hop_rejects: bool = False,
+        control_policy: Literal["permissive", "hardened"] = "permissive",
     ) -> None:
         """An ``application`` other than None, ``"client"`` or
-        ``"client_and_server"`` raises ValueError."""
+        ``"client_and_server"`` raises ValueError.
+
+        The router's own options (#2725), Rust's ``RouterOptions``, apply at
+        each start. ``remote_table_updates=True`` takes an
+        Initialize-Routing-Table update that arrives from another network
+        (it carries an SNET), which the router otherwise drops and counts
+        in ``denied``: turn it on only for a site that manages router tables
+        from a station on another network. ``next_hop_rejects=True`` lets a
+        received Reject-Message-To-Network change a learned route only when
+        it comes from that route's next router; one from another router is
+        still passed on and counted in ``not_next_hop``. ``control_policy``
+        is ``"permissive"`` (the default), which admits the wire controls
+        that change routes, or ``"hardened"``, which denies every protected
+        one, route announcements and table updates among them, since this
+        binding installs no authorizer: the router then keeps its direct
+        routes and learns none from the wire, so only its directly attached
+        networks are reachable. Another policy raises ValueError, as does
+        ``"hardened"`` beside ``remote_table_updates=True`` or
+        ``next_hop_rejects=True``: it denies every routing-table update and
+        every reject, so neither option could ever apply. A flag that isn't
+        a bool raises TypeError."""
         ...
     @property
     def application(self) -> Optional[Literal["client", "client_and_server"]]:
         """How the router shares its application entity."""
+        ...
+    @property
+    def remote_table_updates(self) -> bool:
+        """Whether the router takes routing-table updates from another network."""
+        ...
+    @property
+    def next_hop_rejects(self) -> bool:
+        """Whether only a route's next router may change it with a reject."""
+        ...
+    @property
+    def control_policy(self) -> Literal["permissive", "hardened"]:
+        """The wire-control policy."""
         ...
     def start(self) -> Awaitable[None]:
         """Start; duplicate start raises RuntimeError. Native startup errors
@@ -11010,4 +11104,14 @@ class BACnetRouter:
     def routes(self) -> Awaitable[list[RouterRoute]]:
         """Copy direct/learned routes; raises RuntimeError before start or
         after close begins. No lock or wall-clock timestamp is exposed."""
+        ...
+    def counters(self) -> Awaitable[RouterCounters]:
+        """Copy the router's counts since this start (#2725), zero at each
+        start; raises RuntimeError before start or after close begins.
+        ``isolated_drops`` counts frames whose way on lay between two
+        isolated ports, and ``isolated_refusals`` route changes refused
+        because an isolated port sent them (``BipRouterPort(isolated=True)``).
+        ``denied`` counts protected controls the policy refused and remote
+        table updates dropped; ``control`` has each class's decisions. The
+        fields are sampled one by one, not as one atomic snapshot."""
         ...

@@ -93,9 +93,11 @@ fn device_range(
 /// anything is sent: `ValueError` for another number, or for text that
 /// names a device instance or a routed target and not a station,
 /// `TypeError` for another type. A client on a router's application
-/// (`transport`, `"router"`) has no network of its own, so a local or
-/// directed request raises `ValueError` there, saying which scopes it can
-/// use.
+/// (`transport`, `"router"`) is on each of the router's networks, so
+/// `"local"` asks every one of them and no further (#2601), and a
+/// station's address, which names no one of them, raises `ValueError`
+/// there, saying what to pass instead; a `RoutedTarget` names its network,
+/// and is asked there.
 fn discovery_scope(
     scope: Option<&Bound<'_, PyAny>>,
     transport: &str,
@@ -107,35 +109,40 @@ fn discovery_scope(
     use pyo3::types::{PyBool, PyInt, PyString};
     const EXPECTED: &str =
         "scope is 'local', 'global', a network number from 1 to 65534 or a station's address";
-    let local = |what: &str| match transport {
-        "router" => Err(PyValueError::new_err(format!(
-            "a client on transport='router' has no network of its own for a {what} {service}: \
-             pass scope=<network number> for one of the router's networks, or \
-             scope='global' for every network"
-        ))),
-        _ => Ok(()),
+    // A station's address on a router's application, which is on each of
+    // the router's networks: it names no one of them.
+    let station_on_router = |station: &str| {
+        let instead = match service {
+            "Who-Is" => "pass a RoutedTarget with its network, or scope=<network number>",
+            _ => "pass scope=<network number> for its network",
+        };
+        PyValueError::new_err(format!(
+            "a client on transport='router' is on each of the router's networks, so the \
+             station address '{station}' names no one station for a directed {service}: \
+             {instead}"
+        ))
     };
     let Some(scope) = scope.filter(|scope| !scope.is_none()) else {
-        return local("local").map(|()| ScopeArg::Fixed(Scope::Local));
+        return Ok(ScopeArg::Fixed(Scope::Local));
     };
     if service == "Who-Is"
         && let Ok(target) = scope.cast::<crate::types::PyRoutedTarget>()
     {
-        local("directed")?;
         return Ok(ScopeArg::Fixed(Scope::Directed(target.get().station())));
     }
     if let Ok(name) = scope.cast::<PyString>() {
         let text = name.to_str()?.trim();
         return match text {
-            "local" => local("local").map(|()| ScopeArg::Fixed(Scope::Local)),
+            "local" => Ok(ScopeArg::Fixed(Scope::Local)),
             "global" => Ok(ScopeArg::Fixed(Scope::Global)),
             // A station by its address. A bare number in text is a device
             // instance to the grammar, and a scope is a place, not a
             // device: both it and a routed target are refused.
             station => match parse_target(station) {
-                Ok(Target::Mac(_) | Target::Bip6(_)) => {
-                    local("directed").map(|()| ScopeArg::Directed(station.to_owned()))
+                Ok(Target::Mac(_) | Target::Bip6(_)) if transport == "router" => {
+                    Err(station_on_router(station))
                 }
+                Ok(Target::Mac(_) | Target::Bip6(_)) => Ok(ScopeArg::Directed(station.to_owned())),
                 Ok(_) => Err(PyValueError::new_err(format!(
                     "{EXPECTED}, and '{station}' names a device or a routed target: for a \
                      remote network pass its number, scope=<network>"
@@ -255,7 +262,8 @@ async fn send_who_has(
 /// - `"router"`: the application entity of `router=`, a `BACnetRouter`
 ///   built with `application=` (#2071). Address devices by network, through
 ///   discovery and the `_from_device`/`_to_device` methods: an `ip:port`
-///   names no network, so a send to one fails.
+///   names no one of the router's networks, so a send to one fails. The
+///   local scope is each of the router's networks (#2601).
 ///
 /// SC credential paths must be nonempty at construction (ValueError otherwise).
 /// Files are loaded on async entry; invalid TLS configuration raises RuntimeError
@@ -315,9 +323,9 @@ pub struct BACnetClient {
     /// unless `write_policy=` allows them.
     write_policy: bacnet_ops::WritePolicy,
     /// Where a `device()` handle made from a bare instance asks for it
-    /// (#2561): `None` is this network alone, and on a router's
-    /// application, which has no network of its own, nowhere.
-    resolve_scope: Option<bacnet_ops::ResolveScope>,
+    /// (#2561): this network alone unless `resolve_scope=` says otherwise,
+    /// which on a router's application is each of its networks (#2601).
+    resolve_scope: bacnet_ops::ResolveScope,
     /// Whether a Complex-ACK completes a write-like request as a success,
     /// for a device in the field that answers so (#2721).
     accept_complex_ack_for_simple_services: bool,

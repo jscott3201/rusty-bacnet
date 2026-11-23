@@ -91,8 +91,7 @@ impl BACnetClient {
         resolve_scope: Option<Bound<'_, PyAny>>,
         accept_complex_ack_for_simple_services: bool,
     ) -> PyResult<Self> {
-        let resolve_scope =
-            crate::high_level::resolve_scope_arg(resolve_scope.as_ref(), transport)?;
+        let resolve_scope = crate::high_level::resolve_scope_arg(resolve_scope.as_ref())?;
         let router = crate::router::application::stack_router(
             transport,
             router,

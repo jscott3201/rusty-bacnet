@@ -84,7 +84,7 @@ derived from it. See "Selecting an interface" in docs/python-api.md.
 Properties:
 
 - `write_policy: WritePolicy`: The priorities `Device.write` and `relinquish` may use, as `write_policy=` set them.
-- `resolve_scope: Literal["local", "global"] | int | None`: Where a `device()` handle made from a bare instance asks for it, as `resolve_scope=` set it; None on `transport="router"` given none, which asks nowhere.
+- `resolve_scope: Literal["local", "global"] | int`: Where a `device()` handle made from a bare instance asks for it, as `resolve_scope=` set it.
 
 ### BACnetClient.__init__
 
@@ -148,11 +148,10 @@ don't look at it. Anything but a `WritePolicy` raises TypeError.
 one Who-Is when no address claims the instance (#2561): this
 network alone, `"global"` for every network, or a network number
 from 1 to 65534. A target that names its network (`"5:1234"`)
-asks there whatever this says. On `transport="router"`, which has
-no network of its own, `"local"` raises ValueError and None asks
-nowhere: a bare instance the client hasn't heard from raises
-`BacnetLookupError`. Another name or number raises ValueError,
-another type TypeError.
+asks there whatever this says. On `transport="router"`, which is
+on each of the router's networks, `"local"` asks every one of
+them (#2601). Another name or number raises ValueError, another
+type TypeError.
 
 `accept_complex_ack_for_simple_services` (default False): a device
 that acknowledges a request whose service takes a Simple-ACK, such
@@ -171,8 +170,9 @@ share from the running router, once per router start: before the
 router starts, or when a client already took it, entry raises
 RuntimeError. Requests go out through the router's table, so name
 each device by its network: discover it, then use the
-`_from_device` / `_to_device` methods. A send to an `ip:port`
-names no network and raises BacnetError. Once the router closes,
+`_from_device` / `_to_device` methods. The local scope is each
+of the router's networks (#2601). A send to an `ip:port` names no
+one of them and raises BacnetError. Once the router closes,
 each request fails at once with BacnetTransportError (errno
 ENOTCONN); stop the client as usual. With
 `application="client_and_server"` the APDU timeout must be under
@@ -518,9 +518,12 @@ carries the station-addressed request by broadcast. Another
 number, or text that names a device instance or a routed target,
 raises `ValueError`, and another type `TypeError`, before
 anything is sent; a station the client's link can't reach raises
-`ValueError` on await. A client on `transport="router"` has no
-network of its own, so its Who-Is names a network, or every one: a
-local or directed one raises `ValueError` saying so.
+`ValueError` on await. A client on `transport="router"` is on
+each of the router's networks, so `"local"` sends one Who-Is to
+each, which the router delivers there and passes no further, and
+the devices answer as routed devices on their networks (#2601); a
+station's address names no one of those networks and raises
+`ValueError`, where a `RoutedTarget` names its network.
 
 Give `low` and `high` together or not at all, each from
 0 to 4194303: one alone, `low` above `high`, or a limit
@@ -580,9 +583,9 @@ remote network, through its router; any other text is one station's
 address, asked by unicast (#2561). Another number, or text that
 names a device instance or a routed target, raises `ValueError`,
 and another type `TypeError`, before anything is sent. A client on
-`transport="router"` has no network of its own, so its Who-Has
-names a network, or every one: a local or directed one raises
-`ValueError` saying so.
+`transport="router"` is on each of the router's networks:
+`"local"` asks every one of them (#2601), and a station's address,
+which names no one of them, raises `ValueError`.
 
 Give `low` and `high` together or not at all, each from
 0 to 4194303: one alone, `low` above `high`, or a limit

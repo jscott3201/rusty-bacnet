@@ -719,7 +719,7 @@ class RoutedTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_router_client_names_devices_by_network(self) -> None:
         c = BACnetClient(transport="router", router=self.router, apdu_timeout_ms=2000)
         async with c:
-            self.assertIsNone(c.resolve_scope)
+            self.assertEqual(c.resolve_scope, "local")
             # Works: a routed instance, a routed address, and an instance
             # the client has heard from.
             for network in (1, 5):
@@ -731,22 +731,24 @@ class RoutedTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await known.read("ai:0")).data, 25.5)
             self.assertEqual(sorted(row.instance for row in
                                     await c.discover(scope="global", wait=1.0)), [7001, 7005])
-            # Raises, with nothing sent: a local address, a bare instance
-            # it hasn't heard from (it has no network to ask on), and a
-            # local or directed discovery.
+            # The local scope is each of the router's networks (#2601): a
+            # discovery finds both devices, and a bare instance no one
+            # claims is asked for there.
+            self.assertEqual(sorted(row.instance for row in await c.discover(wait=1.0)),
+                             [7001, 7005])
+            with self.assertRaisesRegex(BacnetLookupError, "did not answer a local Who-Is"):
+                await asyncio.wait_for(c.device(7999), 10)
+            # Raises, with nothing sent: a local address, and a directed
+            # discovery by one, name no one of the router's networks.
             local = self.locals[1]
             for target in (local, (0, bytes([127, 0, 0, 1, 0xBA, 0xC0]))):
                 with self.subTest(target=target):
-                    with self.assertRaisesRegex(ValueError, "no network of its own"):
+                    with self.assertRaisesRegex(ValueError, "names no one station"):
                         await c.device(target)
-            with self.assertRaisesRegex(BacnetLookupError, "no network of its own"):
-                await c.device(7999)
-            for scope in (None, "local", local):
-                with self.subTest(scope=scope):
-                    with self.assertRaisesRegex(ValueError, "no network of its own"):
-                        c.discover(scope=scope)
-        with self.assertRaisesRegex(ValueError, "resolve_scope='local'"):
-            BACnetClient(transport="router", router=self.router, resolve_scope="local")
+            with self.assertRaisesRegex(ValueError, "names no one station"):
+                c.discover(scope=local)
+        named = BACnetClient(transport="router", router=self.router, resolve_scope="local")
+        self.assertEqual(named.resolve_scope, "local")
 
     async def test_a_router_client_given_a_scope_asks_there(self) -> None:
         # Given a network to ask on, a bare instance is looked for there.

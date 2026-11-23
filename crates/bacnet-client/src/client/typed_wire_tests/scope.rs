@@ -286,3 +286,35 @@ async fn forms_without_a_range_or_to_the_own_network() {
         c.who_am_i(Broadcast::Network(OWN), &request).await
     });
 }
+
+/// Which answers each scope takes, by the SNET they carried and the
+/// networks the client's local broadcast reaches
+/// ([`BACnetClient::local_networks`]): none yet, its own once learned, or a
+/// router application's networks (#2601), where every answer has an SNET.
+/// On the router's application a network named takes only its own
+/// answers, not those of the router's other networks.
+#[test]
+fn answers_come_from_the_scope_by_the_networks_local_reaches() {
+    const ROUTER_APP: &[u16] = &[1000, 2000];
+    for (scope, from, local, answered) in [
+        (Broadcast::Local, None, &[][..], true),
+        (Broadcast::Local, Some(OWN), &[], false),
+        (Broadcast::Local, Some(OWN), &[OWN], true),
+        (Broadcast::Local, Some(DNET), &[OWN], false),
+        (Broadcast::Local, Some(2000), ROUTER_APP, true),
+        (Broadcast::Local, Some(3000), ROUTER_APP, false),
+        (Broadcast::Network(OWN), None, &[OWN], true),
+        (Broadcast::Network(OWN), None, &[], false),
+        (Broadcast::Network(OWN), Some(OWN), &[OWN], true),
+        (Broadcast::Network(DNET), Some(OWN), &[OWN], false),
+        (Broadcast::Network(1000), Some(1000), ROUTER_APP, true),
+        (Broadcast::Network(1000), Some(2000), ROUTER_APP, false),
+        (Broadcast::Global, Some(3000), ROUTER_APP, true),
+    ] {
+        assert_eq!(
+            scope.answered_from(from, local),
+            answered,
+            "{scope:?} from {from:?}, local {local:?}"
+        );
+    }
+}

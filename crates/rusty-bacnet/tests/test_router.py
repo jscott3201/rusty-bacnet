@@ -60,7 +60,8 @@ class RouterSurfaceTests(unittest.TestCase):
     def test_installed_signatures_and_snapshot_types(self):
         classes = stub_classes(installed_stub())
         for cls, methods in ((rb.BipRouterPort, ["__init__"]),
-                             (rb.BACnetRouter, ["__init__", "start", "close", "ports", "routes", "__aenter__", "__aexit__"])):
+                             (rb.BACnetRouter, ["__init__", "start", "close", "ports", "routes", "counters",
+                                               "__aenter__", "__aexit__"])):
             for method in methods:
                 runtime = cls if method == "__init__" else getattr(cls, method)
                 node = stub_method(classes[cls.__name__], method)
@@ -86,7 +87,8 @@ class RouterSurfaceTests(unittest.TestCase):
         async def first(): await router.close()
         asyncio.run(first())
         async def second():
-            for method in (router.start, router.close, router.ports, router.routes, router.__aenter__):
+            for method in (router.start, router.close, router.ports, router.routes,
+                           router.counters, router.__aenter__):
                 with self.assertRaisesRegex(RuntimeError, "different asyncio"):
                     method()
         asyncio.run(second())

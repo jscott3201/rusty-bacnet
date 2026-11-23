@@ -311,7 +311,8 @@ fn lookup_errors_are_one_tree() {
             target: "1234".into(),
             asked: Some(bacnet_ops::Scope::Local),
         });
-        assert!(asked.to_string().contains("this network"), "{asked}");
+        // A local Who-Is: this network, or a router application's networks.
+        assert!(asked.to_string().contains("a local Who-Is"), "{asked}");
 
         let routed = DeviceAddress::new(2, &[5]).unwrap();
         let claimed = [

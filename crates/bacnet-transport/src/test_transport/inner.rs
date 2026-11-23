@@ -54,6 +54,7 @@ pub(super) trait InnerPort: Send + Sync {
     fn bip6_port(&self) -> Option<Bip6Port>;
     fn number_controls(&self) -> bool;
     fn data_link(&self) -> Option<DataLink>;
+    fn attached_networks(&self) -> &[u16];
     fn bip_transport(&self) -> Option<&BipTransport>;
     #[cfg(feature = "ipv6")]
     fn bip6_transport(&self) -> Option<&Bip6Transport>;
@@ -136,6 +137,9 @@ impl<T: TransportPort + 'static> InnerPort for T {
     }
     fn data_link(&self) -> Option<DataLink> {
         TransportPort::data_link(self)
+    }
+    fn attached_networks(&self) -> &[u16] {
+        TransportPort::attached_networks(self)
     }
     fn bip_transport(&self) -> Option<&BipTransport> {
         TransportPort::bip_transport(self)

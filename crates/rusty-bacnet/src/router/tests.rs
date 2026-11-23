@@ -291,6 +291,7 @@ fn real_python_context_preserves_sentinel_while_failed_cleanup_blocks_restart() 
                             isolated: false,
                         }],
                         application: super::application::Application::None,
+                        settings: super::config::RouterSettings::default(),
                         lifecycle,
                         event_loop: std::sync::Mutex::new(None),
                     },

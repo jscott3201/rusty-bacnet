@@ -48,47 +48,37 @@ pub(crate) type OpsDevice = bacnet_ops::Device<AppTransport>;
 pub(crate) fn client(
     core: Arc<BACnetClient<AppTransport>>,
     policy: WritePolicy,
-    scope: Option<ResolveScope>,
+    scope: ResolveScope,
 ) -> OpsClient {
     OpsClient::new(core, Arc::new(RequestLimits::new(0)))
         .with_write_policy(policy)
-        .with_resolve_scope(scope.unwrap_or_default())
+        .with_resolve_scope(scope)
 }
 
 /// The `resolve_scope=` keyword of `BACnetClient`: where a `device()`
 /// handle made from a bare instance (`1234`) asks for it when no address
-/// claims it. `"local"`, the default, is this network alone; `"global"`
-/// every network; a number from 1 to 65534 that network. A target that
-/// names its network (`"5:1234"`) asks there whatever this says. On a
-/// router's application (`transport`, `"router"`), which has no network
-/// of its own, `"local"` raises ValueError and the default is `None`: a
-/// bare instance the client hasn't heard from is then refused, saying how
-/// to name it.
-pub(crate) fn resolve_scope_arg(
-    scope: Option<&Bound<'_, PyAny>>,
-    transport: &str,
-) -> PyResult<Option<ResolveScope>> {
+/// claims it. `"local"`, the default, is this network alone, which on a
+/// router's application (`transport`, `"router"`) is each of the router's
+/// networks (#2601); `"global"` every network; a number from 1 to 65534
+/// that network. A target that names its network (`"5:1234"`) asks there
+/// whatever this says.
+pub(crate) fn resolve_scope_arg(scope: Option<&Bound<'_, PyAny>>) -> PyResult<ResolveScope> {
     use pyo3::exceptions::PyTypeError;
     use pyo3::types::{PyBool, PyInt, PyString};
     const EXPECTED: &str = "resolve_scope is 'local', 'global' or a network number from 1 to 65534";
-    let router = transport == "router";
     let Some(scope) = scope.filter(|scope| !scope.is_none()) else {
-        return Ok((!router).then_some(ResolveScope::Local));
+        return Ok(ResolveScope::Local);
     };
     if let Ok(name) = scope.cast::<PyString>() {
         return match name.to_str()? {
-            "local" if router => Err(PyValueError::new_err(
-                "a client on transport='router' has no network of its own for \
-                 resolve_scope='local': pass a network number, or 'global'",
-            )),
-            "local" => Ok(Some(ResolveScope::Local)),
-            "global" => Ok(Some(ResolveScope::Global)),
+            "local" => Ok(ResolveScope::Local),
+            "global" => Ok(ResolveScope::Global),
             other => Err(PyValueError::new_err(format!("{EXPECTED}, not '{other}'"))),
         };
     }
     if scope.is_instance_of::<PyInt>() && !scope.is_instance_of::<PyBool>() {
         return match scope.extract::<u16>() {
-            Ok(network @ 1..=65534) => Ok(Some(ResolveScope::Network(network))),
+            Ok(network @ 1..=65534) => Ok(ResolveScope::Network(network)),
             _ => Err(PyValueError::new_err(format!("{EXPECTED}, not {scope}"))),
         };
     }
@@ -112,49 +102,30 @@ pub(crate) fn link_hint(reason: String) -> String {
 }
 
 /// Why a router's application can't reach the station a local address
-/// names (#2071): it has no network of its own. Raised before anything is
-/// sent, where the send itself would fail with the router's refusal.
-fn no_own_network(shown: &str) -> PyErr {
+/// names (#2071): it is on each of the router's networks, so a MAC with
+/// no network names no one station. Raised before anything is sent, where
+/// the send itself would fail with the router's refusal.
+fn no_one_network(shown: &str) -> PyErr {
     PyValueError::new_err(format!(
-        "a client on transport='router' has no network of its own, so the local address \
-         {shown} names no station it can reach: name the station with its network \
+        "a client on transport='router' is on each of the router's networks, so the local \
+         address {shown} names no one station: name the station with its network \
          ('5:0x0A000001BAC0'), or the device by its network and instance ('5:1234')"
     ))
 }
 
 /// The handle `named` names on `client`, as `bacnet_ops::Client::device`
-/// makes it, with what a router's application can't do refused first:
-/// a local address, and a bare instance the discovery table doesn't hold
-/// when the client was given no `resolve_scope` to ask in.
-pub(crate) async fn device(
-    client: &OpsClient,
-    named: &specs::Named,
-    asks: bool,
-) -> PyResult<OpsDevice> {
-    use bacnet_ops::device::DeviceRef;
-    use bacnet_ops::target::{Target, parse_target};
+/// makes it, with what a router's application can't do refused: a local
+/// address.
+pub(crate) async fn device(client: &OpsClient, named: &specs::Named) -> PyResult<OpsDevice> {
     let style = client.address_style();
     let router = matches!(client.low_level().transport(), AppTransport::Router(_));
-    let bare = match named.as_ref() {
-        DeviceRef::Instance(instance) => Some(instance),
-        DeviceRef::Text(text) => match parse_target(text) {
-            Ok(Target::Instance(instance)) => Some(instance),
-            _ => None,
-        },
-        _ => None,
-    };
-    if let (true, false, Some(instance)) = (router, asks, bare)
-        && matches!(client.low_level().get_device(instance).await, Ok(None))
-    {
-        return Err(errors::unasked(instance));
-    }
     let device = client
         .device(named.as_ref())
         .await
         .map_err(|error| ops_err(error, style))?;
     let address = device.address();
     if router && address.is_local() {
-        return Err(no_own_network(&address.styled(style)));
+        return Err(no_one_network(&address.styled(style)));
     }
     Ok(device)
 }

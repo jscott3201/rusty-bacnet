@@ -44,7 +44,7 @@ impl Started {
     pub(super) fn new(
         core: CoreClient,
         policy: bacnet_ops::WritePolicy,
-        scope: Option<bacnet_ops::ResolveScope>,
+        scope: bacnet_ops::ResolveScope,
     ) -> Self {
         let core = Arc::new(core);
         let high = crate::high_level::client(Arc::clone(&core), policy, scope);
@@ -140,7 +140,11 @@ impl ClientState {
     pub(crate) fn seat(&self, core: CoreClient, own_instance: Option<u32>) -> bool {
         match self.client.try_write() {
             Ok(mut slot) if slot.is_none() => {
-                *slot = Some(Started::new(core, bacnet_ops::WritePolicy::default(), None));
+                *slot = Some(Started::new(
+                    core,
+                    bacnet_ops::WritePolicy::default(),
+                    bacnet_ops::ResolveScope::Local,
+                ));
                 if let Some(instance) = own_instance {
                     let _ = self.own_instance.set(instance);
                 }

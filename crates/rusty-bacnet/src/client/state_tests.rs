@@ -18,7 +18,7 @@ async fn running_client() -> ClientInner {
             .await
             .unwrap(),
         bacnet_ops::WritePolicy::default(),
-        None,
+        bacnet_ops::ResolveScope::Local,
     ));
     state
 }

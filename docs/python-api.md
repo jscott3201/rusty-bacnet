@@ -221,17 +221,19 @@ A client on a link reaches a device behind a router by naming its network:
 `"2:1234"` or `"2:0x05"`, or a `discover(scope=2)` row. The typed calls by
 `address` reach stations on the client's own network only.
 
-A client on a router's application (`transport="router"`) has no network of
-its own, so every device is on a numbered network:
+A client on a router's application (`transport="router"`) is on each of the
+router's networks, so every device is on a numbered network, and the local
+scope is each of the router's networks (#2601): a local Who-Is or Who-Has goes
+to every one of them, isolated ports included, and the router passes it no
+further.
 
 | On `transport="router"` | Result |
 |-------------------------|--------|
-| `device("5:1234")`, `device("5:0x05")`, a `discover(scope=5)` or `scope="global"` row | Works |
-| `device(1234)` when the client has heard from 1234 | Works |
-| `device(1234)` otherwise | `BacnetLookupError`: there is no network to ask on. `BACnetClient(resolve_scope=5)` or `"global"` gives it one |
+| `device("5:1234")`, `device("5:0x05")`, a `discover()` row of any scope | Works |
+| `discover()` with no scope or `scope="local"` | The devices on each of the router's networks, as when each is named |
+| `device(1234)` | Asks where `resolve_scope` says, by default each of the router's networks |
 | `device("192.168.1.10")`, any local address | `ValueError` on await, nothing sent |
-| `discover()` with no scope, `scope="local"` or a station's address | `ValueError` |
-| `BACnetClient(resolve_scope="local")` | `ValueError` |
+| `discover(scope="192.168.1.10")`, a station's address | `ValueError`: pass a `RoutedTarget` or the network |
 
 ### Reading
 
@@ -589,13 +591,11 @@ neither is raised. A read that could read nothing raises.
 
 `BACnetRouter` owns forwarding across configured B/IP networks (Clause 6).
 This source-build API provides B/IP ports, router discovery, copied route
-inspection, and a client and server on the router's own application entity
+inspection and counters, three router options, and a client and server on the
+router's own application entity
 ([below](#a-client-and-a-server-on-the-router)). Other link types, route
-administration, and the full native `RouterOptions` surface are outside this
-binding. Native router defaults apply, including the permissive
-wire-control policy; this API does not add an authorization policy. One
-default is not permissive: a routing-table update that arrives from another
-network is dropped (#2717), and this binding has no option to accept one.
+administration, a wire-control authorizer, and the native router's congestion
+and duplicate-suppression options are outside this binding.
 
 ```python
 from rusty_bacnet import BACnetRouter, BipRouterPort
@@ -662,8 +662,8 @@ level for a port and no access control: a Reject-Message-To-Network or a
 routing-table update from a node on an isolated port can still mark, remove or
 redirect a route through an ordinary port. The native controls for those
 (`RouterOptions::next_hop_rejects()`, and the control policy and authorizer)
-are not exposed by this binding, and neither are the router's counters
-(`isolated_drops`, `isolated_refusals`).
+are the router options below; what isolation stopped is counted in
+`counters()` (`isolated_drops`, `isolated_refusals`).
 
 `routes()` returns frozen `RouterRoute` objects with destination network, egress
 index, direct/learned identity, next-hop MAC (`None` for a direct route), and
@@ -693,6 +693,51 @@ Context exit waits for cleanup and preserves an exception from the body as the
 primary exception; a secondary cleanup error remains observable through a later
 `close()`. Destruction requests best-effort cleanup on the shared runtime. Use
 an awaited close or context exit when resource release must be established.
+
+### Router options and counters
+
+Three keyword-only options, Rust's `RouterOptions`, apply at each start
+(#2725), and read back as properties of the same names:
+
+- `remote_table_updates=False`: the router drops an Initialize-Routing-Table
+  update that arrives from another network, one that carries an SNET, and
+  counts it in `denied` (#2717). Clause 6.6.3.8 sets no limit on who may send
+  one; this default is the router's own. `True` takes such updates as it takes
+  one from its own networks: turn it on only for a site that manages router
+  tables from a station on another network.
+- `next_hop_rejects=False`: a received Reject-Message-To-Network changes the
+  learned route it names whoever relayed it (Clause 6.6.3.5). `True` applies
+  one only when it comes from that route's next router; one from another router
+  is still passed on toward its destination, leaves the route alone, and is
+  counted in `not_next_hop`.
+- `control_policy="permissive"`: the wire controls that change routes are
+  admitted. `"hardened"` denies every protected one, route announcements and
+  routing-table updates and answers among them, since this binding installs no
+  authorizer; the router then keeps its direct routes and learns none from the
+  wire, so only its directly attached networks are reachable. Each decision is
+  counted under `counters()["control"]`.
+
+Another policy raises `ValueError`, and a flag that isn't a `bool` `TypeError`.
+So does `"hardened"` beside `remote_table_updates=True` or
+`next_hop_rejects=True`: with no authorizer it denies every routing-table
+update and every reject, so neither option could ever apply.
+
+```python
+router = BACnetRouter(ports, next_hop_rejects=True)
+async with router:
+    counts = await router.counters()
+    print(counts["isolated_drops"], counts["denied"],
+          counts["control"]["i_am"]["policy_deny_total"])
+```
+
+`counters()` copies the router's counts since this start, zero at each start:
+every Rust router `Counters` field under its own name (a `RouterCounters`
+typed dict), each a total that saturates at 2**64-1 and names no peer, and
+under `"control"` each protected control class (`i_am`, `init_ack`,
+`init_mgmt`, `busy`, `available`, `reject`, `i_could_be`, `init_query`) with
+its `allow_total`, `deny_total` and `policy_deny_total`. The fields are sampled
+one by one. It raises `RuntimeError` before start and once close begins, as
+the snapshot methods do.
 
 ### A client and a server on the router
 
@@ -728,11 +773,10 @@ async with router:
     hosted.add_analog_input(0, "Supply temperature", 62, 18.5)
     await hosted.start()
     async with BACnetClient(transport="router", router=router) as client:
-        # The router's application has no network of its own, so its
-        # Who-Is names one: here each of the router's two networks.
-        for network in (1, 5):
-            for device in await client.discover(scope=network):
-                print(device.instance, device.network)
+        # The router's application is on each of the router's networks,
+        # so its local Who-Is asks networks 1 and 5, and no further.
+        for device in await client.discover():
+            print(device.instance, device.network)
         value = await client.read_property_from_device(
             1005, ObjectIdentifier(ObjectType.ANALOG_INPUT, 0),
             PropertyIdentifier.PRESENT_VALUE)
@@ -743,12 +787,23 @@ The client sends every request through the router's table, so it names each
 device by its network, as a routed device, even on a directly attached
 network. Every reply and I-Am reaches it with the sender's network and MAC
 as its source, so discover devices first and use the `_from_device` and
-`_to_device` methods. Who-Is goes out as a global broadcast on every port. A
-send to an `ip:port` names no network: it raises `BacnetError`. A request to a
+`_to_device` methods. A local Who-Is goes to each of the router's networks,
+and a global one out of every port as a global broadcast. A send to an
+`ip:port` names no one of the router's networks: it raises `BacnetError`. A
+request to a
 network the router doesn't know yet raises `BacnetTransportError` with errno
 `ENETUNREACH`, and the router starts looking for it; once the route is
 learned, a retry goes. The server answers at the router's address on each
 network.
+
+Every local broadcast either stack sends goes to each of the router's networks,
+isolated ports included, once each (#2601): the server's I-Am, an unconfirmed
+event notification to a local-broadcast recipient and the Who-Is that looks
+for a Device recipient, as well as the client's Who-Is, Who-Has, Who-Am-I and
+Write-Group. A recipient or scope that names one network's number reaches that
+network alone. A port that can't carry its copy fails the send with its error,
+yet the other networks' copies still go: an error doesn't mean nothing was
+sent.
 
 A stack whose role the router doesn't share raises `ValueError` at
 construction: a server needs `application="client_and_server"`. `router=`
@@ -2714,9 +2769,11 @@ text is one station's address, in the forms `device()` takes
 text that names a device instance or a routed target, raises `ValueError`,
 and another type `TypeError`, before anything is sent; a station the
 client's link can't reach raises `ValueError` on await. A client on a
-router's application (`transport="router"`) has no network of its own, so
-its Who-Is names a network, or every one: a local or directed one raises
-`ValueError` saying so. A `RoutedTarget` in `who_is` or `discover` selects one station by its
+router's application (`transport="router"`) is on each of the router's
+networks, so its local Who-Is goes to every one of them, once each, and the
+router passes it no further; the devices answer as routed devices on their
+networks, as when each network is named (#2601). A station's address names
+no one of those networks and raises `ValueError` there. A `RoutedTarget` in `who_is` or `discover` selects one station by its
 network and MAC. The explicit or learned next hop receives a unicast.
 With no learned next hop the client broadcasts on the local link while
 keeping the remote station's DNET and DADR. Discovery collects answers from
@@ -2749,8 +2806,9 @@ Find a device hosting a specific object by identifier. The Who-Has goes where
 local broadcast which no router passes on; `scope="global"` every network,
 where every device that hears it searches its objects; a network number from
 1 to 65534 that remote network. The same values raise the same errors as
-`who_is()`'s, before anything is sent, and on `transport="router"` a local
-Who-Has raises `ValueError` naming the scopes to use. Answers come through
+`who_is()`'s, before anything is sent. On `transport="router"` a local
+Who-Has asks each of the router's networks (#2601), and a station's address,
+which names no one of them, raises `ValueError`. Answers come through
 `i_have_events()`.
 
 ```python

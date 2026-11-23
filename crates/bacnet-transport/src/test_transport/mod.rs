@@ -420,6 +420,12 @@ impl TransportPort for TestTransport {
             .or_else(|| self.inner.as_ref().and_then(|i| i.data_link()))
     }
 
+    /// The inner transport's, such as a router application port's
+    /// networks; none without one.
+    fn attached_networks(&self) -> &[u16] {
+        self.inner.as_ref().map_or(&[], |i| i.attached_networks())
+    }
+
     fn bip_transport(&self) -> Option<&crate::bip::BipTransport> {
         self.inner.as_ref().and_then(|i| i.bip_transport())
     }
