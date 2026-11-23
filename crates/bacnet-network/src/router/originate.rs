@@ -3,7 +3,8 @@
 use std::fmt;
 use std::sync::Weak;
 
-use bacnet_router_core::router::{OriginateError, Request};
+use bacnet_npdu::{Address, Npdu};
+use bacnet_router_core::router::{OriginateError, Request, SourceSelection};
 
 use super::BACnetRouter;
 use super::actions::drain;
@@ -120,4 +121,46 @@ pub(super) fn originate(
     } else {
         Ok(())
     }
+}
+
+/// `npdu`, a local broadcast with no DNET, from `source`, once to each of
+/// the router's directly attached networks (#2601): the local broadcast of
+/// the router's [application port](super::RouterApplicationPort), which is
+/// on all of them. Each copy is a broadcast to that port's network, so the
+/// engine's direct route sends it as the port's link broadcast, with no
+/// DNET left for another router to act on (Clause 6.5.4). Isolated ports
+/// are included: isolation keeps traffic from passing between them, and
+/// the router's own sends pass between nothing.
+///
+/// The networks are the router's own list, read here, at the send. Like a
+/// global broadcast, it is not all or nothing: a port that refuses its copy
+/// fails the call with the first refusal, and the other ports' copies still
+/// go out.
+pub(super) fn originate_attached(
+    outputs: &Weak<Outputs>,
+    shared: &Shared,
+    npdu: &Npdu<'_>,
+    source: SourceSelection,
+) -> Result<(), OriginateFailure> {
+    let outputs = outputs.upgrade().ok_or(OriginateFailure::Stopped)?;
+    let now = shared.engine.now();
+    let mut router = shared.engine.lock();
+    let mut failure = None;
+    for &network in &shared.networks {
+        let mut request = Request::new(Address { network, mac: &[] }, npdu.payload);
+        request.expecting_reply = npdu.expecting_reply;
+        request.priority = npdu.priority;
+        request.source = source;
+        let result = router.originate(&request, now);
+        let drained = drain(&mut router, &[], &outputs.send_txs, now);
+        let refused = match result {
+            Err(error) => Some(OriginateFailure::Refused(error)),
+            Ok(()) => drained
+                .originate_refused
+                .then_some(OriginateFailure::QueueFull),
+        };
+        failure = failure.or(refused);
+    }
+    drop(router);
+    failure.map_or(Ok(()), Err)
 }

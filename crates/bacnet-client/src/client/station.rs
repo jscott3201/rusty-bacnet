@@ -301,7 +301,10 @@ impl Station {
 /// takes a [`ToStation`] instead (`who_is_directed` and the like).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Broadcast {
-    /// Every station on this network.
+    /// Every station on this network. On a router's application port,
+    /// which is on each of the router's networks, every station on each of
+    /// them: the port sends one copy to each, which no router passes on
+    /// (#2601).
     Local,
     /// Every station on one remote network, 1 to 65534, through the router
     /// to it. Once the client knows its own network's number, that number
@@ -317,20 +320,22 @@ pub enum Broadcast {
 impl Broadcast {
     /// Whether an answer heard from `source_network`, the SNET it carried
     /// (`None` when it came from this network with none), is one this
-    /// scope's broadcast asked for, `own` being the client's network number
-    /// once known: every answer for [`Broadcast::Global`]; for
-    /// [`Broadcast::Local`], one from this network; for
+    /// scope's broadcast asked for, `local` being the networks the client's
+    /// local broadcast reaches ([`BACnetClient::local_networks`]: its own
+    /// network's number once known, or a router application's networks):
+    /// every answer for [`Broadcast::Global`]; for [`Broadcast::Local`],
+    /// one from this network, with no SNET or one of `local`; for
     /// [`Broadcast::Network`], one from that network. An answer a router
-    /// relays back from `own` is from this network, so a broadcast to
-    /// `own` takes the local answers too. An answer from elsewhere during
-    /// the wait, unasked or another's, is no answer to this one.
-    pub fn answered_from(&self, source_network: Option<u16>, own: Option<u16>) -> bool {
-        let from = source_network.filter(|network| Some(*network) != own);
+    /// relays back from one of `local` is from this network, so a
+    /// broadcast to such a network takes the local answers too. An answer
+    /// from elsewhere during the wait, unasked or another's, is no answer
+    /// to this one.
+    pub fn answered_from(&self, source_network: Option<u16>, local: &[u16]) -> bool {
         match *self {
             Self::Global => true,
-            Self::Local => from.is_none(),
-            Self::Network(network) => match from {
-                None => own == Some(network),
+            Self::Local => source_network.is_none_or(|from| local.contains(&from)),
+            Self::Network(network) => match source_network {
+                None => local.contains(&network),
                 Some(from) => from == network,
             },
         }

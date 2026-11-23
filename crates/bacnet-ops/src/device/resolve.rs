@@ -268,8 +268,9 @@ impl<T: TransportPort + 'static> Client<T> {
         }
         let station = Scope::Directed(address.clone().into());
         let is_station = |row: &DiscoveredDevice| {
+            let low = self.low_level();
             DeviceAddress::of(row)
-                .is_some_and(|at| station.covers(&at, self.low_level().network_number()))
+                .is_some_and(|at| station.covers(&at, low.network_number(), &low.local_networks()))
         };
         let misses = &self.shared.station_misses;
         let known = lock(misses).get(address, tokio::time::Instant::now());
@@ -382,9 +383,11 @@ impl<T: TransportPort + 'static> Client<T> {
         let answered = |row: &DiscoveredDevice| {
             let instance = row.object_identifier.instance_number();
             let address = DeviceAddress::of(row)?;
-            let own = self.low_level().network_number();
-            (range.is_none_or(|r| r.contains(instance)) && request.scope().covers(&address, own))
-                .then_some((address, instance))
+            let low = self.low_level();
+            let (own, local) = (low.network_number(), low.local_networks());
+            (range.is_none_or(|r| r.contains(instance))
+                && request.scope().covers(&address, own, &local))
+            .then_some((address, instance))
         };
         let mut heard = BTreeSet::new();
         let deadline = tokio::time::Instant::now() + request.wait;

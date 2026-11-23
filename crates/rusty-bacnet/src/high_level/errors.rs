@@ -97,8 +97,8 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
             match asked {
                 // Ops' own text names the Rust call that widens the scope.
                 Some(Scope::Local) => format!(
-                    "device {target} did not answer a Who-Is on this network, the only one \
-                     asked: name its network in the target ('5:{target}' for network 5), or \
+                    "device {target} did not answer a local Who-Is, the only one asked: \
+                     name its network in the target ('5:{target}' for network 5), or \
                      give BACnetClient resolve_scope='global' or a network number"
                 ),
                 _ => message,
@@ -133,20 +133,6 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
         // mapped here, so a new one is noticed when that list is updated.
         _ => BacnetError::new_err(message),
     }
-}
-
-/// BacnetLookupError for a bare `instance` a router's application hasn't
-/// heard from and has nowhere to ask for: it was given no `resolve_scope`.
-pub(super) fn unasked(instance: u32) -> PyErr {
-    lookup_error(
-        format!(
-            "device {instance} is not known to the client, and a client on \
-             transport='router' has no network of its own to ask on: name its network in \
-             the target ('5:{instance}' for network 5), or give BACnetClient \
-             resolve_scope='global' or a network number"
-        ),
-        Lookup::unknown(instance.to_string()),
-    )
 }
 
 /// An [`OpsError::ObjectList`]: the exception its `source` raises, of the

@@ -546,8 +546,8 @@ class ReceivedValueTests(Lab):
 
 class RouterTransportTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_local_address_on_a_router_client(self) -> None:
-        # The router's application has no network of its own, so a local
-        # address names no station it can reach: the priority calls refuse
+        # The router's application is on each of the router's networks, so
+        # a local address names no one station: the priority calls refuse
         # it on await with nothing sent, where read_property sends and the
         # router refuses it.
         router = BACnetRouter([bbmd_port(1)], application="client")
@@ -555,9 +555,9 @@ class RouterTransportTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(cleanup, router.close)
         address = (await router.ports())[0].address
         async with BACnetClient(transport="router", router=router, apdu_timeout_ms=2000) as c:
-            with self.assertRaisesRegex(ValueError, "transport='router' has no network"):
+            with self.assertRaisesRegex(ValueError, "transport='router' is on each"):
                 await asyncio.wait_for(c.device(address), 10)
-            with self.assertRaisesRegex(BacnetError, "no network of its own"):
+            with self.assertRaisesRegex(BacnetError, "names no one station"):
                 await asyncio.wait_for(c.read_property(address, AO, PV), 10)
 
 

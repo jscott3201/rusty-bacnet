@@ -4247,9 +4247,16 @@ let ack = client
   endpoint that was asked, along the path the request came by. The port keeps
   the plans of up to 64 requests for up to 30 seconds; an answer after that is
   originated like any other send.
-- The port has no network of its own: a send with no DNET, such as a local
-  broadcast, fails with `Error::Encoding`, and so do network messages. Who-Is
-  goes out as a global broadcast, on every port.
+- The port is on each of the router's networks
+  (`TransportPort::attached_networks`). A local broadcast, with no DNET, goes
+  to every one of them once (#2601): a broadcast to each port's network,
+  isolated ports included, which the router sends there as that link's
+  broadcast and passes no further. So `Broadcast::Local` and ops'
+  `Scope::Local` ask each attached network, and `BACnetClient::local_networks`
+  lists them, so their answers, which carry those networks as SNET, count as
+  local. A copy a port refuses fails the send, while the other copies still
+  go, as for a global broadcast. A unicast with no DNET names a MAC on no one
+  network and fails with `Error::Encoding`, and so do network messages.
 - A refusal from `originate` fails the send. Too long for the egress port is
   `Error::SendTooLong`. Anything else is an `Error::Transport` carrying the
   `OriginateFailure`, which `OriginateFailure::from_error` returns. A network

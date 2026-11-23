@@ -175,6 +175,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.network.local_network_number().get()
     }
 
+    /// The numbers of the networks this client's local broadcast reaches,
+    /// as it knows them now: its own network's, once learned
+    /// ([`Self::network_number`]), or none yet; and on a router's
+    /// application port, which is on each of the router's networks, every
+    /// one of them ([`TransportPort::attached_networks`], #2601). An
+    /// answer whose SNET is one of these comes from this network:
+    /// [`Broadcast::answered_from`](super::Broadcast::answered_from) takes
+    /// this list.
+    pub fn local_networks(&self) -> Vec<u16> {
+        match self.network.transport().attached_networks() {
+            [] => self.network_number().into_iter().collect(),
+            attached => attached.to_vec(),
+        }
+    }
+
     /// Send a What-Is-Network-Number (Clause 6.4.19), broadcast when
     /// `destination_mac` is `None`. Any node holding this network's number,
     /// a router in particular, broadcasts a Network-Number-Is in reply,

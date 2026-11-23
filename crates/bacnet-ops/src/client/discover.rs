@@ -33,7 +33,10 @@ pub const DISCOVER_WAIT: Duration = Duration::from_secs(3);
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Scope {
-    /// A broadcast on this network alone, which no router passes on.
+    /// A broadcast on this network alone, which no router passes on. A
+    /// client on a router's application port is on each of the router's
+    /// networks, so there it is a broadcast on each of them, and their
+    /// devices answer as routed devices on their networks (#2601).
     #[default]
     Local,
     /// A broadcast on one remote network, 1 to 65534, through its router.
@@ -55,7 +58,9 @@ pub enum Scope {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ResolveScope {
-    /// This network alone: a local broadcast.
+    /// This network alone: a local broadcast, which on a router's
+    /// application port goes to each of the router's networks
+    /// ([`Scope::Local`]).
     #[default]
     Local,
     /// One remote network, 1 to 65534, through its router; 0 and 65535
@@ -203,19 +208,22 @@ impl Scope {
     }
 
     /// Whether a device at `address` is one this scope's Who-Is asked,
-    /// `own` being the client's network number once known: any for a
-    /// global one; for a local one, a station on this network; for a
-    /// remote network, a station on it (this network when it is `own`);
-    /// for a directed one, that station. An I-Am from elsewhere during a
-    /// discovery's wait, unasked or the answer to another's Who-Is, is no
-    /// answer to it, as for a Who-Has (`Scope::answered_by`, #2596).
-    pub(crate) fn covers(&self, address: &DeviceAddress, own: Option<u16>) -> bool {
+    /// `own` being the client's network number once known and `local` the
+    /// networks its local broadcast reaches
+    /// ([`BACnetClient::local_networks`]): any for a global one; for a
+    /// local one, a station on this network, or on a router's application
+    /// on any of the router's networks (#2601); for a remote network, a
+    /// station on it (this network when it is `own`); for a directed one,
+    /// that station. An I-Am from elsewhere during a discovery's wait,
+    /// unasked or the answer to another's Who-Is, is no answer to it, as
+    /// for a Who-Has (`Scope::answered_by`, #2596).
+    pub(crate) fn covers(&self, address: &DeviceAddress, own: Option<u16>, local: &[u16]) -> bool {
         let address = address.clone().localized(own);
         let network = (!address.is_local()).then(|| address.network());
         match self {
-            Self::Local => Broadcast::Local.answered_from(network, own),
-            Self::Network(n) => Broadcast::Network(*n).answered_from(network, own),
-            Self::Global => Broadcast::Global.answered_from(network, own),
+            Self::Local => Broadcast::Local.answered_from(network, local),
+            Self::Network(n) => Broadcast::Network(*n).answered_from(network, local),
+            Self::Global => Broadcast::Global.answered_from(network, local),
             Self::Directed(station) => {
                 let (network, mac) = station.address();
                 address.mac() == mac
@@ -327,7 +335,9 @@ impl From<Scope> for Discover {
 }
 
 impl Discover {
-    /// The devices on this network alone: a local broadcast.
+    /// The devices on this network alone: a local broadcast
+    /// ([`Scope::Local`], each of the router's networks on a router's
+    /// application port).
     pub fn local() -> Self {
         Self::from(Scope::Local)
     }

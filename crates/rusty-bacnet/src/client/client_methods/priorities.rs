@@ -52,17 +52,13 @@ impl BACnetClient {
     }
 
     /// Where a `device()` handle made from a bare instance asks for it, as
-    /// `resolve_scope=` set it: `"local"`, `"global"` or a network number;
-    /// None on a router's application given none, which asks nowhere.
+    /// `resolve_scope=` set it: `"local"`, `"global"` or a network number.
     #[getter]
     fn resolve_scope(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         use bacnet_ops::ResolveScope;
-        Ok(match (self.resolve_scope, self.transport_type.as_str()) {
-            (Some(ResolveScope::Network(network)), _) => {
-                network.into_pyobject(py)?.into_any().unbind()
-            }
-            (Some(ResolveScope::Global), _) => "global".into_pyobject(py)?.into_any().unbind(),
-            (None, "router") => py.None(),
+        Ok(match self.resolve_scope {
+            ResolveScope::Network(network) => network.into_pyobject(py)?.into_any().unbind(),
+            ResolveScope::Global => "global".into_pyobject(py)?.into_any().unbind(),
             _ => "local".into_pyobject(py)?.into_any().unbind(),
         })
     }

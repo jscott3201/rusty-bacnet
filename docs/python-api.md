@@ -221,17 +221,19 @@ A client on a link reaches a device behind a router by naming its network:
 `"2:1234"` or `"2:0x05"`, or a `discover(scope=2)` row. The typed calls by
 `address` reach stations on the client's own network only.
 
-A client on a router's application (`transport="router"`) has no network of
-its own, so every device is on a numbered network:
+A client on a router's application (`transport="router"`) is on each of the
+router's networks, so every device is on a numbered network, and the local
+scope is each of the router's networks (#2601): a local Who-Is or Who-Has goes
+to every one of them, isolated ports included, and the router passes it no
+further.
 
 | On `transport="router"` | Result |
 |-------------------------|--------|
-| `device("5:1234")`, `device("5:0x05")`, a `discover(scope=5)` or `scope="global"` row | Works |
-| `device(1234)` when the client has heard from 1234 | Works |
-| `device(1234)` otherwise | `BacnetLookupError`: there is no network to ask on. `BACnetClient(resolve_scope=5)` or `"global"` gives it one |
+| `device("5:1234")`, `device("5:0x05")`, a `discover()` row of any scope | Works |
+| `discover()` with no scope or `scope="local"` | The devices on each of the router's networks, as when each is named |
+| `device(1234)` | Asks where `resolve_scope` says, by default each of the router's networks |
 | `device("192.168.1.10")`, any local address | `ValueError` on await, nothing sent |
-| `discover()` with no scope, `scope="local"` or a station's address | `ValueError` |
-| `BACnetClient(resolve_scope="local")` | `ValueError` |
+| `discover(scope="192.168.1.10")`, a station's address | `ValueError`: pass a `RoutedTarget` or the network |
 
 ### Reading
 
@@ -725,11 +727,10 @@ async with router:
     hosted.add_analog_input(0, "Supply temperature", 62, 18.5)
     await hosted.start()
     async with BACnetClient(transport="router", router=router) as client:
-        # The router's application has no network of its own, so its
-        # Who-Is names one: here each of the router's two networks.
-        for network in (1, 5):
-            for device in await client.discover(scope=network):
-                print(device.instance, device.network)
+        # The router's application is on each of the router's networks,
+        # so its local Who-Is asks networks 1 and 5, and no further.
+        for device in await client.discover():
+            print(device.instance, device.network)
         value = await client.read_property_from_device(
             1005, ObjectIdentifier(ObjectType.ANALOG_INPUT, 0),
             PropertyIdentifier.PRESENT_VALUE)
@@ -740,8 +741,10 @@ The client sends every request through the router's table, so it names each
 device by its network, as a routed device, even on a directly attached
 network. Every reply and I-Am reaches it with the sender's network and MAC
 as its source, so discover devices first and use the `_from_device` and
-`_to_device` methods. Who-Is goes out as a global broadcast on every port. A
-send to an `ip:port` names no network: it raises `BacnetError`. A request to a
+`_to_device` methods. A local Who-Is goes to each of the router's networks,
+and a global one out of every port as a global broadcast. A send to an
+`ip:port` names no one of the router's networks: it raises `BacnetError`. A
+request to a
 network the router doesn't know yet raises `BacnetTransportError` with errno
 `ENETUNREACH`, and the router starts looking for it; once the route is
 learned, a retry goes. The server answers at the router's address on each
@@ -2711,9 +2714,11 @@ text is one station's address, in the forms `device()` takes
 text that names a device instance or a routed target, raises `ValueError`,
 and another type `TypeError`, before anything is sent; a station the
 client's link can't reach raises `ValueError` on await. A client on a
-router's application (`transport="router"`) has no network of its own, so
-its Who-Is names a network, or every one: a local or directed one raises
-`ValueError` saying so. A `RoutedTarget` in `who_is` or `discover` selects one station by its
+router's application (`transport="router"`) is on each of the router's
+networks, so its local Who-Is goes to every one of them, once each, and the
+router passes it no further; the devices answer as routed devices on their
+networks, as when each network is named (#2601). A station's address names
+no one of those networks and raises `ValueError` there. A `RoutedTarget` in `who_is` or `discover` selects one station by its
 network and MAC. The explicit or learned next hop receives a unicast.
 With no learned next hop the client broadcasts on the local link while
 keeping the remote station's DNET and DADR. Discovery collects answers from

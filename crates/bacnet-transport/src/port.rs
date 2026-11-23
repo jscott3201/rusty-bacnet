@@ -510,6 +510,18 @@ pub trait TransportPort: Send + Sync {
         None
     }
 
+    /// The numbers of the networks this port is directly attached to when
+    /// it has no one link of its own: a router's application port is on
+    /// each of the router's networks, so its local broadcast goes to every
+    /// one of them, and an answer from any of them, which comes up with
+    /// that network as its SNET, is an answer from this network (#2601).
+    /// Empty, the default, for a port on one link, whose network number,
+    /// if any, the network layer learns. A wrapper must forward the
+    /// underlying answer.
+    fn attached_networks(&self) -> &[u16] {
+        &[]
+    }
+
     /// The B/IP transport this one is or wraps, for what only that type
     /// offers: BBMD table reads, the foreign-registration state and the
     /// management counters. `None`, the default, when the link isn't
