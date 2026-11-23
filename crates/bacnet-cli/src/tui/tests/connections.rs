@@ -9,7 +9,7 @@ use crate::tui::profile::store::Store;
 use crate::tui::profile::{Overrides, Profile};
 use crate::tui::worker::session::{ConnectPlan, TransportKind};
 use crate::tui::worker::{EventSink, coordinator};
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -167,10 +167,16 @@ async fn failed_attempt_keeps_coordinator_available_for_corrected_interface() {
         .unwrap();
 }
 
-#[tokio::test]
-async fn disconnect_cancels_pending_foreign_registration_and_stops_renewals() {
-    let bbmd = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+/// The foreign-device tests' session sends from a port the test picked, so
+/// the BBMD socket can tell its datagrams from a late one meant for another
+/// test's process (#2718). Another process can take the port before the
+/// session binds it, so each runs under [`rerun_on_lost_port`].
+fn foreign_plan(bbmd: &tokio::net::UdpSocket) -> (ConnectPlan, SocketAddr) {
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let session = socket.local_addr().unwrap();
+    drop(socket);
     let mut p = profile();
+    p.bip_mut().port = session.port();
     p.bip_mut().bbmd = Some(match bbmd.local_addr().unwrap() {
         std::net::SocketAddr::V4(a) => a.into(),
         _ => unreachable!(),
@@ -182,27 +188,62 @@ async fn disconnect_cancels_pending_foreign_registration_and_stops_renewals() {
         args: p.transport_args().unwrap(),
         await_interface: false,
     };
-    let (sink, mut events) = EventSink::channel(32);
-    let (commands, rx) = mpsc::channel(16);
-    let task = coordinator::spawn(Some(plan), None, sink, rx, Default::default());
-    let mut packet = [0; 256];
-    let (len, peer) = tokio::time::timeout(Duration::from_secs(2), bbmd.recv_from(&mut packet))
+    (plan, session)
+}
+
+/// The session's first registration on `bbmd`, from `session`'s address
+/// alone. The session waits for that registration's answer before it
+/// connects, so a connect outcome first is a failed start: a port lost to
+/// another socket comes back as the probe's bind error, as in
+/// [`connected_on`].
+async fn first_registration(
+    bbmd: &tokio::net::UdpSocket,
+    session: SocketAddr,
+    events: &mut mpsc::Receiver<WorkerEvent>,
+) -> std::io::Result<Vec<u8>> {
+    let first = async {
+        tokio::select! {
+            datagram = super::sender::next_from(bbmd, session) => Ok(datagram),
+            started = connected_on(events, 1, session.port()) => {
+                panic!("connected as {} before registering", started?)
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(2), first)
         .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(&packet[..len], &[0x81, 0x05, 0x00, 0x06, 0x00, 0x02]);
-    commands.send(Command::Disconnect).await.unwrap();
-    tokio::time::timeout(Duration::from_millis(500), disconnected(&mut events, 1))
-        .await
-        .expect("disconnect must not wait for registration timeout");
-    assert!(
-        tokio::time::timeout(Duration::from_millis(1200), bbmd.recv_from(&mut packet))
-            .await
-            .is_err(),
-        "retired connection renewed at {peer}"
-    );
-    drop((commands, events));
-    task.await.unwrap();
+        .expect("the session's first registration")
+}
+
+#[tokio::test]
+async fn disconnect_cancels_pending_foreign_registration_and_stops_renewals() {
+    rerun_on_lost_port(async || {
+        let bbmd = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let (plan, session) = foreign_plan(&bbmd);
+        let (sink, mut events) = EventSink::channel(32);
+        let (commands, rx) = mpsc::channel(16);
+        let task = coordinator::spawn(Some(plan), None, sink, rx, Default::default());
+        let registered = first_registration(&bbmd, session, &mut events).await;
+        if let Ok(registration) = &registered {
+            assert_eq!(registration, &[0x81, 0x05, 0x00, 0x06, 0x00, 0x02]);
+            commands.send(Command::Disconnect).await.unwrap();
+            tokio::time::timeout(Duration::from_millis(500), disconnected(&mut events, 1))
+                .await
+                .expect("disconnect must not wait for registration timeout");
+            assert!(
+                tokio::time::timeout(
+                    Duration::from_millis(1200),
+                    super::sender::next_from(&bbmd, session)
+                )
+                .await
+                .is_err(),
+                "retired connection renewed from {session}"
+            );
+        }
+        drop((commands, events));
+        task.await.unwrap();
+        registered.map(drop)
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -400,38 +441,29 @@ fn a_start_ack_does_not_hide_an_already_requested_disconnect() {
 
 #[tokio::test]
 async fn a_refused_first_registration_still_connects_and_retries_in_background() {
-    let bbmd = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    let mut p = profile();
-    p.bip_mut().bbmd = Some(match bbmd.local_addr().unwrap() {
-        std::net::SocketAddr::V4(a) => a.into(),
-        _ => unreachable!(),
-    });
-    p.bip_mut().ttl = 2;
-    p.bip_mut().renewal_secs = Some(1);
-    let plan = ConnectPlan {
-        kind: TransportKind::Bip,
-        args: p.transport_args().unwrap(),
-        await_interface: false,
-    };
-    let (sink, mut events) = EventSink::channel(32);
-    let (commands, rx) = mpsc::channel(16);
-    let task = coordinator::spawn(Some(plan), None, sink, rx, Default::default());
-    let mut packet = [0; 256];
-    let (_, peer) = tokio::time::timeout(Duration::from_secs(2), bbmd.recv_from(&mut packet))
-        .await
-        .unwrap()
-        .unwrap();
-    bbmd.send_to(&[0x81, 0x00, 0x00, 0x06, 0x00, 0x30], peer)
-        .await
-        .unwrap();
-    connected(&mut events, 1).await;
-    let (len, next_peer) =
-        tokio::time::timeout(Duration::from_secs(2), bbmd.recv_from(&mut packet))
+    rerun_on_lost_port(async || {
+        let bbmd = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let (plan, session) = foreign_plan(&bbmd);
+        let (sink, mut events) = EventSink::channel(32);
+        let (commands, rx) = mpsc::channel(16);
+        let task = coordinator::spawn(Some(plan), None, sink, rx, Default::default());
+        let registered = first_registration(&bbmd, session, &mut events).await;
+        if registered.is_ok() {
+            bbmd.send_to(&[0x81, 0x00, 0x00, 0x06, 0x00, 0x30], session)
+                .await
+                .unwrap();
+            connected(&mut events, 1).await;
+            let retry = tokio::time::timeout(
+                Duration::from_secs(2),
+                super::sender::next_from(&bbmd, session),
+            )
             .await
-            .unwrap()
-            .unwrap();
-    assert_eq!(next_peer, peer);
-    assert_eq!(&packet[..len], &[0x81, 0x05, 0x00, 0x06, 0x00, 0x02]);
-    drop((commands, events));
-    task.await.unwrap();
+            .expect("a registration retried in the background");
+            assert_eq!(retry, [0x81, 0x05, 0x00, 0x06, 0x00, 0x02]);
+        }
+        drop((commands, events));
+        task.await.unwrap();
+        registered.map(drop)
+    })
+    .await;
 }

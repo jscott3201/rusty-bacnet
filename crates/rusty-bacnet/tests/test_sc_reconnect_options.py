@@ -25,9 +25,13 @@ class ScReconnectOptionsTests(unittest.TestCase):
     def test_semantic_validation_and_unsigned_conversion(self):
         for kwargs in [dict(initial_delay_ms=0), dict(max_delay_ms=0),
                        dict(initial_delay_ms=200, max_delay_ms=100),
-                       dict(max_delay_ms=86_400_001)]:
+                       dict(max_delay_ms=600_001), dict(max_delay_ms=86_400_000)]:
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 ScReconnect(**kwargs)
+        # Ten minutes is the cap (Annex AB.6.1), and the default.
+        with self.assertRaisesRegex(ValueError, "must not exceed 600000"):
+            ScReconnect(max_delay_ms=600_001)
+        self.assertEqual(ScReconnect(initial_delay_ms=600_000).max_delay_ms, 600_000)
         for name, bits in [("initial_delay_ms", 64), ("max_delay_ms", 64),
                            ("max_retries", 32)]:
             for value in [-1, 1 << bits]:

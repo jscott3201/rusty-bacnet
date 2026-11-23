@@ -132,7 +132,12 @@ mod sc_profiles;
 #[cfg(feature = "sc-tls")]
 mod sc_reconnect;
 mod sc_screen;
+/// Loopback datagrams judged by their sender (#2718), shared with the CLI's
+/// integration tests.
+#[path = "../../../tests/support/sender.rs"]
+mod sender;
 mod site;
+mod stray_datagrams;
 mod values;
 mod watch;
 mod watch_routed;

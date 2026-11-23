@@ -1888,8 +1888,11 @@ backoff. `max_retries: Some(n)` bounds the rounds and `None` keeps going while
 a hub can still be dialled, with the round number saturating at `u32::MAX`.
 `Some(0)` turns recovery off: the first loss ends the transport, while the
 start-up dial and primary restoration still run. Unlimited recovery needs
-`initial_delay_ms` of at least 1,000; `validate()`, `start()` and the
-builders refuse less. A response that forbids further retries and `stop()`
+`initial_delay_ms` of at least 1,000
+(`ScReconnectConfig::UNLIMITED_MIN_INITIAL_DELAY_MS`), and `max_delay_ms` is
+at most 600,000 (`ScReconnectConfig::MAX_DELAY_MS`, ten minutes: Annex AB.6.1
+lets the reconnect wait grow, but never past 600 seconds); `validate()`,
+`start()` and the builders refuse anything else. A response that forbids further retries and `stop()`
 end recovery in either mode, and so does a raw transport with nothing left to
 dial: a lost socket recovery reuses gets one Connect-Request, and is closed
 and dropped when that fails. When a failover connector's dial fails and an

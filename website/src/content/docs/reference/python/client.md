@@ -1894,7 +1894,8 @@ closing state for another stop attempt.
 
 Frozen SC client retry settings, copied when passed to BACnetClient.
 
-Delays must be nonzero, initial \<= maximum, and maximum \<= 86,400,000 ms.
+Delays must be nonzero, initial \<= maximum, and maximum \<= 600,000 ms
+(ten minutes, the most Annex AB.6.1 lets the reconnect wait grow to).
 Invalid settings raise ValueError; unsigned integer overflow raises
 OverflowError. Validation is not deployment qualification.
 

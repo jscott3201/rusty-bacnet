@@ -2113,7 +2113,8 @@ client = BACnetClient(
 All three `ScReconnect` arguments are keyword-only and have the defaults shown.
 The initial delay is the minimum reconnect sleep; exponential backoff and jitter
 stay within the configured minimum and maximum. Delays must be positive,
-`initial_delay_ms <= max_delay_ms`, and the maximum must not exceed 86,400,000 ms.
+`initial_delay_ms <= max_delay_ms`, and the maximum must not exceed 600,000 ms
+(ten minutes, the most Annex AB.6.1 lets the reconnect wait grow to).
 Invalid settings raise `ValueError`; negative or overflowing unsigned integers
 raise `OverflowError`. These checks do not qualify deployment timing.
 

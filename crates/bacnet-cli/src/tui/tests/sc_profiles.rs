@@ -7,7 +7,7 @@ use super::*;
 use crate::tui::app::connection::{Connection, Screen};
 use crate::tui::app::{Link, Overlay};
 use crate::tui::profile::checks::Checks;
-use crate::tui::profile::sc::{DeviceUuid, Vmac};
+use crate::tui::profile::sc::{DeviceUuid, Rounds, Vmac};
 use crate::tui::profile::sc_tests::{pem_files, sc_profile};
 use crate::tui::profile::service::{Reply, Request, Service};
 use crate::tui::profile::store::Store;
@@ -550,4 +550,38 @@ fn sc_editor_at_80x24_shows_the_failover_needs_reconnect_error() {
     assert!(text.contains("needs reconnect on"), "{text}");
     assert!(text.contains("Reconnect     off"), "{text}");
     assert_snapshot!("sc_profile_editor_error_80x24", text);
+}
+
+/// The preview says how the profile recovers a lost hub (#2708): so many
+/// rounds, unlimited ones, or none at all.
+#[test]
+fn the_preview_says_how_a_lost_hub_is_recovered() {
+    for (rounds, said) in [
+        (
+            Some(10),
+            "Reconnect: on, 10000 ms doubling to 600000 ms, 10 rounds",
+        ),
+        (
+            None,
+            "Reconnect: on, 10000 ms doubling to 600000 ms, unlimited rounds",
+        ),
+        (
+            Some(0),
+            "Reconnect: on, no recovery after a loss (reconnect_max_retries = 0)",
+        ),
+    ] {
+        let mut p = framed_sc_profile();
+        p.sc_mut().reconnect_max_retries = Rounds(rounds);
+        let mut app = profile_app();
+        worker(
+            &mut app,
+            WorkerEvent::Profile(Ok(Reply::Loaded {
+                name: "hub-west".into(),
+                profile: p,
+                checks: Checks::default(),
+            })),
+        );
+        let text = screen(&mut app, 120, 40);
+        assert!(text.contains(said), "{rounds:?}: {text}");
+    }
 }

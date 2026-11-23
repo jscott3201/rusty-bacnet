@@ -134,6 +134,39 @@ impl Net {
         net
     }
 
+    /// [`Self::start`] for a session bound to `port`, a port the test picked
+    /// and freed (#2718). A failed start probes it, so a port another socket
+    /// took comes back as the probe's bind error for `rerun_on_lost_port`;
+    /// a failure on a free port panics.
+    pub(super) async fn start_on(plan: ConnectPlan, port: u16) -> std::io::Result<Self> {
+        let (sink, events) = EventSink::channel(EVENT_CHANNEL_CAPACITY);
+        let (commands, rx) = mpsc::channel(16);
+        let task = coordinator::spawn(Some(plan), None, sink, rx, Default::default());
+        let mut net = Self {
+            app: new_app(None),
+            events,
+            commands,
+            task,
+        };
+        while !matches!(net.app.link, Link::Up { .. }) {
+            let event = tokio::time::timeout(STEP, net.events.recv())
+                .await
+                .expect("timed out waiting for the connection")
+                .expect("the worker is running");
+            if let WorkerEvent::Session { event: inner, .. } = &event
+                && let WorkerEvent::ConnectFailed { error } = inner.as_ref()
+            {
+                let error = error.clone();
+                net.stop().await;
+                std::net::UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))?;
+                panic!("connection failed on a free port: {error}");
+            }
+            let commands = worker(&mut net.app, event);
+            net.send(commands).await;
+        }
+        Ok(net)
+    }
+
     fn now() -> std::time::Instant {
         tokio::time::Instant::now().into_std()
     }
