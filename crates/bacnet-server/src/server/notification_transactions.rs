@@ -65,6 +65,8 @@ pub enum NotificationWorkerResult {
 struct NotificationState {
     closed: bool,
     pending: HashMap<LeaseToken, oneshot::Sender<CovAckResult>>,
+    /// The event notifications waiting for an invoke ID, first-come (#2563).
+    waiters: waiters::Waiters,
 }
 
 #[doc(hidden)]
@@ -132,6 +134,9 @@ struct NotificationCore {
 #[path = "notification_lease_cap.rs"]
 mod lease_cap;
 pub(super) use lease_cap::SEAT_LEASES;
+
+#[path = "notification_waiters.rs"]
+mod waiters;
 
 pub(super) type NotificationReservation = (NotificationOperation, oneshot::Receiver<CovAckResult>);
 
@@ -221,6 +226,7 @@ impl NotificationTransactions {
                 state: Mutex::new(NotificationState {
                     closed: false,
                     pending: HashMap::new(),
+                    waiters: waiters::Waiters::default(),
                 }),
                 lease_cap,
             }),
@@ -416,38 +422,6 @@ impl NotificationTransactions {
             .reserve(LeaseMetadata::notification(peer, service_choice))
     }
 
-    /// [`Self::reserve`], waiting while every invoke ID is leased: a
-    /// confirmed event notification holds its lane until one comes back
-    /// (#2537). The server's 256 IDs are one pool, shared by its event, COV,
-    /// audit and command-run requests, so each release wakes every waiter.
-    /// Whichever runs first takes the ID and the rest wait again: there is
-    /// no order among waiters. `waits` is called once, as the wait starts.
-    /// Any other refusal returns at once. It holds no lock while it waits,
-    /// so it can be cancelled.
-    pub(super) async fn reserve_waiting(
-        &self,
-        peer: CanonicalPeer,
-        service_choice: ConfirmedServiceChoice,
-        waits: impl FnOnce(),
-    ) -> Result<NotificationReservation, NotificationReserveError> {
-        let mut waits = Some(waits);
-        loop {
-            // Made before the attempt, so a lease released after it fails
-            // still ends this wait: the coordinator's wake reaches every
-            // waiter already made, polled or not, and stores no permit.
-            let released = self.core.coordinator.released();
-            match self.reserve(peer.clone(), service_choice) {
-                Err(NotificationReserveError::Coordinator(ReserveError::Exhausted)) => {
-                    if let Some(waits) = waits.take() {
-                        waits();
-                    }
-                    released.await;
-                }
-                result => return result,
-            }
-        }
-    }
-
     /// Poison the transaction state, as a panic under its lock would, for
     /// tests of a state that can lease no invoke ID at all.
     #[cfg(test)]
@@ -570,34 +544,12 @@ impl NotificationTransactions {
 }
 
 impl NotificationCore {
+    /// Lease an invoke ID now, without waiting ([`Self::lease`]).
     pub(super) fn reserve(
         self: &Arc<Self>,
         metadata: LeaseMetadata,
     ) -> Result<NotificationReservation, NotificationReserveError> {
-        if self.lease_cap != usize::MAX {
-            return self.reserve_within_cap(metadata);
-        }
-        let token = self
-            .coordinator
-            .reserve(metadata)
-            .map_err(NotificationReserveError::Coordinator)?;
-        let (sender, receiver) = oneshot::channel();
-
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(_) => {
-                let _ = self.coordinator.cancel(token);
-                return Err(NotificationReserveError::StatePoisoned);
-            }
-        };
-        if state.closed {
-            drop(state);
-            let _ = self.coordinator.cancel(token);
-            return Err(NotificationReserveError::Closed);
-        }
-        state.pending.insert(token, sender);
-        drop(state);
-        Ok(self.reservation(token, receiver))
+        self.lease(metadata, None)
     }
 
     pub(super) fn admit_terminal(
@@ -673,17 +625,19 @@ impl NotificationCore {
     }
 
     pub(super) fn close(&self) {
-        let pending = match self.state.lock() {
+        let (pending, waiters) = match self.state.lock() {
             Ok(mut state) => {
                 if state.closed {
                     return;
                 }
                 state.closed = true;
-                state.pending.drain().collect::<Vec<_>>()
+                let waiters = state.waiters.wake_all();
+                (state.pending.drain().collect::<Vec<_>>(), waiters)
             }
             Err(_) => return,
         };
 
+        waiters.into_iter().for_each(Waker::wake);
         for (token, sender) in pending {
             drop(sender);
             let _ = self.coordinator.cancel(token);

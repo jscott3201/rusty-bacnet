@@ -15,8 +15,9 @@ const INVOKE_IDS: usize = 256;
 
 impl NotificationTransactions {
     /// How many invoke IDs a reservation could take now: those free in the
-    /// pool, within the seat's cap on a seat, and none once closed. Racing
-    /// work may take them first.
+    /// pool, within the seat's cap on a seat, less the one an event
+    /// notification waiting for an ID is owed (#2563), and none once
+    /// closed. Racing work may take them first.
     pub(in crate::server) fn free_invoke_ids(&self) -> usize {
         self.core.free()
     }
@@ -32,45 +33,23 @@ impl NotificationTransactions {
 impl NotificationCore {
     /// See [`NotificationTransactions::free_invoke_ids`].
     fn free(&self) -> usize {
-        let held = match self.state.lock() {
-            Ok(state) if !state.closed => state.pending.len(),
+        let (held, held_back) = match self.state.lock() {
+            Ok(state) if !state.closed => (state.pending.len(), state.waiters.held_back()),
             _ => return 0,
         };
+        self.free_with(held).saturating_sub(held_back)
+    }
+
+    /// The IDs free in the pool, within the cap less the `held` this server
+    /// leases. Read under the transaction state's guard, the count and a
+    /// lease are one step ([`Self::lease`]), so racing reservations never
+    /// pass the cap.
+    pub(super) fn free_with(&self, held: usize) -> usize {
         let pool = self
             .coordinator
             .active_count()
             .map_or(0, |active| INVOKE_IDS.saturating_sub(active));
         self.lease_cap.saturating_sub(held).min(pool)
-    }
-
-    /// [`Self::reserve`] on a seat: the count and the lease are taken under
-    /// one guard, so racing reservations never pass the cap. Refused as
-    /// the node's pool refuses when it is out of IDs, and with nothing
-    /// leased, so a waiter's wake comes only from a lease that ends.
-    pub(super) fn reserve_within_cap(
-        self: &Arc<Self>,
-        metadata: LeaseMetadata,
-    ) -> Result<NotificationReservation, NotificationReserveError> {
-        let (sender, receiver) = oneshot::channel();
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| NotificationReserveError::StatePoisoned)?;
-        if state.closed {
-            return Err(NotificationReserveError::Closed);
-        }
-        if state.pending.len() >= self.lease_cap {
-            return Err(NotificationReserveError::Coordinator(
-                ReserveError::Exhausted,
-            ));
-        }
-        let token = self
-            .coordinator
-            .reserve(metadata)
-            .map_err(NotificationReserveError::Coordinator)?;
-        state.pending.insert(token, sender);
-        drop(state);
-        Ok(self.reservation(token, receiver))
     }
 
     /// The operation that holds `token`, and the receiver of its answer.
