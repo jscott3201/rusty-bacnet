@@ -686,6 +686,25 @@ mod tests {
         });
     }
 
+    /// A request refused before it went out because it needs segments the
+    /// endpoint doesn't send, or the device can't take, raises the base
+    /// exception with the refusal's text, as a send too long does (#2617).
+    #[test]
+    fn a_segmentation_refusal_uses_the_existing_base_exception() {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = to_py_err(Error::Segmentation(
+                bacnet_types::error::SegmentationError::LocalCannotTransmit,
+            ));
+            assert!(error.value(py).get_type().is(py.get_type::<BacnetError>()));
+            assert_eq!(
+                error.value(py).str().unwrap().to_str().unwrap(),
+                "segmentation error: request requires segmentation, which this side does not \
+                 transmit"
+            );
+        });
+    }
+
     #[test]
     fn transport_errors_are_oserrors_with_errno() {
         Python::initialize();

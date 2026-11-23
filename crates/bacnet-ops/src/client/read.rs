@@ -18,7 +18,7 @@ use bacnet_services::rpm::ReadPropertyMultipleACK;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{AbortReason, ErrorClass, ObjectType, PropertyIdentifier, RejectReason};
-use bacnet_types::error::{Error, RangeError, RemoteError};
+use bacnet_types::error::{Error, RangeError, RemoteError, SegmentationError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::device::{DeviceAddress, path_to};
@@ -117,6 +117,16 @@ pub fn rpm_failure(error: &Error) -> RpmFailure {
         // a frame of 228 octets or fewer never earns this, #2665): one
         // property at a time is shorter.
         Error::SendTooLong { .. } | Error::RoutedPathTooLong { .. } => RpmFailure::TooLarge,
+        // The request needs segments the client may not send (a node whose
+        // Device doesn't transmit them, #2617), or that the device can't
+        // take, or not so many: refused before it went out, and one
+        // property at a time may fit one APDU.
+        Error::Segmentation(
+            SegmentationError::LocalCannotTransmit
+            | SegmentationError::PeerCannotReceive { .. }
+            | SegmentationError::PeerSegmentLimit { .. }
+            | SegmentationError::TooManySegments { .. },
+        ) => RpmFailure::TooLarge,
         _ => RpmFailure::Other,
     }
 }
@@ -161,9 +171,10 @@ pub fn unreachable(error: &Error) -> bool {
 ///   reason: the client, not the property, failed.
 ///
 /// A request too long for the link or the routed path
-/// ([`Error::SendTooLong`], [`Error::RoutedPathTooLong`]) is not one: a
-/// smaller request may pass, so those fall back as an answer too large
-/// does ([`rpm_failure`]).
+/// ([`Error::SendTooLong`], [`Error::RoutedPathTooLong`]), or one that
+/// needs segments the client or the device can't use
+/// ([`Error::Segmentation`]), is not one: a smaller request may pass, so
+/// those fall back as an answer too large does ([`rpm_failure`]).
 pub(crate) fn failed_locally(error: &Error) -> bool {
     matches!(
         error,
