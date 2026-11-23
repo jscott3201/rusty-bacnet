@@ -19,10 +19,12 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 /// The vendor identifier the lab devices report.
 pub const LAB_VENDOR: u16 = 260;
 
-/// The lab device's identity, for the server builder.
+/// The lab device's identity, for the server builder: a device that
+/// doesn't segment (the identity's default segments both ways, #2617).
 pub fn lab_identity(instance: u32) -> DeviceIdentity {
     DeviceIdentity::new(instance, LAB_VENDOR)
         .expect("valid Device identity")
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
         .with_name(format!("Lab device {instance}"))
 }
 

@@ -12,6 +12,7 @@ fn device(instance: u32, apdu_timeout: u32) -> Box<DeviceObject> {
         DeviceObject::new(DeviceConfig {
             identity: bacnet_objects::DeviceIdentity::new(instance, 0)
                 .unwrap()
+                .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
                 .with_name(format!("Device {instance}"))
                 .with_apdu_segment_timeout_ms(u64::from(apdu_timeout.min(2000))),
             apdu_timeout,

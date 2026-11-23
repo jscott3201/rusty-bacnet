@@ -28,6 +28,15 @@ mod refusals;
 #[path = "full_server/object_list.rs"]
 mod object_list;
 
+/// Both roles segment, both ways, beside each other and as the node's
+/// Device says (#2617).
+#[path = "full_server/segmentation.rs"]
+mod segmentation;
+
+/// The same, frame by frame: one peer with a transfer in each role (#2617).
+#[path = "full_server/segmentation_wire.rs"]
+mod segmentation_wire;
+
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, Broadcast, COVNotificationDelivery};

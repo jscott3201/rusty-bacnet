@@ -56,8 +56,10 @@ async fn registered_port_routed_read_uses_receiving_owner_not_remote_number() {
         owner.stop().await;
     }
 }
+/// A server and an endpoint session alike reassemble a segmented read of
+/// the registered port, the session segmenting as its identity says (#2617).
 #[tokio::test]
-async fn registered_port_reassembled_routed_read_and_endpoint_segmentation_boundary() {
+async fn registered_port_reassembled_routed_read_on_a_server_and_a_session() {
     for full in [true, false] {
         let mut owner = if full {
             let id =
@@ -100,17 +102,9 @@ async fn registered_port_reassembled_routed_read_and_endpoint_segmentation_bound
             encode_apdu(&mut encoded, &Apdu::ConfirmedRequest(request.clone())).unwrap();
             send(&peer, owner.address(), &encoded, true).await;
             let response = receive(&peer, true).await;
-            if !full {
-                assert!(
-                    matches!(response, Apdu::Abort(abort) if abort.abort_reason == bacnet_types::enums::AbortReason::SEGMENTATION_NOT_SUPPORTED)
-                );
-                break;
-            }
-            assert!(matches!(response, Apdu::SegmentAck(_)));
+            assert!(matches!(response, Apdu::SegmentAck(_)), "{response:?}");
         }
-        if full {
-            assert_identity(receive(&peer, true).await);
-        }
+        assert_identity(receive(&peer, true).await);
         owner.stop().await;
     }
 }

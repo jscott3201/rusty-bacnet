@@ -201,8 +201,14 @@ builder or database that contradicts them is refused. A DeviceCommunicationContr
 the server accepts binds the whole node (Clause 16.1): the client's
 requests and the session's own I-Am fail with
 `Error::InitiationDisabled` until it ends, unless an operator starts a client
-with `ClientOptions::with_node_dcc_override`. The client keeps its own
-segmentation settings for now (a later step of #2617).
+with `ClientOptions::with_node_dcc_override`. Both roles segment as the
+identity says, both ways by default (#2617): the server reassembles requests
+and segments answers, and the client accepts segmented answers, sends
+segmented requests and takes the identity's segment timeout only as far as the
+Device's Segmentation_Supported allows. Each segment, Segment-ACK and Abort
+reaches the role whose transaction it is. Known gap: the client still aborts a
+segmented ConfirmedCOVNotification (#2646), though the Device says it receives
+segments.
 
 ## What is proven
 

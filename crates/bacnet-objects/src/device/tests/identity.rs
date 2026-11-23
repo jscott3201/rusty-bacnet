@@ -59,7 +59,9 @@ fn mode_derived_max_segments_accepted() {
 #[test]
 fn segment_timeout_absence_custom_value_and_zero_validation() {
     let none = DeviceObject::new(DeviceConfig {
-        identity: crate::DeviceIdentity::default().with_apdu_segment_timeout_ms(0),
+        identity: crate::DeviceIdentity::default()
+            .with_segmentation(Segmentation::NO_SEGMENTATION)
+            .with_apdu_segment_timeout_ms(0),
         ..Default::default()
     })
     .unwrap();

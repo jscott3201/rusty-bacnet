@@ -169,9 +169,10 @@ impl PyScEndpoint {
     ///         (defaults 30000/60000; interval 3000..=300000, timeout>interval).
     ///     network_number / network_port_instance: SC port entry (instance 2
     ///         by convention, VIRTUAL type).
-    ///     max_apdu / segmentation / device name: Identity knobs (same
-    ///         defaults as BIP). The raw receive ceiling resolves against the
-    ///         SC link before Device construction or dialing.
+    ///     max_apdu / segmentation / apdu_segment_timeout_ms / device name:
+    ///         Identity knobs (same defaults as BIP). The raw receive ceiling
+    ///         resolves against the SC link before Device construction or
+    ///         dialing.
     ///     queue_capacity: Bounded queue capacity (must be >0, default 256;
     ///         a full queue drops and counts, see `status()`'s
     ///         `*_full_drops`). The APDU timeout and retries stay at
@@ -219,6 +220,7 @@ impl PyScEndpoint {
         network_port_instance=2,
         max_apdu=1476,
         segmentation=None,
+        apdu_segment_timeout_ms=5000,
         queue_capacity=256,
         read_work_limit=256,
         min_request_interval_ms=0,
@@ -251,6 +253,7 @@ impl PyScEndpoint {
         network_port_instance: u32,
         max_apdu: u16,
         segmentation: Option<PySegmentation>,
+        apdu_segment_timeout_ms: u64,
         queue_capacity: usize,
         read_work_limit: usize,
         min_request_interval_ms: u64,
@@ -331,6 +334,7 @@ impl PyScEndpoint {
             vendor_id,
             max_apdu,
             segmentation,
+            apdu_segment_timeout_ms,
             uuid,
         )?
         .resolve(

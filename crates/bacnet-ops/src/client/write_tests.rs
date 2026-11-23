@@ -459,6 +459,10 @@ async fn a_bulk_read_refused_part_way_keeps_its_rows() {
     stop(client, server).await;
 }
 
+/// A ReadPropertyMultiple the client refuses for segmentation (#2617).
+#[path = "write_tests/segmentation.rs"]
+mod segmentation;
+
 fn rpm_too_long_for_the_link(
     inner: bacnet_transport::loopback::LoopbackTransport,
 ) -> TestTransport {
@@ -479,12 +483,18 @@ fn rpm_too_long_for_the_path(
 }
 
 /// A ReadPropertyMultiple too long for the link, or for a router on the
-/// way (a small frame, an older router), is no failure of the read: it
-/// falls back to ReadProperty each, as an answer too large does, for a
-/// bulk read, an object's read and the priorities.
+/// way (a small frame, an older router), or needing segments the client or
+/// the device can't use (#2617), is no failure of the read: it falls back
+/// to ReadProperty each, as an answer too large does, for a bulk read, an
+/// object's read and the priorities.
 #[tokio::test(start_paused = true)]
 async fn a_request_too_long_falls_back_to_read_property() {
-    for link in [rpm_too_long_for_the_link, rpm_too_long_for_the_path] {
+    for link in [
+        rpm_too_long_for_the_link,
+        rpm_too_long_for_the_path,
+        segmentation::rpm_needs_segments_it_may_not_send,
+        segmentation::rpm_needs_more_segments_than_it_takes,
+    ] {
         let (client, server) = lab_on(link).await;
         let device = lab_device(&client).await;
         let read = device.read_many(["ai:1 pv", "ao:1 pv"]).await.unwrap();

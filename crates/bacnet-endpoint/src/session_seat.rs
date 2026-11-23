@@ -59,6 +59,28 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// operation cut off by a stop, of the session or of the client, is not
     /// recorded.
     ///
+    /// **Segmentation.** The client does what the session's Device says
+    /// (#2617). With an identity ([`device`](Self::device)) that receives
+    /// segments (SEGMENTED_RECEIVE, or SEGMENTED_BOTH, the default) it
+    /// accepts segmented answers and states in each request that it takes
+    /// more than 64 segments; with one that transmits them
+    /// (SEGMENTED_TRANSMIT or SEGMENTED_BOTH) it sends a request too long
+    /// for one APDU as segments, and otherwise such a request fails with
+    /// [`SegmentationError::LocalCannotTransmit`](bacnet_types::error::SegmentationError::LocalCannotTransmit)
+    /// before anything is sent. Its segment timeout is the identity's
+    /// APDU_Segment_Timeout, and it proposes a window of one segment. Its
+    /// transfers and the server's run side by side: each segment,
+    /// Segment-ACK and Abort goes to the role whose transaction it is, by
+    /// its PDU type, which side sent it and the invoke ID the role leased,
+    /// so one peer may hold a transaction with each role under the same
+    /// invoke ID. Each role keeps its own reassembly limits (the client 64
+    /// answers at once; the server 128 requests, 16 from one peer), so one
+    /// role's transfers never take the other's room. A session without an
+    /// identity leaves the client its own defaults: segmented both ways,
+    /// with its APDU timeout as its segment timeout. Known gap: the client
+    /// still aborts a segmented ConfirmedCOVNotification (#2646), though
+    /// the Device says it receives segments.
+    ///
     /// **Who answers what.** Beside a server role the client answers only
     /// the COV notifications of its own subscriptions; the server answers
     /// a ConfirmedEventNotification, and the client still publishes it to

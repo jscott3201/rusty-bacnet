@@ -112,7 +112,9 @@ fn objects() -> Vec<Box<dyn BACnetObject>> {
 
 /// Device 1234, [`objects`] and [`Permissive`].
 fn database() -> ObjectDatabase {
-    let identity = DeviceIdentity::new(DEVICE, 0x105).unwrap();
+    let identity = DeviceIdentity::new(DEVICE, 0x105)
+        .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION);
     let mut objects = objects();
     objects.push(Box::new(Permissive));
     build_database_with_extra(&identity, objects).unwrap()

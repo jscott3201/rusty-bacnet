@@ -205,8 +205,9 @@ impl PyMstpEndpoint {
     ///     max_apdu: Raw receive ceiling, at least 50 bytes and no more than
     ///         480, or 1476 with ``mstp_extended_frames=True``. Request headers
     ///         use the largest supported code that does not exceed it.
-    ///     segmentation / device_uuid: Identity knobs (UUID zeros allowed;
-    ///         stored into DEVICE_UUID).
+    ///     segmentation / apdu_segment_timeout_ms / device_uuid: Identity
+    ///         knobs, as for BIP (the segment timeout keyword-only; UUID
+    ///         zeros allowed; stored into DEVICE_UUID).
     ///     queue_capacity / apdu_timeout_ms / apdu_retries: Session tuning
     ///         (queue_capacity default 256; a full queue drops and counts,
     ///         see `status()`'s `*_full_drops`). The APDU timeout and
@@ -262,6 +263,7 @@ impl PyMstpEndpoint {
         apdu_timeout_ms=6000,
         apdu_retries=3,
         *,
+        apdu_segment_timeout_ms=5000,
         read_work_limit=256,
         min_request_interval_ms=0,
         mstp_extended_frames=false,
@@ -295,6 +297,7 @@ impl PyMstpEndpoint {
         queue_capacity: usize,
         apdu_timeout_ms: u64,
         apdu_retries: u8,
+        apdu_segment_timeout_ms: u64,
         read_work_limit: usize,
         min_request_interval_ms: u64,
         mstp_extended_frames: bool,
@@ -375,6 +378,7 @@ impl PyMstpEndpoint {
             vendor_id,
             max_apdu,
             segmentation,
+            apdu_segment_timeout_ms,
             uuid,
         )?;
         let source_audit = super::source_audit::SourceAuditKeywords::parse(

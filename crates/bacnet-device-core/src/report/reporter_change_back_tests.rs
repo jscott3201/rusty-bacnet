@@ -31,6 +31,7 @@ fn av() -> ObjectIdentifier {
 fn device(increment: f32) -> Device {
     let identity = DeviceIdentity::new(9, 0x105)
         .unwrap()
+        .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
         .with_services(SERVICES);
     let mut sensor = AnalogInputObject::new(1, "AI-1", EngineeringUnits::NO_UNITS).unwrap();
     sensor.set_present_value(10.0);

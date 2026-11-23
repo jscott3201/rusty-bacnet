@@ -82,7 +82,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         // changes (#2617).
         preparation.session.default_server();
         preparation.session.check_server_builder()?;
-        preparation.session.validate_segmentation().await?;
         preparation.session.prepare_identity().await?;
         preparation.session.check_server_settings().await?;
         let routes = preparation.session.prepare_source_audit_reporter()?;
@@ -95,42 +94,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         preparation.session.prepare_registered_port().await?;
         preparation.committed = true;
         Ok(routes)
-    }
-
-    /// The session's roles take no segmented request or answer yet: refuse
-    /// an identity, or an attached database's Device, that declares
-    /// segmentation other than NO_SEGMENTATION.
-    async fn validate_segmentation(&self) -> Result<(), Error> {
-        use bacnet_types::enums::{PropertyIdentifier, Segmentation};
-        use bacnet_types::primitives::PropertyValue;
-        if self
-            .identity
-            .as_ref()
-            .is_some_and(|identity| identity.segmentation() != Segmentation::NO_SEGMENTATION)
-        {
-            return Err(Error::Encoding(
-                "EndpointSession roles require segmentation NO_SEGMENTATION".into(),
-            ));
-        }
-        if let Some(database) = self.database.as_ref() {
-            let database = database.read().await;
-            if let Some(oid) = database.selected_device() {
-                let device = database
-                    .get(&oid)
-                    .expect("selected under same database guard");
-                let mode =
-                    device.read_property(PropertyIdentifier::SEGMENTATION_SUPPORTED, None)?;
-                if mode
-                    != PropertyValue::Enumerated(u32::from(Segmentation::NO_SEGMENTATION.to_raw()))
-                {
-                    return Err(Error::Encoding(
-                        "EndpointSession selected Device requires segmentation NO_SEGMENTATION"
-                            .into(),
-                    ));
-                }
-            }
-        }
-        Ok(())
     }
 }
 

@@ -78,6 +78,7 @@ pub(crate) fn lower_device(instance: u32) -> Box<DeviceObject> {
         DeviceObject::new(DeviceConfig {
             identity: DeviceIdentity::new(instance, 0)
                 .unwrap()
+                .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION)
                 .with_name(format!("Lower-Device-{instance}")),
             ..DeviceConfig::default()
         })

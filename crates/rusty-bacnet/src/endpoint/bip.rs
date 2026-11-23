@@ -195,7 +195,12 @@ impl PyBipEndpoint {
     ///     max_apdu: Raw receive ceiling, at least 50 bytes, resolved against
     ///         the B/IP link before Device construction. Request headers use
     ///         the largest supported code that does not exceed it.
-    ///     segmentation: `Segmentation` override (default NO_SEGMENTATION, the proven value).
+    ///     segmentation: `Segmentation` override (default SEGMENTED_BOTH). The
+    ///         Device states it, and the endpoint's server and client both
+    ///         segment only as it says.
+    ///     apdu_segment_timeout_ms: Keyword-only (#2617). The Device's
+    ///         APDU_Segment_Timeout (default 5000), which the server and
+    ///         `client()` use while they segment; positive when segmenting.
     ///     device_uuid: Optional 16-byte UUID (zeros allowed for BIP-only;
     ///         stored into DEVICE_UUID, single identity source).
     ///     queue_capacity: Bounded queue capacity (must be >0, default 256).
@@ -280,6 +285,7 @@ impl PyBipEndpoint {
         apdu_retries=3,
         registered_network_port=None,
         *,
+        apdu_segment_timeout_ms=5000,
         read_work_limit=256,
         share_port_by_address=false,
         share_wildcard_port=false,
@@ -314,6 +320,7 @@ impl PyBipEndpoint {
         apdu_timeout_ms: u64,
         apdu_retries: u8,
         registered_network_port: Option<u32>,
+        apdu_segment_timeout_ms: u64,
         read_work_limit: usize,
         share_port_by_address: bool,
         share_wildcard_port: bool,
@@ -391,6 +398,7 @@ impl PyBipEndpoint {
             vendor_id,
             max_apdu,
             segmentation,
+            apdu_segment_timeout_ms,
             uuid,
         )?
         .resolve(BipTransport::new(interface_ip, port, broadcast).local_receive_apdu_capacity())

@@ -80,9 +80,12 @@ fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(object_type, instance).unwrap()
 }
 
+/// The parity Device. The device core segments neither way, so both sides
+/// declare no segmentation (the identity's default segments both, #2617).
 fn identity() -> bacnet_objects::DeviceIdentity {
     bacnet_objects::DeviceIdentity::new(DEVICE, 0x105)
         .unwrap()
+        .with_segmentation(Segmentation::NO_SEGMENTATION)
         .with_name("parity-device")
 }
 

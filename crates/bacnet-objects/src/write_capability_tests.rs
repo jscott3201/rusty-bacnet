@@ -40,9 +40,10 @@ use crate::property_metadata_tests::{
 };
 use crate::traits::BACnetObject;
 
-/// Rows without a write route: 686 of them. A row added, dropped or given
-/// a write route changes it.
-const REFUSED_ROWS: usize = 686;
+/// Rows without a write route: 688 of them. A row added, dropped or given
+/// a write route changes it: the representative Device segmenting by
+/// default added APDU_Segment_Timeout and Max_Segments_Accepted (#2617).
+const REFUSED_ROWS: usize = 688;
 /// Rows Out_Of_Service opens. A `WhenOutOfService` row added or dropped
 /// changes it: the Integer Value's Reliability made it 49 (#2446).
 const OUT_OF_SERVICE_ROWS: usize = 49;

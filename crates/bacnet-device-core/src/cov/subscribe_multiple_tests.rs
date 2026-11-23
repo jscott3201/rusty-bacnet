@@ -136,7 +136,9 @@ fn an_object_that_is_missing_or_reports_nothing_refuses_its_first_reference() {
     let device = ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap();
     db.add(Box::new(
         bacnet_objects::device::DeviceObject::new(bacnet_objects::device::DeviceConfig {
-            identity: bacnet_objects::DeviceIdentity::new(9, 0).unwrap(),
+            identity: bacnet_objects::DeviceIdentity::new(9, 0)
+                .unwrap()
+                .with_segmentation(bacnet_types::enums::Segmentation::NO_SEGMENTATION),
             ..Default::default()
         })
         .unwrap(),
