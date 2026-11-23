@@ -118,6 +118,17 @@ fn a_device_names_its_path_and_the_forms_stay_apart() {
             "no device in the device table is that one",
         ),
         ("path-limit 77 big", "neither clear nor a number"),
+        // A station at an address the one-station mark lifts is a target
+        // (#2738); the table can't list one, and says where to go.
+        (
+            "path-limit 5:0xFF:one-station 128",
+            "lists no device at a one-station address",
+        ),
+        ("path-limit 5:0xFF 128", "not a station"),
+        (
+            "path-limit 5:0x05:one-station 128",
+            "':one-station' lifts nothing at MAC 0x05",
+        ),
         (
             "path-limit 10.0.0.9:47808 128",
             "a path through a router is ROUTER/NETWORK=SIZE",

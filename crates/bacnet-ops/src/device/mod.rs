@@ -357,6 +357,9 @@ mod find_tests;
 mod follow_tests;
 
 #[cfg(test)]
+mod one_station_tests;
+
+#[cfg(test)]
 mod proxy_tests;
 
 #[cfg(test)]

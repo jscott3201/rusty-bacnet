@@ -13,7 +13,8 @@ use bacnet_types::error::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::target::{
-    AddressStyle, MSTP_TEXT_PREFIX, Target, format_mac, format_sc_mac, parse_target, routed_station,
+    AddressStyle, MSTP_TEXT_PREFIX, ONE_STATION_SUFFIX, Target, check_one_station, format_mac,
+    format_sc_mac, lifted_by_one_station, parse_target, routed_target,
 };
 
 /// Where a device answers: its network (0 for the local one) and its MAC
@@ -27,6 +28,14 @@ use crate::target::{
 /// It reads and writes as the target grammar's address forms
 /// ([`parse_target`]): `192.168.1.10:47808`, `bip6:0x0004D2`, `mstp:5` or
 /// six hex octets on the local network, and `2:0x05` behind a router.
+/// A station at an address that is a broadcast or group form on some links
+/// takes the suffix `:one-station` (`5:0xFF:one-station`, ARCNET station
+/// 255; `9:0x0012:one-station`, a gateway's two-octet virtual station),
+/// which [`marked`](Self::marked) builds and nothing else does (#2738).
+/// There is no field for the mark: no unmarked address exists at such a MAC, so the
+/// mark follows from the MAC ([`is_one_station`](Self::is_one_station)),
+/// [`Display`](fmt::Display) writes the suffix there and nowhere else, and
+/// every address reads back as it was.
 /// [`Display`](fmt::Display) writes a local MAC by its length, the forms
 /// [`Error::AmbiguousDevice`] prints: one octet as `mstp:N`, three as a
 /// B/IPv6 VMAC and six as `ip:port` (also for an SC VMAC or an Ethernet
@@ -52,13 +61,13 @@ impl DeviceAddress {
     /// refuses a confirmed request to ([`RemoteBroadcast`]: the MS/TP
     /// broadcast `0xFF`, two octets beginning `0x00` or `0xFF`, three
     /// octets of `0xFF`, and six beginning with four) name no one station,
-    /// on this network or a remote one (#2709). The grammar has no form for
-    /// an address marked one station (#2738), such as an ARCNET station 255
-    /// or a gateway's two-octet virtual station: the low-level client's
-    /// [`Station::one_station`] reaches one.
+    /// on this network or a remote one (#2709). A remote address that is
+    /// one station at such a MAC (#2738), such as an ARCNET station 255 or
+    /// a gateway's two-octet virtual station, is refused here too: only
+    /// [`marked`](Self::marked) builds one, so that a discovered device's
+    /// address ([`of`](Self::of)) can never invent the mark.
     ///
     /// [`RemoteBroadcast`]: bacnet_client::client::RemoteBroadcast
-    /// [`Station::one_station`]: bacnet_client::client::Station::one_station
     pub fn new(network: u16, mac: &[u8]) -> Result<Self, String> {
         if network == u16::MAX {
             return Err("network 65535 is every network, not a station's".into());
@@ -80,11 +89,13 @@ impl DeviceAddress {
             // On a remote network the form may be one station's address
             // there, which only the one-station mark lets through (#2738).
             let marked = if network != 0 && form.lifted_by_one_station() {
-                "; a station at such an address needs the one-station mark, which the target \
-                 grammar can't write yet; Rust (Station::one_station) and Python \
-                 (RoutedTarget(..., one_station=True)) can"
+                format!(
+                    "; a station at such an address is written with the one-station mark: \
+                     {}",
+                    routed_target(network, mac, true).unwrap_or_default()
+                )
             } else {
-                ""
+                String::new()
             };
             return Err(format!(
                 "MAC 0x{} is {form}, not a station{marked}",
@@ -95,6 +106,58 @@ impl DeviceAddress {
             network,
             mac: MacAddr::from_slice(mac),
         })
+    }
+
+    /// The station at `mac` on the remote `network`, marked one station
+    /// (#2738): the target grammar's `5:0xFF:one-station`. It is the only
+    /// way to an address at a MAC that is a broadcast or group form on some
+    /// links, and the mark only lifts, so it takes just the MACs it lifts
+    /// ([`check_one_station`]): the one octet `0xFF`, and two octets
+    /// starting `0x00` or `0xFF` but for `0x0000` and `0xFFFF`. For a
+    /// caller that has the operator's word that the MAC is one station.
+    ///
+    /// # Errors
+    ///
+    /// The local network (0) and 65535 (every network), and a MAC the mark
+    /// lifts nothing at: an ordinary station, `0x0000`, `0xFFFF`, and the
+    /// three- and six-octet forms.
+    pub fn marked(network: u16, mac: &[u8]) -> Result<Self, String> {
+        if network == 0 {
+            return Err(format!(
+                "':{ONE_STATION_SUFFIX}' lifts nothing on the local network: a local MAC is \
+                 judged by its link"
+            ));
+        }
+        if network == u16::MAX {
+            return Err("network 65535 is every network, not a station's".into());
+        }
+        check_one_station(mac)?;
+        Ok(Self {
+            network,
+            mac: MacAddr::from_slice(mac),
+        })
+    }
+
+    /// Whether the address is marked one station: a remote station at a MAC
+    /// the mark lifts ([`marked`](Self::marked)). No address is at such a
+    /// MAC unmarked, so this is a read of the MAC; the typed calls send to
+    /// it as a marked [`Station`](bacnet_client::client::Station).
+    pub fn is_one_station(&self) -> bool {
+        self.network != 0 && lifted_by_one_station(&self.mac)
+    }
+
+    /// The target text of a routed row `device` whose address is a MAC the
+    /// mark lifts, with the suffix: how an operator who knows it is one
+    /// station names it (#2738). `None` for any other row. A device that
+    /// answered from such an address has no [`DeviceAddress`] of its own
+    /// ([`of`](Self::of)), so a caller that finds an instance's only
+    /// claimant there uses this to say how to name it.
+    pub fn one_station_form(device: &DiscoveredDevice) -> Option<String> {
+        let at = device.address()?;
+        if at.network_number == 0 || !lifted_by_one_station(&at.mac_address) {
+            return None;
+        }
+        routed_target(at.network_number, &at.mac_address, true)
     }
 
     /// The station at `mac` on the local network.
@@ -201,8 +264,11 @@ impl fmt::Display for DeviceAddress {
             (0, [station]) => write!(f, "{MSTP_TEXT_PREFIX}{station}"),
             // Three or six octets: `new` takes no other local length.
             (0, mac) => f.write_str(&format_mac(mac)),
-            // Never `None`: the MAC isn't empty.
-            (network, mac) => f.write_str(&routed_station(network, mac).unwrap_or_default()),
+            // Never `None`: the MAC isn't empty. The suffix is written
+            // exactly where the MAC is one the mark lifts.
+            (network, mac) => {
+                f.write_str(&routed_target(network, mac, self.is_one_station()).unwrap_or_default())
+            }
         }
     }
 }
@@ -216,7 +282,16 @@ impl FromStr for DeviceAddress {
     fn from_str(text: &str) -> Result<Self, String> {
         match parse_target(text)? {
             Target::Mac(mac) => Self::local(&mac),
-            Target::RoutedMac { dnet, mac } => Self::new(dnet, &mac),
+            Target::RoutedMac {
+                dnet,
+                mac,
+                one_station: false,
+            } => Self::new(dnet, &mac),
+            Target::RoutedMac {
+                dnet,
+                mac,
+                one_station: true,
+            } => Self::marked(dnet, &mac),
             Target::Instance(_) | Target::Routed { .. } => {
                 Err(format!("'{text}' names a device instance, not an address"))
             }
@@ -228,8 +303,26 @@ impl FromStr for DeviceAddress {
 }
 
 impl From<DeviceAddress> for bacnet_client::client::Station {
+    /// This link at `mac` for a local address, else the remote station,
+    /// marked one station for a MAC the mark lifts ([`DeviceAddress::marked`]),
+    /// so the client sends a confirmed request there (#2738).
     fn from(address: DeviceAddress) -> Self {
-        Self::from(BACnetAddress::from(address))
+        let one_station = address.is_one_station();
+        match address.network {
+            0 => Self::Local { mac: address.mac },
+            network => Self::Remote {
+                network,
+                mac: address.mac,
+                one_station,
+            },
+        }
+    }
+}
+
+impl From<&DeviceAddress> for bacnet_client::client::Station {
+    /// As the owned conversion, for a caller that keeps the address.
+    fn from(address: &DeviceAddress) -> Self {
+        Self::from(address.clone())
     }
 }
 

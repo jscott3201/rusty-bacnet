@@ -181,9 +181,14 @@ impl Scope {
             )),
             Self::Directed(station) => {
                 let (network, mac) = station.address();
-                let address = DeviceAddress::new(network, mac).map_err(|reason| {
-                    OpsError::parse("address", &format!("{station:?}"), reason)
-                })?;
+                // A station the caller marked one station is that address:
+                // the mark is the caller's word (#2738).
+                let address = if station.is_one_station() {
+                    DeviceAddress::marked(network, mac)
+                } else {
+                    DeviceAddress::new(network, mac)
+                }
+                .map_err(|reason| OpsError::parse("address", &format!("{station:?}"), reason))?;
                 if ask == Ask::WhoIs
                     || address
                         .clone()

@@ -27,17 +27,17 @@ use bacnet_services::file::{FileAccessMethod, FileWriteAccessMethod};
 use bacnet_services::read_range::ReadRangeValidation;
 use bacnet_services::wpm::WriteAccessSpecification;
 
-const CLIENT: [u8; 6] = [10, 0, 0, 1, 0xBA, 0xC0];
+pub(super) const CLIENT: [u8; 6] = [10, 0, 0, 1, 0xBA, 0xC0];
 /// The local device claiming the instance.
 const LOCAL: [u8; 6] = [10, 0, 0, 2, 0xBA, 0xC0];
-const ROUTER: [u8; 6] = [10, 0, 0, 9, 0xBA, 0xC0];
+pub(super) const ROUTER: [u8; 6] = [10, 0, 0, 9, 0xBA, 0xC0];
 const DNET: u16 = 2;
 const STATION: u8 = 0x05;
 const INSTANCE: u32 = 1234;
 
 /// Every confirmed request answered with an Error PDU from where it went:
 /// through the router, from the station it named.
-fn answer(frame: &SentFrame) -> Option<ReceivedNpdu> {
+pub(super) fn answer(frame: &SentFrame) -> Option<ReceivedNpdu> {
     if frame.broadcast {
         return None;
     }
@@ -130,7 +130,11 @@ async fn a_queued_routed_answer_and_its_local_alias_match_the_canonical_destinat
         address: DeviceAddress::local(&[STATION]).unwrap(),
         instance: Some(INSTANCE),
     };
-    for target in [Station::Instance(INSTANCE), Station::Mac(vec![STATION])] {
+    let mac = || Station::Mac {
+        mac: vec![STATION],
+        one_station: false,
+    };
+    for target in [Station::Instance(INSTANCE), mac()] {
         assert_eq!(
             target.destination(DNET, Some(DNET), &queued),
             Some(expected.clone())
@@ -149,7 +153,7 @@ async fn a_queued_routed_answer_and_its_local_alias_match_the_canonical_destinat
             .is_none()
     );
     assert_eq!(
-        Station::Mac(vec![STATION]).known(DNET, Some(DNET), std::slice::from_ref(&local)),
+        mac().known(DNET, Some(DNET), std::slice::from_ref(&local)),
         Some(Ok(expected))
     );
     let mut different = local.clone();
@@ -164,7 +168,7 @@ async fn a_queued_routed_answer_and_its_local_alias_match_the_canonical_destinat
 }
 
 /// The device's Error, as every call to the station should end.
-fn refused<V: std::fmt::Debug>(result: Result<V, Error>) -> bool {
+pub(super) fn refused<V: std::fmt::Debug>(result: Result<V, Error>) -> bool {
     matches!(
         result.as_ref().map_err(Error::remote),
         Err(Some(bacnet_types::error::RemoteError::Error {
@@ -180,7 +184,7 @@ type Sent = (Vec<u8>, Option<(u16, Vec<u8>)>, Option<S>);
 
 /// Where each unicast went, and its service: through the router to the
 /// station, never to the local device claiming the same instance.
-fn routed(sent: &SendLog) -> Vec<Sent> {
+pub(super) fn routed(sent: &SendLog) -> Vec<Sent> {
     sent.unicasts()
         .iter()
         .map(|frame| {

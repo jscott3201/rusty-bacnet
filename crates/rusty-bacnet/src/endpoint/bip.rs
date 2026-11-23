@@ -269,7 +269,7 @@ impl PyBipEndpoint {
     ///         writes: none (read-only), `"deny_all"` or a callable, never
     ///         `"permissive"`. `audit_device_bindings` is a list of
     ///         `(ObjectIdentifier, "ipv4:port")` routes to recipient
-    ///         Devices, or `"network:0xMAC"` for one behind a router, or a
+    ///         Devices, or `"network:0xMAC[:one-station]"` for one behind a router, or a
     ///         `RoutedTarget` with no router, which can mark the address
     ///         `one_station=True` (#2371, #2738). A Reporter identifier of
     ///         another type, and other shapes construction can check, raise

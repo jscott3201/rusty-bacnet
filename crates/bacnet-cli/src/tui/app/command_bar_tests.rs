@@ -67,12 +67,15 @@ fn a_routed_station_names_the_device_the_table_lists_there() {
     for missing in [
         "watch 2:0x06 ai:1",
         "watch 3:0x05 ai:1",
-        "watch 2:0x0005 ai:1",
         "writem 2:0x06 av:1 pv 4",
     ] {
         let error = super::parse(missing, &devices).unwrap_err();
         assert!(error.contains("no device in the device table"), "{error}");
     }
+    // Two octets are no station 5: the refusal is the address rules' own,
+    // not a hint to run a Who-Is.
+    let error = super::parse("watch 2:0x0005 ai:1", &devices).unwrap_err();
+    assert!(error.contains("not a station"), "{error}");
     // One row per address: another instance announced at the station
     // takes its row, and the station names that one now (#2560).
     devices.upsert(device_row(2003, Some((2, &[5]))));

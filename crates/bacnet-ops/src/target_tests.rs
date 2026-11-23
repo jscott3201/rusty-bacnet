@@ -34,7 +34,11 @@ fn ambiguous_device_candidates_read_back() {
         .split(", ")
         .map(|word| match parse_target(word) {
             Ok(Target::Mac(mac)) => at(0, &mac),
-            Ok(Target::RoutedMac { dnet, mac }) => at(dnet, &mac),
+            Ok(Target::RoutedMac {
+                dnet,
+                mac,
+                one_station: false,
+            }) => at(dnet, &mac),
             other => panic!("{word} reads back as {other:?}"),
         })
         .collect();
@@ -116,14 +120,16 @@ fn routed_targets_name_a_network_and_an_instance_or_a_mac() {
         parse_target("5:0x05"),
         Ok(Target::RoutedMac {
             dnet: 5,
-            mac: vec![5]
+            mac: vec![5],
+            one_station: false
         })
     );
     assert_eq!(
         parse_target("7:0X020000000001"),
         Ok(Target::RoutedMac {
             dnet: 7,
-            mac: vec![2, 0, 0, 0, 0, 1]
+            mac: vec![2, 0, 0, 0, 0, 1],
+            one_station: false
         })
     );
     for bad in ["0:1234", "65535:1234", "0:0x05", "65535:0x05"] {
@@ -190,7 +196,8 @@ fn routed_stations_read_back_as_the_same_target() {
             parse_target(&shown),
             Ok(Target::RoutedMac {
                 dnet: network,
-                mac: station.to_vec()
+                mac: station.to_vec(),
+                one_station: false
             }),
             "{shown}"
         );
@@ -436,7 +443,8 @@ fn mstp_targets_need_the_mstp_transport() {
         parse_target_on(&mstp, "2:0x05"),
         Ok(Target::RoutedMac {
             dnet: 2,
-            mac: vec![5]
+            mac: vec![5],
+            one_station: false
         })
     );
 }
@@ -519,4 +527,107 @@ fn the_test_transport_forwards_and_sets_the_kind() {
     let set = TestTransport::builder().data_link(DataLink::Mstp).build();
     assert!(is_mstp(&set));
     assert!(as_bip6(&set).is_none());
+}
+
+/// The suffix is read for the MACs the mark lifts, with the mark set, and
+/// every one of them reads back from `routed_target`.
+#[test]
+fn the_one_station_suffix_marks_a_lifted_mac() {
+    let cases: [(&str, u16, &[u8]); 4] = [
+        ("5:0xFF:one-station", 5, &[0xFF]),
+        ("9:0x0012:one-station", 9, &[0x00, 0x12]),
+        ("9:0xFF07:one-station", 9, &[0xFF, 0x07]),
+        ("9:0X00FF:one-station", 9, &[0x00, 0xFF]),
+    ];
+    for (text, dnet, mac) in cases {
+        assert_eq!(
+            parse_target(text),
+            Ok(Target::RoutedMac {
+                dnet,
+                mac: mac.to_vec(),
+                one_station: true
+            }),
+            "{text}"
+        );
+        // One spelling: upper-case hex, lower-case suffix.
+        let written = routed_target(dnet, mac, true).unwrap();
+        assert_eq!(
+            written.to_ascii_uppercase(),
+            text.replace("0X", "0x").to_ascii_uppercase()
+        );
+        assert_eq!(parse_target(&written).unwrap(), parse_target(text).unwrap());
+    }
+    // Without the suffix the same text parses unmarked: it is the
+    // address, and the address constructors refuse it.
+    assert_eq!(
+        parse_target("5:0xFF"),
+        Ok(Target::RoutedMac {
+            dnet: 5,
+            mac: vec![0xFF],
+            one_station: false
+        })
+    );
+    assert_eq!(routed_target(5, &[0xFF], false).unwrap(), "5:0xFF");
+}
+
+/// The suffix lifts nothing, so it is refused, with the reason: an
+/// ordinary station, the forms no mark lifts, a device instance, another
+/// suffix. Each refusal names the suffix and why.
+#[test]
+fn the_one_station_suffix_is_refused_where_it_lifts_nothing() {
+    let nothing = [
+        ("5:0x05:one-station", "an ordinary station"),
+        ("5:0x00:one-station", "an ordinary station"),
+        ("5:0x0100:one-station", "an ordinary station"),
+        ("5:0x7F000001C335:one-station", "an ordinary station"),
+        (
+            "5:0x0000:one-station",
+            "LonTalk broadcast to the whole domain",
+        ),
+        ("5:0xFFFF:one-station", "LonTalk group 255"),
+        ("5:0xFFFFFF:one-station", "VMAC 0xFFFFFF"),
+        (
+            "5:0xFFFFFFFFBAC0:one-station",
+            "a broadcast on every six-octet link",
+        ),
+    ];
+    for (text, why) in nothing {
+        let error = parse_target(text).unwrap_err();
+        assert!(
+            error.contains("':one-station' lifts nothing"),
+            "{text}: {error}"
+        );
+        assert!(error.contains(why), "{text}: {error}");
+    }
+    // Network 0 and 65535 are no network of a station's, with or without it.
+    for text in ["0:0xFF:one-station", "65535:0xFF:one-station"] {
+        let error = parse_target(text).unwrap_err();
+        assert!(error.contains("expected 1 to 65534"), "{text}: {error}");
+    }
+    // A device instance has no such form; its address does.
+    let error = parse_target("5:1234:one-station").unwrap_err();
+    assert!(error.contains("not a device instance"), "{error}");
+    assert!(error.contains("5:0xMAC:one-station"), "{error}");
+    // Any other third field, a stray one on an address or a repeat.
+    for text in [
+        "5:0xFF:One-Station",
+        "5:0xFF:one_station",
+        "5:0xFF:arcnet",
+        "5:0xFF:",
+        "5:0xFF:one-station:one-station",
+    ] {
+        let error = parse_target(text).unwrap_err();
+        assert!(error.contains("invalid suffix"), "{text}: {error}");
+        assert!(error.contains(":one-station"), "{text}: {error}");
+    }
+    // Local forms never take it: an IP, mstp:, bip6: and six octets.
+    for text in [
+        "10.0.0.1:47808:one-station",
+        "mstp:5:one-station",
+        "bip6:0x0004D2:one-station",
+        "02:00:00:00:00:01:one-station",
+        "1234:one-station",
+    ] {
+        assert!(parse_target(text).is_err(), "{text}");
+    }
 }

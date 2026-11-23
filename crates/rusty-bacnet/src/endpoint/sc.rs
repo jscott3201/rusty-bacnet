@@ -196,7 +196,7 @@ impl PyScEndpoint {
     ///         Keyword-only, as on `BipEndpoint` (#2348, #2357), each binding
     ///         address a VMAC as `local_address()` gives it
     ///         (`"xx:xx:xx:xx:xx:xx"`) or as twelve hex digits, or a routed
-    ///         `"network:0xMAC"` or `RoutedTarget` (#2371, #2738). An address
+    ///         `"network:0xMAC[:one-station]"` or `RoutedTarget` (#2371, #2738). An address
     ///         `audit_recipient` takes another node's VMAC: never the
     ///         broadcast or all-zero VMAC or this endpoint's own.
     ///     reconnect / sc_failover_hub / sc_connect_timeout_ms: Keyword-only

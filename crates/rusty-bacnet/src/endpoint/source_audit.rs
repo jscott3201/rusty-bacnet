@@ -1,7 +1,7 @@
 //! The endpoints' source Audit Reporter keywords (#2348, #2357):
 //! `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` take the same ones, each
 //! binding address in its link's format, or a Device behind a router as
-//! `"network:0xMAC"` or a `RoutedTarget` on any of them (#2371, #2738). They
+//! `"network:0xMAC[:one-station]"` or a `RoutedTarget` on any of them (#2371, #2738). They
 //! are parsed once at construction and kept for the rebuild at each start,
 //! as the object keywords are (#1867).
 
@@ -135,21 +135,28 @@ impl AuditLink {
     /// The binding address format, for messages.
     fn format(self) -> &'static str {
         match self {
-            Self::Bip(_) => "'ipv4:port' or a routed 'network:0xMAC'",
-            Self::Sc(_) => "a VMAC, 'xx:xx:xx:xx:xx:xx', or a routed 'network:0xMAC'",
-            Self::Mstp(_) => "a station, 0 to 254, or a routed 'network:0xMAC'",
+            Self::Bip(_) => "'ipv4:port' or a routed 'network:0xMAC[:one-station]'",
+            Self::Sc(_) => "a VMAC, 'xx:xx:xx:xx:xx:xx', or a routed 'network:0xMAC[:one-station]'",
+            Self::Mstp(_) => "a station, 0 to 254, or a routed 'network:0xMAC[:one-station]'",
         }
     }
 }
 
 /// A station behind a router, written as the CLI writes a routed target
 /// (`bacnet_ops::target::parse_target`'s `dnet:0xMAC`): the network in
-/// decimal digits, a colon, `0x` and an even, nonzero number of hex digits.
+/// decimal digits, a colon, `0x` and an even, nonzero number of hex digits,
+/// then optionally `:one-station`, which marks the address one station
+/// (#2738) and is taken only at a MAC the mark lifts
+/// ([`bacnet_ops::target::check_one_station`]).
 /// `None` when `address` isn't in that form (decimal digits, then `:0x`);
 /// `Some(None)` when it is, but doesn't parse. No other link's form starts
 /// that way: a B/IP address has dots, and a VMAC's second octet no `x`.
 fn routed(address: &str) -> Option<Option<Binding>> {
-    let (network, mac) = address.split_once(':')?;
+    let (network, rest) = address.split_once(':')?;
+    let (mac, mark) = match rest.split_once(':') {
+        Some((mac, mark)) => (mac, Some(mark)),
+        None => (rest, None),
+    };
     let hex = mac.strip_prefix("0x").or(mac.strip_prefix("0X"))?;
     if network.is_empty() || !network.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
@@ -164,15 +171,23 @@ fn routed(address: &str) -> Option<Option<Binding>> {
             .collect::<Option<Vec<u8>>>()
     })
     .flatten();
+    let one_station = mark.is_some();
+    let marked_ok = match (mark, &octets) {
+        (None, _) => true,
+        (Some(bacnet_ops::target::ONE_STATION_SUFFIX), Some(octets)) => {
+            bacnet_ops::target::check_one_station(octets).is_ok()
+        }
+        (Some(_), _) => false,
+    };
     Some(
         network
             .parse()
             .ok()
-            .zip(octets)
+            .zip(octets.filter(|_| marked_ok))
             .map(|(network, mac)| Binding::Routed {
                 network,
                 mac: MacAddr::from_slice(&mac),
-                one_station: false,
+                one_station,
             }),
     )
 }
@@ -192,8 +207,8 @@ enum Binding {
 }
 
 /// One `audit_device_bindings` address as Python gives it: a `str` in the
-/// link's format or a routed `"network:0xMAC"`, or a `RoutedTarget`, the
-/// one form that can mark the address one station (#2738). A
+/// link's format or a routed `"network:0xMAC[:one-station]"`, or a
+/// `RoutedTarget`, which also marks an address one station (#2738). A
 /// `RoutedTarget`'s network and MAC were checked when it was made; a router
 /// on it is refused when the bindings are parsed.
 pub(crate) enum BindingAddress {
