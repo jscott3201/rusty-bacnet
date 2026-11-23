@@ -18,7 +18,7 @@ use super::super::{
 use super::LaneLockSpy;
 use crate::server::command_remote_write_tests::{deliver, device, disable_initiation};
 use crate::server::cov_wire_test_support::*;
-use crate::server::device_bindings::{DeviceResolution, OBSERVED_BINDING_TTL, ObservationOutcome};
+use crate::server::device_bindings::{DeviceResolution, ObservationOutcome};
 use crate::server::event_recipient_routing_tests::{address_recipient, destination_for};
 use crate::server::remote_write_discovery_tests::{
     everywhere, i_am, next_who_is, targeted, who_is_sent,
@@ -806,34 +806,10 @@ async fn an_i_am_during_the_who_is_send_still_ends_the_wait() {
     h.server.stop().await.unwrap();
 }
 
-/// A bound Device recipient whose confirmed notification waits for an
-/// invoke ID past its observed binding's lifetime: once an ID comes back,
-/// its first attempt finds the binding gone, so it is withdrawn, its ID given
-/// back, counted as unbound, with no Who-Is for it. The next notification
-/// finds the binding stale and looks for the device where it was last seen.
-#[tokio::test(start_paused = true)]
-async fn a_binding_that_lapses_during_a_wait_for_an_invoke_id_counts_as_unbound() {
-    let mut h = start(true).await;
-    deliver(&h, &i_am(9), &DEVICE_9, None).await;
-    h.settle().await;
-    let transactions = Arc::clone(&h.server.notification_transactions);
-    let mut leases = transactions.lease_every_invoke_id();
-    h.write_pv(85.0, 0).await;
-    let waited = || {
-        h.server
-            .event_notification_counters()
-            .confirmed_waited_for_invoke_id
-    };
-    until("the wait for an ID", || waited() == 1).await;
-    tokio::time::sleep(OBSERVED_BINDING_TTL).await;
-    drop(leases.pop());
-    h.settle().await;
-    assert_eq!(notifications(&h), vec![(OTHER.to_vec(), 7, false)]);
-    assert_eq!(counted(&h), (1, 0));
-    assert!(next_who_is_none(&h));
-    assert_eq!(transactions.active_count(), 255, "its ID given back");
-    h.write_pv(50.0, 0).await;
-    assert_eq!(next_who_is(&h).await, (None, targeted(9)));
-    drop(leases);
-    h.server.stop().await.unwrap();
-}
+// A binding that lapses or moves while its notification waits for an
+// invoke ID (#2569).
+#[path = "event_lanes_rebind_tests.rs"]
+mod rebind;
+// Start-up Staging plans that alarm to silent devices (#2573).
+#[path = "event_lanes_start_tests.rs"]
+mod start_up;

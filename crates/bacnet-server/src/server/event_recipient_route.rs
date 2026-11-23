@@ -246,6 +246,40 @@ impl RecipientRoute {
         }
     }
 
+    /// This Device binding's freshness when it routes as `earlier` did: the
+    /// same local MAC, or the same station, router and one-station mark,
+    /// however long it now has left. `None` for any other route, a binding
+    /// that lapsed or moved among them (#2569).
+    pub(super) fn rebound_freshness(&self, earlier: &Self) -> Option<BindingFreshness> {
+        match (self, earlier) {
+            (
+                Self::BoundLocalUnicast { mac, freshness },
+                Self::BoundLocalUnicast { mac: was, .. },
+            ) if mac == was => Some(*freshness),
+            (
+                Self::BoundRoutedUnicast {
+                    network,
+                    mac,
+                    router,
+                    freshness,
+                    one_station,
+                },
+                Self::BoundRoutedUnicast {
+                    network: was_network,
+                    mac: was_mac,
+                    router: was_router,
+                    one_station: was_one_station,
+                    ..
+                },
+            ) if (network, mac, router, one_station)
+                == (was_network, was_mac, was_router, was_one_station) =>
+            {
+                Some(*freshness)
+            }
+            _ => None,
+        }
+    }
+
     /// The route a confirmed request to this recipient takes: each confirmed
     /// request the server starts toward a configured recipient or a bound
     /// device (event notifications, a Notification Forwarder's copies, a

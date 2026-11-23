@@ -77,10 +77,12 @@ pub struct EventNotificationCounters {
     /// when no Who-Is may go out for it (within a minute of one that drew
     /// nothing, or with 256 devices already being looked for). Both clear
     /// once the device's I-Am is observed again or a binding is configured.
-    /// A confirmed notification whose observed binding expires before an
-    /// attempt (a retry, or a first one that waited for its invoke ID) ends
-    /// there, its invoke ID freed, and counts here rather than in
-    /// `confirmed_unanswered` (#1371).
+    /// A confirmed notification whose observed binding expires before a
+    /// retry ends there, its invoke ID freed, and counts here rather than in
+    /// `confirmed_unanswered` (#1371). One that waited for its invoke ID
+    /// reads the binding again first: one that lapsed or moved meanwhile is
+    /// looked for as above, its ID given back, and counts here only if the
+    /// device stays silent (#2569).
     pub device_recipient_unbound: u64,
     /// Recipients that cannot be routed as configured, so no binding or
     /// retry delivers them: a Device recipient whose identifier is not a
@@ -107,9 +109,11 @@ pub struct EventNotificationCounters {
     /// No invoke ID is reserved for them.
     pub confirmed_broadcast_recipient: u64,
     /// Confirmed notifications that found every invoke ID in use and waited
-    /// for one to come back, counted once each as its wait starts (#2537).
-    /// None is dropped for want of an ID: it waits in its destination's
-    /// lane and holds up only that destination.
+    /// for one to come back, counted once each as its wait starts (#2537),
+    /// and those that found others already waiting and queued behind them,
+    /// even with an ID free (#2563). None is dropped for want of an ID: it
+    /// waits in its destination's lane and holds up only that destination,
+    /// and the waiters get IDs in the order they began to wait.
     pub confirmed_waited_for_invoke_id: u64,
     /// Confirmed notifications the recipient answered with an Error, Reject
     /// or Abort.
