@@ -13,6 +13,8 @@ mod nat_tests;
 pub(crate) mod overrides;
 pub(crate) mod sc;
 #[cfg(test)]
+mod sc_rounds_tests;
+#[cfg(test)]
 pub(crate) mod sc_tests;
 pub(crate) mod service;
 #[cfg(test)]

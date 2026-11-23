@@ -176,25 +176,30 @@ fn v4(socket: &UdpSocket) -> SocketAddrV4 {
     }
 }
 
-/// A one-client NAT on loopback: the client talks to `front`, and the
-/// BBMD sees every datagram come from `back`, the global address it
-/// records in its FDT. Returns `(front, back)` and the relay task.
-async fn nat(bbmd: SocketAddrV4) -> (SocketAddrV4, SocketAddrV4, tokio::task::JoinHandle<()>) {
+/// A one-client NAT on loopback: the client at `client` talks to `front`,
+/// and the BBMD sees every datagram come from `back`, the global address it
+/// records in its FDT. Each side passes on only what its own peer sent: a
+/// datagram from anywhere else is a late one meant for another test's
+/// process (#2718). Returns `(front, back)` and the relay task.
+async fn nat(
+    bbmd: SocketAddrV4,
+    client: SocketAddrV4,
+) -> (SocketAddrV4, SocketAddrV4, tokio::task::JoinHandle<()>) {
     let front = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let back = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let (front_at, back_at) = (v4(&front), v4(&back));
     let relay = tokio::spawn(async move {
         let (mut out, mut inbound) = ([0u8; 1500], [0u8; 1500]);
-        let mut client = None;
         loop {
             // Both arms are cancel safe: a datagram is taken whole or not.
             tokio::select! {
                 Ok((n, from)) = front.recv_from(&mut out) => {
-                    client = Some(from);
-                    let _ = back.send_to(&out[..n], bbmd).await;
+                    if from == client.into() {
+                        let _ = back.send_to(&out[..n], bbmd).await;
+                    }
                 }
-                Ok((n, _)) = back.recv_from(&mut inbound) => {
-                    if let Some(client) = client {
+                Ok((n, from)) = back.recv_from(&mut inbound) => {
+                    if from == bbmd.into() {
                         let _ = front.send_to(&inbound[..n], client).await;
                     }
                 }
@@ -205,15 +210,23 @@ async fn nat(bbmd: SocketAddrV4) -> (SocketAddrV4, SocketAddrV4, tokio::task::Jo
 }
 
 /// The BBMD records the relay's address, not ours: the global address
-/// finds the entry, and the screen says it was translated.
+/// finds the entry, and the screen says it was translated. The client's
+/// port is picked first, so the relay knows it before the client sends;
+/// another process can take it before the session binds it, which reruns
+/// the test.
 #[tokio::test]
 async fn a_translated_registration_is_found_at_the_global_address() {
+    super::port_retry::rerun_on_lost_port(translated_registration).await;
+}
+
+async fn translated_registration() -> std::io::Result<()> {
     let mut server = bbmd_server(3304, true).await;
-    let (front, global, relay) = nat(server_address(&server)).await;
+    let client = v4(&UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap());
+    let (front, global, relay) = nat(server_address(&server), client).await;
     let mut profile = Profile::default();
     let bip = profile.bip_mut();
     bip.interface = Ipv4Addr::LOCALHOST;
-    bip.port = 0;
+    bip.port = client.port();
     bip.broadcast = Ipv4Addr::LOCALHOST;
     bip.bbmd = Some(front.into());
     bip.ttl = 60;
@@ -223,7 +236,14 @@ async fn a_translated_registration_is_found_at_the_global_address() {
         args: profile.transport_args().unwrap(),
         await_interface: false,
     };
-    let mut net = Net::start(plan).await;
+    let mut net = match Net::start_on(plan, client.port()).await {
+        Ok(net) => net,
+        Err(lost) => {
+            relay.abort();
+            server.stop().await.unwrap();
+            return Err(lost);
+        }
+    };
     net.press(KeyCode::Char('4')).await;
     assert_eq!(
         net.app.network.foreign.as_ref().unwrap().nat_global,
@@ -253,4 +273,5 @@ async fn a_translated_registration_is_found_at_the_global_address() {
     net.stop().await;
     relay.abort();
     server.stop().await.unwrap();
+    Ok(())
 }

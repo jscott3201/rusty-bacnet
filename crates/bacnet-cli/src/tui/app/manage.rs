@@ -26,9 +26,10 @@ pub(crate) const MONITOR_ONLY: &str =
     "Monitor-only: this session listens and transmits nothing; dcc and reinit are refused.";
 
 impl App {
-    /// The device `:dcc` and `:reinit` go to: the browser's on the Browse
-    /// screen, the selected row's on the Devices screen, none elsewhere.
-    fn manage_target(&mut self) -> Option<(u32, bacnet_ops::DeviceAddress)> {
+    /// The device in front of the operator, which `:dcc` and `:reinit` go
+    /// to and `:path-limit .` names: the browser's on the Browse screen, the
+    /// selected row's on the Devices screen, none elsewhere.
+    pub(super) fn selected_device(&mut self) -> Option<(u32, bacnet_ops::DeviceAddress)> {
         if let Some(browser) = self.shown_browser() {
             return Some((browser.device, browser.at.clone()));
         }
@@ -68,7 +69,7 @@ impl App {
             self.flash(why, FLASH_FOR);
             return;
         }
-        let Some((device, at)) = self.manage_target() else {
+        let Some((device, at)) = self.selected_device() else {
             self.flash(NO_DEVICE, FLASH_FOR);
             return;
         };

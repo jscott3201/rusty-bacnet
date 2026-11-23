@@ -207,14 +207,21 @@ anything, and so are a router named as a device or as a station behind a
 router (`1234`, `5:0x0a`) and one path named twice, however its router is
 written. A path's limit lasts for the run only. `tui`, `mcp`, plain `bacnet`,
 `capture`, `sc-check` and `mstp-ports` refuse the flag rather than ignore it.
-In the TUI, the command bar's `path-limit ROUTER/NETWORK=SIZE` sets a path's
-limit for the session, and `path-limit ROUTER/NETWORK clear` puts the default
-back. They take the router in the flag's forms but one: a B/IPv6 router is
-named by its `bip6:0x...` VMAC, since the TUI refuses a socket address
-rather than ask the router for its VMAC. They send nothing, and work at every
-write level. When a device
-behind a router stops answering after a small request was refused there, the
-browser says so under its failed read and names the command.
+In the TUI, the command bar's `path-limit DEVICE SIZE` sets the limit of the
+path to a device for the session, and `path-limit DEVICE clear` puts the
+default back. DEVICE is a device from the device table as `watch` takes it
+(`1234`, `5:1234`, `5:0x0a`) or `.` for the device open in Browse or selected
+on the Devices screen; the path is the router and network the client reaches
+that device through, and a device on this network, which has none, is
+refused. `path-limit ROUTER/NETWORK=SIZE` and `path-limit ROUTER/NETWORK
+clear` name the path by its router instead, in the flag's forms but one: a
+B/IPv6 router is named by its `bip6:0x...` VMAC, since the TUI refuses a
+socket address rather than ask the router for its VMAC. A router form always
+has a `/` between the router and the network and a device never has one, so
+the first word says which form it is. They send nothing, and work at every
+write level. When a device behind a router stops answering after a small
+request was refused there, the browser says so under its failed read and
+names the command, the device form first.
 
 After the command, the CLI prints the client's routed paths to stderr when
 something happened that the command line didn't ask for: a path learned a
@@ -462,13 +469,18 @@ same across restarts. An SC profile reconnects with backoff after it loses its
 hub, primary-only profiles included, so a long session survives a hub restart:
 by default the first retry comes after 10 s, the delay doubles up to 10 min,
 and 10 rounds are made, each trying the primary and then a failover hub, if
-one is set. `reconnect_max_retries = 0` gives up at the first loss.
-`reconnect = false` turns this off (a lost hub then stays down) and is refused
-with a failover URL, since the failover hub is reached by reconnecting. The
-backoff (`reconnect_initial_delay_ms`, `reconnect_max_delay_ms`,
-`reconnect_max_retries`) and the connect timeout (`connect_timeout_ms`, 1 to
-600000, default 10000) can be set in the file; the editor offers the connect
-timeout and reconnect on/off. `--sc-failover-url`, `--sc-reconnect` and
+one is set. `reconnect_max_retries = 0` gives up at the first loss, and
+`reconnect_max_retries = "unlimited"` keeps trying for as long as a hub can be
+dialled, which needs `reconnect_initial_delay_ms` of at least 1000; a file
+without the key makes the 10 rounds. The connection view shows the rounds,
+`0` as no recovery. `reconnect = false` turns this off (a lost hub then stays
+down) and is refused with a failover URL, since the failover hub is reached by
+reconnecting. The backoff (`reconnect_initial_delay_ms`,
+`reconnect_max_delay_ms`, at most 600000, ten minutes, the most Annex AB.6.1
+lets the reconnect wait grow to, and `reconnect_max_retries`) and the connect
+timeout (`connect_timeout_ms`, 1 to 600000, default 10000) can be set in the
+file, and a value out of range is a profile error naming its key; the editor
+offers the connect timeout and reconnect on/off. `--sc-failover-url`, `--sc-reconnect` and
 `--sc-connect-timeout` override a profile like the other flags, and give a
 flags-only session the same settings (reconnect stays off there unless one of
 the first two is given).
@@ -558,7 +570,7 @@ connect_timeout_ms = 10000
 reconnect = true                  # false: a lost hub stays down (no failover then)
 reconnect_initial_delay_ms = 10000
 reconnect_max_delay_ms = 600000
-reconnect_max_retries = 10
+reconnect_max_retries = 10        # 0: no recovery; "unlimited": no limit
 
 [safety]
 writes = "session"
@@ -630,7 +642,7 @@ table is refreshed from the client's discovery table afterwards.
 | `/` | Filter rows by instance, address, network or vendor; Enter keeps the filter, Esc clears it |
 | `Enter` | Browse the selected device |
 | `1` / `2` / `3` / `4` / `5` / `6` / `7` / `8` | The devices / Browse, the open device's browser / the watch list / the Network screen (BBMD tables on B/IP; the Networks tab on every transport) / the SC screen / the MS/TP screen / Capture / the agent pane, the attached agents' MCP calls and the write requests waiting for you (only while the profile's MCP listener runs; otherwise `8` stays and says so). The status bar's strip numbers those that apply to the session (Network once connected, SC on SC, MS/TP with a serial port, Agents with a listener), with the one shown in brackets. `1` keeps an open browser as it was, and `2` shows it again; with no device open, `2` stays on the devices and says so |
-| `:` | Command bar: `watch DEVICE OBJECT [PROPERTY]`, `csv on`, `csv off`, `writem DEVICE OBJECT PROPERTY VALUE[@P] ...`, `bbmd [ADDRESS]`, `find NAME`, `find --dnet N NAME`, `find --global NAME`, `path-limit ROUTER/NETWORK=SIZE`, `path-limit ROUTER/NETWORK clear`, `mstp rotation MS`, `mstp hold MS`, `mstp listen SECS`, `mstp scan SECS`, `mstp scan cancel`, `dcc enable`, `dcc ACTION [MINUTES|forever]`, `reinit STATE`; the footer shows the syntax of the commands matching what is typed |
+| `:` | Command bar: `watch DEVICE OBJECT [PROPERTY]`, `csv on`, `csv off`, `writem DEVICE OBJECT PROPERTY VALUE[@P] ...`, `bbmd [ADDRESS]`, `find NAME`, `find --dnet N NAME`, `find --global NAME`, `path-limit DEVICE SIZE`, `path-limit DEVICE clear`, `path-limit ROUTER/NETWORK=SIZE`, `path-limit ROUTER/NETWORK clear`, `mstp rotation MS`, `mstp hold MS`, `mstp listen SECS`, `mstp scan SECS`, `mstp scan cancel`, `dcc enable`, `dcc ACTION [MINUTES|forever]`, `reinit STATE`; the footer shows the syntax of the commands matching what is typed |
 | `W` | Arm a write session, or disarm the armed one |
 | `w` / `n` | On an open object, in a write session: write a property / relinquish a priority slot |
 | `u` | The session ledger |
