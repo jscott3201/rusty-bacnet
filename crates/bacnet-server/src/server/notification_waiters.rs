@@ -7,7 +7,8 @@
 //! state's lock. Only the queue's head tries for an ID: it waits for a lease
 //! to end, and the others for their turn. Once the head has its ID, or
 //! leaves the queue for any reason (stop, its lane's task aborted, its
-//! future dropped), the next is woken to try at once. No ID is ever set
+//! future dropped), the next is woken to try at once. Closing the state
+//! wakes every waiter, the head too, to find it closed. No ID is ever set
 //! aside for a waiter: each takes its own, in a poll of its own future, so
 //! one that is cancelled or no longer polled holds none.
 //!
@@ -20,9 +21,16 @@
 //! reservation of this server leaves the last free ID to it, until it has
 //! one. So the head is passed over by this server's own work at most twice,
 //! once as its turn comes and once after a lease ends, and the next ID this
-//! server can lease is its own. A node's client role leases from the node's
-//! pool directly and is not ordered here; on a seat the server holds at
-//! most [`SEAT_LEASES`] and the client keeps the rest.
+//! server can lease is its own. In that window, until the woken head is
+//! polled, the last free ID is refused to the rest as when none is free: a
+//! Command or Channel run's request fails, an Audit record is dropped or
+//! kept for a retry as it would be then, and a COV report is owed a look.
+//!
+//! A known limit, tracked on #2617: a node's client role leases from the
+//! node's pool directly, not through this queue, so while that pool is
+//! full a client that keeps leasing can take each freed ID ahead of the
+//! head, without bound. On a seat the server holds at most
+//! [`SEAT_LEASES`], and the client keeps the rest.
 
 use super::*;
 use std::collections::VecDeque;
@@ -45,7 +53,7 @@ pub(super) struct Waiters {
 
 struct Waiter {
     ticket: u64,
-    /// Woken when its turn comes.
+    /// Woken when its turn comes, or as the state closes.
     waker: Option<Waker>,
 }
 
@@ -168,9 +176,25 @@ impl NotificationTransactions {
                     return result;
                 }
             }
-            released.await;
-            woken = true;
+            // A lease's end wakes it, or the state closing, which wakes the
+            // head through its place as it wakes the rest: with no lease of
+            // this server's own to cancel, closing ends no lease.
+            let mut released = std::pin::pin!(released);
+            woken = poll_fn(|cx| match released.as_mut().poll(cx) {
+                Poll::Ready(()) => Poll::Ready(true),
+                Poll::Pending => core.park(cx, ticket).map(|()| false),
+            })
+            .await;
         }
+    }
+
+    /// How many event notifications wait for an invoke ID, for tests.
+    #[cfg(test)]
+    pub(in crate::server) fn waiting_for_ids(&self) -> usize {
+        self.core
+            .state
+            .lock()
+            .map_or(0, |state| state.waiters.len())
     }
 }
 
@@ -276,6 +300,22 @@ impl NotificationCore {
             }
             _ => Poll::Ready(()),
         }
+    }
+
+    /// Ready once the state is closed or poisoned; otherwise `ticket`'s place
+    /// keeps `cx`'s waker, for closing to wake.
+    fn park(&self, cx: &mut Context<'_>, ticket: u64) -> Poll<()> {
+        let Ok(mut state) = self.state.lock() else {
+            return Poll::Ready(());
+        };
+        if state.closed {
+            return Poll::Ready(());
+        }
+        let queue = &mut state.waiters.queue;
+        if let Some(waiter) = queue.iter_mut().find(|waiter| waiter.ticket == ticket) {
+            waiter.waker = Some(cx.waker().clone());
+        }
+        Poll::Pending
     }
 
     /// Give up `ticket`'s place, waking the next when it was the head.

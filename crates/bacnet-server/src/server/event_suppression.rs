@@ -108,11 +108,12 @@ pub struct EventNotificationCounters {
     /// unconfirmed would drop the acknowledgment the destination asks for.
     /// No invoke ID is reserved for them.
     pub confirmed_broadcast_recipient: u64,
-    /// Confirmed notifications that found every invoke ID in use, or others
-    /// already waiting, and waited for one to come back, counted once each
-    /// as its wait starts (#2537). None is dropped for want of an ID: it
+    /// Confirmed notifications that found every invoke ID in use and waited
+    /// for one to come back, counted once each as its wait starts (#2537),
+    /// and those that found others already waiting and queued behind them,
+    /// even with an ID free (#2563). None is dropped for want of an ID: it
     /// waits in its destination's lane and holds up only that destination,
-    /// and the waiters get IDs in the order they began to wait (#2563).
+    /// and the waiters get IDs in the order they began to wait.
     pub confirmed_waited_for_invoke_id: u64,
     /// Confirmed notifications the recipient answered with an Error, Reject
     /// or Abort.

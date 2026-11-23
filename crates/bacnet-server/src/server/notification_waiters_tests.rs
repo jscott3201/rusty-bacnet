@@ -214,6 +214,70 @@ fn a_head_passed_over_takes_the_next_id() {
     assert!(head.served());
 }
 
+/// A server on a node's seat: its cap of 64, not the node's pool, is the
+/// limit.
+fn seated() -> (
+    Arc<OutboundTransactionCoordinator>,
+    Arc<NotificationTransactions>,
+) {
+    let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+    let transactions =
+        NotificationTransactions::with_lease_cap(Arc::clone(&coordinator), SEAT_LEASES);
+    (coordinator, transactions)
+}
+
+/// On a seat at its cap, the node's pool with IDs to spare, the server's
+/// own work keeps the order: the oldest waiter takes the first lease to
+/// end, and a head that other work passed over takes the next.
+#[test]
+fn on_a_seat_the_order_holds_among_the_servers_own_work() {
+    let (_coordinator, transactions) = seated();
+    let mut leases: Vec<_> = (0..SEAT_LEASES)
+        .map(|_| fresh(&transactions).expect("within the cap"))
+        .collect();
+    assert!(exhausted(&fresh(&transactions)), "at the cap");
+    assert_eq!(
+        transactions.active_count(),
+        SEAT_LEASES,
+        "the pool has more"
+    );
+    let mut waiters = queued(&transactions, 2);
+    drop(leases.pop());
+    assert!(!waiters[1].served());
+    assert!(waiters[0].served(), "the oldest");
+    drop(leases.pop());
+    let _first = fresh(&transactions).expect("may go first as the turn passes");
+    assert!(!waiters[1].served());
+    drop(leases.pop());
+    let _second = fresh(&transactions).expect("may go first once more");
+    assert!(!waiters[1].served(), "passed over");
+    drop(leases.pop());
+    assert_eq!(transactions.free_invoke_ids(), 0, "the free one is owed");
+    assert!(exhausted(&fresh(&transactions)), "held back");
+    assert!(waiters[1].served());
+}
+
+/// On a seat holding no lease of its own, the node's client holding the
+/// whole pool, closing ends no lease, and still wakes the head as well as
+/// the rest, each to find it closed.
+#[test]
+fn closing_wakes_a_head_with_no_lease_to_end() {
+    let (coordinator, transactions) = seated();
+    for peer in 0..=u8::MAX {
+        let metadata = LeaseMetadata::notification(canonical_direct_peer(&[peer]), EVENT);
+        coordinator.reserve(metadata).expect("a free ID");
+    }
+    let mut waiters = queued(&transactions, 2);
+    transactions.close();
+    for waiter in &mut waiters {
+        assert!(waiter.woken() > 0, "woken by the close");
+        assert!(matches!(
+            waiter.poll(),
+            Poll::Ready(Err(NotificationReserveError::Closed))
+        ));
+    }
+}
+
 /// Closing ends every wait, the queued ones woken to find it closed.
 #[test]
 fn closing_ends_every_wait() {

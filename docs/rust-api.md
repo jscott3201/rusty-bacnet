@@ -12617,10 +12617,15 @@ only its own lane (#2537). A confirmed one holds its lane until its first
 attempt is handed off, and, with every invoke ID in use, until one comes back,
 counted once in `confirmed_waited_for_invoke_id`. The lanes waiting for an
 ID get one in the order they began to wait, one arriving while others wait
-queuing behind them (#2563). Other work of the server that doesn't wait (a
-COV report, an Audit record, a run's request) may take a freed ID first, but
-once it has, the next free ID is kept for the oldest waiter; a node's client
-role leases from the node's pool apart from this order. A Device recipient's
+queuing behind them, and counted, even with an ID free (#2563). Other work
+of the server that doesn't wait (a COV report, an Audit record, a run's
+request) may take a freed ID first, but once it has, the next free ID is
+kept for the oldest waiter: until that waiter takes it, a Command or Channel
+run's request fails, an Audit record is dropped or kept for a retry, and a
+COV report is owed a look, as when no ID is free. A known limit, tracked on
+#2617: a node's client role leases from the node's pool apart from this
+order, so while that pool is full a client that keeps leasing can take each
+freed ID ahead of the waiters. A Device recipient's
 binding is read again once its ID comes: a binding refreshed meanwhile still
 takes the notification, and one that lapsed or moved is looked for as at a
 first send, the ID given back while it is (#2569). A Device recipient the

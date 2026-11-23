@@ -1,7 +1,7 @@
 ---
 section: Fixed
 ---
-- Confirmed event notifications waiting for an invoke ID now get one in the
-  order they began to wait, and once other server work has taken a freed ID
-  ahead of the oldest, the next free one is kept for it, so no lane waits
-  without bound (#2563).
+- Confirmed event notifications waiting for an invoke ID get one in the
+  order they began to wait; one arriving behind others queues, and counts
+  as a wait, even with an ID free. Once the server's own work takes a freed
+  ID ahead of the oldest, the next is kept for it (#2563).
