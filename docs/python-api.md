@@ -7773,7 +7773,11 @@ async with endpoint:
   segments the endpoint doesn't send fails before anything goes out.
   `NO_SEGMENTATION` keeps everything to one APDU, for a constrained link or
   a peer that can't segment. `BACnetServer()` keeps its own default,
-  `NO_SEGMENTATION`.
+  `NO_SEGMENTATION`. The keyword-only `apdu_segment_timeout_ms` (default
+  5000, positive when segmenting) is the Device's APDU_Segment_Timeout,
+  which both roles use while they segment. Known gap: `client()` still
+  aborts a segmented ConfirmedCOVNotification (#2646), though the Device
+  says it takes segments.
 - **Who may write.** The keyword-only `mutation_policy` takes what
   `BACnetServer`'s does: `"permissive"` (any peer), `"deny_all"` (no peer,
   COV subscriptions included) or a callable that gets a `MutationContext`
