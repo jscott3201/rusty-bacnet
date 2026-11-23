@@ -1,5 +1,6 @@
 //! Owned immutable B/IP construction inputs; parsing performs no I/O.
 use crate::bip_options::{PyBbmd, PyForeignDevice, bip_mode, parse_ip};
+use bacnet_network::router::{ControlPolicy, RouterOptions};
 use bacnet_transport::bip::{BipMode, BipTransport};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -119,5 +120,63 @@ impl PyBipRouterPort {
             self.mode(),
             if self.0.isolated { "True" } else { "False" }
         )
+    }
+}
+
+/// The router's own options (#2725), `RouterOptions` in Rust: the keywords
+/// `remote_table_updates`, `next_hop_rejects` and `control_policy`, fixed
+/// at construction and applied at each start.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct RouterSettings {
+    /// Take routing-table updates that arrive from another network.
+    pub remote_table_updates: bool,
+    /// Apply a reject to a learned route only from its next router.
+    pub next_hop_rejects: bool,
+    /// The wire-control policy.
+    pub control_policy: ControlPolicy,
+}
+
+impl RouterSettings {
+    /// The keywords, checked: `control_policy` is `"permissive"` or
+    /// `"hardened"`, anything else ValueError.
+    pub fn parse(
+        remote_table_updates: bool,
+        next_hop_rejects: bool,
+        control_policy: &str,
+    ) -> PyResult<Self> {
+        let control_policy = match control_policy {
+            "permissive" => ControlPolicy::Permissive,
+            "hardened" => ControlPolicy::Hardened,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "control_policy must be 'permissive' or 'hardened', not {other:?}"
+                )));
+            }
+        };
+        Ok(Self {
+            remote_table_updates,
+            next_hop_rejects,
+            control_policy,
+        })
+    }
+
+    /// The `control_policy` keyword's value.
+    pub fn policy_name(&self) -> &'static str {
+        match self.control_policy {
+            ControlPolicy::Permissive => "permissive",
+            ControlPolicy::Hardened => "hardened",
+        }
+    }
+
+    /// These settings as the options `BACnetRouter::start` takes.
+    pub fn router_options(&self) -> RouterOptions {
+        let mut options = RouterOptions::new().control_policy(self.control_policy);
+        if self.remote_table_updates {
+            options = options.remote_table_updates();
+        }
+        if self.next_hop_rejects {
+            options = options.next_hop_rejects();
+        }
+        options
     }
 }

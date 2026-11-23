@@ -1,6 +1,7 @@
 //! B/IP-only forwarding owner with retained native lifecycle and copied state.
 pub(crate) mod application;
 mod config;
+mod counters;
 mod errors;
 mod lifecycle;
 mod publication;
@@ -10,7 +11,7 @@ mod session;
 mod tests;
 
 use application::Application;
-use config::{PortConfig, PyBipRouterPort};
+use config::{PortConfig, PyBipRouterPort, RouterSettings};
 use lifecycle::Lifecycle;
 use publication::Publication;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -29,6 +30,8 @@ pub(crate) struct PyBACnetRouter {
     configs: Vec<PortConfig>,
     /// How the router shares its application entity (#2071).
     application: Application,
+    /// The router's own options (#2725).
+    settings: RouterSettings,
     lifecycle: Lifecycle<NativeSession>,
     event_loop: Mutex<Option<Py<PyAny>>>,
 }
@@ -65,10 +68,35 @@ impl PyBACnetRouter {
     /// `"client_and_server"` for a `BACnetClient` and a `BACnetServer`. Each
     /// stack is built with `transport="router", router=router` and takes its
     /// share when it starts, once per router start.
+    ///
+    /// The router's own options (#2725), `RouterOptions` in Rust, applied
+    /// at each start: `remote_table_updates=True` takes routing-table
+    /// updates that arrive from another network, which the router drops by
+    /// default; `next_hop_rejects=True` lets a reject change a learned route
+    /// only when it comes from that route's next router; `control_policy`
+    /// is `"permissive"` (the default) or `"hardened"`, which denies every
+    /// protected wire control, such as a route announcement or a table
+    /// update, since Python installs no authorizer. Anything else raises
+    /// ValueError, and a non-bool flag TypeError.
     #[new]
-    #[pyo3(signature = (ports, *, application=None))]
-    fn new(ports: Vec<PyRef<'_, PyBipRouterPort>>, application: Option<&str>) -> PyResult<Self> {
+    #[pyo3(signature = (
+        ports,
+        *,
+        application=None,
+        remote_table_updates=false,
+        next_hop_rejects=false,
+        control_policy="permissive",
+    ))]
+    fn new(
+        ports: Vec<PyRef<'_, PyBipRouterPort>>,
+        application: Option<&str>,
+        remote_table_updates: bool,
+        next_hop_rejects: bool,
+        control_policy: &str,
+    ) -> PyResult<Self> {
         let application = Application::parse(application)?;
+        let settings =
+            RouterSettings::parse(remote_table_updates, next_hop_rejects, control_policy)?;
         if ports.is_empty() || ports.len() > 255 {
             return Err(PyValueError::new_err(
                 "router requires between 1 and 255 ports",
@@ -88,6 +116,7 @@ impl PyBACnetRouter {
         Ok(Self {
             configs,
             application,
+            settings,
             lifecycle: Lifecycle::new(),
             event_loop: Mutex::new(None),
         })
@@ -100,6 +129,24 @@ impl PyBACnetRouter {
         self.application.name()
     }
 
+    /// Whether the router takes routing-table updates from another network.
+    #[getter]
+    fn remote_table_updates(&self) -> bool {
+        self.settings.remote_table_updates
+    }
+
+    /// Whether only a route's next router may change it with a reject.
+    #[getter]
+    fn next_hop_rejects(&self) -> bool {
+        self.settings.next_hop_rejects
+    }
+
+    /// The wire-control policy: `"permissive"` or `"hardened"`.
+    #[getter]
+    fn control_policy(&self) -> &'static str {
+        self.settings.policy_name()
+    }
+
     /// Start this configuration; duplicate explicit start raises RuntimeError.
     /// The returned object is an Awaitable, not necessarily a coroutine.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -107,7 +154,7 @@ impl PyBACnetRouter {
         crate::logging_bridge::refresh_at_start(py);
         let owner = self.lifecycle.clone();
         let config = self.configs.clone();
-        let application = self.application;
+        let (application, settings) = (self.application, self.settings);
         let networks = self.networks();
         let publication = Publication::new(owner.clone());
         let hook = publication.clone();
@@ -115,7 +162,7 @@ impl PyBACnetRouter {
             py,
             async move {
                 publication
-                    .start(false, config, application)
+                    .start(false, config, application, settings)
                     .await
                     .map_err(|e| errors::start_error(e, &networks))?;
                 crate::py_async::attach(|py| Ok(py.None()))
@@ -141,13 +188,14 @@ impl PyBACnetRouter {
     /// Enter the owner, reusing its running generation if already started.
     fn __aenter__<'py>(slf: Bound<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let self_ref = slf.clone().unbind();
-        let (owner, config, application, networks) = {
+        let (owner, config, application, settings, networks) = {
             let this = slf.borrow();
             this.bind_loop(py)?;
             (
                 this.lifecycle.clone(),
                 this.configs.clone(),
                 this.application,
+                this.settings,
                 this.networks(),
             )
         };
@@ -158,7 +206,7 @@ impl PyBACnetRouter {
             py,
             async move {
                 publication
-                    .start(true, config, application)
+                    .start(true, config, application, settings)
                     .await
                     .map_err(|e| errors::start_error(e, &networks))?;
                 Ok(self_ref)
@@ -196,6 +244,22 @@ impl PyBACnetRouter {
                 .inspect(NativeSession::ports)
                 .await
                 .ok_or_else(|| PyRuntimeError::new_err("router not started or already closing"))
+        })
+    }
+
+    /// Copy the engine's counts since this start and its wire-control
+    /// decisions (#2725): a dict with every Rust `Counters` field under its
+    /// own name, and under `"control"` each decision class with its allow,
+    /// deny and policy-deny totals.
+    fn counters<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.bind_loop(py)?;
+        let owner = self.lifecycle.clone();
+        crate::py_async::future_into_py(py, async move {
+            let snapshot = owner
+                .inspect(NativeSession::counters)
+                .await
+                .ok_or_else(|| PyRuntimeError::new_err("router not started or already closing"))?;
+            crate::py_async::attach(|py| Ok(snapshot.into_dict(py)?.into_any().unbind()))
         })
     }
 

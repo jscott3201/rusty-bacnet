@@ -589,13 +589,11 @@ neither is raised. A read that could read nothing raises.
 
 `BACnetRouter` owns forwarding across configured B/IP networks (Clause 6).
 This source-build API provides B/IP ports, router discovery, copied route
-inspection, and a client and server on the router's own application entity
+inspection and counters, three router options, and a client and server on the
+router's own application entity
 ([below](#a-client-and-a-server-on-the-router)). Other link types, route
-administration, and the full native `RouterOptions` surface are outside this
-binding. Native router defaults apply, including the permissive
-wire-control policy; this API does not add an authorization policy. One
-default is not permissive: a routing-table update that arrives from another
-network is dropped (#2717), and this binding has no option to accept one.
+administration, a wire-control authorizer, and the native router's congestion
+and duplicate-suppression options are outside this binding.
 
 ```python
 from rusty_bacnet import BACnetRouter, BipRouterPort
@@ -661,8 +659,8 @@ level for a port and no access control: a Reject-Message-To-Network or a
 routing-table update from a node on an isolated port can still mark, remove or
 redirect a route through an ordinary port. The native controls for those
 (`RouterOptions::next_hop_rejects()`, and the control policy and authorizer)
-are not exposed by this binding, and neither are the router's counters
-(`isolated_drops`, `isolated_refusals`).
+are the router options below; what isolation stopped is counted in
+`counters()` (`isolated_drops`, `isolated_refusals`).
 
 `routes()` returns frozen `RouterRoute` objects with destination network, egress
 index, direct/learned identity, next-hop MAC (`None` for a direct route), and
@@ -692,6 +690,47 @@ Context exit waits for cleanup and preserves an exception from the body as the
 primary exception; a secondary cleanup error remains observable through a later
 `close()`. Destruction requests best-effort cleanup on the shared runtime. Use
 an awaited close or context exit when resource release must be established.
+
+### Router options and counters
+
+Three keyword-only options, Rust's `RouterOptions`, apply at each start
+(#2725), and read back as properties of the same names:
+
+- `remote_table_updates=False`: the router drops an Initialize-Routing-Table
+  update that arrives from another network, one that carries an SNET, and
+  counts it in `denied` (#2717). Clause 6.6.3.8 sets no limit on who may send
+  one; this default is the router's own. `True` takes such updates as it takes
+  one from its own networks: turn it on only for a site that manages router
+  tables from a station on another network.
+- `next_hop_rejects=False`: a received Reject-Message-To-Network changes the
+  learned route it names whoever relayed it (Clause 6.6.3.5). `True` applies
+  one only when it comes from that route's next router; one from another router
+  is still passed on toward its destination, leaves the route alone, and is
+  counted in `not_next_hop`.
+- `control_policy="permissive"`: the wire controls that change routes are
+  admitted. `"hardened"` denies every protected one, route announcements and
+  routing-table updates and answers among them, since this binding installs no
+  authorizer; the router then keeps its direct routes and learns none from the
+  wire. Each decision is counted under `counters()["control"]`.
+
+Another policy raises `ValueError`, and a flag that isn't a `bool` `TypeError`.
+
+```python
+router = BACnetRouter(ports, next_hop_rejects=True, control_policy="hardened")
+async with router:
+    counts = await router.counters()
+    print(counts["isolated_drops"], counts["denied"],
+          counts["control"]["i_am"]["policy_deny_total"])
+```
+
+`counters()` copies the router's counts since this start, zero at each start:
+every Rust router `Counters` field under its own name (a `RouterCounters`
+typed dict), each a total that saturates at 2**64-1 and names no peer, and
+under `"control"` each protected control class (`i_am`, `init_ack`,
+`init_mgmt`, `busy`, `available`, `reject`, `i_could_be`, `init_query`) with
+its `allow_total`, `deny_total` and `policy_deny_total`. The fields are sampled
+one by one. It raises `RuntimeError` before start and once close begins, as
+the snapshot methods do.
 
 ### A client and a server on the router
 
