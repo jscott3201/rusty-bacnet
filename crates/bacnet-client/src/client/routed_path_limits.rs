@@ -124,6 +124,10 @@ struct RoutedPathEntry {
     /// (#2683), so a reason 4 is judged by the limit its request was sized
     /// to, not the one in force when it lands.
     sized_under: u64,
+    /// A busy reject (reason 2) tied to a request on the path, which names
+    /// the router if that request times out (#2724). Written on the receive
+    /// side only; a later request's owner never matches it.
+    busy: Option<Box<rejects::BusyNote>>,
 }
 
 impl RoutedPathEntry {
@@ -142,6 +146,7 @@ impl RoutedPathEntry {
             below_minimum_warned: false,
             changed: last_used,
             sized_under: last_used,
+            busy: None,
         }
     }
 
@@ -592,6 +597,7 @@ impl RoutedPathLease {
             .get_mut(&self.key)
             .expect("path entry remains present while its gate is held");
         entry.generation_end = GenerationEnd::Answered;
+        entry.busy = None;
     }
 }
 

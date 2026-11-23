@@ -99,6 +99,8 @@ class IsolatedPortRoutingTests(unittest.IsolatedAsyncioTestCase):
         error = caught.exception
         self.assertEqual((error.reason, error.network), (1, 7))
         self.assertEqual(error.router, self.ports[1].address)
+        # One frame went, and the router refused it: the node never got it.
+        self.assertIs(error.reached_device, False)
         self.assertIn("no route to network 7 (not-directly-connected, reason 1)", str(error))
         self.assertNotIsInstance(error, rb.BacnetTimeoutError)
         self.assertIsNone(rb.BacnetNetworkRejectError.router)

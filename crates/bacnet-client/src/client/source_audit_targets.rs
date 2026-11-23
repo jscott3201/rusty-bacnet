@@ -254,6 +254,7 @@ pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
                 | Error::Structured { .. }
                 | Error::RoutedPathTooLong { .. }
                 | Error::NetworkRejected(_)
+                | Error::RouterBusyTimeout(_)
                 | Error::UnexpectedAck { .. }
                 | Error::Timeout(_)
                 | Error::Transport(_)
@@ -268,7 +269,8 @@ pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
 /// its COMMUNICATION code, and the client's own wait for an answer running
 /// out as TIMEOUT. The client reports that wait as an Abort for a TSM
 /// timeout, which a peer's Abort for that reason can't be told from; both
-/// say the device didn't answer in time. A router's network reject is the
+/// say the device didn't answer in time, and so does a timeout after a
+/// router said it was busy (#2724). A router's network reject is the
 /// COMMUNICATION code Clause 18 gives its reason
 /// ([`NetworkReject::error_code`](bacnet_types::error::NetworkReject::error_code)).
 /// An acknowledgement of the wrong kind for the service (#2721), whose
@@ -287,6 +289,7 @@ pub(crate) fn audit_result(error: &Error) -> (ErrorClass, ErrorCode) {
             return (ErrorClass::SERVICES, ErrorCode::COMMUNICATION_DISABLED);
         }
         Error::Timeout(_)
+        | Error::RouterBusyTimeout(_)
         | Error::Remote(RemoteError::Abort {
             reason: AbortReason::TSM_TIMEOUT,
         }) => ErrorCode::TIMEOUT,

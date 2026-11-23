@@ -506,8 +506,13 @@ fn network_reject_display_names_router_network_and_reason() {
     ];
     for (router, link, reason, text) in cases {
         let reject = NetworkReject::new(router, link, 7, reason);
-        assert_eq!(Error::NetworkRejected(reject).to_string(), text);
-        assert_eq!(reject.to_string(), text);
+        let later = "; an earlier attempt may have reached the device";
+        assert_eq!(reject.what().to_string(), text);
+        assert_eq!(reject.to_string(), format!("{text}{later}"));
+        assert_eq!(
+            Error::NetworkRejected(reject).to_string(),
+            format!("{text}{later}")
+        );
     }
 }
 
@@ -555,5 +560,46 @@ fn unexpected_ack_display_names_the_service_and_both_kinds() {
         "the device acknowledged read-property with a Simple-ACK, but that service is \
          acknowledged with a Complex-ACK carrying its result; whether it carried out the \
          request is unknown"
+    );
+}
+
+/// A reject for a request's one frame says the device never received it;
+/// one relayed from a farther router names that router beside the one it
+/// came through; a busy reject a request then timed out after reads as the
+/// timeout it is, naming the router (#2724).
+#[test]
+fn network_reject_says_whether_the_device_can_have_the_request() {
+    use bacnet_npdu::{Mac, RejectMessageReason as R};
+    let reject = NetworkReject::new(
+        Mac::from_array([2]),
+        Some(DataLink::Mstp),
+        7,
+        R::NOT_DIRECTLY_CONNECTED,
+    );
+    assert!(!reject.single_frame);
+    let once = reject.after_one_frame();
+    assert!(once.single_frame);
+    assert_eq!(
+        once.to_string(),
+        "Reject-Message-To-Network from router mstp:2: no route to network 7 \
+         (not-directly-connected, reason 1); the request never reached the device"
+    );
+    let relayed = once.relayed_from(5, Mac::from_array([0x0A]));
+    assert_eq!(relayed.refused_by, Some((5, Mac::from_array([0x0A]))));
+    assert_eq!(
+        relayed.what().to_string(),
+        "Reject-Message-To-Network through router mstp:2, from 5:0x0A: no route to network 7 \
+         (not-directly-connected, reason 1)"
+    );
+    let busy = NetworkReject::new(
+        Mac::from_array([2]),
+        Some(DataLink::Mstp),
+        7,
+        R::ROUTER_BUSY,
+    );
+    assert_eq!(
+        Error::RouterBusyTimeout(busy).to_string(),
+        "BACnet abort: tsm-timeout; on the way, Reject-Message-To-Network from router mstp:2: \
+         busy for network 7 (router-busy, reason 2)"
     );
 }

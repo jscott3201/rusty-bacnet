@@ -446,7 +446,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return Err(e);
         }
 
-        let response = self
+        let mut response = self
             .wait_for_confirmed_response(
                 ConfirmedWait {
                     target,
@@ -463,10 +463,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         if sized_by.is_some() {
             self.note_answer(sized_by, &response);
         }
-        if let Some(lease) = path_lease.as_ref()
-            && answered_by_peer(&response)
-        {
-            lease.mark_answered();
+        if let Some(lease) = path_lease.as_ref() {
+            self.settle_routed(lease, (&tsm_mac, invoke_id, &owner), &mut response);
         }
         guard.mark_completed();
         response.and_then(Self::confirmed_response_result)

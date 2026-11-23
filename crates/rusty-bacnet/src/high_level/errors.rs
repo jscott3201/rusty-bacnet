@@ -64,7 +64,20 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
     // A request that timed out, however the client reported it (the
     // transaction state machine's abort included), is a timeout.
     if error.timed_out() {
-        return BacnetTimeoutError::new_err(message);
+        let timeout = BacnetTimeoutError::new_err(message);
+        // After a router said it was busy, the timeout names it (#2724).
+        if let OpsError::Unreachable {
+            source: Error::RouterBusyTimeout(busy),
+            ..
+        }
+        | OpsError::Client(Error::RouterBusyTimeout(busy)) = &error
+        {
+            let _ = crate::py_async::attach(|py| {
+                crate::errors::set_busy(timeout.value(py).as_any(), busy);
+                Ok(())
+            });
+        }
+        return timeout;
     }
     match error {
         OpsError::Parse { reason, .. } => PyValueError::new_err(super::link_hint(reason)),

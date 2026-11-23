@@ -373,14 +373,26 @@ matching network-layer rejection; it does not claim an exact supported length.
 `Error::NetworkRejected(NetworkReject)` is a routed request the router it went
 through refused at the network layer, its reason one that ends a request at
 once (#2724): `NetworkReject` holds the router's MAC (`router`, a
-`bacnet_npdu::Mac`), the client's `link`, the `network` and the `reason` (a
-`bacnet_npdu::RejectMessageReason`). Its text names the router in the link's
-own form (`10.0.0.1:47808`, `mstp:5`, `bip6:0x0004D2`, hex on BACnet/SC), the
-network and the reason by name and number, such as "Reject-Message-To-Network
-from router mstp:2: no route to network 7 (not-directly-connected, reason
-1)"; `router()` writes the router alone and `error_code()` gives the
+`bacnet_npdu::Mac`), the client's `link`, the `network`, the `reason` (a
+`bacnet_npdu::RejectMessageReason`), `refused_by` (the network and MAC of a
+farther router that sent it, when the reject came through the first one) and
+`single_frame`: `true` when the request had sent one frame, so the device
+never received it; `false` after a retry or a segment, when an earlier
+attempt may have reached the device and a write may have taken effect. Its
+text names the router in the link's own form (`10.0.0.1:47808`, `mstp:5`,
+`bip6:0x0004D2`, hex on BACnet/SC), the network, the reason by name and
+number, and which of those holds, such as "Reject-Message-To-Network from
+router mstp:2: no route to network 7 (not-directly-connected, reason 1); the
+request never reached the device"; `router()` writes the router alone,
+`what()` the text without the last clause, and `error_code()` gives the
 COMMUNICATION code Clause 18 pairs with the reason (`NOT_ROUTER_TO_DNET` for
 reason 1), which a source audit record carries.
+`Error::RouterBusyTimeout(NetworkReject)` is a routed request that ran out of
+retries after its router said, with a reason-2 reject, that it was busy for
+the network: a timeout, which `bacnet_ops::raw::timed_out` and the bindings
+treat as the TSM_TIMEOUT abort it stands for, whose text adds the router and
+the network ("BACnet abort: tsm-timeout; on the way, Reject-Message-To-Network
+from router mstp:2: busy for network 7 (router-busy, reason 2)").
 `Error::RoutedPathCapacityExceeded { capacity }` reports that all bounded path
 state is protected by a held/waiting gate or configured/learned evidence, so a
 new path was rejected before transaction registration or frame emission.
@@ -9955,16 +9967,20 @@ the wrong request (#2651):
 - Network controls observed at ingress before a request becomes active are
   discarded using a monotonic ingress sequence.
 
-A reject for any other reason is tied to the active request by the same rules,
-the router and network of the path and the ingress sequence, without the size
-rules; while an answered request's frames may still draw a reject none is
-taken, since nothing says which frame it is for (#2724). What it does depends
-on its reason:
+A reject is addressed to the station that sent the refused message, so one
+that came as a broadcast (a global one, DNET 65535, or a broadcast on this
+link) is dropped before its reason is read, reason 4 included: anyone could
+send one naming any network to every client at once. A reject for any other
+reason is tied to the active request by the same rules, the router and
+network of the path and the ingress sequence (assigned when the network layer
+decodes the frame), without the size rules; while an answered request's
+frames may still draw a reject none is taken, since nothing says which frame
+it is for (#2724). What it does depends on its reason:
 
 | Reason | The request |
 | --- | --- |
 | 0 other, 1 no route to the network, 5 (a security refusal in earlier revisions), 6 an address length the router found invalid, and any reason 135-2020 doesn't define | ends at once as `Error::NetworkRejected`; no retry goes |
-| 2 the router is busy for the network | runs on: its retries go at the APDU timeout, the pace the router's flow control asks for |
+| 2 the router is busy for the network | runs on: its retries go at the APDU timeout, the pace the router's flow control asks for; if they run out, `Error::RouterBusyTimeout` names the router |
 | 3 an unknown network message type | runs on: the reason answers a network message, never a request |
 | 4 too long | `Error::RoutedPathTooLong`, as above |
 
@@ -9978,12 +9994,18 @@ that follows a device instance asks where the device went after one, as
 after a timeout, and an I-Am heard through another router moves the row
 there. A request by local broadcast (`Station::routed_via_local_broadcast`)
 takes no path, so no reject ends it: any router on the link may hear it, and
-one router's refusal says nothing of another's. A station that can send from
-the router's link address and names the network of a request in flight can
-end that request early, as it could with a forged Abort; it can't end a
+one router's refusal says nothing of another's. A reject a router delivers
+to this station alone can still be forged: any station that can send through
+the router can address one to this client (its network as DNET, its MAC as
+DADR), and a station on this link can send one from the router's link
+address. Naming the network of a request in flight, it ends that request
+early, as a forged Abort could; it reaches one client at a time, can't end a
 request through another router, to another network, or one not yet sent,
 and changes no route or limit (a request it ends after several frames holds
-its path, as a timeout would).
+its path, as a timeout would). A router's refusal of a request whose answer
+was arriving in segments ends the request, has the dispatch task drop the
+reassembly, and sends the device nothing, as when the request's timeout or
+its caller cuts it off.
 
 All of this covers the client's own confirmed requests on the path. Other
 traffic to the same network sits outside it, as before: the client's
@@ -13365,7 +13387,8 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Timeout(duration)` | APDU retry exhausted |
 | `Error::RoutedPathTooLong { dnet }` | Router rejected the active message as too long for DNET |
 | `Error::UnexpectedAck { service, complex }` | The device acknowledged the request with the other kind of acknowledgement than its service takes: a Complex-ACK for a service acknowledged with a Simple-ACK (`complex` true, such as WriteProperty), or the reverse (#2721). The request failed at once and nothing more was sent; whether the device carried it out is unknown |
-| `Error::NetworkRejected(NetworkReject)` | The router a routed request went through refused it, sending back a Reject-Message-To-Network (no route, an addressing error, other); names the router in the link's form, the network and the reason |
+| `Error::NetworkRejected(NetworkReject)` | The router a routed request went through refused it, sending back a Reject-Message-To-Network (no route, an addressing error, other); names the router in the link's form, the network and the reason, and says whether the device can have received it |
+| `Error::RouterBusyTimeout(NetworkReject)` | A routed request timed out after its router said it was busy for the network: a timeout, naming that router |
 | `Error::RoutedPathCapacityExceeded { capacity }` | No routed-path entry can be allocated without discarding protected safety state |
 | `Error::UnsupportedTransport { required, actual }` | The client's data link cannot carry the operation (a BBMD helper on a non-B/IP transport) |
 | `Error::Decoding(DecodeError)` | Malformed received data, with its offset and `DecodingKind` |

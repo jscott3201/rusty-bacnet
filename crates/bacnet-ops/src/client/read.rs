@@ -178,13 +178,14 @@ pub(crate) fn failed_locally(error: &Error) -> bool {
 
 /// True when `error`, a low-level client's error, says the request timed
 /// out: the client's own timeout, or the transaction state machine giving
-/// up on its retries. A transport failure is unreachable but not a
-/// timeout. The high-level calls' errors say it with
+/// up on its retries, also after a router said it was busy
+/// ([`Error::RouterBusyTimeout`], #2724). A transport failure, or a
+/// router's network reject, is unreachable but not a timeout. The high-level calls' errors say it with
 /// [`OpsError::timed_out`](crate::OpsError::timed_out).
 pub fn timed_out(error: &Error) -> bool {
     match error {
         Error::Remote(RemoteError::Abort { reason }) => *reason == AbortReason::TSM_TIMEOUT,
-        Error::Timeout(_) => true,
+        Error::Timeout(_) | Error::RouterBusyTimeout(_) => true,
         _ => false,
     }
 }

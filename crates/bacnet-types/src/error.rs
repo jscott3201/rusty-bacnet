@@ -202,11 +202,23 @@ pub enum Error {
     /// way at once for reason 1 (no route to the network), 6 (an address
     /// length the router found invalid), 0 (other), 5 (a security refusal
     /// in earlier revisions) and any reason the standard doesn't define.
-    /// A busy router (reason 2) leaves the request to its retries, reason 3
-    /// answers a network message and never a request, and reason 4 is
-    /// [`Error::RoutedPathTooLong`].
+    /// A busy router (reason 2) leaves the request to its retries
+    /// ([`Error::RouterBusyTimeout`] when they run out), reason 3 answers a
+    /// network message and never a request, and reason 4 is
+    /// [`Error::RoutedPathTooLong`]. Whether the device can have received
+    /// the request is [`NetworkReject::single_frame`].
     #[error("{0}")]
     NetworkRejected(NetworkReject),
+
+    /// A routed confirmed request ran out of retries with no answer after
+    /// the router it went through said, with a reject of reason 2, that it
+    /// was busy for the station's network (#2724). It is a timeout as the
+    /// client's TSM_TIMEOUT abort is, and the low-level crates' and the
+    /// bindings' timeout handling treat it as one; the reject names the
+    /// router and the network. Whether the device received the request is
+    /// unknown, as after any timeout.
+    #[error("BACnet abort: tsm-timeout; on the way, {}", .0.what())]
+    RouterBusyTimeout(NetworkReject),
 
     /// The device acknowledged a confirmed request with the other kind of
     /// acknowledgement than its service takes (#2721): a Complex-ACK for a

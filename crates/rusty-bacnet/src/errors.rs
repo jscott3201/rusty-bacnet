@@ -2,7 +2,7 @@
 
 use bacnet_transport::bip::BvlcExchangeError;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
-use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
+use bacnet_types::enums::{AbortReason, ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use pyo3::create_exception;
 use pyo3::prelude::*;
@@ -187,8 +187,10 @@ pub fn to_py_err(err: Error) -> PyErr {
             lookup_error(err.to_string(), Lookup::ambiguous(instance, candidates))
         }
         // A router on the way refused a routed request at the network
-        // layer (#2724): its reason octet, the network it named and the
-        // router in the link's own address form.
+        // layer (#2724): its reason octet, the network it named, the router
+        // in the link's own address form, and whether the device can have
+        // received the request (False after one frame, None once a retry
+        // or a segment went first).
         Error::NetworkRejected(reject) => {
             let py_err = BacnetNetworkRejectError::new_err(reject.to_string());
             let _ = crate::py_async::attach(|py| {
@@ -196,6 +198,22 @@ pub fn to_py_err(err: Error) -> PyErr {
                 let _ = value.setattr("reason", reject.reason.to_raw());
                 let _ = value.setattr("network", reject.network);
                 let _ = value.setattr("router", reject.router().to_string());
+                let _ = value.setattr("reached_device", reject.single_frame.then_some(false));
+                Ok(())
+            });
+            py_err
+        }
+        // The client's timeout after a router said it was busy (#2724): the
+        // abort a timeout raises, naming that router and the network.
+        Error::RouterBusyTimeout(busy) => {
+            let py_err = BacnetAbortError::new_err(err.to_string());
+            let _ = crate::py_async::attach(|py| {
+                set_enum_attr(
+                    py_err.value(py).as_any(),
+                    "reason",
+                    AbortReason::TSM_TIMEOUT,
+                );
+                set_busy(py_err.value(py).as_any(), &busy);
                 Ok(())
             });
             py_err
@@ -365,6 +383,13 @@ fn transport_error_type(py: Python<'_>) -> PyResult<&Py<PyType>> {
     })
 }
 
+/// Set `busy_router` and `busy_network` on a timeout's `error` from the
+/// busy reject (reason 2) a router sent before the request timed out.
+pub(crate) fn set_busy(error: &Bound<'_, PyAny>, busy: &bacnet_types::error::NetworkReject) {
+    let _ = error.setattr("busy_router", busy.router().to_string());
+    let _ = error.setattr("busy_network", busy.network);
+}
+
 /// Set `name` on `error` to `value`'s IntEnum member, which compares equal
 /// to the wire integer (#915, #1816); the plain integer if the member can't
 /// be made.
@@ -487,6 +512,15 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     network_reject.setattr("reason", m.py().None())?;
     network_reject.setattr("network", m.py().None())?;
     network_reject.setattr("router", m.py().None())?;
+    network_reject.setattr("reached_device", m.py().None())?;
+    // A timeout after a router said it was busy names it (#2724).
+    for timeout in [
+        m.py().get_type::<BacnetTimeoutError>(),
+        m.py().get_type::<BacnetAbortError>(),
+    ] {
+        timeout.setattr("busy_router", m.py().None())?;
+        timeout.setattr("busy_network", m.py().None())?;
+    }
     m.add("BacnetNetworkRejectError", network_reject)?;
     lookup::register(m)
 }

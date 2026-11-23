@@ -682,3 +682,6 @@ mod change;
 
 #[path = "source_routed_segmented_tests.rs"]
 mod segmented;
+
+#[path = "source_routed_reject_tests.rs"]
+mod reject;

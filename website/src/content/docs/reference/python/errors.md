@@ -75,6 +75,18 @@ Attributes:
 
 Raised when a BACnet operation times out.
 
+Attributes:
+busy\_router: When a router on the way said it was busy for the
+device's network (its Reject-Message-To-Network gave reason 2)
+before the request timed out (#2724): that router's address in
+the link's own form. `None` otherwise.
+busy\_network: The network that router was busy for, or `None`.
+
+Attributes:
+
+- `busy_router: str | None`
+- `busy_network: int | None`
+
 ## BacnetRejectError
 
 `class BacnetRejectError(BacnetError)`
@@ -95,13 +107,23 @@ Attributes:
 
 Raised when a BACnet transaction is aborted.
 
+A typed call that runs out of retries raises it with `reason`
+`TSM_TIMEOUT`, the client's own abort.
+
 Attributes:
 reason: The abort reason, an `AbortReason` member (an int equal
 to the wire value, #1816).
+busy\_router: For a `TSM_TIMEOUT` after a router on the way said
+it was busy for the device's network (its
+Reject-Message-To-Network gave reason 2, #2724): that router's
+address in the link's own form. `None` otherwise.
+busy\_network: The network that router was busy for, or `None`.
 
 Attributes:
 
 - `reason: AbortReason`
+- `busy_router: str | None`
+- `busy_network: int | None`
 
 ## BacnetLogNotAdvancingError
 
@@ -183,10 +205,12 @@ a Reject-Message-To-Network: a confirmed request to a `RoutedTarget`
 (#2724) or a `routing_table()` query (#2612). A request fails at once,
 with no retry, for reason 1 (no route to the network), 6 (an address
 length the router found invalid), 0 (other), 5 or a reason the standard
-doesn't define; nothing reached the device. A busy router (reason 2)
-leaves the request to its retries. The client takes a reject as a
-request's own only from the router it went through, naming its network,
-after it was sent. Silence raises `BacnetTimeoutError` instead.
+doesn't define. A busy router (reason 2) leaves the request to its
+retries; if they run out, the timeout's `busy_router` and
+`busy_network` name it. The client takes a reject as a request's own
+only when the router it went through delivered it to this station alone
+(not as a broadcast), naming its network, after it was sent. Silence
+raises `BacnetTimeoutError` instead.
 
 Attributes:
 reason: The reject reason octet the router sent.
@@ -194,12 +218,17 @@ network: The network the router named.
 router: The router's address in the link's own form, such as
 `"10.0.0.1:47808"` or `"mstp:5"`, which a `RoutedTarget`'s
 `router` takes; `None` for `routing_table()`.
+reached\_device: `False` when the request had sent one frame, so
+the device never received it; `None` once a retry or a
+segment went first: an earlier attempt may have reached the
+device, and a write may have taken effect.
 
 Attributes:
 
 - `reason: int`
 - `network: int`
 - `router: str | None`
+- `reached_device: bool | None`
 
 ## BacnetLookupError
 

@@ -184,6 +184,12 @@ async fn each_refusing_reason_ends_the_request_at_once() {
         assert_eq!(reject.link, Some(DataLink::Mstp));
         assert_eq!((reject.network, reject.reason), (DNET, reason));
         assert!(reject.to_string().contains("router mstp:2"), "{reject}");
+        // Its one frame was refused: the device never received the request.
+        assert!(reject.single_frame);
+        assert!(
+            reject.to_string().ends_with("never reached the device"),
+            "{reject}"
+        );
         rig.quiet().await;
         rig.settled();
         rig.next_goes_out_after(Duration::ZERO).await;
@@ -294,7 +300,13 @@ async fn a_request_refused_after_several_frames_holds_its_path() {
     rig.next().await;
     rig.reject(&ROUTER, RejectMessageReason::NOT_DIRECTLY_CONNECTED, DNET)
         .await;
-    rejected(task.await.unwrap());
+    // The first frame may have reached the device before the route went.
+    let reject = rejected(task.await.unwrap());
+    assert!(!reject.single_frame);
+    assert!(
+        reject.to_string().ends_with("may have reached the device"),
+        "{reject}"
+    );
     rig.settled();
     rig.next_goes_out_after(HOLD).await;
     rig.stop().await;
@@ -320,7 +332,9 @@ async fn a_segmented_request_ends_on_a_refusing_reject() {
 
 /// A request whose answer is arriving in segments still holds its path, so
 /// a refusing reject ends it there too: the router can no longer carry the
-/// client's SegmentACKs, and the client sends nothing more.
+/// client's SegmentACKs. As for a request its timeout or its caller cuts off
+/// mid-reassembly, the client sends the device nothing more, and the
+/// dispatch task drops the reassembly.
 #[tokio::test(start_paused = true)]
 async fn a_request_taking_a_segmented_answer_ends_on_a_refusing_reject() {
     let mut rig = Rig::new().await;
@@ -357,6 +371,12 @@ async fn a_request_taking_a_segmented_answer_ends_on_a_refusing_reject() {
     rig.reject(&ROUTER, RejectMessageReason::NOT_DIRECTLY_CONNECTED, DNET)
         .await;
     rejected(task.await.unwrap());
+    assert!(
+        timeout(HOLD, rig.client.segmented_cleanup.wait_processed())
+            .await
+            .expect("the dispatch task was not asked to drop the reassembly"),
+        "the reassembly of the answer was left behind"
+    );
     rig.quiet().await;
     rig.settled();
     rig.stop().await;
@@ -449,9 +469,9 @@ fn control(reason: RejectMessageReason, ingress_sequence: u64) -> ReceivedNetwor
     }
 }
 
-/// A refusing reject that reached ingress before the request was installed
-/// on its path, at or below its floor, is not its own; one after it ends
-/// the request.
+/// A refusing reject the network layer decoded before the request was
+/// installed on its path, at or below its floor, is not its own; one after
+/// it ends the request.
 #[tokio::test]
 async fn a_reject_queued_before_the_request_went_out_is_not_its_own() {
     let limits = Arc::new(RoutedPathLimits::with_capacity(2, HOLD));
@@ -497,6 +517,7 @@ async fn a_reject_queued_before_the_request_went_out_is_not_its_own() {
             DNET,
             reason
         )
+        .after_one_frame()
     );
     drop(lease);
 }
@@ -511,3 +532,6 @@ impl RoutedPathLimits {
             .is_some_and(|entry| entry.answered_now().is_some())
     }
 }
+
+#[path = "routed_path_reject_forms_tests.rs"]
+mod forms;
