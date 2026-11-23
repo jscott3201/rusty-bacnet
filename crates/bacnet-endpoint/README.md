@@ -185,9 +185,11 @@ arrives while the server builds waits for it; its queue is as deep as the
 session's request queue. A builder setting a server's start would refuse is
 refused before the link starts, leaving the session ready to retry with its
 database; only target Audit's recipient as the started link sees it is
-checked after. It shares the session's invoke-ID pool, holding at most 64 of
-the 256 at once so the client keeps the rest, and the session's
-network-number owner, which target Audit follows. The session's registered
+checked after. It shares the session's invoke-ID pool, in which each role
+the session runs keeps a reserve the other can't take: with both roles the
+server always finds 64 of the 256 and may hold 128, and the client always
+finds 128 and may hold 192. It also shares the session's network-number
+owner, which target Audit follows. The session's registered
 Network Port and source Audit Reporter work beside it.
 
 The node is one device. A session with a server role needs a Device identity

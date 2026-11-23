@@ -127,13 +127,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// refuses work its handlers have no room for.
     ///
     /// **One pool of invoke IDs.** The server and the client roles lease
-    /// from the session's one pool of 256. The server holds at most 64 at
-    /// once: its confirmed notifications (COV, event and Audit, the source
-    /// Audit's records among them) and the reads its runs make. Past that,
-    /// each does what it does when the pool is empty: an event notification
-    /// waits for an ID, a COV notification's subscription waits for one of
-    /// the server's IDs to come back and is then looked at again, an Audit
-    /// record is counted lost. The client's requests find the rest.
+    /// from the session's one pool of 256, in which each role the session
+    /// runs keeps a reserve ([`SessionRole`], #2617). With both roles the
+    /// server always finds 64 for its confirmed notifications (COV, event
+    /// and Audit, the source Audit's records among them) and the requests
+    /// its runs make, and may hold 128; the client always finds 128 and may
+    /// hold 192. Past its share, each piece of the server's work does what
+    /// it does when the pool is empty: an event notification waits for an
+    /// ID, a COV notification's subscription waits for an ID to come back
+    /// and is then looked at again, an Audit record is counted lost or kept
+    /// for a retry. A waiting event notification is passed over by the
+    /// client only while the server holds its reserve or more.
     ///
     /// **DeviceCommunicationControl binds the node.** The standard has it
     /// bind the whole device (Clause 16.1). While the server holds a

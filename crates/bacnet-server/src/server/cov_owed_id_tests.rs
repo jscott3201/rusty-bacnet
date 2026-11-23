@@ -7,10 +7,13 @@
 //! Time is paused; each test leases the IDs itself, so nothing but the
 //! server's own notifications ends a lease unless the test drops one.
 use super::cov_wire_test_support::*;
-use super::notification_transactions::{NotificationReservation, SEAT_LEASES};
+use super::notification_transactions::NotificationReservation;
 use super::*;
 use crate::server::test_transport::{SendLog, TestTransport};
 use bacnet_device_core::cov::{CovNotificationKind, CovSubscription};
+use bacnet_endpoint_core::coordinator::{
+    NOTIFICATION_RESERVE, OutboundTransactionCoordinator, REQUESTER_RESERVE,
+};
 use bacnet_endpoint_core::endpoint_ingress::{EndpointIngress, IngressReceivers};
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_services::cov::{COVNotificationRequest, SubscribeCOVRequest};
@@ -325,8 +328,10 @@ async fn seated() -> Seated {
     let sent = transport.sent();
     let mut ingress = EndpointIngress::new(transport, 8);
     let receivers = ingress.start().await.unwrap();
-    let coordinator =
-        Arc::new(bacnet_endpoint_core::coordinator::OutboundTransactionCoordinator::new());
+    let coordinator = Arc::new(OutboundTransactionCoordinator::with_reserves(
+        REQUESTER_RESERVE,
+        NOTIFICATION_RESERVE,
+    ));
     let seat = ingress.server_seat(coordinator).unwrap();
     let identity = bacnet_objects::DeviceIdentity::new(2661, 0).unwrap();
     let mut db = identity.clone().build_database().unwrap();
@@ -411,16 +416,17 @@ impl Seated {
     }
 }
 
-/// On a node's seat the server holds at most 64 invoke IDs: a change refused
-/// one there is reported once one of the server's own leases ends.
+/// On a node's seat the server holds at most the pool less the client's
+/// reserve (#2617): a change refused an ID there is reported once one of the
+/// server's own leases ends.
 #[tokio::test(start_paused = true)]
-async fn a_seated_change_refused_at_the_cap_goes_once_a_lease_ends() {
+async fn a_seated_change_refused_at_the_ceiling_goes_once_a_lease_ends() {
     let mut s = seated().await;
     let pool = Arc::clone(&s.server.notification_transactions);
-    let mut held: Vec<_> = (0..SEAT_LEASES)
+    let mut held: Vec<_> = (0..256 - REQUESTER_RESERVE)
         .map(|_| {
             pool.reserve(canonical_direct_peer(&[0x22]), COV)
-                .expect("an ID within the cap")
+                .expect("an ID within the ceiling")
         })
         .collect();
     s.subscribe().await;
