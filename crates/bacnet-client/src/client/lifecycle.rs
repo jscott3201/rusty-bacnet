@@ -16,6 +16,13 @@ impl ClientConfig {
     pub(super) fn validate_request_settings(&self) -> Result<(), Error> {
         validate_max_apdu_length(self.max_apdu_length)?;
         validate_max_segments(self.max_segments)?;
+        if self.segmentation.to_raw() > Segmentation::NO_SEGMENTATION.to_raw() {
+            return Err(Error::Encoding(format!(
+                "invalid segmentation {}; expected SEGMENTED_BOTH, SEGMENTED_TRANSMIT, \
+                 SEGMENTED_RECEIVE or NO_SEGMENTATION",
+                self.segmentation.to_raw()
+            )));
+        }
         if self.apdu_segment_timeout_ms == Some(0) {
             return Err(Error::Encoding(
                 "invalid apdu-segment-timeout 0 ms; expected a positive value, or none for the \
@@ -32,11 +39,27 @@ impl ClientConfig {
         self.apdu_segment_timeout_ms.unwrap_or(self.apdu_timeout_ms)
     }
 
+    /// Whether this client receives segments: SEGMENTED_BOTH (0) or
+    /// SEGMENTED_RECEIVE (2), the values with the low bit clear. Read on
+    /// every request's header, so it is one bit test, not a branch; the
+    /// build refuses any value past NO_SEGMENTATION (3).
+    #[inline(always)]
+    pub(super) fn receives_segments(&self) -> bool {
+        self.segmentation.to_raw() & 1 == 0
+    }
+
+    /// Whether this client transmits segments: SEGMENTED_BOTH (0) or
+    /// SEGMENTED_TRANSMIT (1), the values with the second bit clear.
+    #[inline(always)]
+    pub(super) fn transmits_segments(&self) -> bool {
+        self.segmentation.to_raw() & 2 == 0
+    }
+
     /// Refuse a request that needs segments when this client sends none
-    /// ([`Self::segmented_requests`]), before anything is sent. Asked only
-    /// of a request too long for one APDU.
+    /// ([`Self::segmentation`]), before anything is sent. Asked only of a
+    /// request too long for one APDU.
     pub(super) fn check_segmented_request(&self) -> Result<(), Error> {
-        if self.segmented_requests {
+        if self.transmits_segments() {
             Ok(())
         } else {
             Err(bacnet_types::error::SegmentationError::LocalCannotTransmit.into())
@@ -193,11 +216,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// come from: its own layer's receivers, or a seat's queues (#2617).
     /// Nothing here waits, and the caller has checked `config` and `options`.
     pub(super) fn assemble<S: Inbound<T>>(
-        config: ClientConfig,
+        mut config: ClientConfig,
         options: ClientOptions,
         mut inbound: S,
         coordinator: Arc<OutboundTransactionCoordinator>,
     ) -> Self {
+        // A client that takes no segments states no segment count either:
+        // settled here once, so no request's header asks.
+        if !config.receives_segments() {
+            config.max_segments = None;
+        }
         let network = Arc::clone(inbound.network());
         let local_mac = MacAddr::from_slice(network.local_mac());
         // On a link that takes the local Number controls, the client asks

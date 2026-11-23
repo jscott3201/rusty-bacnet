@@ -172,8 +172,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// answer otherwise. A notification the sender sends again, its answer
     /// lost, is published again. One that comes in segments is reassembled
     /// first, when the client receives segments
-    /// ([`ClientConfig::segmented_response_accepted`]), and then published
-    /// and answered once, as one that came whole (#2646).
+    /// ([`ClientConfig::segmentation`]), and then published and answered
+    /// once, as one that came whole (#2646).
     pub fn cov_notifications(&self) -> broadcast::Receiver<COVEvent> {
         self.cov_tx.subscribe()
     }

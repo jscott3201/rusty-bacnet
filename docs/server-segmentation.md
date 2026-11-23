@@ -61,8 +61,8 @@ session's client also reassembles a segmented COV notification of either form
 once with the window the requester proposed, then each full window and the
 last segment, all with the server bit set, and answers the whole notification
 as one that came in one APDU. A standalone client does the same for every
-confirmed notification it executes, unless `segmented_response_accepted` is
-off.
+confirmed notification it executes, unless its `ClientConfig::segmentation`
+receives no segments.
 
 The Python full server accepts keyword-only `segmentation_supported` (default
 `Segmentation.SEGMENTED_BOTH`, as the Rust server's, since #2617) and

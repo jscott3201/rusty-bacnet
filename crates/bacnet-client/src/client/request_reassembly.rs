@@ -4,7 +4,7 @@
 //! ConfirmedCOVNotificationMultiple and ConfirmedEventNotification (beside a
 //! server role, the COV notifications only). A notifier may send any of them
 //! as segments, a COV-multiple with many values most of all. When the client
-//! receives segments ([`ClientConfig::segmented_response_accepted`]), it
+//! receives segments ([`ClientConfig::segmentation`]), it
 //! reassembles such a request on the answering side's rules
 //! ([`SegmentedRequests`], the full server's) and then executes it as one
 //! that came whole: the same decoding, publishing and answer. Otherwise, and

@@ -13,7 +13,7 @@ use bacnet_transport::{
     sc_tls::TlsWebSocket,
 };
 use bacnet_types::{
-    enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier, RejectReason},
+    enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier, RejectReason, Segmentation},
     primitives::ObjectIdentifier,
 };
 use bytes::{Bytes, BytesMut};
@@ -25,7 +25,7 @@ macro_rules! configured {
             .apdu_timeout_ms(2_000)
             .apdu_retries(0)
             .max_segments(Some(8))
-            .segmented_response_accepted(false)
+            .segmentation(Segmentation::SEGMENTED_TRANSMIT)
             .proposed_window_size(4)
             .min_request_interval_ms(5)
             .cov_channel_capacity(1)
@@ -162,7 +162,8 @@ async fn options<T: TransportPort + 'static, P: TransportPort>(
         let Apdu::ConfirmedRequest(sent) = sent else {
             panic!("expected ReadProperty request");
         };
-        assert_eq!(sent.max_segments, Some(8));
+        // A client that takes no segments states no segment count.
+        assert_eq!(sent.max_segments, None);
         assert!(!sent.segmented_response_accepted);
         assert_eq!(sent.max_apdu_length, 1476);
         // Dropping the outstanding request also exercises the erased client's

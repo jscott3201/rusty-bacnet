@@ -10766,7 +10766,7 @@ the subscription, and publishes it; `confirmed_cov_notification_ack_policy`
 sees the `COVEvent` and may answer otherwise. A notification sent again,
 its answer lost, is acknowledged and published again. A confirmed
 notification that comes in segments is reassembled first, when the client
-receives segments (`segmented_response_accepted`, on by default), then
+receives segments (`ClientConfig::segmentation`, both ways by default), then
 published and answered once (#2646); a client that takes none aborts its
 first segment. `ManagedCOVSubscription` renews
 SubscribeCOV and SubscribeCOVProperty subscriptions only.

@@ -40,7 +40,11 @@ async fn lab(segments: bool) -> Lab {
     let log = transport.sent();
     let client = BACnetClient::generic_builder()
         .transport(transport)
-        .segmented_response_accepted(segments)
+        .segmentation(if segments {
+            Segmentation::SEGMENTED_BOTH
+        } else {
+            Segmentation::SEGMENTED_TRANSMIT
+        })
         .apdu_segment_timeout_ms(TSEG_MS)
         .build()
         .await

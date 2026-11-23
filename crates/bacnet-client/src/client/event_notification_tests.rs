@@ -131,7 +131,11 @@ impl Harness {
         let (output_tx, output) = mpsc::channel(8);
         let client = BACnetClient::generic_builder()
             .transport(receive_transport(input_rx, output_tx))
-            .segmented_response_accepted(segments)
+            .segmentation(if segments {
+                Segmentation::SEGMENTED_BOTH
+            } else {
+                Segmentation::SEGMENTED_TRANSMIT
+            })
             .event_channel_capacity(capacity)
             .confirmed_cov_notification_ack_policy(|_| {
                 panic!("event notifications must not invoke the COV policy")
