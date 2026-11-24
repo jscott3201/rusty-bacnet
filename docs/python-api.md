@@ -6868,10 +6868,12 @@ await server.set_reliability_local(sensor, Reliability.NO_FAULT_DETECTED)
 `add_binary_input` and `add_binary_output` take a keyword-only `polarity`,
 a `Polarity` or its number: `Polarity.NORMAL` (0, the default) or
 `Polarity.REVERSE` (1) (#2580). Any other int raises `BacnetProtocolError`
-VALUE_OUT_OF_RANGE. The endpoints' `add_binary_input` takes it too. Clients
-read Polarity but can't write it; `set_polarity_local(object_id, polarity)`
-changes it on a running server. The physical side has its own routes, so a
-raw hardware state is never mistaken for a logical one:
+VALUE_OUT_OF_RANGE. The endpoints' `add_binary_input` and
+`add_binary_output` take it too, and the calls below are on
+`await endpoint.server()` (#2594). Clients read Polarity but can't write
+it; `set_polarity_local(object_id, polarity)` changes it on a running
+server. The physical side has its own routes, so a raw hardware state is
+never mistaken for a logical one:
 
 - `set_physical_input_local(object_id, on)` reports what a Binary Input's
   hardware reads, `True` for ON. In service Present_Value becomes that state

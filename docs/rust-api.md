@@ -6537,8 +6537,13 @@ server, a full server (#2617), has it too.
 
 Binary Input and Binary Output hold a Polarity and a physical side (#2580).
 `set_polarity(Polarity)` takes NORMAL or REVERSE (VALUE_OUT_OF_RANGE for
-anything else); Polarity stays read-only on the network. On a running server
-the routes are:
+anything else); Polarity stays read-only on the network. A point list gives
+it as `bacnet_types::points::Binary::with_polarity` (#2595), which
+`points::build_database` sets on an Input or Output and refuses on a Binary
+Value, a type with no Polarity, as `Refusal::PropertyNotInType`. On a
+running server, an endpoint session's server included
+(`EndpointSession::server`, a full server since #2617; #2594), the routes
+are:
 
 | Route | Object | What it does |
 | --- | --- | --- |
@@ -13331,7 +13336,10 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
 - **Options.** `InventoryOptions::new()` reads every object the Object_List
   names. `.with_types(..)` narrows it, `.with_values(true)` adds each
   object's Present_Value and Status_Flags, and `.with_settings(true)` its
-  COV_Increment, Min_Pres_Value, Max_Pres_Value and Relinquish_Default.
+  COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default and a
+  Binary Input's or Output's Polarity (a required property there, so one
+  the device doesn't give, or gives as other than an Enumerated, is a
+  problem; a Binary Value has none).
   `bacnet_ops::inventory::properties(object_type, &options)` is the one
   list of what each object type reads: Object_Name and Description of every
   type, a vendor's included; Units of the analog and integer types,
@@ -13342,8 +13350,9 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
 - **A record.** `PointRecord { device, device_instance, object, name,
   description, units, state_texts, number_of_states, commandable,
   relinquish_default, cov_increment, min_present_value, max_present_value,
-  present_value, status_flags, problems }`. Text is exactly as the device
-  sent it. `units` is the `EngineeringUnits` value, and the values are
+  polarity, present_value, status_flags, problems }`. Text is exactly as
+  the device sent it. `units` is the `EngineeringUnits` value, and the
+  values are
   `Value`s, so their text names the units and the state (`72.5 °F`,
   `2 (Low)`). `commandable` is what `Commandability::of` says of the type,
   settled by the Priority_Array where the type alone can't. A property the
@@ -13365,8 +13374,12 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   size is the smaller of 16 and 32/p rounded down (31 analog inputs, at
   three properties each, go ten a batch and take 4 requests), and a mix
   one or two more than its types would apart: about N/8 + 2 requests for a
-  typical controller, N/5 + 2 with values. A handle made from an address whose instance isn't
-  known yet costs one more. A batch whose answer the device can't send for
+  typical controller, N/5 + 2 with values. Settings add up to four
+  properties an object, so fewer objects fit a batch and a device with
+  many of them takes more requests: a Binary Input then reads five (its
+  Polarity among them) and goes six a batch, a Binary Output six and goes
+  five. A handle made from an address whose instance isn't known yet
+  costs one more. A batch whose answer the device can't send for
   its size is asked again an object at a time, and the batches after it
   hold at most half as many objects as it did, down to one: at most four
   such refused batches an inventory (a device that answers one object at
@@ -13420,9 +13433,10 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   `units` (the kebab name), `state_texts` (joined with `|`, a `|` or `\`
   inside a text escaped with `\`), `number_of_states`, `commandable`,
   `relinquish_default`, `cov_increment`, `min_present_value`,
-  `max_present_value`, `present_value`, `status_flags` (each value's text)
-  and `problems`. A field holding a comma, a double quote or a line break
-  is quoted, its quotes doubled; rows end with a line feed. The JSON keeps
+  `max_present_value`, `polarity`, `present_value`, `status_flags` (each
+  value's text) and `problems`. A field holding a comma, a double quote or
+  a line break is quoted, its quotes doubled; rows end with a line feed.
+  The JSON keeps
   device text exactly. The CSV guards it by default: a `name`,
   `description` or `state_texts` cell that starts with `=`, `+`, `-`, `@`,
   a tab or a carriage return, which a spreadsheet would run as a formula,
@@ -13443,7 +13457,11 @@ export's terms, a `bacnet_types::points::Point` an object
 (`PointRecord::to_point()`) or the reason it has none (`Skipped`), and
 `to_turtle(&model, &options)` writes the same Turtle as before.
 `point_list_options()` reads what `Model::point_list()` needs for a whole
-`PointList`.
+`PointList`, a Binary Input's and Output's Polarity included (#2760): a
+list with a REVERSE point reads back REVERSE and builds the same way
+again. As with the other fields, one the list left out reads back as the
+object's default, NORMAL, and one the device doesn't give stays `None`,
+named among the record's problems.
 
 | Was (`bacnet_ops::export::s223`) | Now |
 |---|---|
@@ -13451,7 +13469,7 @@ export's terms, a `bacnet_types::points::Point` an object
 | `Entry::Point(point)`, `Entry::Failed { object, property, error }` | `Result<Point, Skipped>`: `Ok(point)`, `Err(Skipped { object, property, error })`; `s223::exported(&record)` makes one from a record |
 | `Entry::object()`, `point()`, `error()` | match on the `Result` |
 | `InventoryOptions::default()`, `InventoryOptions::new(types)?` | `s223::inventory_options(None)?`, `s223::inventory_options(Some(types))?`, which give a `bacnet_ops::InventoryOptions` |
-| `Detail::Export`, `Detail::Full`, `InventoryOptions::with_detail` | `InventoryOptions::with_settings(bool)`; `s223::point_list_options()` for everything a `PointList` holds |
+| `Detail::Export`, `Detail::Full`, `InventoryOptions::with_detail` | `InventoryOptions::with_settings(bool)`; `s223::point_list_options()` for every field a `PointList` holds |
 | `read_inventory(&mut reader, &options)` | `bacnet_ops::raw::read_inventory(&mut reader, &options)`, then `Model::from(&inventory)` |
 | `Device::inventory(&options) -> s223::Inventory` | `Device::inventory(&options) -> bacnet_ops::Inventory` |
 | `Device::inventory_device(detail)` | `Device::describe_device()`, or `device.read((device_object, OBJECT_NAME))` for the name alone |
@@ -14298,8 +14316,18 @@ slot. A stop or the caller going away ends the wait with nothing sent. A
 request waits out its turn at its destination (`min_request_interval_ms`)
 holding nothing, and takes the turn with its slot, so the interval holds
 between requests as they are admitted; one whose turn another request took
-meanwhile takes no slot and waits again. A request the Reporter doesn't
-select, or with no recipient, goes unaudited in the caller's task.
+meanwhile takes no slot and waits again. A caller never waits for the
+node's database (#2755): Tokio's lock hands its guard to a queued waiter
+whether or not it is polled, so a caller parked in a `select!`, `join!` or
+`buffer_unordered` could own it. An admitted request takes the guard in its
+caller's task only when it is free at once; otherwise the request goes with
+its slot to a task the session owns, which waits for the guard. So a parked
+caller holds neither the guard nor a slot, and holds up no request the node
+serves. A caller that goes before that task has the guard loses the
+request, with nothing sent or recorded. Sequence numbers follow admission
+while the database is free; a request admitted while it is busy takes its
+number when its task gets the guard. A request the Reporter doesn't select,
+or with no recipient, goes unaudited in the caller's task.
 
 - Each target is its own record (Clause 19.6.5): one per reference of a
   ReadPropertyMultiple, or per value its answer reports for ALL, REQUIRED or

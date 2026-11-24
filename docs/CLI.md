@@ -1687,16 +1687,18 @@ included.
 |------|-------------|
 | `--types <TYPES>` | Only these object types, comma-separated, by the target grammar's names (`ai`, `msv`, `trend-log` and so on) |
 | `--values` | Also read each object's Present_Value and Status_Flags |
-| `--settings` | Also read each object's COV_Increment, Min_Pres_Value, Max_Pres_Value and Relinquish_Default, where its type has them |
+| `--settings` | Also read each object's COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default and Polarity, where its type has them |
 | `--format table\|json\|csv`, `--json` | How to print; a table at a terminal and JSON through a pipe unless given |
 | `--csv-exact` | With `--format csv`: write device text exactly, without the formula guard |
 
 - **What is read.** Object_Name and Description of every object; Units of
   the analog and integer types, Accumulator and Pulse Converter; a binary
   object's Active_Text and Inactive_Text; a multi-state object's
-  Number_Of_States and State_Text. An output is commandable by its type; a
-  value object, or an object of a type this release doesn't know, is
-  commandable when it has a Priority_Array, which is read to find out. An
+  Number_Of_States and State_Text. With `--settings`, a binary input's or
+  output's Polarity too (`normal` or `reverse`); a binary value has none.
+  An output is commandable by its type; a value object, or an object of a
+  type this release doesn't know, is commandable when it has a
+  Priority_Array, which is read to find out. An
   optional property an object lacks is left empty. A property that should
   have read and didn't is listed with the device's error under the object's
   problems and never fails the command; an object the device refuses is a
@@ -1710,9 +1712,11 @@ included.
   up, where the size is the smaller of 16 and 32/p rounded down: 31 analog
   inputs, at three properties each, take 4 requests. That is about N/8 + 2
   requests for a typical controller, N/5 + 2 with `--values`, one at a
-  time. A target
-  given by address costs one more, a read of the Device object by the
-  wildcard instance. A device that can't send a batch's answer for its
+  time. `--settings` adds up to four properties an object, so fewer
+  objects fit a batch and a device with many of them takes more requests:
+  a binary input then reads five (its Polarity among them) and goes six a
+  batch, a binary output six and goes five. A target given by address
+  costs one more, a read of the Device object by the wildcard instance. A device that can't send a batch's answer for its
   size is asked for that batch an object at a time, and for at most half
   as many objects a batch from then on, down to one: at most four such
   refused batches. A device that
@@ -1764,6 +1768,7 @@ error's text, is set:
       "cov_increment": null,
       "min_present_value": null,
       "max_present_value": null,
+      "polarity": null,
       "present_value": { "value": "72.5 °F", "decoded": 72.5 },
       "status_flags": { "value": "none", "decoded": { "bits": "0000", "names": [] } },
       "problems": []
@@ -1784,9 +1789,9 @@ The field names are stable.
 these and in this order:
 
 ```text
-device,device_instance,object,name,description,units,state_texts,number_of_states,commandable,relinquish_default,cov_increment,min_present_value,max_present_value,present_value,status_flags,problems
-192.168.1.100:47808,1234,analog-input:1,Zone Temp,"Room 101, east",degrees-fahrenheit,,,false,,,,,72.5 °F,none,
-192.168.1.100:47808,1234,multi-state-value:1,Mode,,,Off|Low|High,3,true,,,,,2 (Low),none,
+device,device_instance,object,name,description,units,state_texts,number_of_states,commandable,relinquish_default,cov_increment,min_present_value,max_present_value,polarity,present_value,status_flags,problems
+192.168.1.100:47808,1234,analog-input:1,Zone Temp,"Room 101, east",degrees-fahrenheit,,,false,,,,,,72.5 °F,none,
+192.168.1.100:47808,1234,multi-state-value:1,Mode,,,Off|Low|High,3,true,,,,,,2 (Low),none,
 ```
 
 - `object` is `type:instance`, the form the other commands take; `units` is

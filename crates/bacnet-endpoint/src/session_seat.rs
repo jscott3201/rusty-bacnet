@@ -53,7 +53,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// out its turn at the destination (`min_request_interval_ms`) holding
     /// nothing and takes the turn with its slot. A waiting request takes a
     /// slot only as it is polled, so one its caller no longer polls holds
-    /// none. A write sent with a priority is a command at that
+    /// none; an admitted one takes the node's database guard in its
+    /// caller's task only when it is free at once, and otherwise waits for
+    /// it in a task the session owns, so its caller never holds the guard
+    /// (#2755). A write sent with a priority is a command at that
     /// priority, which the Audit_Priority_Filter applies to; one without a
     /// priority is not filtered by priority. An audited
     /// request goes to one station, direct or behind a router, and a raw

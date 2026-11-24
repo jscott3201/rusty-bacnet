@@ -247,3 +247,6 @@ mod pacing;
 
 #[path = "source_audit_share_tests.rs"]
 mod share;
+
+#[path = "source_audit_guard_tests.rs"]
+mod guard;

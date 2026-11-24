@@ -1,7 +1,7 @@
 //! Every refusal of the point-list builder names its point and the
 //! property at fault (#2445), and nothing is built.
 use super::*;
-use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::enums::{ErrorClass, ErrorCode, Polarity};
 use bacnet_types::error::RemoteError;
 
 /// The refusal's variant, by name: `Refusal` holds an `Error`, which has no
@@ -15,6 +15,7 @@ fn variant(reason: &Refusal) -> &'static str {
         Refusal::TypeNotCovered => "TypeNotCovered",
         Refusal::KindMismatch => "KindMismatch",
         Refusal::AccessNotAllowed => "AccessNotAllowed",
+        Refusal::PropertyNotInType => "PropertyNotInType",
         Refusal::NotFinite => "NotFinite",
         Refusal::MinAboveMax => "MinAboveMax",
         Refusal::OutOfRange => "OutOfRange",
@@ -221,6 +222,26 @@ fn every_refusal_names_its_point_and_property() {
             Some(P::PRESENT_VALUE),
             "AccessNotAllowed",
         ),
+        // Polarity: a Binary Value has none (#2595), whatever its access
+        // and whichever Polarity is given.
+        (
+            Point::new(
+                oid(ObjectType::BINARY_VALUE, 2),
+                "bv-polarity",
+                Binary::new(commandable(None)).with_polarity(Polarity::NORMAL),
+            ),
+            Some(P::POLARITY),
+            "PropertyNotInType",
+        ),
+        (
+            Point::new(
+                oid(ObjectType::BINARY_VALUE, 2),
+                "bv-reverse",
+                Binary::new(Access::ReadOnly).with_polarity(Polarity::REVERSE),
+            ),
+            Some(P::POLARITY),
+            "PropertyNotInType",
+        ),
         // An Integer kind fits no Input or Output, whatever its access.
         (
             Point::new(
@@ -376,6 +397,23 @@ fn a_setter_refusal_names_its_property() {
             ),
             P::RELINQUISH_DEFAULT,
         ),
+        // Polarity is NORMAL or REVERSE (#2595).
+        (
+            Point::new(
+                oid(ObjectType::BINARY_INPUT, 2),
+                "bi",
+                Binary::new(Access::ReadOnly).with_polarity(Polarity::from_raw(2)),
+            ),
+            P::POLARITY,
+        ),
+        (
+            Point::new(
+                oid(ObjectType::BINARY_OUTPUT, 2),
+                "bo-polarity",
+                Binary::new(commandable(None)).with_polarity(Polarity::from_raw(7)),
+            ),
+            P::POLARITY,
+        ),
         (
             Point::new(
                 oid(ObjectType::MULTI_STATE_VALUE, 2),
@@ -479,6 +517,15 @@ fn a_refusal_displays_object_property_and_reason() {
     assert_eq!(
         error.to_string(),
         "LARGE_ANALOG_VALUE,1: object type not covered by point lists"
+    );
+    let error = refuse(Point::new(
+        oid(ObjectType::BINARY_VALUE, 4),
+        "bv",
+        Binary::new(Access::Writable).with_polarity(Polarity::REVERSE),
+    ));
+    assert_eq!(
+        error.to_string(),
+        "BINARY_VALUE,4 POLARITY: object type has no such property"
     );
 }
 

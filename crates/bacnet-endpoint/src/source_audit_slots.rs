@@ -38,8 +38,9 @@
 //! take no slot, and whatever frees a slot or gives up a wake wakes the
 //! next asleep waiter under the same lock. A woken waiter that never polls
 //! keeps a free slot from the others only until the next slot comes back,
-//! which wakes past it; while slots are held one will, as long as their
-//! holders are polled (#2755), and with none held none is asleep.
+//! which wakes past it; while slots are held one will, since each is held
+//! by a task the session owns, which is always polled (#2755), and with
+//! none held none is asleep.
 //!
 //! So a lane holding none is woken by the (k + 1)th slot to come back,
 //! where k counts the lanes that have waited longer since they were last

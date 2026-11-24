@@ -303,5 +303,132 @@ class BinaryPolarityTests(unittest.TestCase):
             await server.stop()
 
 
+def loopback_endpoint(device_instance: int) -> BipEndpoint:
+    return BipEndpoint(
+        device_instance=device_instance,
+        vendor_id=42,
+        interface="127.0.0.1",
+        port=0,
+        broadcast_address="127.0.0.1",
+        apdu_timeout_ms=2_000,
+    )
+
+
+class EndpointBinaryPolarityTests(unittest.IsolatedAsyncioTestCase):
+    """The same routes on an endpoint (#2594): ``await endpoint.server()``
+    is the full server the endpoint's session runs, so its Binary Input's
+    physical side and Polarity are set there, and a second endpoint's client
+    hears each change of Present_Value."""
+
+    async def test_the_endpoints_server_takes_the_physical_side_and_polarity(self) -> None:
+        owner = loopback_endpoint(503_082)
+        owner.add_binary_input(2, "BI-2", polarity=Polarity.REVERSE)
+        owner.add_binary_output(3, "BO-3", polarity=Polarity.REVERSE)
+        owner.add_analog_input(1, "AI-1")
+        peer = loopback_endpoint(503_083)
+        notifications: asyncio.Queue[Any] = asyncio.Queue()
+        listener: asyncio.Task[None] | None = None
+
+        async def notified() -> PropertyValue:
+            """BI-2's Present_Value in the next notification."""
+            notification = await asyncio.wait_for(
+                notifications.get(), timeout=NOTIFICATION_TIMEOUT
+            )
+            self.assertEqual(notification.monitored_object_identifier, BI)
+            return next(
+                item["value"]
+                for item in notification.values
+                if item["property_id"] == PropertyIdentifier.PRESENT_VALUE
+            )
+
+        try:
+            async with owner, peer:
+                address = await owner.local_address()
+                server = await owner.server()
+                client = await peer.client()
+                iterator = await client.cov_notifications()
+
+                async def collect() -> None:
+                    async for notification in iterator:
+                        notifications.put_nowait(notification)
+
+                listener = asyncio.create_task(collect())
+                await client.subscribe_cov(
+                    address,
+                    subscriber_process_identifier=1,
+                    monitored_object_identifier=BI,
+                    confirmed=False,
+                    lifetime=60,
+                )
+                self.assertEqual(await notified(), INACTIVE)
+
+                # An OFF input under REVERSE is ACTIVE; under NORMAL the
+                # same input is INACTIVE.
+                await server.set_physical_input_local(BI, False)
+                self.assertEqual(await notified(), ACTIVE)
+                self.assertEqual(
+                    await client.read_property(
+                        address, BI, PropertyIdentifier.PRESENT_VALUE
+                    ),
+                    ACTIVE,
+                )
+                await server.set_polarity_local(BI, Polarity.NORMAL)
+                self.assertEqual(await notified(), INACTIVE)
+
+                # Out of service Present_Value is the simulated one, whatever
+                # the input and Polarity do; back in service it is derived
+                # from both: ON under REVERSE is INACTIVE.
+                async def write(prop: PropertyIdentifier, value: PropertyValue) -> None:
+                    await server.write_property_local(BI, prop, value, source_object=None)
+
+                await write(PropertyIdentifier.OUT_OF_SERVICE, PropertyValue.boolean(True))
+                self.assertEqual(await notified(), INACTIVE)
+                await write(PropertyIdentifier.PRESENT_VALUE, ACTIVE)
+                self.assertEqual(await notified(), ACTIVE)
+                await server.set_physical_input_local(BI, True)
+                await server.set_polarity_local(BI, Polarity.REVERSE)
+                self.assertEqual(
+                    await client.read_property(
+                        address, BI, PropertyIdentifier.PRESENT_VALUE
+                    ),
+                    ACTIVE,
+                )
+                await write(PropertyIdentifier.OUT_OF_SERVICE, PropertyValue.boolean(False))
+                self.assertEqual(await notified(), INACTIVE)
+
+                # The endpoint's Binary Output drives its relinquished
+                # INACTIVE through Polarity.
+                self.assertTrue(await server.physical_output_local(BO))
+                await server.set_polarity_local(BO, Polarity.NORMAL)
+                self.assertFalse(await server.physical_output_local(BO))
+
+                analog = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
+                missing = ObjectIdentifier(ObjectType.BINARY_INPUT, 9)
+                for oid, code in (
+                    (analog, ErrorCode.OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED),
+                    (missing, ErrorCode.UNKNOWN_OBJECT),
+                ):
+                    for call in (
+                        lambda: server.set_physical_input_local(oid, True),
+                        lambda: server.set_polarity_local(oid, Polarity.NORMAL),
+                    ):
+                        with self.subTest(object=str(oid)):
+                            with self.assertRaises(BacnetProtocolError) as refused:
+                                await call()
+                            self.assertEqual(
+                                (refused.exception.error_class, refused.exception.error_code),
+                                (ErrorClass.OBJECT.to_raw(), code.to_raw()),
+                            )
+                self.assertEqual(
+                    await server.read_property(BI, PropertyIdentifier.PRESENT_VALUE),
+                    INACTIVE,
+                )
+        finally:
+            if listener is not None:
+                listener.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await listener
+
+
 if __name__ == "__main__":
     unittest.main()

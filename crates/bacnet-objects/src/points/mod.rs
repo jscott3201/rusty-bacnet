@@ -66,13 +66,16 @@
 //!   kind of another family than the type's;
 //! - an Input whose access isn't [`Access::ReadOnly`], and an Output whose
 //!   access isn't [`Access::Commandable`];
+//! - a Polarity given for a Binary Value, which has no such property; only
+//!   a Binary Input or Output takes one (#2595);
 //! - a Real that isn't finite, Min_Pres_Value above Max_Pres_Value (an
 //!   analog object's or an Integer Value's), Units past 65535, a state
 //!   count outside 1 to [`MAX_NUMBER_OF_STATES`], and State_Text given with
 //!   other than one label per state;
 //! - whatever the objects' own setters refuse, as a write would be: a
 //!   negative COV_Increment, a binary relinquish default other than
-//!   INACTIVE or ACTIVE, a multi-state one that names no state.
+//!   INACTIVE or ACTIVE, a multi-state one that names no state, a Polarity
+//!   other than NORMAL or REVERSE.
 //!
 //! A relinquish default outside Min_Pres_Value to Max_Pres_Value builds,
 //! an analog one or an Integer Value's: the builder, like the objects,
@@ -251,6 +254,8 @@ pub enum Refusal {
     /// The type doesn't take this access: an Input is read-only and an
     /// Output commandable.
     AccessNotAllowed,
+    /// The type has no such property: a Polarity given for a Binary Value.
+    PropertyNotInType,
     /// A Real is infinite or not a number.
     NotFinite,
     /// Min_Pres_Value is above Max_Pres_Value.
@@ -274,6 +279,7 @@ impl fmt::Display for Refusal {
             Self::TypeNotCovered => "object type not covered by point lists",
             Self::KindMismatch => "point kind does not fit the object type",
             Self::AccessNotAllowed => "access not allowed for the object type",
+            Self::PropertyNotInType => "object type has no such property",
             Self::NotFinite => "value is not finite",
             Self::MinAboveMax => "Min_Pres_Value is above Max_Pres_Value",
             Self::OutOfRange => "value out of range",
@@ -598,11 +604,19 @@ fn binary_object(named: Named, binary: Binary) -> Result<Box<dyn BACnetObject>, 
     let Binary {
         active_text,
         inactive_text,
+        polarity,
         access,
         ..
     } = binary;
     let (access, relinquish_default) = admit(role, access)
         .map_err(|reason| BuildError::new(object, Some(P::PRESENT_VALUE), reason))?;
+    if polarity.is_some() && matches!(role, Role::Value) {
+        return Err(BuildError::new(
+            object,
+            Some(P::POLARITY),
+            Refusal::PropertyNotInType,
+        ));
+    }
     let instance = object.instance_number();
     macro_rules! configure {
         ($built:ident) => {
@@ -617,17 +631,29 @@ fn binary_object(named: Named, binary: Binary) -> Result<Box<dyn BACnetObject>, 
             }
         };
     }
+    // Only an Input or an Output gets here with a Polarity.
+    macro_rules! polarize {
+        ($built:ident) => {
+            if let Some(polarity) = polarity {
+                $built
+                    .set_polarity(polarity)
+                    .map_err(refused_by(object, Some(P::POLARITY)))?;
+            }
+        };
+    }
     let constructed = refused_by(object, None);
     let relinquish = refused_by(object, Some(P::RELINQUISH_DEFAULT));
     Ok(match role {
         Role::Input => {
             let mut built = BinaryInputObject::new(instance, name).map_err(constructed)?;
             configure!(built);
+            polarize!(built);
             Box::new(built)
         }
         Role::Output => {
             let mut built = BinaryOutputObject::new(instance, name).map_err(constructed)?;
             configure!(built);
+            polarize!(built);
             if let Some(default) = relinquish_default {
                 built
                     .set_relinquish_default(default.to_raw())
