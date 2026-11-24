@@ -7,6 +7,7 @@
 //! treats it as a write (`bacnet_tool::class`).
 
 use std::future::Future;
+use std::io::Write;
 use std::time::Duration;
 
 use crate::destination::Destination;
@@ -89,7 +90,8 @@ pub(crate) async fn stop_signal() {
 /// after that (a renewal, the cancel, a write to stdout) ends the stream
 /// with an error line; a refused subscription prints nothing. A reader that
 /// goes away (a closed pipe) stops the watch as Ctrl+C does, once a line
-/// finds it gone.
+/// finds it gone. Notifications missed because the watch fell behind are a
+/// note on stderr and, in JSON, a `missed` line where the gap is (#2787).
 pub async fn subscribe_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     to: &Destination,
@@ -113,7 +115,7 @@ pub async fn subscribe_cmd<T: TransportPort + 'static>(
     let rx = client.cov_notifications();
     held.subscribe(client, to).await?;
 
-    let watched = watch(client, to, held, rx, format, stop).await;
+    let watched = watch(client, to, held, rx, format, &mut std::io::stdout(), stop).await;
     let ended = if lifetime != 0
         && let Err(error) = to.unsubscribe_cov(client, held.process_id, held.oid).await
     {
@@ -162,15 +164,17 @@ const CHANNEL_CLOSED: &str = "Notification channel closed";
 
 /// Print the opening line, then each notification until `stop` completes
 /// or stdout's reader has gone, renewing a finite subscription on the way.
+/// The lines go to `out`, which is stdout but for tests.
 async fn watch<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     to: &Destination,
     held: Held,
     mut rx: broadcast::Receiver<COVEvent>,
     format: OutputFormat,
+    out: &mut impl Write,
     stop: impl Future<Output = ()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if output::print_line(&opening_text(&held, format))? == Printed::ReaderGone {
+    if output::print_line_to(out, &opening_text(&held, format))? == Printed::ReaderGone {
         return Ok(());
     }
     let style = AddressStyle::of(client.transport());
@@ -195,7 +199,7 @@ async fn watch<T: TransportPort + 'static>(
             }
             result = rx.recv() => {
                 if let Some(line) = event_line(result, style, format)?
-                    && output::print_line(&line)? == Printed::ReaderGone
+                    && output::print_line_to(out, &line)? == Printed::ReaderGone
                 {
                     return Ok(());
                 }
@@ -205,8 +209,11 @@ async fn watch<T: TransportPort + 'static>(
 }
 
 /// What a received event prints: a notification's line, or nothing for one
-/// the command doesn't watch or for missed ones (stderr says so). The
-/// client's notifications ending is an error that ends the watch.
+/// the command doesn't watch. Notifications the watch fell too far behind to
+/// read (more than the client's buffer, 64, came while it was busy, as with
+/// a slow reader of stdout) are a note on stderr and, in JSON, a `missed`
+/// line with their exact count, which comes where they would have (#2787).
+/// The client's notifications ending is an error that ends the watch.
 fn event_line(
     received: Result<COVEvent, RecvError>,
     style: AddressStyle,
@@ -219,10 +226,11 @@ fn event_line(
         // A COV-multiple notification answers a SubscribeCOVPropertyMultiple,
         // which this command never sends: nothing it watches.
         Ok(COVEvent::Multiple(_)) => Ok(None),
-        Err(RecvError::Lagged(n)) => {
-            output::print_error(&format!("Missed {n} notifications (buffer overflow)"));
-            Ok(None)
-        }
+        Err(RecvError::Lagged(n)) => Ok(output::missed(
+            &format!("Missed {n} notifications (buffer overflow)"),
+            n,
+            format,
+        )),
         Err(RecvError::Closed) => Err(CHANNEL_CLOSED.into()),
     }
 }
@@ -448,8 +456,9 @@ mod tests {
     }
 
     /// The client's notifications ending ends the watch with an error
-    /// (status 1, after the error line); missed ones go to stderr and the
-    /// watch goes on (#2783).
+    /// (status 1, after the error line, #2783); missed ones are a `missed`
+    /// line in JSON and nothing on a table's stdout (#2787), and the watch
+    /// goes on.
     #[test]
     fn the_notifications_ending_is_an_error() {
         use super::event_line;
@@ -465,12 +474,136 @@ mod tests {
             ended.expect_err("an error").to_string(),
             "Notification channel closed"
         );
-        let missed = event_line(
-            Err(RecvError::Lagged(3)),
-            AddressStyle::Bip,
-            OutputFormat::Json,
+        let missed =
+            |format| event_line(Err(RecvError::Lagged(3)), AddressStyle::Bip, format).unwrap();
+        assert_eq!(
+            missed(OutputFormat::Json).as_deref(),
+            Some(r#"{"count":3,"type":"missed"}"#)
         );
-        assert_eq!(missed.unwrap(), None);
+        assert_eq!(missed(OutputFormat::Table), None);
+    }
+
+    /// A notification about AI:`instance`, as the client publishes it.
+    fn about(instance: u32) -> bacnet_client::client::COVEvent {
+        use bacnet_types::enums::ObjectType;
+        use bacnet_types::primitives::ObjectIdentifier;
+
+        let mut notification = received(&[2], None);
+        notification.notification.monitored_object_identifier =
+            ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap();
+        bacnet_client::client::COVEvent::Object(notification)
+    }
+
+    /// Until the watch has read everything `sender` sent, or learned that
+    /// it lost some.
+    async fn read_up(sender: &tokio::sync::broadcast::Sender<bacnet_client::client::COVEvent>) {
+        for _ in 0..100 {
+            if sender.is_empty() {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("the watch stopped reading");
+    }
+
+    /// `watch`'s stdout in `format` while its buffer, of 2 notifications
+    /// here, overflows (#2787): it reads AI:1; AI:2 to AI:5 arrive before
+    /// it reads again, so AI:2 and AI:3 are lost; then AI:6 comes, and the
+    /// channel closes, which ends the watch. No timers: each step waits
+    /// until the watch has read what was sent.
+    async fn watched_across_a_gap(format: crate::output::OutputFormat) -> String {
+        use super::{Held, watch};
+        use crate::destination::Destination;
+        use bacnet_client::client::{BACnetClient, ClientConfig};
+        use bacnet_ops::DeviceAddress;
+        use bacnet_transport::test_transport::TestTransport;
+        use bacnet_types::enums::ObjectType;
+        use bacnet_types::primitives::ObjectIdentifier;
+
+        let transport = TestTransport::builder().build();
+        let mut client = BACnetClient::start(ClientConfig::default(), transport)
+            .await
+            .unwrap();
+        let to = Destination {
+            address: DeviceAddress::local(&[2]).unwrap(),
+            instance: None,
+        };
+        let held = Held {
+            process_id: 7,
+            oid: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
+            confirmed: false,
+            // Indefinite: no renewal to send.
+            lifetime: 0,
+        };
+        let (sender, notifications) = tokio::sync::broadcast::channel(2);
+        let device = async move {
+            sender.send(about(1)).unwrap();
+            read_up(&sender).await;
+            for instance in 2..=5 {
+                sender.send(about(instance)).unwrap();
+            }
+            read_up(&sender).await;
+            sender.send(about(6)).unwrap();
+        };
+        let mut stdout = Vec::new();
+        let stop = std::future::pending();
+        let watching = watch(&client, &to, held, notifications, format, &mut stdout, stop);
+        let (watched, ()) = tokio::join!(watching, device);
+        assert_eq!(
+            watched.expect_err("the channel closed").to_string(),
+            "Notification channel closed"
+        );
+        client.stop().await.unwrap();
+        String::from_utf8(stdout).unwrap()
+    }
+
+    /// A watch that falls behind marks the gap where it is (#2787): in JSON
+    /// a `missed` line with the exact count between the notifications on
+    /// either side of it, every line one JSON value, and the stream goes on
+    /// after it. A table's stdout is the notifications alone (the note is
+    /// on stderr).
+    #[tokio::test]
+    async fn a_gap_in_the_notifications_is_marked_where_it_is() {
+        use crate::output::OutputFormat;
+
+        let json = watched_across_a_gap(OutputFormat::Json).await;
+        let lines: Vec<serde_json::Value> = json
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("one JSON value a line"))
+            .collect();
+        let kinds: Vec<&str> = lines
+            .iter()
+            .map(|line| line["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["subscribed", "cov", "missed", "cov", "cov", "cov"],
+            "{json}"
+        );
+        assert_eq!(lines[2], serde_json::json!({"type": "missed", "count": 2}));
+        let objects: Vec<&str> = lines
+            .iter()
+            .filter_map(|line| line["object"].as_str())
+            .collect();
+        let read = [
+            "ANALOG_INPUT:1",
+            "ANALOG_INPUT:4",
+            "ANALOG_INPUT:5",
+            "ANALOG_INPUT:6",
+        ];
+        assert_eq!(objects, read, "{json}");
+
+        let table = watched_across_a_gap(OutputFormat::Table).await;
+        assert!(!table.to_lowercase().contains("missed"), "{table}");
+        let lines: Vec<&str> = table.lines().collect();
+        assert_eq!(lines.len(), 5, "the opening line, 4 notifications: {table}");
+        assert!(lines[0].contains("Subscribed to ANALOG_INPUT:1"), "{table}");
+        let objects: Vec<&str> = lines[1..]
+            .iter()
+            .map(|line| line.strip_prefix("[COV] ").expect("a notification"))
+            .map(|line| line.split(' ').next().unwrap())
+            .collect();
+        assert_eq!(objects, read, "{table}");
     }
 
     /// A routed COV source prints as the `NET:0xMAC` target, in the text

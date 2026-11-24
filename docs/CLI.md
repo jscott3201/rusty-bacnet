@@ -131,7 +131,17 @@ stderr). Each object names its kind in `type`:
 | `subscribed` | `subscribe`'s first line, once the subscription is in place: `status` (`ok`) and `message` |
 | `cov` | A notification `subscribe` received (see [COV Subscriptions](#cov-subscriptions)) |
 | `packet` | A packet `capture` read (see [Packet Capture](#packet-capture)) |
+| `missed` | A gap: `count` notifications the stream lost because `subscribe` fell behind (below) |
 | `error` | The last line of a stream that fails once it is running, with `message` as stderr prints it after `Error: `; the exit status is the usual 1 |
+
+A command that can't keep up, as when its reader is slow, loses what comes
+meanwhile; a `missed` line, `{"count":3,"type":"missed"}`, says so in the
+stream, stderr notes it in every format, and the stream goes on. In
+`subscribe` it comes exactly where the gap is: `count` is how many
+notifications overflowed the client's buffer of 64, whatever object they
+were about (a notification lost on the network can't be counted). A
+consumer that needs a value current should read it again (`bacnet read`)
+rather than wait for its next change.
 
 An error before a stream starts (a subscription the device refuses, a capture
 device that won't open) leaves stdout empty, as with any command. A stream
@@ -2170,8 +2180,11 @@ target.
 With `--json` (or through a pipe) the watch is a stream of
 [JSON Lines](#json-streams): the `subscribed` line, then a `cov` line a
 notification, as each arrives. A renewal or cancel that fails ends it with an
-`error` line. A note that notifications were missed goes to stderr only. For
-example, the opening line and the device's first notification:
+`error` line. Notifications that overflow the watch's buffer while it falls
+behind are noted on stderr and, in JSON, marked by a `missed` line where
+they would have come, with their count ([gaps](#json-streams)); read the
+object again if you need its present value. For example, the opening line
+and the device's first notification:
 
 ```json
 {"message":"Subscribed to ANALOG_INPUT:1 (process_id=4242; lifetime 300s, renewed while watching, cancelled on exit). Watching... (Ctrl+C to stop)","status":"ok","type":"subscribed"}
