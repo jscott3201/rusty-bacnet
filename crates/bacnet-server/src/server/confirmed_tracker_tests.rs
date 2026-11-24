@@ -291,3 +291,31 @@ fn a_repeat_is_answered_from_the_newest_note() {
     drop(first);
     assert_eq!(repeat(), None);
 }
+
+/// Ending an entry ahead of its guard (a segmented answer's final
+/// acknowledgment, #2767) ends that entry alone, and ending it again, or
+/// the guard's drop afterwards, is a no-op, even once the same request is
+/// pending again under a new entry.
+#[test]
+fn an_entry_ended_early_is_ended_once_and_its_late_guard_spares_a_newer_one() {
+    let tracker = Arc::new(ConfirmedRequestTracker::default());
+    let same = request(9, Bytes::from_static(b"same"));
+    let old = new(begin(&tracker, same.clone()));
+    let other = new(begin(&tracker, request(9, Bytes::from_static(b"other"))));
+    tracker.end(old.id().unwrap());
+    tracker.end(old.id().unwrap());
+    let newer = new(begin(&tracker, same.clone()));
+    assert_ne!(newer.id(), old.id());
+    drop(old);
+    for (body, what) in [
+        (same, "the newer entry"),
+        (request(9, Bytes::from_static(b"other")), "the other body's"),
+    ] {
+        assert!(
+            matches!(begin(&tracker, body), ConfirmedRequestAdmission::Duplicate),
+            "{what} is still pending"
+        );
+    }
+    drop((newer, other));
+    assert!(tracker.state.lock().unwrap().entries.is_empty());
+}

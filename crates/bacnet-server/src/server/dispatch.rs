@@ -34,8 +34,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         true
     }
 
-    async fn route_segmented_send_event(
+    /// Hand a requester's Segment-ACK or Abort to the segmented answer it
+    /// belongs to; the final Segment-ACK or the Abort also ends the answered
+    /// request ([`SegmentedSendHandle::end_request`]). Not `async`: nothing
+    /// here waits, and as a future it would add its arguments to the
+    /// dispatch future every request is served in.
+    fn route_segmented_send_event(
         seg_ack_senders: &Arc<segmented_send::SegmentedSendRegistry>,
+        tracker: &ConfirmedRequestTracker,
         key: SegKey,
         event: SegmentedSendEvent,
     ) -> bool {
@@ -51,6 +57,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         match event {
             SegmentedSendEvent::Abort(abort) => {
                 handle.send_control(SegmentedSendControlEvent::Abort(abort));
+                handle.end_request(tracker);
                 true
             }
             SegmentedSendEvent::SegmentAck(ack) => {
@@ -67,7 +74,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
 
                 match handle.segment_ack_tx.try_send(ack) {
-                    Ok(()) => true,
+                    Ok(()) => {
+                        // One accepted names the segment in flight (or
+                        // asks again for the one before it), so one naming
+                        // the last segment is the final acknowledgment.
+                        if usize::from(seq) + 1 == handle.total_segments {
+                            handle.end_request(tracker);
+                        }
+                        true
+                    }
                     Err(mpsc::error::TrySendError::Full(_)) => {
                         warn_throttled!(
                             seg_ack_senders.warning,
@@ -413,10 +428,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     );
                     Self::route_segmented_send_event(
                         seg_ack_senders,
+                        confirmed_request_tracker,
                         key,
                         SegmentedSendEvent::Abort(abort.clone()),
                     )
-                    .await
                 };
                 let admitted = Self::admit_notification_terminal(
                     learned_routers,
@@ -453,11 +468,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 );
                 if !Self::route_segmented_send_event(
                     seg_ack_senders,
+                    confirmed_request_tracker,
                     key,
                     SegmentedSendEvent::SegmentAck(sa),
-                )
-                .await
-                {
+                ) {
                     debug!(
                         invoke_id,
                         "Server ignoring SegmentAck for unknown transaction"

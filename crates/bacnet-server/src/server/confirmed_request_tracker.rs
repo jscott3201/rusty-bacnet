@@ -172,16 +172,31 @@ impl PendingConfirmedRequest {
             id: None,
         }
     }
+
+    /// The entry this owns, if the tracker follows the request.
+    pub(super) fn id(&self) -> Option<u64> {
+        self.id
+    }
 }
+
+impl ConfirmedRequestTracker {
+    /// End pending entry `id` now, ahead of its owner. The owner's drop
+    /// then finds nothing to end: `begin` never gives an id twice.
+    /// `#[inline]`: every confirmed request's guard ends its entry here.
+    #[inline]
+    pub(super) fn end(&self, id: u64) {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entries
+            .retain(|entry| entry.id != id);
+    }
+}
+
 impl Drop for PendingConfirmedRequest {
     fn drop(&mut self) {
         if let Some(id) = self.id {
-            self.tracker
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .entries
-                .retain(|entry| entry.id != id);
+            self.tracker.end(id);
         }
     }
 }
