@@ -3,6 +3,8 @@
 //! Supports table (human-readable) and JSON output formats with automatic
 //! TTY detection.
 
+use std::io::{self, Write};
+
 use bacnet_client::discovery::DiscoveredDevice;
 use owo_colors::OwoColorize;
 use serde::Serialize;
@@ -249,13 +251,13 @@ pub fn print_rpm_table(entries: &[RpmEntry], format: OutputFormat) {
 }
 
 /// Print a success/status message: the status line of the commands that
-/// change a device, of the file and BBMD commands, and `subscribe`'s first.
+/// change a device, and of the file and BBMD commands.
 pub fn print_success(msg: &str, format: OutputFormat) {
     println!("{}", success_text(msg, format));
 }
 
 /// [`print_success`]'s text: the message, or `{"status": "ok", "message"}`.
-fn success_text(msg: &str, format: OutputFormat) -> String {
+pub(crate) fn success_text(msg: &str, format: OutputFormat) -> String {
     match format {
         OutputFormat::Table => msg.green().to_string(),
         OutputFormat::Json => {
@@ -263,6 +265,69 @@ fn success_text(msg: &str, format: OutputFormat) -> String {
             serde_json::to_string_pretty(&result).expect("serialize success")
         }
     }
+}
+
+/// What became of a line [`print_line`] wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Printed {
+    /// It went out.
+    Line,
+    /// Stdout's reader has gone (a closed pipe, as `| head -1` leaves it):
+    /// the stream stops quietly, a success.
+    ReaderGone,
+}
+
+/// Print `text` as a line of a long-running command's output (`subscribe`,
+/// `capture`). With JSON these lines are JSON Lines (#2783): each one
+/// compact value ([`json_line`]) naming its kind in `type`, and nothing
+/// else on stdout. A reader that has gone is [`Printed::ReaderGone`], for
+/// the command to stop on, cleaning up as it does at Ctrl+C (`println!`
+/// would panic); any other failed write (a full disk) is an error.
+pub fn print_line(text: &str) -> Result<Printed, Box<dyn std::error::Error>> {
+    written(write_line(&mut io::stdout().lock(), text))
+}
+
+/// [`print_line`]'s outcome from its write's. The reader having gone is
+/// told by the error's kind, which std gives a closed pipe on each OS: EPIPE
+/// on Unix, ERROR_BROKEN_PIPE and ERROR_NO_DATA on Windows.
+fn written(result: io::Result<()>) -> Result<Printed, Box<dyn std::error::Error>> {
+    match result {
+        Ok(()) => Ok(Printed::Line),
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(Printed::ReaderGone),
+        Err(error) => Err(format!("writing to stdout failed: {error}").into()),
+    }
+}
+
+/// [`print_line`] to `out`: `text` and its newline in one write, then a
+/// flush, so a consumer reading a pipe sees each line when it happens
+/// rather than when a buffer fills.
+fn write_line(out: &mut impl Write, text: &str) -> io::Result<()> {
+    let mut line = String::with_capacity(text.len() + 1);
+    line.push_str(text);
+    line.push('\n');
+    out.write_all(line.as_bytes())?;
+    out.flush()
+}
+
+/// `value` as a line of a JSON Lines stream: compact.
+pub fn json_line(value: &impl Serialize) -> String {
+    serde_json::to_string(value).expect("serialize a stream line")
+}
+
+/// End a stream that fails once it is running with its last line: in JSON
+/// `{"type": "error", "message"}`, the message as stderr gives it after
+/// `Error: ` (`main` prints that, with the exit status); with a table,
+/// nothing, as stderr says it. A failed write is let go: the message still
+/// reaches stderr.
+pub fn end_stream(error: &(dyn std::error::Error + 'static), format: OutputFormat) {
+    if format == OutputFormat::Json {
+        let _ = print_line(&error_line(&crate::error_text(error)));
+    }
+}
+
+/// [`end_stream`]'s JSON line.
+fn error_line(message: &str) -> String {
+    json_line(&serde_json::json!({ "type": "error", "message": message }))
 }
 
 /// Print a waiting/progress message to stderr.
@@ -326,6 +391,62 @@ mod tests {
         assert_eq!(
             json,
             serde_json::json!({"status": "ok", "message": "Alarm acknowledged"})
+        );
+    }
+
+    /// A stream line goes out whole, newline and all, and is flushed after
+    /// it (#2783), so a piped reader sees it when it happens.
+    #[test]
+    fn a_stream_line_is_written_whole_then_flushed() {
+        #[derive(Default)]
+        struct Recorded {
+            writes: Vec<Vec<u8>>,
+            /// How many writes had been made at the last flush.
+            flushed_after: Option<usize>,
+        }
+        impl Write for Recorded {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.writes.push(buf.to_vec());
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                self.flushed_after = Some(self.writes.len());
+                Ok(())
+            }
+        }
+        let mut out = Recorded::default();
+        write_line(&mut out, r#"{"type":"cov"}"#).unwrap();
+        assert_eq!(out.writes, [b"{\"type\":\"cov\"}\n".to_vec()]);
+        assert_eq!(out.flushed_after, Some(1));
+    }
+
+    /// A closed pipe stops a stream quietly; any other failed write is an
+    /// error naming stdout (#2783).
+    #[test]
+    fn a_closed_pipe_stops_quietly_and_other_write_errors_fail() {
+        assert_eq!(written(Ok(())).unwrap(), Printed::Line);
+        let closed = io::Error::from(io::ErrorKind::BrokenPipe);
+        assert_eq!(written(Err(closed)).unwrap(), Printed::ReaderGone);
+        for kind in [io::ErrorKind::StorageFull, io::ErrorKind::Other] {
+            let error = written(Err(io::Error::new(kind, "no space left on device")))
+                .expect_err("an error");
+            assert_eq!(
+                error.to_string(),
+                "writing to stdout failed: no space left on device"
+            );
+        }
+    }
+
+    /// The error line a failed stream ends with is one compact line, even
+    /// for a message that spans lines.
+    #[test]
+    fn a_stream_ends_with_one_error_line() {
+        let line = error_line("renewing failed:\nno answer");
+        assert!(!line.contains('\n'), "{line}");
+        let json: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"type": "error", "message": "renewing failed:\nno answer"})
         );
     }
 

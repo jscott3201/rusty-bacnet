@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::Serialize;
 
 use crate::decode;
-use crate::output::OutputFormat;
+use crate::output::{self, OutputFormat, Printed};
 
 // ---------------------------------------------------------------------------
 // Options
@@ -139,8 +139,12 @@ impl CaptureSource for OfflineCapture {
 // JSON output struct
 // ---------------------------------------------------------------------------
 
+/// A packet's line in the JSON Lines stream (#2783).
 #[derive(Serialize)]
 struct PacketJson {
+    /// The line's kind: `packet` (a stream that fails ends with `error`).
+    #[serde(rename = "type")]
+    kind: &'static str,
     timestamp: String,
     src: String,
     dst: String,
@@ -281,7 +285,11 @@ pub(crate) fn udp_datagram(
     Some((address(12, 0), address(16, 2), payload))
 }
 
-/// Install a Ctrl-C handler that clears the running flag.
+/// Install a handler that clears the running flag on Ctrl-C and, on Unix
+/// with `ctrlc`'s `termination` feature, on SIGTERM and SIGHUP too (#2783),
+/// so `kill` stops a capture as Ctrl-C does, with its summary, rather than
+/// killing it. A live capture sees the flag within its one-second read
+/// timeout.
 fn ctrlc_flag(flag: &Arc<AtomicBool>) {
     let f = flag.clone();
     let _ = ctrlc::set_handler(move || {
@@ -333,97 +341,17 @@ pub fn run_capture(opts: CaptureOpts) -> Result<(), Box<dyn std::error::Error>> 
     let running = Arc::new(AtomicBool::new(true));
     ctrlc_flag(&running);
 
-    let mut packet_count: u64 = 0;
-
-    loop {
-        // Check running flag and count limit
-        if !running.load(Ordering::Relaxed) {
-            break;
-        }
-        if let Some(limit) = opts.count
-            && packet_count >= limit
-        {
-            break;
-        }
-
-        // Get next packet
-        let pkt = match source.next_packet() {
-            Ok(p) => p,
-            Err(PcapError::Timeout) => continue,
-            Err(PcapError::Eof) => break,
-            Err(PcapError::Other(e)) => return Err(e.into()),
-        };
-
-        packet_count += 1;
-
-        // Write to savefile if saving
-        if let Some(ref mut sf) = savefile {
-            let packet_ref = pcap::Packet {
-                header: &pkt.header,
-                data: &pkt.data,
-            };
-            sf.write(&packet_ref);
-        }
-
-        // Display output
-        if !opts.quiet {
-            let timestamp = format_timestamp(&pkt.header.ts);
-            let (src, dst) = extract_ip_addrs(&pkt.data, datalink)
-                .unwrap_or_else(|| ("?".to_string(), "?".to_string()));
-
-            let payload = extract_bacnet_payload(&pkt.data, datalink);
-            let decoded = payload.and_then(|p| {
-                if p.is_empty() {
-                    None
-                } else {
-                    decode::decode_packet(p).ok()
-                }
-            });
-
-            let (bvlc, service) = match &decoded {
-                Some(d) => {
-                    let s = decode::summarize(d);
-                    (s.bvlc, s.service)
-                }
-                None => {
-                    let n = payload.map_or(pkt.data.len(), |p| p.len());
-                    (format!("raw({n} bytes)"), format!("raw({n} bytes)"))
-                }
-            };
-
-            let detail_lines = if opts.decode {
-                decoded.as_ref().map(decode::format_detail)
-            } else {
-                None
-            };
-
-            match opts.format {
-                OutputFormat::Table => {
-                    println!(
-                        "{:<15} {:<24} -> {:<24} {:<24} {}",
-                        timestamp, src, dst, bvlc, service
-                    );
-                    if let Some(ref lines) = detail_lines {
-                        for line in lines {
-                            println!("{line}");
-                        }
-                    }
-                }
-                OutputFormat::Json => {
-                    let pj = PacketJson {
-                        timestamp,
-                        src,
-                        dst,
-                        bvlc,
-                        service,
-                        detail: detail_lines,
-                    };
-                    let json = serde_json::to_string(&pj).expect("serialize packet");
-                    println!("{json}");
-                }
+    // From here stdout is a stream (#2783): a failure ends it with an
+    // error line, after the packets printed before it.
+    let packet_count = match packets(&mut *source, &mut savefile, datalink, &opts, &running) {
+        Ok(count) => count,
+        Err(error) => {
+            if !opts.quiet {
+                output::end_stream(&*error, opts.format);
             }
+            return Err(error);
         }
-    }
+    };
 
     // Summary on exit
     if opts.quiet {
@@ -435,6 +363,113 @@ pub fn run_capture(opts: CaptureOpts) -> Result<(), Box<dyn std::error::Error>> 
     }
 
     Ok(())
+}
+
+/// Read packets until Ctrl-C (or SIGTERM or SIGHUP on Unix), `--count`, the
+/// end of the file or stdout's reader going, saving and printing each as it
+/// comes; how many were read.
+fn packets(
+    source: &mut dyn CaptureSource,
+    savefile: &mut Option<pcap::Savefile>,
+    datalink: pcap::Linktype,
+    opts: &CaptureOpts,
+    running: &AtomicBool,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let mut packet_count: u64 = 0;
+    loop {
+        // Check running flag and count limit
+        if !running.load(Ordering::Relaxed) {
+            return Ok(packet_count);
+        }
+        if let Some(limit) = opts.count
+            && packet_count >= limit
+        {
+            return Ok(packet_count);
+        }
+
+        // Get next packet
+        let pkt = match source.next_packet() {
+            Ok(p) => p,
+            Err(PcapError::Timeout) => continue,
+            Err(PcapError::Eof) => return Ok(packet_count),
+            Err(PcapError::Other(e)) => return Err(e.into()),
+        };
+
+        packet_count += 1;
+
+        // Write to savefile if saving
+        if let Some(sf) = savefile {
+            let packet_ref = pcap::Packet {
+                header: &pkt.header,
+                data: &pkt.data,
+            };
+            sf.write(&packet_ref);
+        }
+
+        // A reader that has gone ends the capture as Ctrl-C does.
+        if !opts.quiet
+            && output::print_line(&packet_text(&pkt, datalink, opts))? == Printed::ReaderGone
+        {
+            return Ok(packet_count);
+        }
+    }
+}
+
+/// A packet as printed: its summary line and, with `--decode`, the detail
+/// lines under it; in JSON one line, a [`PacketJson`].
+fn packet_text(pkt: &CapturedPacket, datalink: pcap::Linktype, opts: &CaptureOpts) -> String {
+    let timestamp = format_timestamp(&pkt.header.ts);
+    let (src, dst) =
+        extract_ip_addrs(&pkt.data, datalink).unwrap_or_else(|| ("?".to_string(), "?".to_string()));
+
+    let payload = extract_bacnet_payload(&pkt.data, datalink);
+    let decoded = payload.and_then(|p| {
+        if p.is_empty() {
+            None
+        } else {
+            decode::decode_packet(p).ok()
+        }
+    });
+
+    let (bvlc, service) = match &decoded {
+        Some(d) => {
+            let s = decode::summarize(d);
+            (s.bvlc, s.service)
+        }
+        None => {
+            let n = payload.map_or(pkt.data.len(), |p| p.len());
+            (format!("raw({n} bytes)"), format!("raw({n} bytes)"))
+        }
+    };
+
+    let detail_lines = if opts.decode {
+        decoded.as_ref().map(decode::format_detail)
+    } else {
+        None
+    };
+
+    match opts.format {
+        OutputFormat::Table => {
+            let mut text = format!(
+                "{:<15} {:<24} -> {:<24} {:<24} {}",
+                timestamp, src, dst, bvlc, service
+            );
+            for line in detail_lines.iter().flatten() {
+                text.push('\n');
+                text.push_str(line);
+            }
+            text
+        }
+        OutputFormat::Json => output::json_line(&PacketJson {
+            kind: "packet",
+            timestamp,
+            src,
+            dst,
+            bvlc,
+            service,
+            detail: detail_lines,
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------
