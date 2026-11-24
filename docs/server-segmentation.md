@@ -65,9 +65,11 @@ not reassembled or executed a second time. That note lives as long as the
 request is pending in the duplicate-request tracker, which keeps a request
 over 64 KiB by its length and a digest of its data rather than the data. It
 ends when the answer is handed to the link, or, for an answer sent in
-segments, at that answer's final acknowledgment; a requester's Abort for
-the invoke ID ends it sooner. After that a segment sent again draws the
-invalid-state Abort above, except segment zero, which opens a fresh
+segments, when the server takes that answer's final acknowledgment, before
+the next frame, so a request that reuses the invoke ID right behind it is a
+new one; a requester's Abort for the invoke ID ends it sooner. After that a
+segment sent again draws the invalid-state Abort above, except segment
+zero, which opens a fresh
 transfer, as a request sent whole again is executed again:
 the tracker keeps nothing about answered requests. In the moment between
 the hand-off and the answer leaving the link, a repeat can still draw that

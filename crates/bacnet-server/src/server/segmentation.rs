@@ -243,6 +243,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             seg_ack_tx.clone(),
             control_tx,
             total_segments,
+            pending.as_ref().and_then(PendingConfirmedRequest::id),
         ));
         let key =
             segmented_transaction_key(source_mac, source_network, invoke_id, route.provenance());

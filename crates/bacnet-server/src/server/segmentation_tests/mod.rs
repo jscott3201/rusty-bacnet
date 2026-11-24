@@ -299,6 +299,7 @@ fn fake_segmented_send_handle(
         segment_ack_tx,
         control_tx,
         total_segments,
+        None,
     ));
     handle
         .current_sequence

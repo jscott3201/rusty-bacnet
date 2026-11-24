@@ -13,10 +13,11 @@
 //! the request, the acknowledgment that completed it, and answers a repeat
 //! from the same peer (same requester, trust context and route) and invoke
 //! ID with it. The note lives as long as that entry, which ends when the
-//! answer is handed to the link (for a segmented answer, at its final
-//! acknowledgment); a requester's Abort for the invoke ID ends the note
-//! sooner. After that a repeat finds no transfer and draws the Abort it
-//! always did. A request the tracker doesn't follow (past its entry cap, or
+//! answer is handed to the link (for a segmented answer, as the dispatch
+//! loop takes its final acknowledgment, before the next frame); a
+//! requester's Abort for the invoke ID ends the note sooner. After that a
+//! repeat finds no transfer and draws the Abort it always did. A request
+//! the tracker doesn't follow (past its entry cap, or
 //! a LifeSafetyOperation, which has its own replay) gets no note. Only the
 //! segment branch and a requester's Abort touch the notes, so a request that
 //! isn't segmented pays nothing for them.

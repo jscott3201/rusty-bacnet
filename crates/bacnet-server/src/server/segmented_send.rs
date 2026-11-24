@@ -104,6 +104,9 @@ pub(crate) struct SegmentedSendHandle {
     pub(crate) closed: AtomicBool,
     pub(crate) current_sequence: AtomicU16,
     pub(crate) total_segments: usize,
+    /// The duplicate tracker's entry for the request this answers, if it
+    /// has one: see [`Self::end_request`].
+    request: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +146,7 @@ impl SegmentedSendHandle {
         segment_ack_tx: mpsc::Sender<SegmentAckPdu>,
         control_tx: watch::Sender<Option<SegmentedSendControlEvent>>,
         total_segments: usize,
+        request: Option<u64>,
     ) -> Self {
         Self {
             segment_ack_tx,
@@ -150,6 +154,20 @@ impl SegmentedSendHandle {
             closed: AtomicBool::new(false),
             current_sequence: AtomicU16::new(u16::MAX),
             total_segments,
+            request,
+        }
+    }
+
+    /// End the answered request's tracker entry, and with it the note a
+    /// repeated segment of it is answered from, as the dispatch loop takes
+    /// the requester's final Segment-ACK or Abort (Clause 5.4.5.4: either
+    /// returns the transaction to IDLE). The sending task, which owns the
+    /// entry, ends it too, but only once it runs, and the loop takes the
+    /// next frame first: a request reusing the invoke ID right behind
+    /// would otherwise be judged against a transaction already over.
+    pub(super) fn end_request(&self, tracker: &super::ConfirmedRequestTracker) {
+        if let Some(id) = self.request {
+            tracker.end(id);
         }
     }
 
