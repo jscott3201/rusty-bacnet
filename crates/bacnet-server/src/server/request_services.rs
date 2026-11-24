@@ -30,6 +30,9 @@ pub(super) struct RequestServices<T: TransportPort + 'static> {
     /// What the Device's Protocol_Services_Supported lists: the server's
     /// services, or on a node with a client role the node's (#2617).
     pub(super) execution: crate::device_view::DeviceExecution,
+    /// On a node's seat, where a segmented request the server reassembled
+    /// goes when the node's client hears a copy of it (#2743).
+    pub(super) client_copies: Option<bacnet_endpoint_core::seat::ClientCopies>,
 }
 
 /// The server's throttles on warnings a peer can set off once per packet
@@ -68,6 +71,7 @@ impl<T: TransportPort + 'static> Clone for RequestServices<T> {
             warnings: Arc::clone(&self.warnings),
             config: Arc::clone(&self.config),
             execution: self.execution,
+            client_copies: self.client_copies.clone(),
         }
     }
 }
@@ -234,6 +238,7 @@ impl<T: TransportPort + 'static> RequestServices<T> {
             mutation_decisions: Arc::new(crate::mutation::MutationDecisions::default()),
             warnings: Arc::default(),
             execution: crate::device_view::DeviceExecution::server(false, &config.time_sync_policy),
+            client_copies: None,
             config,
         }
     }
@@ -325,6 +330,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             warnings: Arc::default(),
             config: Arc::clone(&self.config),
             execution: self.execution,
+            client_copies: None,
         }
     }
 

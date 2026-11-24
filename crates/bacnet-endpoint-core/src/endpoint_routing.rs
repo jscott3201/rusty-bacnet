@@ -42,6 +42,9 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
+use bacnet_encoding::apdu::{ConfirmedRequest, encode_apdu};
+use bytes::BytesMut;
+
 use super::*;
 use crate::coordinator::LeaseHolder;
 use crate::seat::{Attached, SeatSlot};
@@ -401,6 +404,56 @@ fn lease_holder(
     })
 }
 
+/// The client seat's share of a Confirmed-Request for `service`, whole or
+/// `segmented` (see [`crate::seat`]).
+fn confirmed_share(attached: &Attached, segmented: bool, service: Option<u8>) -> SeatShare {
+    if !attached.roles.server {
+        return SeatShare::Whole;
+    }
+    match service {
+        // A COV notification of either form is about the client's own
+        // subscription: the client answers it (#2654).
+        Some(CONFIRMED_COV_NOTIFICATION | CONFIRMED_COV_NOTIFICATION_MULTIPLE) => SeatShare::Whole,
+        // The server answers an event notification, and the client hears a
+        // copy of one that comes whole. Of one in segments the server hands
+        // the client the request once it is whole ([`share_reassembled`],
+        // #2743): a copy of each segment would only take the seat's room.
+        Some(CONFIRMED_EVENT_NOTIFICATION) if !segmented => SeatShare::Copy,
+        _ => SeatShare::None,
+    }
+}
+
+/// Offer the client seat a copy of `request`, which the server role
+/// reassembled from segments, the last of them in `last`, as ingress offers
+/// it a copy of a request that comes whole (#2743): under the same rule
+/// ([`confirmed_share`]), in the same tier of its queue, as one APDU with no
+/// reply authority. It never waits: a seat with no room drops and counts it.
+/// The copy is made only for a client that hears it.
+pub(crate) fn share_reassembled(seats: &SeatSlot, last: &ReceivedApdu, request: &ConfirmedRequest) {
+    let service = Some(request.service_choice.to_raw());
+    seats.with(|client, _| {
+        let client = client?;
+        if !matches!(confirmed_share(client, false, service), SeatShare::Copy) {
+            return None;
+        }
+        let whole = ConfirmedRequest {
+            segmented: false,
+            more_follows: false,
+            sequence_number: None,
+            proposed_window_size: None,
+            ..request.clone()
+        };
+        let mut apdu = BytesMut::with_capacity(4 + request.service_request.len());
+        encode_apdu(&mut apdu, &Apdu::ConfirmedRequest(whole)).ok()?;
+        let mut copy = seat_copy(last);
+        copy.apdu = apdu.freeze();
+        if seats.takes(client, &copy) {
+            let _ = seats.offer(client, copy);
+        }
+        Some(())
+    });
+}
+
 /// The client seat's share of a valid APDU, from its first octets and the
 /// answer's lease holder (see [`crate::seat`]).
 fn client_share(
@@ -413,20 +466,12 @@ fn client_share(
     let first = apdu.first().copied().unwrap_or(0);
     match (route, first >> 4) {
         (IngressRoute::InboundRequest, 1) => SeatShare::Copy,
-        (IngressRoute::InboundRequest, _) if !attached.roles.server => SeatShare::Whole,
         (IngressRoute::InboundRequest, _) => {
             // The service choice follows the sequence number and window
             // size when the request is segmented.
-            let service = if first & 0x08 == 0 { 3 } else { 5 };
-            match apdu.get(service).copied() {
-                // A COV notification of either form is about the client's
-                // own subscription: the client answers it (#2654).
-                Some(CONFIRMED_COV_NOTIFICATION | CONFIRMED_COV_NOTIFICATION_MULTIPLE) => {
-                    SeatShare::Whole
-                }
-                Some(CONFIRMED_EVENT_NOTIFICATION) => SeatShare::Copy,
-                _ => SeatShare::None,
-            }
+            let segmented = first & 0x08 != 0;
+            let service = apdu.get(if segmented { 5 } else { 3 }).copied();
+            confirmed_share(attached, segmented, service)
         }
         (IngressRoute::TerminalOrSegment, _) if holder == Some(LeaseHolder::Client) => {
             SeatShare::Whole

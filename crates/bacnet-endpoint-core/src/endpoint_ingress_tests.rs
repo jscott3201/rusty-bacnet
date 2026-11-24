@@ -497,6 +497,10 @@ mod seat;
 #[path = "endpoint_server_seat_tests.rs"]
 mod server_seat;
 
+/// The server hands the client seat a request it reassembled (#2743).
+#[path = "endpoint_client_copies_tests.rs"]
+mod client_copies;
+
 /// One device on two seats: stray segmented answers, and the node's
 /// DeviceCommunicationControl state (#2617).
 #[path = "endpoint_node_tests.rs"]

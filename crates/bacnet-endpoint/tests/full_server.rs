@@ -41,6 +41,11 @@ mod segmentation_wire;
 #[path = "full_server/segmented_notifications.rs"]
 mod segmented_notifications;
 
+/// The server hands the client a segmented event notification it
+/// reassembled (#2743).
+#[path = "full_server/segmented_events.rs"]
+mod segmented_events;
+
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, Broadcast, COVNotificationDelivery};

@@ -17,7 +17,7 @@ const COV_MULTIPLE: ConfirmedServiceChoice =
     ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE;
 
 /// A COV-multiple from the peer for `process`, about AI 1 to AI 8.
-fn notification(process: u32) -> COVNotificationMultipleRequest {
+pub(super) fn notification(process: u32) -> COVNotificationMultipleRequest {
     COVNotificationMultipleRequest {
         subscriber_process_identifier: process,
         initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, PEER_DEVICE)

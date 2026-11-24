@@ -107,6 +107,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             execution,
             dcc: node_dcc,
             number: seat_number,
+            client_copies,
         } = boxed(|| link.start(outputs.db(), &config, audit_routes)).await?;
         notification_transactions.set_retries(config.notification_retries);
         let local_mac = MacAddr::from_slice(network.local_mac());
@@ -198,6 +199,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 warnings: Arc::default(),
                 config: Arc::clone(&config_dispatch),
                 execution,
+                client_copies,
             }),
             confirmed_request_tracker: Arc::clone(&confirmed_request_tracker),
             clock: clock.clone(),

@@ -25,8 +25,11 @@
 //!   or ConfirmedCOVNotificationMultiple goes to the client seat instead,
 //!   with its reply authority. A
 //!   ConfirmedEventNotification goes to the server role, and a copy with no
-//!   reply authority to the client seat. On an endpoint with no server role
-//!   every Confirmed-Request goes to the client seat;
+//!   reply authority to the client seat. One that comes in segments goes to
+//!   the server alone, segment by segment: once the server has reassembled
+//!   it, it hands the client the whole request ([`ClientCopies`], #2743), a
+//!   copy as ingress makes of one that comes whole. On an endpoint with no
+//!   server role every Confirmed-Request goes to the client seat;
 //! - an answer (Simple-ACK, Complex-ACK and its segments, Error, Reject, and
 //!   an Abort or Segment-ACK sent by the answering side) goes to the seat of
 //!   the role [`OutboundTransactionCoordinator::holder_of_source`] names for
@@ -468,6 +471,51 @@ pub struct ServerSeat<T: TransportPort> {
     /// and its server serves its own Device.
     #[doc(hidden)]
     pub node: Option<NodeDevice>,
+    /// Where the server hands the node's client a request it reassembled
+    /// from segments that the client hears a copy of (#2743).
+    #[doc(hidden)]
+    pub client_copies: ClientCopies,
+}
+
+/// The line from a node's server to its client for a request that comes in
+/// segments (#2743). Ingress hands the client a copy of a
+/// ConfirmedEventNotification that comes whole, but it can't hand over one
+/// that comes in segments: the server alone reassembles it. Once the server
+/// has it whole, it hands it on through this, and the client hears it as it
+/// hears one that came whole. It holds the node's seats weakly: once the
+/// node is gone it hands nothing on.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct ClientCopies(Weak<SeatSlot>);
+
+impl ClientCopies {
+    /// Offer the node's client a copy of `request`, which the server
+    /// reassembled from segments, the last of them in `last`. The client
+    /// gets it when it would get a copy of the request whole (a
+    /// ConfirmedEventNotification, beside the server role), as one APDU
+    /// with no reply authority, in that copy's tier of its queue. It never
+    /// waits: a seat with no room drops and counts it, as it does any copy.
+    ///
+    /// Called only from the server's branch for a completed segmented
+    /// request, which is cold: `#[cold]` keeps it out of the plain path's
+    /// layout, `#[inline]` lets that branch take it where it is compiled.
+    #[cold]
+    #[inline]
+    pub fn reassembled(
+        &self,
+        last: &ReceivedApdu,
+        request: &bacnet_encoding::apdu::ConfirmedRequest,
+    ) {
+        if let Some(seats) = self.0.upgrade() {
+            crate::endpoint_ingress::share_reassembled(&seats, last, request);
+        }
+    }
+}
+
+impl std::fmt::Debug for ClientCopies {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientCopies").finish_non_exhaustive()
+    }
 }
 
 impl<T: TransportPort> std::fmt::Debug for ServerSeat<T> {
@@ -678,7 +726,7 @@ impl SeatSlot {
     /// Make the server's seat on `network`. One server at a time, as for
     /// the client.
     pub(crate) fn attach_server<T: TransportPort>(
-        &self,
+        self: &Arc<Self>,
         network: Arc<NetworkLayer<T>>,
         coordinator: Arc<OutboundTransactionCoordinator>,
         capacity: usize,
@@ -692,6 +740,7 @@ impl SeatSlot {
             number: self.number.for_seat(Role::Server),
             dcc: self.dcc.claim(),
             node: None,
+            client_copies: ClientCopies(Arc::downgrade(self)),
         })
     }
 

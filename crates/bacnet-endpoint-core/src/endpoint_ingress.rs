@@ -41,9 +41,9 @@ tokio::task_local! {
     /// How long a test holds the start just after the classifier spawns.
     pub(crate) static AFTER_CLASSIFIER_SPAWN: std::time::Duration;
 }
-pub(crate) use routing::reserve;
 use routing::{ControlTee, IngressDrops, IngressQueues, next_apdu, route_received};
 pub use routing::{DROP_LOG_INTERVAL, IngressDropCounters};
+pub(crate) use routing::{reserve, share_reassembled};
 
 /// What [`EndpointIngress::observe_sources`] calls with each APDU from
 /// another network that it shows.
