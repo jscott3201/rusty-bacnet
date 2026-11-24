@@ -221,6 +221,15 @@ impl BACnetServer {
             Some((values, references, priority))
         };
         self.precheck_pending(ObjectType::TIMER, instance, name)?;
+        // The setter's checks, run on a scratch Timer first: the real one
+        // may clear its storage file, which a refusal must leave alone.
+        if let Some((values, references, priority)) = &set {
+            TimerObject::new(instance, name)
+                .and_then(|mut scratch| {
+                    scratch.set_state_change(values.clone(), references.clone(), *priority)
+                })
+                .map_err(to_py_err)?;
+        }
         let mut obj = match storage_path {
             Some(path) => {
                 timer_on_storage(instance, name, path, clear_written_config).map_err(to_py_err)?

@@ -133,7 +133,7 @@ class ChecksAtTheCallTests(unittest.TestCase):
                 owner = server()
                 # BacnetError, or its BacnetProtocolError subclass from an
                 # object whose own constructor refuses the instance first.
-                with self.assertRaises(rb.BacnetError):
+                with self.assertRaisesRegex(rb.BacnetError, "4194303|code=37"):
                     call(owner, builder, RESERVED, "Reserved")
                 self.assertEqual(owner._pending_registration_count(), 0)
 
@@ -177,22 +177,102 @@ class ChecksAtTheCallTests(unittest.TestCase):
                 self.assertEqual(owner._pending_registration_count(), 1)
 
 
-class StartStateTests(unittest.IsolatedAsyncioTestCase):
-    async def test_registrations_during_a_start_and_a_second_start_are_refused(self):
+class PureChecksBeforeStorageTests(unittest.TestCase):
+    """A check on a list keyword runs before the builder opens or clears its
+    storage file, so a refusal leaves the file as it was."""
+
+    def kept_file(self, name):
+        path = Path(SCRATCH.name) / name
+        path.write_bytes(b"not a storage file")
+        return path
+
+    def test_a_timer_priority_the_setter_refuses_clears_nothing(self):
+        path = self.kept_file("timer-priority")
         owner = server()
-        owner.add_file(1, "File")
-        starting = owner.start()
-        with self.assertRaisesRegex(RuntimeError, "in progress"):
-            owner.add_file(2, "Late")
-        with self.assertRaisesRegex(RuntimeError, "already in progress"):
-            owner.start()
-        await starting
+        # The sentinel is no storage file, so opening it would refuse with
+        # "no valid header": the refusal must be the setter's instead.
+        with self.assertRaises(rb.BacnetError) as refused:
+            owner.add_timer(
+                1, "Timer", state_change_values=[rb.PropertyValue.unsigned(1)] * 7,
+                priority_for_writing=0, storage_path=str(path),
+                clear_written_config=True)
+        self.assertNotIn("no valid header", str(refused.exception))
+        self.assertEqual(path.read_bytes(), b"not a storage file")
+        self.assertEqual(owner._pending_registration_count(), 0)
+
+    def test_too_many_forwarder_recipients_open_nothing(self):
+        path = self.kept_file("forwarder-recipients")
+        device = rb.ObjectIdentifier(rb.ObjectType.DEVICE, 99)
+        recipients = [{"recipient": {"kind": "device", "object_identifier": device}, "process_identifier": n} for n in range(1, 34)]
+        owner = server()
+        with self.assertRaises(Exception) as refused:
+            owner.add_notification_forwarder(
+                1, "Forwarder", storage_path=str(path), recipients=recipients)
+        self.assertNotIn("no valid header", str(refused.exception))
+        self.assertEqual(path.read_bytes(), b"not a storage file")
+        self.assertEqual(owner._pending_registration_count(), 0)
+
+
+class RegisteredPortStartTests(unittest.IsolatedAsyncioTestCase):
+    """A registered_network_port the Rust server's builder would refuse is
+    refused by start() while the registrations are still there."""
+
+    def node(self):
+        owner = rb.BACnetServer(
+            2748, device_name=DEVICE_NAME, interface="127.0.0.1", port=0,
+            registered_network_port=1)
+        owner.add_file(1, "Kept file")
+        return owner
+
+    async def test_a_port_that_was_never_added_is_added_and_the_start_serves(self):
+        owner = self.node()
+        for _ in range(2):
+            with self.assertRaisesRegex(ValueError, "names no Network Port"):
+                await owner.start()
+            self.assertEqual(owner._pending_registration_count(), 1)
+        owner.add_bip_network_port(1, "Port", ip_address="127.0.0.1", udp_port=0)
+        await owner.start()
         try:
-            with self.assertRaisesRegex(RuntimeError, "after start"):
-                owner.add_file(2, "Late")
             self.assertEqual(owner._pending_registration_count(), 0)
+            name = await owner.read_property(
+                rb.ObjectIdentifier(rb.ObjectType.FILE, 1), rb.PropertyIdentifier.OBJECT_NAME)
+            self.assertEqual(name.value, "Kept file")
         finally:
             await owner.stop()
+
+    async def test_a_port_that_differs_from_the_transport_is_refused_with_the_rest_kept(self):
+        cases = (
+            ("the wrong family", lambda o: o.add_bip6_network_port(1, "Port"), "not a B/IP port"),
+            ("another address", lambda o: o.add_bip_network_port(
+                1, "Port", ip_address="127.0.0.2", udp_port=0), "differs"),
+            ("another UDP port", lambda o: o.add_bip_network_port(
+                1, "Port", ip_address="127.0.0.1", udp_port=47808), "differs"),
+            ("an unspecified address", lambda o: o.add_bip_network_port(1, "Port"), "differs"),
+        )
+        for label, add, message in cases:
+            with self.subTest(label):
+                owner = self.node()
+                add(owner)
+                with self.assertRaisesRegex(ValueError, message):
+                    await owner.start()
+                self.assertEqual(owner._pending_registration_count(), 2)
+
+
+class StartStateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_second_start_of_a_running_server_is_refused(self):
+        owner = server()
+        owner.add_file(1, "File")
+        await owner.start()
+        try:
+            with self.assertRaisesRegex(RuntimeError, "already running"):
+                owner.start()
+            with self.assertRaisesRegex(RuntimeError, "after start"):
+                owner.add_file(2, "Late")
+        finally:
+            await owner.stop()
+        # Stopped, it may start again.
+        await owner.start()
+        await owner.stop()
 
 
 if __name__ == "__main__":

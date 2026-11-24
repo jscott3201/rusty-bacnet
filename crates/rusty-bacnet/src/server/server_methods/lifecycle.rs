@@ -23,9 +23,10 @@ fn refused_object(error: bacnet_types::error::Error) -> PyErr {
 
 #[pymethods]
 impl BACnetServer {
-    /// Start the server. It will begin responding to BACnet requests. An
-    /// endpoint's server (#2617) raises RuntimeError: it started with its
-    /// endpoint.
+    /// Start the server. It will begin responding to BACnet requests. A
+    /// running server, or one whose start is in progress, raises
+    /// RuntimeError. An endpoint's server (#2617) raises RuntimeError: it
+    /// started with its endpoint.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.owned("start()")?;
         crate::logging_bridge::refresh_at_start(py);
@@ -34,6 +35,11 @@ impl BACnetServer {
         let mut pending = self.lock_pending()?;
         if self.start_in_flight.load(Ordering::Acquire) {
             return Err(PyRuntimeError::new_err("start() is already in progress"));
+        }
+        if self.started.load(Ordering::Acquire) {
+            return Err(PyRuntimeError::new_err(
+                "cannot start() — server is already running",
+            ));
         }
         let audit_notification_sink = self.audit_notification_sink;
         if let Some(sink) = audit_notification_sink {
@@ -64,6 +70,9 @@ impl BACnetServer {
                 audit_configuration::pending_audit_log_index(&pending, object.object_identifier())?;
             }
         }
+        // What the Rust server's builder would refuse about the registered
+        // port, checked while the registrations are still here to keep.
+        self.check_registered_port(&pending)?;
         let identity = bacnet_objects::DeviceIdentity::new(self.device_instance, 555)
             .map_err(to_py_err)?
             .with_name(self.device_name.clone())
@@ -233,8 +242,9 @@ impl BACnetServer {
                         .ok_or_else(|| PyRuntimeError::new_err("MS/TP transport was not prepared"))?
                         .into(),
                 ),
-                // The router's server port is taken only once the database
-                // is valid, so a refused start leaves it for the next one.
+                // The router's server port is taken below, after the Device
+                // is built, so a refusal before that leaves it for the next
+                // start.
                 "router" => {
                     if router.is_none() {
                         return Err(PyRuntimeError::new_err("transport='router' needs router="));
@@ -260,7 +270,7 @@ impl BACnetServer {
                 >::LOCAL_RECEIVE_APDU_CAPACITY,
             };
 
-            // Validate the generated Device and entire pending DB before SC I/O.
+            // Validate the generated Device before SC I/O.
             let identity = identity.resolve(local_capacity).map_err(to_py_err)?;
             let config = DeviceConfig {
                 identity,
@@ -281,7 +291,8 @@ impl BACnetServer {
 
             let transport = match (prepared_transport, router) {
                 (Some(transport), _) => transport,
-                // The database is valid: now spend the router's port.
+                // Spend the router's port. A refusal after this one, in the
+                // Rust server's own startup, spends it with the registrations.
                 (None, Some(router)) => AppTransport::Router(router.take().await?),
                 (None, None) => {
                     let hub_url = sc_hub.ok_or_else(|| {

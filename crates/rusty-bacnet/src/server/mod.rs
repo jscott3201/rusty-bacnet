@@ -58,6 +58,7 @@ use crate::types::{PyEventType, PyObjectIdentifier, PyPropertyIdentifier, PyProp
 mod audit_configuration;
 use audit_configuration::AuditNotificationSink;
 mod host;
+mod registered_port;
 mod start_claim;
 pub(crate) use audit_configuration::{
     reporter_audit_level, reporter_auditable_operations, validate_audit_recipient,
@@ -293,6 +294,18 @@ impl BACnetServer {
         std::iter::once(device).chain(kept)
     }
 
+    /// Refuse a change to the pending registrations while a `start()` holds
+    /// them: what it gives back after a refusal must not meet a newer call.
+    fn check_start_not_in_flight(&self) -> PyResult<()> {
+        if self.start_in_flight.load(Ordering::Acquire) {
+            return Err(PyRuntimeError::new_err(
+                "start() is in progress: registrations and their configuration \
+                 cannot change until it ends",
+            ));
+        }
+        Ok(())
+    }
+
     /// Refuse an object once the server runs (call it under the pending
     /// lock). An endpoint's server (#2617) takes its objects from the
     /// endpoint only.
@@ -303,11 +316,7 @@ impl BACnetServer {
                  endpoint's add_* calls before its start",
             ));
         }
-        if self.start_in_flight.load(Ordering::Acquire) {
-            return Err(PyRuntimeError::new_err(
-                "cannot add objects while start() is in progress",
-            ));
-        }
+        self.check_start_not_in_flight()?;
         if self.started.load(Ordering::Acquire) {
             return Err(PyRuntimeError::new_err(
                 "cannot add objects after start() — server is already running",

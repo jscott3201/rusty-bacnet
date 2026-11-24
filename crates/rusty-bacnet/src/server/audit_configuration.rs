@@ -308,6 +308,7 @@ impl BACnetServer {
         };
         {
             let objects = self.lock_pending()?;
+            self.check_start_not_in_flight()?;
             if self.started.load(Ordering::Acquire) {
                 return Err(PyRuntimeError::new_err(
                     "cannot configure Audit receipt after start() — server is already running",

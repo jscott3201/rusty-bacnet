@@ -40,6 +40,7 @@ impl BACnetServer {
     ) -> PyResult<R> {
         let oid = file_oid(instance)?;
         let guard = self.lock_pending()?;
+        self.check_start_not_in_flight()?;
         if self.started.load(Ordering::Acquire) {
             return Err(PyRuntimeError::new_err(STARTED_CONFIGURATION));
         }
@@ -60,6 +61,7 @@ impl BACnetServer {
     ) -> PyResult<R> {
         let oid = file_oid(instance)?;
         let mut guard = self.lock_pending()?;
+        self.check_start_not_in_flight()?;
         if self.started.load(Ordering::Acquire) {
             return Err(PyRuntimeError::new_err(STARTED_CONFIGURATION));
         }

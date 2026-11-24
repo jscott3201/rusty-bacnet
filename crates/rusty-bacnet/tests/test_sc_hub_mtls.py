@@ -418,33 +418,117 @@ class NodeMtlsTests(MtlsFixture):
         self.assertEqual(await asyncio.to_thread(self.websocket, await hub.address(), "client",
                                                 read_property=True), "TLSv1.3")
 
-    async def test_a_refused_dial_keeps_the_registrations_for_the_next_start(self):
-        # The hub is not there yet: the dial is refused after the Device is
-        # built, and every registration (and the Audit recipient) is still
-        # pending for the start that follows (#2748).
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
+    REPORTER = {"instance": 0, "audit_level": "audit_all", "auditable_operations": 2,
+                "issue_confirmed_notifications": False}
+
+    def kept_node(self, port):
+        """A server aimed at 127.0.0.1:`port` with two registrations, a
+        Reporter and an Audit recipient, all of which a refused start must
+        leave for the next one (#2748)."""
         node = self.node(BACnetServer, f"wss://127.0.0.1:{port}")
         self.addAsyncCleanup(self.stop_server, node)
-        pending_count = getattr(node, "_pending_registration_count")
         node.add_analog_input(0, "Kept AI", 64, 72.5)
-        node.add_file(1, "Kept file")
-        with self.assertRaises(Exception) as refused:
-            await self.start_node(node)
-        self.assertNotIsInstance(refused.exception, asyncio.TimeoutError)
-        self.assertEqual(pending_count(), 2)
-        # The registrations came back whole, so the same names are taken.
-        with self.assertRaisesRegex(ValueError, "duplicate object name: Kept AI"):
-            node.add_binary_input(5, "Kept AI")
-        node.add_binary_input(1, "Added after failure")
+        node.add_file(7, "Kept file")
+        node.add_audit_reporter(1, "Kept reporter")
+        node.configure_audit_recipient({
+            "kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
+        node.configure_audit_reporters([{**self.REPORTER, "instance": 1}])
+        return node
+
+    async def serves_after_the_hub_arrives(self, node, port):
+        """Bring a hub up where the node dials, start it, read it."""
         hub = self.hub(listen=f"127.0.0.1:{port}")
         self.addAsyncCleanup(self.stop_hub, hub)
         await asyncio.wait_for(hub.start(), 3)
         await self.start_node(node)
-        self.assertEqual(pending_count(), 0)
+        self.assertEqual(getattr(node, "_pending_registration_count")(), 0)
         self.assertEqual(await asyncio.to_thread(self.websocket, await hub.address(), "client",
                                                 read_property=True), "TLSv1.3")
+
+    def free_port(self):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            return probe.getsockname()[1]
+
+    async def test_a_refused_dial_keeps_the_registrations_for_the_next_start(self):
+        # The hub is not there yet: the dial is refused after the Device is
+        # built, and every registration, the Audit recipient and the
+        # forwarding configuration are still there for the start that follows.
+        async def run():
+            port = self.free_port()
+            node = self.kept_node(port)
+            pending_count = getattr(node, "_pending_registration_count")
+            self.assertEqual(pending_count(), 3)
+            for _ in range(2):
+                with self.assertRaises(Exception) as refused:
+                    await self.start_node(node)
+                self.assertNotIsInstance(refused.exception, asyncio.TimeoutError)
+                self.assertEqual(pending_count(), 3)
+                # Not frozen: a Reporter is selected again without error.
+                node.configure_audit_reporters([{**self.REPORTER, "instance": 1}])
+            # The registrations came back whole, so their names are taken.
+            with self.assertRaisesRegex(ValueError, "duplicate object name: Kept AI"):
+                node.add_binary_input(5, "Kept AI")
+            node.add_binary_input(1, "Added after failure")
+            await self.serves_after_the_hub_arrives(node, port)
+        await rerun_on_lost_port(run)
+
+    async def test_a_cancelled_start_in_flight_gives_back_what_it_took(self):
+        async def hold(_reader, writer):
+            held.append(writer)  # Accepted and never answered.
+
+        async def settled(count, node):
+            for _ in range(200):
+                if getattr(node, "_pending_registration_count")() == count:
+                    return
+                await asyncio.sleep(0.05)
+            self.fail("the registrations did not come back")
+
+        async def run():
+            held.clear()
+            listener = await asyncio.start_server(hold, "127.0.0.1", 0)
+            self.addAsyncCleanup(self.close_listener, listener, held)
+            port = listener.sockets[0].getsockname()[1]
+            node = self.kept_node(port)
+            starting = asyncio.ensure_future(node.start())
+            try:
+                with self.assertRaisesRegex(RuntimeError, "in progress"):
+                    node.add_file(2, "Late")
+                with self.assertRaisesRegex(RuntimeError, "already in progress"):
+                    node.start()
+                with self.assertRaisesRegex(RuntimeError, "in progress"):
+                    node.set_file_data(7, b"x")
+                with self.assertRaisesRegex(RuntimeError, "in progress"):
+                    node.configure_audit_notification_sink(1, policy="deny_all")
+                with self.assertRaisesRegex(RuntimeError, "cannot configure"):
+                    node.configure_audit_reporters([{**self.REPORTER, "instance": 1}])
+            finally:
+                starting.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await starting
+            await settled(3, node)
+            # Given back whole: the forwarding freeze is lifted and the
+            # Audit recipient is there, so a start passes its own checks.
+            node.configure_audit_reporters([{**self.REPORTER, "instance": 1}])
+            again = asyncio.ensure_future(node.start())
+            again.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await again
+            await settled(3, node)
+            # The fault is corrected (the hub is there): the same server
+            # starts and serves.
+            listener.close()
+            for writer in held:
+                writer.close()
+            await self.serves_after_the_hub_arrives(node, port)
+        held = []
+        await rerun_on_lost_port(run)
+
+    @staticmethod
+    async def close_listener(listener, writers):
+        listener.close()
+        for writer in writers:
+            writer.close()
 
     async def test_client_repairs_files_and_reads_through_trusted_hub(self):
         hub = self.hub()

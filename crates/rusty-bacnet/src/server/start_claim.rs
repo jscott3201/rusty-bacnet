@@ -4,16 +4,21 @@
 //! At ownership transfer `start()` takes the pending registrations, the
 //! save counters of the pending Notification Forwarders and the Audit
 //! recipient, and freezes the forwarding configuration. All of it moves
-//! into the startup future, which can still fail: a transport that cannot
-//! be prepared, a router that has no port, a Device that cannot be built,
-//! or the application cancelling the start. A [`StartClaim`] holds what was
-//! taken, and its drop puts it back unless the objects have gone into the
-//! database, so the application can correct the fault and start again.
+//! into the startup future, which can still fail before the objects reach
+//! the database: a transport that cannot be prepared, a router that has no
+//! port, a Device that cannot be built, an SC dial that is refused. A
+//! [`StartClaim`] holds what was taken, and its drop puts it back unless
+//! the objects have gone into the database, so the application can correct
+//! the fault and start again. The drop runs when the future is dropped, a
+//! cancelled start's on a runtime thread some time after the cancel.
 //!
-//! Once the objects are in the database, a refusal from the Rust server's
-//! own startup (a transport that will not bind, the SC dial) cannot give
-//! them back: the database is consumed by the builder, and the objects do
-//! not clone. Such a start leaves the server with no registrations.
+//! Only an SC dial and a router's lookups wait before the hand-off, so a
+//! cancel reaches that window for them alone. A B/IP, B/IPv6 or MS/TP start
+//! hands the objects over without waiting, and a refusal or cancel after
+//! that, from the Rust server's own startup (a bind), cannot give them back:
+//! the builder consumes the database and the objects do not clone. Such a
+//! start leaves the server with no registrations, and `start()` checks
+//! beforehand what the pending objects and the configuration already show.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

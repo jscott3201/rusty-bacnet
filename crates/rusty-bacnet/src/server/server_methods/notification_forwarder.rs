@@ -47,6 +47,14 @@ impl BACnetServer {
     ) -> PyResult<()> {
         let recipients = crate::types::destinations(recipients)?;
         self.precheck_pending(ObjectType::NOTIFICATION_FORWARDER, instance, name)?;
+        // The recipient list's checks, run on a scratch forwarder first: the
+        // real one opens its storage file, which a refusal must leave alone.
+        let mut scratch = NotificationForwarderObject::new(instance, name).map_err(to_py_err)?;
+        for destination in &recipients {
+            scratch
+                .add_destination(destination.clone())
+                .map_err(to_py_err)?;
+        }
         let mut nf = match storage_path {
             Some(path) => {
                 let storage =

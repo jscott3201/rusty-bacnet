@@ -1,4 +1,4 @@
 ---
 section: Fixed
 ---
-- **Python API:** A `BACnetServer.start()` refused before it hands the objects to the database (a hub that refuses the dial, a cancelled start) keeps its registrations; `add_*` and a second `start()` raise while one is in progress (#2748).
+- **Python API:** A `BACnetServer.start()` refused before the objects reach the database (a bad `registered_network_port`, a refused SC dial) keeps its registrations; `start()` on a running server raises (#2748).
