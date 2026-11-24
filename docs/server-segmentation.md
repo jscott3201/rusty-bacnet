@@ -92,9 +92,10 @@ where the answer is at that moment:
 - Midway (a segment still to send, or one on its way): the request is not
   executed and gets one Abort (INVALID_APDU_IN_THIS_STATE). The answer's
   sending task sends that Abort after any segment already on its way, so no
-  segment follows it. Until the Abort is issued, any further request under
-  the invoke ID is dropped, so none runs ahead of it; then the invoke ID is
-  free.
+  segment follows it. Until the Abort is handed to the transport, any
+  further request under the invoke ID is dropped, so none runs ahead of it;
+  then the invoke ID is free. The same holds for the Abort the task sends
+  when it gives up after too many negative acknowledgments.
 - Every segment sent, none on its way, only the final Segment-ACK due: that
   acknowledgment is taken as lost, since a requester reuses the invoke ID
   only once it is done with the answer. No Abort goes out, and the request

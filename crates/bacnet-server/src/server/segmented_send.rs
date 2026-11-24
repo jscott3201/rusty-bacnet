@@ -112,8 +112,9 @@ pub(crate) enum Superseded {
     /// Segment-ACK was due: it is taken as lost, no Abort goes out, and the
     /// request is served as a new one.
     FinalAckTaken,
-    /// Ended so before, and its Abort not yet issued: the request is
-    /// dropped, so it can't run ahead of that Abort under the invoke ID.
+    /// An Abort under the invoke ID is still to be issued (handed to the
+    /// transport): for a different request before, or the task's own. The
+    /// request is dropped, so it can't run ahead of that Abort.
     AbortPending,
 }
 
@@ -142,7 +143,8 @@ const FINISHED: u8 = 2;
 /// Every segment has gone out, none is on its way, and only the final
 /// Segment-ACK is due.
 const LAST_SENT: u8 = 3;
-/// The task has stopped and is issuing the Abort it owes.
+/// The task has stopped and is issuing an Abort: the one a different
+/// request is owed, or its own.
 const ABORTING: u8 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,13 +205,28 @@ impl SegmentedSendHandle {
     /// next frame first: a request reusing the invoke ID right behind
     /// would otherwise be judged against a transaction already over.
     pub(super) fn end_request(&self, tracker: &super::ConfirmedRequestTracker) {
-        // Ended for a different request, the entry lasts until its Abort is
-        // issued, so nothing runs under the invoke ID ahead of it (#2770).
+        // With an Abort to issue, the entry lasts until it is handed to the
+        // transport, so nothing runs under the invoke ID ahead of it (#2770).
         if let Some(id) = self.request
             && !self.abort_pending()
         {
             tracker.end(id);
         }
+    }
+
+    /// The requester's final Segment-ACK, as the dispatch loop queues it:
+    /// the task may send nothing again, then the entry ends
+    /// ([`Self::end_request`]). A resend of the last segment its timer chose
+    /// just before it reads that acknowledgment would otherwise follow a
+    /// new request under the reused invoke ID (#2770).
+    pub(super) fn final_ack(&self, tracker: &super::ConfirmedRequestTracker) {
+        let _ = self
+            .phase
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |phase| match phase {
+                SENDING | LAST_SENT => Some(FINISHED),
+                _ => None,
+            });
+        self.end_request(tracker);
     }
 
     /// End the answer for a different request that came under its
@@ -270,9 +287,9 @@ impl SegmentedSendHandle {
     }
 
     /// The sending task sends nothing more of the answer; true when it owes
-    /// the Abort a [`Self::supersede`] asked for, which it then issues.
-    /// True once only, so exactly one Abort goes out whichever of the
-    /// task's ways out asks first.
+    /// the Abort a [`Self::supersede`] asked for, which it then issues
+    /// (hands to the transport). True once only, so exactly one Abort goes
+    /// out whichever of the task's ways out asks first.
     pub(super) fn finish(&self) -> bool {
         self.phase
             .try_update(Ordering::AcqRel, Ordering::Acquire, |phase| match phase {
@@ -283,9 +300,16 @@ impl SegmentedSendHandle {
             == Ok(SUPERSEDED)
     }
 
-    /// Whether a different request has ended this answer with an Abort
-    /// still to be issued (#2770): the requester's own Abort then leaves
-    /// the entry to that issue.
+    /// The task gives up with an Abort of its own; true when a different
+    /// request had ended the answer first, whose Abort this one then is.
+    /// Until it is issued, requests under the invoke ID are dropped, as for
+    /// a superseded answer, so none is served ahead of it (#2770).
+    pub(super) fn aborting(&self) -> bool {
+        self.phase.swap(ABORTING, Ordering::AcqRel) == SUPERSEDED
+    }
+
+    /// Whether an Abort under the invoke ID is still to be issued (#2770):
+    /// the requester's own Abort then leaves the entry to that issue.
     pub(super) fn abort_pending(&self) -> bool {
         let phase = self.phase.load(Ordering::Acquire);
         phase == SUPERSEDED || phase == ABORTING

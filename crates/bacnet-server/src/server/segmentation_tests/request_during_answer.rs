@@ -3,9 +3,13 @@
 //! final Segment-ACK (Clause 5.4.5.4, #2770). The same request again keeps
 //! the handling it had: dropped as a duplicate whole, or, for a segment of
 //! a request that came in segments, acknowledged again; the answer goes on.
-//! A different one draws one Abort (INVALID_APDU_IN_THIS_STATE), is not
-//! executed, and ends the answer: nothing of it follows the Abort, and the
-//! invoke ID is free for the next request.
+//! A different one, midway, draws one Abort (INVALID_APDU_IN_THIS_STATE),
+//! is not executed, and ends the answer: nothing of it follows the Abort,
+//! requests under the invoke ID are dropped until that Abort is handed to
+//! the transport, and then the invoke ID is free. Once every segment has
+//! gone out, with none on its way and only the final Segment-ACK due, a
+//! different one takes that acknowledgment as lost and is served, with no
+//! Abort and nothing more of the answer.
 //!
 //! The requester is a routed peer; its ReadProperty of a long Present_Value
 //! at a 50-octet APDU is answered in segments, which the test acknowledges
@@ -505,7 +509,8 @@ async fn a_life_safety_operation_during_the_answer_draws_the_abort() {
 
 /// A segment already on its way when the different request comes goes out
 /// first, and the Abort after it: the sending task sends the Abort once it
-/// stops, never the dispatch loop beside it. Until that Abort is issued,
+/// stops, never the dispatch loop beside it. Until that Abort is handed to
+/// the transport,
 /// requests under the invoke ID are dropped, so none runs ahead of it and
 /// has its answer meet that Abort; after it, the invoke ID is free.
 #[tokio::test(start_paused = true)]

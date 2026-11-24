@@ -476,9 +476,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 );
                                 // Settled first, so this is the one Abort
                                 // even if a different request has just
-                                // ended the answer (#2770): then it is that
-                                // request's.
-                                let abort_reason = if send_handle.finish() {
+                                // ended the answer (#2770), when it is that
+                                // request's; until it is issued, requests
+                                // under the invoke ID are dropped.
+                                let abort_reason = if send_handle.aborting() {
                                     AbortReason::INVALID_APDU_IN_THIS_STATE
                                 } else {
                                     AbortReason::TSM_TIMEOUT

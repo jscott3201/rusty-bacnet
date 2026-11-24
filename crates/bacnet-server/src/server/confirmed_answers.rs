@@ -18,7 +18,8 @@
 //! nothing for them. A different request then ends the answer
 //! ([`SegmentedSendHandle::supersede`]). Midway, the answer's task sends the
 //! Abort once it stops, after any segment already on its way, and the
-//! request is not executed; the entry lasts until that Abort is issued, and
+//! request is not executed; the entry lasts until that Abort is issued
+//! (handed to the transport, which is when the task's guard drops), and
 //! any request under the key meanwhile is dropped, so nothing runs ahead of
 //! the Abort under the invoke ID. Once every segment has gone out, with
 //! none on its way and only the final Segment-ACK due, that acknowledgment
@@ -139,7 +140,7 @@ impl TrackerState {
     /// Newest first: a newer answer under a key cancels the older one, so
     /// at most one is in progress once that lands. Its final acknowledgment
     /// taken as lost, its entry ends now. Ended with an Abort, its entry
-    /// lasts until the task issues that Abort, and a request under the key
+    /// lasts until the task hands that Abort to the transport, and a request under the key
     /// meanwhile is dropped ([`Superseded::AbortPending`]), so none runs
     /// ahead of the Abort. `None`, with nothing changed, when none is in
     /// progress.

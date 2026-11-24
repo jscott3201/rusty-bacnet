@@ -125,6 +125,27 @@ fn a_requesters_abort_leaves_the_entry_to_a_pending_abort() {
     drop(new(begin(&tracker, request(4, b"third"))));
 }
 
+/// The task's own Abort (it gives up after too many negative
+/// acknowledgments) holds the key as a pending one does: a different
+/// request meanwhile is dropped, not served ahead of it. It is that
+/// request's Abort when one came first, and the only one either way.
+#[test]
+fn the_tasks_own_abort_holds_the_key_until_issued() {
+    for superseded_first in [false, true] {
+        let tracker = Arc::new(ConfirmedRequestTracker::default());
+        let pending = new(begin(&tracker, request(4, b"answered")));
+        let (handle, _control) = answer(&pending);
+        if superseded_first {
+            assert!(aborts(begin(&tracker, request(4, b"first"))));
+        }
+        assert_eq!(handle.aborting(), superseded_first);
+        assert!(aborts(begin(&tracker, request(4, b"other"))));
+        assert!(!handle.finish(), "no second Abort");
+        drop(pending);
+        drop(new(begin(&tracker, request(4, b"other"))));
+    }
+}
+
 /// A request over 64 KiB is kept by its digest: the same one again is a
 /// duplicate during the answer, and one differing in a single octet ends it.
 #[test]

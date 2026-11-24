@@ -79,7 +79,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         // asks again for the one before it), so one naming
                         // the last segment is the final acknowledgment.
                         if usize::from(seq) + 1 == handle.total_segments {
-                            handle.end_request(tracker);
+                            handle.final_ack(tracker);
                         }
                         true
                     }

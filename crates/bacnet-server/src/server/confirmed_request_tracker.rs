@@ -70,9 +70,11 @@ pub(super) struct ConfirmedRequestTracker {
 pub(super) enum ConfirmedRequestAdmission {
     Duplicate,
     New(PendingConfirmedRequest),
-    /// Another request than the one answered in segments under its
-    /// requester and invoke ID: that answer and its entry end, its task
-    /// sends the Abort, and this request is not executed (#2770).
+    /// Dropped, not executed (#2770): another request than the one
+    /// answered in segments under its requester and invoke ID, midway
+    /// through that answer, which it ends (the answer's task sends the
+    /// Abort); or any request under them while an Abort there is still to
+    /// be handed to the transport. The answer's entry lasts until then.
     AbortsAnswer,
 }
 
