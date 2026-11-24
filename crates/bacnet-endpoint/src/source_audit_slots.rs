@@ -38,8 +38,8 @@
 //! take no slot, and whatever frees a slot or gives up a wake wakes the
 //! next asleep waiter under the same lock. A woken waiter that never polls
 //! keeps a free slot from the others only until the next slot comes back,
-//! which wakes past it; while slots are held one will, and with none held
-//! none is asleep.
+//! which wakes past it; while slots are held one will, as long as their
+//! holders are polled (#2755), and with none held none is asleep.
 //!
 //! So a lane holding none is woken by the (k + 1)th slot to come back,
 //! where k counts the lanes that have waited longer since they were last
@@ -50,11 +50,14 @@
 //! retries plus one (24 s at the session defaults), and for a routed one
 //! its wait at the router behind the others of its lane.
 //!
-//! A slot that comes back wakes at most one waiter per free slot, so
-//! draining a queue costs a wake and a poll per waiter, and finding whom to
-//! wake costs a lookup per lane woken; only the last slot, with nothing
-//! held, wakes every asleep waiter. Wakers are collected under the lock and
-//! woken once it is let go; closing wakes every waiter once. The lock is a
+//! A slot that comes back wakes at most one waiter per free slot, and
+//! finding whom to wake costs a lookup per lane woken. So draining a queue
+//! costs a wake and a poll per waiter, as long as each woken waiter polls
+//! before the next slot comes back. The last held slot to come back wakes
+//! every asleep waiter: a lane's slots coming back one after another with
+//! nothing else held wake all its waiters. Wakers are collected under the
+//! lock and woken once it is let go, and those replaced or removed are
+//! dropped then too; closing wakes every waiter once. The lock is a
 //! leaf apart from the condition a waiter checks as it takes a slot, which
 //! takes the client's pacer lock (itself a leaf). It is never held across
 //! an await, it orders after the database's, and it is never held with the
@@ -186,10 +189,10 @@ impl State {
         lane: &Lane,
         number: u64,
         ready: &mut dyn FnMut() -> bool,
-        wakers: &mut Vec<Waker>,
+        after: &mut After,
     ) -> Poll<Polled> {
         if self.closed {
-            self.remove(lane, number);
+            self.remove(lane, number, after);
             return Poll::Ready(Polled::Closed);
         }
         let free = self.held < SLOTS;
@@ -202,14 +205,14 @@ impl State {
                 self.held += 1;
             }
             self.place(lane, before);
-            let woken = self.remove(lane, number);
+            let woken = self.remove(lane, number, after);
             self.forget_if_idle(lane);
             if admitted {
                 return Poll::Ready(Polled::Admitted);
             }
             // Woken for the slot it leaves free: the next asleep waiter is.
             if woken {
-                self.pass_on(wakers);
+                self.pass_on(after);
             }
             return Poll::Ready(Polled::NotReady);
         }
@@ -217,7 +220,10 @@ impl State {
             entry.turn = self.next_turn;
             self.next_turn += 1;
         }
-        entry.waiters.insert(number, cx.waker().clone());
+        // Its age is its number, kept from its first poll.
+        if let Some(replaced) = entry.waiters.insert(number, cx.waker().clone()) {
+            after.spent.push(replaced);
+        }
         entry.asleep.insert(number);
         self.place(lane, before);
         Poll::Pending
@@ -225,14 +231,15 @@ impl State {
 
     /// Waiter `number` of `lane` leaves, if it waits. Whether it was woken
     /// and had not polled since.
-    fn remove(&mut self, lane: &Lane, number: u64) -> bool {
+    fn remove(&mut self, lane: &Lane, number: u64, after: &mut After) -> bool {
         let Some(entry) = self.lanes.get_mut(lane) else {
             return false;
         };
         let before = entry.key();
-        if entry.waiters.remove(&number).is_none() {
+        let Some(removed) = entry.waiters.remove(&number) else {
             return false;
-        }
+        };
+        after.spent.push(removed);
         let woken = !entry.asleep.remove(&number);
         self.place(lane, before);
         self.forget_if_idle(lane);
@@ -241,22 +248,22 @@ impl State {
 
     /// Waiter `number` of `lane` gives up waiting. One woken for a free
     /// slot passes the wake on.
-    fn leave(&mut self, lane: &Lane, number: u64, wakers: &mut Vec<Waker>) {
-        if self.remove(lane, number) && self.free() > 0 {
-            self.pass_on(wakers);
+    fn leave(&mut self, lane: &Lane, number: u64, after: &mut After) {
+        if self.remove(lane, number, after) && self.free() > 0 {
+            self.pass_on(after);
         }
     }
 
     /// A free slot's wake goes to the next asleep waiter. With nothing held
     /// none is asleep: the last slot back woke them all, and none can fall
     /// asleep with every slot free.
-    fn pass_on(&mut self, wakers: &mut Vec<Waker>) {
-        self.wake(Wake::Up(1), wakers);
+    fn pass_on(&mut self, after: &mut After) {
+        self.wake(Wake::Up(1), after);
     }
 
     /// A slot of `lane` comes back: one asleep waiter is woken per free
     /// slot, or every one when nothing is held.
-    fn release(&mut self, lane: &Lane, wakers: &mut Vec<Waker>) {
+    fn release(&mut self, lane: &Lane, after: &mut After) {
         let entry = self.lanes.get_mut(lane).expect("a held slot's lane");
         let before = entry.key();
         entry.held -= 1;
@@ -268,12 +275,12 @@ impl State {
         } else {
             Wake::Up(self.free())
         };
-        self.wake(wake, wakers);
+        self.wake(wake, after);
     }
 
     /// Wake asleep waiters, oldest first, of the lanes under their share in
     /// order, and move each lane woken behind those holding as many.
-    fn wake(&mut self, wake: Wake, wakers: &mut Vec<Waker>) {
+    fn wake(&mut self, wake: Wake, after: &mut After) {
         if self.closed {
             return;
         }
@@ -301,7 +308,7 @@ impl State {
                 let Some(number) = entry.asleep.pop_first() else {
                     break;
                 };
-                wakers.push(entry.waiters[&number].clone());
+                after.wake.push(entry.waiters[&number].clone());
                 budget -= 1;
             }
             entry.turn = self.next_turn;
@@ -321,10 +328,22 @@ impl State {
     }
 }
 
-/// Wake `wakers`, the lock let go.
-fn wake_all(wakers: Vec<Waker>) {
-    for waker in wakers {
-        waker.wake();
+/// What a change under the lock leaves for after it is let go: wakers to
+/// wake, and wakers it replaced or removed, dropped there too, since
+/// dropping one may run code that takes this lock.
+#[derive(Default)]
+struct After {
+    wake: Vec<Waker>,
+    spent: Vec<Waker>,
+}
+
+impl After {
+    /// Run it, the lock let go.
+    fn run(self) {
+        for waker in self.wake {
+            waker.wake();
+        }
+        drop(self.spent);
     }
 }
 
@@ -355,16 +374,16 @@ impl Slots {
             number: None,
         };
         let admission = poll_fn(|cx| {
-            let mut wakers = Vec::new();
+            let mut after = After::default();
             let polled = {
                 let mut state = self.lock();
                 let number = *place.number.get_or_insert_with(|| {
                     state.next_waiter += 1;
                     state.next_waiter
                 });
-                state.poll(cx, &lane, number, &mut ready, &mut wakers)
+                state.poll(cx, &lane, number, &mut ready, &mut after)
             };
-            wake_all(wakers);
+            after.run();
             polled
         })
         .await;
@@ -384,7 +403,7 @@ impl Slots {
     /// End every wait, and admit nothing more. Slots already held stay held
     /// until they drop.
     pub(crate) fn close(&self) {
-        let wakers: Vec<Waker> = {
+        let wake = {
             let mut state = self.lock();
             state.closed = true;
             (state.lanes.values())
@@ -392,7 +411,11 @@ impl Slots {
                 .cloned()
                 .collect()
         };
-        wake_all(wakers);
+        After {
+            wake,
+            spent: Vec::new(),
+        }
+        .run();
     }
 
     pub(crate) fn is_closed(&self) -> bool {
@@ -420,9 +443,9 @@ pub(crate) struct Slot {
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        let mut wakers = Vec::new();
-        self.slots.lock().release(&self.lane, &mut wakers);
-        wake_all(wakers);
+        let mut after = After::default();
+        self.slots.lock().release(&self.lane, &mut after);
+        after.run();
     }
 }
 
@@ -437,9 +460,9 @@ struct Place<'a> {
 impl Drop for Place<'_> {
     fn drop(&mut self) {
         if let Some(number) = self.number.take() {
-            let mut wakers = Vec::new();
-            self.slots.lock().leave(self.lane, number, &mut wakers);
-            wake_all(wakers);
+            let mut after = After::default();
+            self.slots.lock().leave(self.lane, number, &mut after);
+            after.run();
         }
     }
 }

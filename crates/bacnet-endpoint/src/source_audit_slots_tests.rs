@@ -42,7 +42,14 @@ impl Waiting {
     }
 
     fn poll(&mut self) -> Poll<Admission> {
-        let waker = Waker::from(Arc::clone(&self.wakes));
+        let wakes = Arc::clone(&self.wakes);
+        self.poll_with(&wakes)
+    }
+
+    /// Poll it with a waker counting into `wakes`, as a task that moved
+    /// would.
+    fn poll_with(&mut self, wakes: &Arc<Wakes>) -> Poll<Admission> {
+        let waker = Waker::from(Arc::clone(wakes));
         (self.future.as_mut()).poll(&mut Context::from_waker(&waker))
     }
 
@@ -317,6 +324,56 @@ fn a_long_queue_drains_with_one_wake_per_waiter() {
     }
     assert!(queue.iter().all(Option::is_none), "every waiter served");
     assert_eq!(polls, WAITERS, "one wake and one poll each");
+}
+
+/// A woken waiter that polls and can't take a slot sleeps again, keeping
+/// its age: the next slot back wakes it again, ahead of those that came
+/// after it. Once its lane is at its share again, once the pool is full.
+#[test]
+fn a_woken_waiter_that_cannot_take_sleeps_again_keeping_its_age() {
+    let slots = Arc::new(Slots::new());
+    let mut lane = hold(&slots, 1, LANE_SHARE).remove(0);
+    let mut first = waiting(&slots, station(100));
+    let later = waiting(&slots, station(100));
+    drop(lane.pop());
+    lane.push(held(&slots, station(100)));
+    assert!(first.pending(), "its lane is at its share again");
+    drop(lane.pop());
+    assert_eq!((first.woken(), later.woken()), (2, 0));
+    drop((lane, first, later));
+
+    let mut lanes = hold(&slots, 16, LANE_SHARE);
+    let mut first = waiting(&slots, station(50));
+    let later = waiting(&slots, station(50));
+    drop(lanes[0].pop());
+    let newcomer = held(&slots, station(51));
+    assert!(first.pending(), "the pool is full again");
+    drop(lanes[1].pop());
+    assert_eq!((first.woken(), later.woken()), (2, 0));
+    let _first = first.slot();
+    drop((lanes, newcomer, later));
+}
+
+/// A waiter polled again with another waker, as a task that moved polls
+/// it, is woken through the new one only; a poll that finds no slot leaves
+/// it waiting where it was.
+#[test]
+fn a_waiter_is_woken_through_its_latest_waker() {
+    let slots = Arc::new(Slots::new());
+    let mut lane = hold(&slots, 1, LANE_SHARE).remove(0);
+    let mut moved = waiting(&slots, station(100));
+    let behind = waiting(&slots, station(100));
+    let latest = Arc::new(Wakes::default());
+    assert!(moved.poll_with(&latest).is_pending());
+    drop(lane.pop());
+    assert_eq!(moved.woken(), 0, "the first waker is gone");
+    assert_eq!(latest.0.load(Ordering::SeqCst), 1);
+    assert_eq!(behind.woken(), 0, "it kept its place");
+    assert!(matches!(
+        moved.poll_with(&latest),
+        Poll::Ready(Admission::Admitted(_))
+    ));
+    drop((lane, behind));
 }
 
 /// Closing wakes every waiter once, each to fail; slots that come back
