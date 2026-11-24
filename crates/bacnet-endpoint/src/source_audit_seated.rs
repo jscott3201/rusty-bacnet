@@ -78,39 +78,38 @@ impl SourceAudit {
         let lane = slots::Lane::of(request.station());
         let slot = loop {
             // Its turn at the destination (`min_request_interval_ms`) is
-            // taken as it is admitted, so the interval holds between
-            // requests as they are admitted (#2652). It first waits for the
-            // turn to come due, holding nothing, so a request waiting out
-            // the interval keeps no other out of its lane.
+            // taken with its slot, so the interval holds between requests
+            // as they are admitted (#2652). It first waits for the turn to
+            // come due, holding nothing, so a request waiting out the
+            // interval keeps no other out of its lane.
             request.turn_due().await?;
             // At most 64 operations are held at once, and at most a lane's
             // share by one lane. Past them a request waits here for a slot,
             // in its caller's task: nothing is spawned for it, its timeout
             // starts once it is admitted, and a stop (which closes the
             // slots) or its caller going away ends the wait with nothing
-            // sent and no slot held.
-            let slot = (self.slots)
-                .admit(lane.clone())
+            // sent and no slot held. A slot is taken only with the turn:
+            // one another request to the destination took meanwhile sends
+            // it back to wait for the next, holding nothing.
+            match (self.slots)
+                .admit(lane.clone(), || request.try_take_turn())
                 .await
-                .ok_or_else(|| Error::Encoding("endpoint shutdown".into()))?;
-            // A request that waited for its slot while the node's
-            // DeviceCommunicationControl took effect goes no further:
-            // refused before it takes a turn or a sequence number, as one
-            // made then is.
-            if request.initiation_restricted() {
-                return Err(Error::InitiationDisabled { sent: false });
-            }
-            // Another request to the destination may have taken the turn
-            // while this one waited for its slot: the slot goes back, and
-            // it waits for the next turn.
-            if request.try_take_turn() {
-                break slot;
+            {
+                slots::Admission::Admitted(slot) => break slot,
+                slots::Admission::NotReady => {}
+                slots::Admission::Closed => {
+                    return Err(Error::Encoding("endpoint shutdown".into()));
+                }
             }
         };
-        let mut db = self.db.write().await;
-        if self.slots.is_closed() {
-            return Err(Error::Encoding("endpoint shutdown".into()));
+        // A request that waited for its slot while the node's
+        // DeviceCommunicationControl took effect goes no further: refused
+        // before it takes a sequence number, as one made then is.
+        if request.initiation_restricted() {
+            return Err(Error::InitiationDisabled { sent: false });
         }
+        let mut db = self.db.write().await;
+        // A stop is seen here: `close` seals the owner before the slots.
         let runtime = self
             .runtime
             .upgrade()

@@ -14257,14 +14257,17 @@ is admitted; a request to a lane at its share waits behind that lane only,
 so a burst to one slow or silent device leaves the other 60 slots to the
 rest. A waiting request takes a slot only as it is polled, so one its
 caller stops polling holds nothing: within a lane the first polled goes
-first. A slot that comes back wakes the waiting lane holding the fewest,
-then the one that has waited longest since it was last woken. A stop or the
-caller going away ends the wait with nothing sent. A request waits out its
-turn at its destination (`min_request_interval_ms`) holding nothing, and
-takes the turn with its slot, so the interval holds between requests as
-they are admitted; one that finds the turn taken meanwhile gives the slot
-back and waits again. A request the Reporter doesn't select, or with no
-recipient, goes unaudited in the caller's task.
+first. A slot that comes back wakes one waiting request, of the lane
+holding the fewest, then of the one that has waited longest since it was
+last woken; a request woken is not woken again until it polls, so one its
+caller no longer polls is woken past. That order bounds when a lane is
+woken, not when a given request is admitted: one polled first can take the
+slot. A stop or the caller going away ends the wait with nothing sent. A
+request waits out its turn at its destination (`min_request_interval_ms`)
+holding nothing, and takes the turn with its slot, so the interval holds
+between requests as they are admitted; one whose turn another request took
+meanwhile takes no slot and waits again. A request the Reporter doesn't
+select, or with no recipient, goes unaudited in the caller's task.
 
 - Each target is its own record (Clause 19.6.5): one per reference of a
   ReadPropertyMultiple, or per value its answer reports for ALL, REQUIRED or

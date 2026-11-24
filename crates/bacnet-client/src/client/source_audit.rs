@@ -151,11 +151,11 @@ impl AuditedRequest {
     }
 
     /// Take the request's turn at its destination if it is due now, as a
-    /// node does once it has admitted the request, so the interval holds
-    /// between requests as they are admitted, however long each waited.
-    /// `false` when another request to the destination took it since
+    /// node does as it admits the request, so the interval holds between
+    /// requests as they are admitted, however long each waited. `false`
+    /// when another request to the destination took it since
     /// [`Self::turn_due`]; always `true` once taken, or when the client
-    /// doesn't pace.
+    /// doesn't pace. It takes only the client's pacer lock.
     pub fn try_take_turn(&mut self) -> bool {
         let Some(turn) = &self.turn else {
             return true;

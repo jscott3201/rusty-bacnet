@@ -18,30 +18,46 @@
 //! passes one at a time.
 //!
 //! A slot is taken only by a waiter as it is polled: one polled while a
-//! slot is free and its lane is under its share takes it, newcomer or not.
-//! So a waiter that is never polled again holds nothing and keeps no one
-//! else out, and within a lane the first waiter polled goes first, not the
-//! first to come. Who is woken follows an order. A slot that comes back
-//! wakes every waiter of the first lane under its share in that order, and
-//! moves that lane behind the others holding as many. The order is fewest
-//! slots held, then longest wait since the lane began to wait or was last
-//! woken. A slot that comes back while another is still free (the lane
-//! woken for that one has not taken it up) wakes every waiter of every lane
-//! under its share, and so does a waiter that leaves while a slot is free.
+//! slot is free and its lane is under its share takes it, newcomer or not,
+//! if its condition (its turn at the destination) holds then. So a waiter
+//! that is never polled again holds nothing, and within a lane the first
+//! waiter polled goes first. A waiter is asleep until woken, and woken
+//! until it next polls. A slot that comes back wakes, for each free slot,
+//! one asleep waiter of a lane under its share, as many from a lane as it
+//! has room for, oldest first. Lanes go in an order: fewest slots held,
+//! then longest since the lane began to wait or was last woken, and a lane
+//! goes behind those holding as many once woken. A woken waiter is not
+//! woken again until it polls, so the next slot to come back wakes the
+//! next asleep waiter, of the same lane or past it, and a lane whose
+//! waiters are all woken is passed over. A woken waiter that leaves
+//! without taking a free slot (dropped, or its turn not due) wakes the
+//! next. The last slot to come back, with nothing held, wakes every asleep
+//! waiter: no later one would.
+//!
+//! No wake is lost: a waiter falls asleep, under the lock, only when it can
+//! take no slot, and whatever frees a slot or gives up a wake wakes the
+//! next asleep waiter under the same lock. A woken waiter that never polls
+//! keeps a free slot from the others only until the next slot comes back,
+//! which wakes past it; while slots are held one will, and with none held
+//! none is asleep.
 //!
 //! So a lane holding none is woken by the (k + 1)th slot to come back,
 //! where k counts the lanes that have waited longer since they were last
 //! woken, whatever they hold now: each of those is woken at most once
-//! first. Woken, it takes the slot unless a request polled before it did;
-//! a slot it leaves free reaches everyone with the next one. Every held
-//! slot comes back within its operation's life: the APDU timeout times the
+//! first. That bounds when a lane is woken, not when one of its requests is
+//! admitted: a newcomer polled first may take the slot. Every held slot
+//! comes back within its operation's life: the APDU timeout times the
 //! retries plus one (24 s at the session defaults), and for a routed one
 //! its wait at the router behind the others of its lane.
 //!
-//! Wakers are collected under the lock and woken once it is let go; closing
-//! wakes every waiter once. The lock is a leaf: held only inside these
-//! methods, never across an await, and no other lock is taken under it, so
-//! it orders after the database's and is never held with the
+//! A slot that comes back wakes at most one waiter per free slot, so
+//! draining a queue costs a wake and a poll per waiter, and finding whom to
+//! wake costs a lookup per lane woken; only the last slot, with nothing
+//! held, wakes every asleep waiter. Wakers are collected under the lock and
+//! woken once it is let go; closing wakes every waiter once. The lock is a
+//! leaf apart from the condition a waiter checks as it takes a slot, which
+//! takes the client's pacer lock (itself a leaf). It is never held across
+//! an await, it orders after the database's, and it is never held with the
 //! coordinator's or a client's transaction state. A lane's entry goes with
 //! its last slot and waiter.
 //!
@@ -50,7 +66,7 @@
 //! names, its MAC on this link or its network, and is then refused. A
 //! routed station whose router isn't known yet is in its network's lane.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::poll_fn;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll, Waker};
@@ -83,6 +99,23 @@ impl Lane {
     }
 }
 
+/// How a wait for a slot ended.
+pub(crate) enum Admission {
+    /// With a slot, its condition holding.
+    Admitted(Slot),
+    /// A slot was free but its condition did not hold: nothing is held.
+    NotReady,
+    /// The slots are closed.
+    Closed,
+}
+
+/// How a poll under the lock ended, before `admit` makes the slot.
+enum Polled {
+    Admitted,
+    NotReady,
+    Closed,
+}
+
 /// The slots, by lane, and the requests waiting for one.
 pub(crate) struct Slots {
     state: Mutex<State>,
@@ -93,8 +126,8 @@ struct State {
     /// Slots held.
     held: usize,
     lanes: HashMap<Lane, LaneState>,
-    /// Each lane with a waiter, by the slots it holds and then its turn:
-    /// the order lanes are woken in.
+    /// Each lane with an asleep waiter, by the slots it holds and then its
+    /// turn: the order lanes are woken in.
     order: BTreeMap<(usize, u64), Lane>,
     /// The next turn and the next waiter's number; both only grow.
     next_turn: u64,
@@ -105,16 +138,28 @@ struct State {
 #[derive(Default)]
 struct LaneState {
     held: usize,
-    /// Each with the waker its last poll left; numbers rise front to back.
-    waiters: VecDeque<Waiter>,
-    /// Its turn in `order` while it has waiters: when it began to wait, or
-    /// was last woken.
+    /// Its waiters by number, each with the waker its last poll left.
+    waiters: BTreeMap<u64, Waker>,
+    /// Those not woken since they last polled, oldest first.
+    asleep: BTreeSet<u64>,
+    /// Its turn in `order`: when it began to wait, or was last woken.
     turn: u64,
 }
 
-struct Waiter {
-    number: u64,
-    waker: Waker,
+impl LaneState {
+    /// Its key in `order`, while it is there.
+    fn key(&self) -> Option<(usize, u64)> {
+        (!self.asleep.is_empty()).then_some((self.held, self.turn))
+    }
+}
+
+/// How many asleep waiters to wake.
+#[derive(Clone, Copy)]
+enum Wake {
+    /// This many, at most as many from a lane as it has room for.
+    Up(usize),
+    /// Every one, of every lane under its share.
+    All,
 }
 
 impl State {
@@ -122,112 +167,148 @@ impl State {
         SLOTS - self.held
     }
 
-    /// Waiter `number` of `lane`, polled: it takes a slot (`true`) if one
-    /// is free and the lane is under its share, or waits with `cx`'s waker.
-    /// `false` once closed.
-    fn poll(&mut self, cx: &Context<'_>, lane: &Lane, number: u64) -> Poll<bool> {
+    /// Move `lane` in `order` from `before` to where its entry puts it.
+    fn place(&mut self, lane: &Lane, before: Option<(usize, u64)>) {
+        if let Some(key) = before {
+            self.order.remove(&key);
+        }
+        if let Some(key) = self.lanes.get(lane).and_then(LaneState::key) {
+            self.order.insert(key, lane.clone());
+        }
+    }
+
+    /// Waiter `number` of `lane`, polled. With a slot free and room in the
+    /// lane it takes the slot if `ready()`, and otherwise leaves, passing
+    /// on its wake. Else it waits, asleep, with `cx`'s waker.
+    fn poll(
+        &mut self,
+        cx: &Context<'_>,
+        lane: &Lane,
+        number: u64,
+        ready: &mut dyn FnMut() -> bool,
+        wakers: &mut Vec<Waker>,
+    ) -> Poll<Polled> {
         if self.closed {
             self.remove(lane, number);
-            return Poll::Ready(false);
+            return Poll::Ready(Polled::Closed);
         }
         let free = self.held < SLOTS;
         let entry = self.lanes.entry(lane.clone()).or_default();
-        let at = entry.waiters.binary_search_by_key(&number, |w| w.number);
+        let before = entry.key();
         if free && entry.held < LANE_SHARE {
-            let key = (entry.held, entry.turn);
-            if let Ok(at) = at {
-                entry.waiters.remove(at);
+            let admitted = ready();
+            if admitted {
+                entry.held += 1;
+                self.held += 1;
             }
-            if at.is_ok() || !entry.waiters.is_empty() {
-                self.order.remove(&key);
+            self.place(lane, before);
+            let woken = self.remove(lane, number);
+            self.forget_if_idle(lane);
+            if admitted {
+                return Poll::Ready(Polled::Admitted);
             }
-            entry.held += 1;
-            self.held += 1;
-            if !entry.waiters.is_empty() {
-                self.order.insert((entry.held, entry.turn), lane.clone());
+            // Woken for the slot it leaves free: the next asleep waiter is.
+            if woken {
+                self.pass_on(wakers);
             }
-            return Poll::Ready(true);
+            return Poll::Ready(Polled::NotReady);
         }
-        match at {
-            Ok(at) => {
-                let waker = &mut entry.waiters[at].waker;
-                if !waker.will_wake(cx.waker()) {
-                    *waker = cx.waker().clone();
-                }
-            }
-            Err(_) => {
-                if entry.waiters.is_empty() {
-                    entry.turn = self.next_turn;
-                    self.next_turn += 1;
-                    self.order.insert((entry.held, entry.turn), lane.clone());
-                }
-                entry.waiters.push_back(Waiter {
-                    number,
-                    waker: cx.waker().clone(),
-                });
-            }
+        if entry.waiters.is_empty() {
+            entry.turn = self.next_turn;
+            self.next_turn += 1;
         }
+        entry.waiters.insert(number, cx.waker().clone());
+        entry.asleep.insert(number);
+        self.place(lane, before);
         Poll::Pending
     }
 
-    /// Waiter `number` of `lane` leaves, if it waits.
-    fn remove(&mut self, lane: &Lane, number: u64) {
+    /// Waiter `number` of `lane` leaves, if it waits. Whether it was woken
+    /// and had not polled since.
+    fn remove(&mut self, lane: &Lane, number: u64) -> bool {
         let Some(entry) = self.lanes.get_mut(lane) else {
-            return;
+            return false;
         };
-        let Ok(at) = (entry.waiters).binary_search_by_key(&number, |w| w.number) else {
-            return;
-        };
-        entry.waiters.remove(at);
-        if entry.waiters.is_empty() {
-            self.order.remove(&(entry.held, entry.turn));
-            self.forget_if_idle(lane);
+        let before = entry.key();
+        if entry.waiters.remove(&number).is_none() {
+            return false;
         }
+        let woken = !entry.asleep.remove(&number);
+        self.place(lane, before);
+        self.forget_if_idle(lane);
+        woken
     }
 
-    /// Waiter `number` of `lane` gives up waiting. A slot left free for
-    /// it goes to everyone.
+    /// Waiter `number` of `lane` gives up waiting. One woken for a free
+    /// slot passes the wake on.
     fn leave(&mut self, lane: &Lane, number: u64, wakers: &mut Vec<Waker>) {
-        self.remove(lane, number);
-        if self.free() > 0 {
-            self.wake(true, wakers);
+        if self.remove(lane, number) && self.free() > 0 {
+            self.pass_on(wakers);
         }
     }
 
-    /// A slot of `lane` comes back. What it wakes is in the module
-    /// documentation.
+    /// A free slot's wake goes to the next asleep waiter. With nothing held
+    /// none is asleep: the last slot back woke them all, and none can fall
+    /// asleep with every slot free.
+    fn pass_on(&mut self, wakers: &mut Vec<Waker>) {
+        self.wake(Wake::Up(1), wakers);
+    }
+
+    /// A slot of `lane` comes back: one asleep waiter is woken per free
+    /// slot, or every one when nothing is held.
     fn release(&mut self, lane: &Lane, wakers: &mut Vec<Waker>) {
         let entry = self.lanes.get_mut(lane).expect("a held slot's lane");
-        if !entry.waiters.is_empty() {
-            self.order.remove(&(entry.held, entry.turn));
-            self.order
-                .insert((entry.held - 1, entry.turn), lane.clone());
-        }
+        let before = entry.key();
         entry.held -= 1;
         self.held -= 1;
+        self.place(lane, before);
         self.forget_if_idle(lane);
-        let everyone = self.free() > 1;
-        self.wake(everyone, wakers);
+        let wake = if self.held == 0 {
+            Wake::All
+        } else {
+            Wake::Up(self.free())
+        };
+        self.wake(wake, wakers);
     }
 
-    /// Wake every waiter of the first lane under its share in order, or of
-    /// every such lane, and move each behind those holding as many.
-    fn wake(&mut self, everyone: bool, wakers: &mut Vec<Waker>) {
+    /// Wake asleep waiters, oldest first, of the lanes under their share in
+    /// order, and move each lane woken behind those holding as many.
+    fn wake(&mut self, wake: Wake, wakers: &mut Vec<Waker>) {
         if self.closed {
             return;
         }
-        let woken: Vec<(usize, u64)> = (self.order.keys())
+        let mut budget = match wake {
+            Wake::Up(budget) => budget,
+            Wake::All => usize::MAX,
+        };
+        // Each lane taken wakes at least one waiter.
+        let lanes: Vec<(usize, u64)> = (self.order.keys())
             .take_while(|(held, _)| *held < LANE_SHARE)
-            .take(if everyone { usize::MAX } else { 1 })
+            .take(budget)
             .copied()
             .collect();
-        for key in woken {
-            let lane = self.order.remove(&key).expect("a waiting lane");
+        for key in lanes {
+            if budget == 0 {
+                break;
+            }
+            let lane = self.order.remove(&key).expect("a lane in order");
             let entry = self.lanes.get_mut(&lane).expect("a waiting lane");
-            wakers.extend(entry.waiters.iter().map(|w| w.waker.clone()));
+            let room = match wake {
+                Wake::Up(_) => LANE_SHARE - entry.held,
+                Wake::All => usize::MAX,
+            };
+            for _ in 0..budget.min(room) {
+                let Some(number) = entry.asleep.pop_first() else {
+                    break;
+                };
+                wakers.push(entry.waiters[&number].clone());
+                budget -= 1;
+            }
             entry.turn = self.next_turn;
             self.next_turn += 1;
-            self.order.insert((entry.held, entry.turn), lane);
+            if let Some(key) = entry.key() {
+                self.order.insert(key, lane);
+            }
         }
     }
 
@@ -259,30 +340,45 @@ impl Slots {
     }
 
     /// Wait for a slot in `lane`, as the module documentation describes.
-    /// `None` once the slots are closed. Dropping the wait gives up its
-    /// place; it holds nothing until it has its slot.
-    pub(crate) async fn admit(self: &Arc<Self>, lane: Lane) -> Option<Slot> {
+    /// `ready` is checked under the lock as a slot is taken, and must not
+    /// take this lock: when it is false the wait ends with nothing held.
+    /// Dropping the wait gives up its place; it holds nothing until it has
+    /// its slot.
+    pub(crate) async fn admit(
+        self: &Arc<Self>,
+        lane: Lane,
+        mut ready: impl FnMut() -> bool,
+    ) -> Admission {
         let mut place = Place {
             slots: self,
             lane: &lane,
             number: None,
         };
-        let admitted = poll_fn(|cx| {
-            let mut state = self.lock();
-            let number = *place.number.get_or_insert_with(|| {
-                state.next_waiter += 1;
-                state.next_waiter
-            });
-            state.poll(cx, &lane, number)
+        let admission = poll_fn(|cx| {
+            let mut wakers = Vec::new();
+            let polled = {
+                let mut state = self.lock();
+                let number = *place.number.get_or_insert_with(|| {
+                    state.next_waiter += 1;
+                    state.next_waiter
+                });
+                state.poll(cx, &lane, number, &mut ready, &mut wakers)
+            };
+            wake_all(wakers);
+            polled
         })
         .await;
-        // Admitted or closed, it waits no more.
+        // Whatever the end, it waits no more.
         place.number = None;
         drop(place);
-        admitted.then(|| Slot {
-            slots: Arc::clone(self),
-            lane,
-        })
+        match admission {
+            Polled::Admitted => Admission::Admitted(Slot {
+                slots: Arc::clone(self),
+                lane,
+            }),
+            Polled::NotReady => Admission::NotReady,
+            Polled::Closed => Admission::Closed,
+        }
     }
 
     /// End every wait, and admit nothing more. Slots already held stay held
@@ -292,8 +388,8 @@ impl Slots {
             let mut state = self.lock();
             state.closed = true;
             (state.lanes.values())
-                .flat_map(|entry| entry.waiters.iter())
-                .map(|waiter| waiter.waker.clone())
+                .flat_map(|entry| entry.waiters.values())
+                .cloned()
                 .collect()
         };
         wake_all(wakers);
