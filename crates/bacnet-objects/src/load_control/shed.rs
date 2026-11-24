@@ -48,9 +48,10 @@ pub trait LoadShedder: Send + Sync {
     fn shed(&self, request: &ShedRequest) -> ShedStatus;
 
     /// The request ended: it ran its Shed_Duration, a client cancelled it,
-    /// Enable went FALSE, the object left its database (removed from it or
-    /// replaced by another object), or a server start that looked at it
-    /// failed or was cancelled (#2479). Stop shedding. The default does
+    /// Enable went FALSE, or the object left its database (removed from it
+    /// or replaced by another object). Or a server start that looked at it
+    /// failed or was cancelled (#2479): the request is kept then, and the
+    /// next start offers it again (#2752). Stop shedding. The default does
     /// nothing.
     ///
     /// Only a request the object has offered to [`shed`](Self::shed) is
@@ -331,18 +332,37 @@ impl LoadControlObject {
     fn end_request(&mut self) {
         // A request restored as it was being shed owes a stop too (#2479).
         let restored = self.shed_before_restart.take().is_some();
-        if (core::mem::take(&mut self.offered) || restored)
-            && let Some(shedder) = &self.shedder
-            && crate::catch_panic(|| shedder.stop()).is_none()
-        {
-            let oid = self.oid;
-            log_warn!(object = %oid, "A Load Control's shedder panicked as its request ended");
+        if core::mem::take(&mut self.offered) || restored {
+            self.stop_shedder();
         }
         self.state = ShedState::SHED_INACTIVE;
         self.requested_shed_level = choice_default(&self.requested_shed_level);
         self.start_time = UNSPECIFIED_DATETIME;
         self.shed_duration = 0;
         self.duty_window = self.agreed_duty_window;
+    }
+
+    /// Tell the application to stop shedding, as a request's end does, but
+    /// keep the request: the start that looked at it didn't finish, and the
+    /// next start looks at it again (#2752). With no shedder installed, a
+    /// stop owed to a restored request stays owed.
+    pub(super) fn release_request(&mut self) {
+        if self.shedder.is_none() {
+            return;
+        }
+        let restored = self.shed_before_restart.take().is_some();
+        if core::mem::take(&mut self.offered) || restored {
+            self.stop_shedder();
+        }
+    }
+
+    fn stop_shedder(&self) {
+        if let Some(shedder) = &self.shedder
+            && crate::catch_panic(|| shedder.stop()).is_none()
+        {
+            let oid = self.oid;
+            log_warn!(object = %oid, "A Load Control's shedder panicked as its request ended");
+        }
     }
 
     /// The Device clock's local moment now, if it has one.

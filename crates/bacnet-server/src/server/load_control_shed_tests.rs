@@ -568,12 +568,33 @@ async fn a_start_that_fails_lets_a_restored_shed_go() {
     let transport = TestTransport::builder()
         .start(StartMode::Inbound(None))
         .build();
-    assert!(BACnetServer::start(config, db, transport).await.is_err());
+    let refused = BACnetServer::start(config.clone(), db, transport)
+        .await
+        .err()
+        .expect("the start fails");
     // The start offered the restored request to the application, then let
     // it go as it failed (#2479); storage keeps it for the next start.
     assert!(!app.asked.lock().unwrap().is_empty());
     assert_eq!(*app.stops.lock().unwrap(), 1);
+    assert_eq!(*store.saved.lock().unwrap(), Some(saved.clone()));
+    // The object keeps it too: the next start over the database the refusal
+    // handed back sheds it again, and storage still holds it (#2752).
+    app.asked.lock().unwrap().clear();
+    let db = refused.into_parts().1.expect("the database comes back");
+    let mut server = BACnetServer::start(config, db, TestTransport::new())
+        .await
+        .unwrap();
+    assert!(!app.asked.lock().unwrap().is_empty());
+    let state = server
+        .read_local(&lc1(), PropertyIdentifier::PRESENT_VALUE, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        state,
+        PropertyValue::Enumerated(bacnet_types::enums::ShedState::SHED_COMPLIANT.to_raw())
+    );
     assert_eq!(*store.saved.lock().unwrap(), Some(saved));
+    server.stop().await.unwrap();
 }
 
 #[tokio::test]

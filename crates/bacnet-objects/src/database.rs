@@ -549,16 +549,19 @@ impl ObjectDatabase {
         }
     }
 
-    /// The device isn't starting after all: call [`Timed::retire`] as
-    /// [`Retirement::Released`] on every timed object, so what a start
-    /// began ([`start_outputs`](Self::start_outputs)) ends, while what the
-    /// objects keep in storage stays for the next start (#2479). The bundled
-    /// server calls it when its start fails after driving the outputs.
+    /// The device isn't starting after all: call [`Timed::release_output`]
+    /// on every timed object, so what a start began
+    /// ([`start_outputs`](Self::start_outputs)) stops, while what the
+    /// objects hold, in memory and in storage, stays for the next start
+    /// (#2479, #2752). The bundled server calls it when its start fails or
+    /// is dropped after driving the outputs.
     ///
-    /// [`Timed::retire`]: crate::traits::Timed::retire
+    /// [`Timed::release_output`]: crate::traits::Timed::release_output
     pub fn release_outputs(&mut self) {
         for object in self.objects.values_mut() {
-            retire(object.as_mut(), Retirement::Released);
+            if let Some(timed) = object.timed() {
+                timed.release_output();
+            }
         }
     }
 

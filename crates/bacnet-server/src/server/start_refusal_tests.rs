@@ -406,3 +406,6 @@ async fn a_registered_port_whose_link_would_not_bind_registers_again() {
     assert_eq!(udp_port(&server).await, PropertyValue::Unsigned(47811));
     server.stop().await.unwrap();
 }
+
+#[path = "start_refusal_drop_tests.rs"]
+mod drop_tests;

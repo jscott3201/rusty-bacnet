@@ -91,8 +91,7 @@ pub enum Retirement {
     /// of what it ran.
     Removed,
     /// Let go with its storage left as it was, for what comes next: an
-    /// object put in its place, which may restore from the same storage,
-    /// or the next start after one that failed.
+    /// object put in its place, which may restore from the same storage.
     Released,
 }
 
@@ -145,15 +144,21 @@ pub trait Timed {
     /// output nothing has driven yet to its default (#1526).
     fn start_output(&mut self) {}
 
+    /// The start that called [`start_output`](Self::start_output) didn't
+    /// finish: it was refused, or its future dropped. Let go of what the
+    /// object drives outside the database, such as a Load Control's shed,
+    /// whose application is told to stop, and keep what the object holds,
+    /// so the next start over it drives it the same way again (#2479,
+    /// #2752). A host calls it on every object ([`release_outputs`]).
+    ///
+    /// [`release_outputs`]: crate::database::ObjectDatabase::release_outputs
+    fn release_output(&mut self) {}
+
     /// The object is leaving its database (#2479): `retirement` says how.
     /// End what it runs outside the database, such as a Load Control's
     /// shed, whose application is told to stop. The database calls this
-    /// before it hands a removed object back or drops a replaced one, and a
-    /// host whose start fails calls it on every object
-    /// ([`release_outputs`]); dropping an object, or a copy of one, calls
-    /// nothing.
-    ///
-    /// [`release_outputs`]: crate::database::ObjectDatabase::release_outputs
+    /// before it hands a removed object back or drops a replaced one;
+    /// dropping an object, or a copy of one, calls nothing.
     fn retire(&mut self, _retirement: Retirement) {}
 
     /// A frozen copy of the COV-readable state, taken while the host still

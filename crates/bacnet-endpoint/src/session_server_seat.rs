@@ -390,8 +390,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 }
             }));
         }
-        // A refused build hands the database back: it stays the session's,
-        // which lets go of it off the runtime as ever (#2752).
+        // A refused build hands the database back (#2752). The session only
+        // holds it, so that its stop or drop lets go of it off the runtime
+        // as on every other way out: the refused start leaves the session
+        // terminal, and nothing gives the database to the caller.
         let server = match seated.build().await {
             Ok(server) => server,
             Err(refused) => {

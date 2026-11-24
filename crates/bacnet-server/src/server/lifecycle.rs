@@ -127,7 +127,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let target_audit = match target_audit {
             Ok(runtime) => runtime,
             Err(error) => {
-                let error = L::abandon(network).await.err().unwrap_or(error);
+                // The refusal is the installation's; a cleanup that fails
+                // too is logged beside it.
+                if let Err(cleanup) = L::abandon(network).await {
+                    warn!(%cleanup, "startup cleanup after a refused Audit installation failed");
+                }
                 return Err(StartError::new(error, Some(outputs.refuse())));
             }
         };

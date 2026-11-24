@@ -334,13 +334,12 @@ impl BACnetServer {
             // against the Device and the others when it was added, so the
             // database takes them all. The Device's Object_List is the
             // database's own: the Device, then the objects in the order they
-            // were added (#2669). A refusal from the Rust server's start hands
+            // were added (#2669). Should it refuse one anyway, the claim
+            // keeps them all; a refusal from the Rust server's start hands
             // the database back, and the registrations go back with it.
-            let mut db = ObjectDatabase::new();
-            for obj in claim.hand_off_objects() {
-                db.add(obj).map_err(refused_object)?;
-            }
-            db.add(Box::new(device)).map_err(refused_object)?;
+            let db = claim
+                .fill_database(Box::new(device))
+                .map_err(refused_object)?;
 
             let mut builder = builder
                 .database(db)

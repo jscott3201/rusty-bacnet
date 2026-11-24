@@ -596,8 +596,9 @@ fn a_session_with_its_server_drops_where_no_runtime_runs() {
 }
 
 /// A full server whose seated build the started link refuses hands the
-/// database back, and the session keeps it (#2752): target Audit's checks
-/// of the started link, which reports the Audit recipient's address as its
+/// database back, and the session holds it again, so its drop lets go of
+/// it off the runtime (#2752); no caller gets it. Target Audit's checks of
+/// the started link, which reports the Audit recipient's address as its
 /// broadcast once started, refuse after the link is up.
 #[tokio::test(start_paused = true)]
 async fn a_server_build_the_started_link_refuses_leaves_the_session_its_database() {

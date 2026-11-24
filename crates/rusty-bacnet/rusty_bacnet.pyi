@@ -8262,7 +8262,8 @@ class BACnetServer:
         the expected and actual levels as ``ShedLevel`` mappings in the
         requested choice. ``stop`` (optional, needs ``shed``) is called with
         no arguments once a request ``shed`` was asked about ends, removal
-        of the object and a start that fails or is cancelled included. Make
+        of the object included, and when a start that asked fails or is
+        cancelled: the request then stays for the next start (#2752). Make
         it idempotent: it may come with no loads shed, and twice with no
         ``shed`` between. Without ``shed`` nothing is shed: a request runs
         SHED_NON_COMPLIANT from Start_Time to its end.

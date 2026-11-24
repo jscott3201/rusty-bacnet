@@ -143,6 +143,59 @@ fn a_withdrawn_publication_reads_and_reserves_as_configured() {
     );
 }
 
+/// A port published in BBMD or FOREIGN mode is withdrawn to NORMAL with its
+/// configured address and UDP port, and reserves again (#2752).
+#[test]
+fn a_withdrawn_bbmd_or_foreign_publication_reads_normal_and_reserves_again() {
+    use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
+    let bbmd = BACnetHostNPort {
+        host: BACnetHostAddress::Ip(core::net::IpAddr::V4(core::net::Ipv4Addr::new(10, 0, 0, 1))),
+        port: 0xBAC0,
+    };
+    struct Tables;
+    impl bacnet_types::bip_port::BbmdTables for Tables {
+        fn broadcast_distribution_table(&self) -> Vec<bacnet_types::constructed::BACnetBDTEntry> {
+            Vec::new()
+        }
+        fn accepts_foreign_device_registrations(&self) -> bool {
+            false
+        }
+        fn foreign_device_table(&self) -> Vec<bacnet_types::constructed::BACnetFDTEntry> {
+            Vec::new()
+        }
+    }
+    for mode in [
+        BipPortMode::Bbmd {
+            tables: Some(Arc::new(Tables)),
+        },
+        BipPortMode::fixed_foreign(bbmd, 300),
+    ] {
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(object(1))).unwrap();
+        let configured = db.configured_bip_port_internal(&oid(1));
+        let (_, owner) = db
+            .reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
+            .unwrap();
+        db.publish_bip_port_internal(oid(1), [127, 0, 0, 1], 1234, 1476, mode)
+            .unwrap();
+        let mode = |db: &ObjectDatabase| {
+            db.get(&oid(1))
+                .unwrap()
+                .read_property(P::BACNET_IP_MODE, None)
+                .unwrap()
+        };
+        assert_ne!(mode(&db), PropertyValue::Enumerated(0));
+        drop(owner);
+        db.withdraw_network_port_internal();
+        assert_eq!(mode(&db), PropertyValue::Enumerated(0), "NORMAL again");
+        assert_eq!(db.configured_bip_port_internal(&oid(1)), configured);
+        assert!(
+            db.reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
+                .is_ok()
+        );
+    }
+}
+
 #[test]
 fn mismatched_or_unavailable_port_is_not_reserved() {
     let mut db = ObjectDatabase::new();
