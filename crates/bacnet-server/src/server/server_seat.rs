@@ -461,23 +461,28 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
     /// Number_Of_APDU_Retries than the node's (one that declares the object
     /// model's defaults, 6000 ms and 3, is given the node's), and on
     /// whatever a transport of its own would refuse. Must be called within
-    /// a Tokio runtime.
-    pub async fn build(mut self) -> Result<BACnetServer<T>, Error> {
+    /// a Tokio runtime. A refusal hands back the database ([`StartError`]),
+    /// with the node's APDU timing once its Device has been given it.
+    pub async fn build(mut self) -> Result<BACnetServer<T>, StartError> {
         if self.had_transport {
-            return Err(Error::Encoding(
+            let error = Error::Encoding(
                 "a server builder with a transport of its own takes no seat as well".into(),
-            ));
+            );
+            return Err(StartError::new(error, self.db));
         }
         if self.config.registered_network_port.is_some() {
-            return Err(Error::Encoding(
+            let error = Error::Encoding(
                 "a server on a node's seat takes no registered Network Port of its own: the \
                  node reserves and publishes its port"
                     .into(),
-            ));
+            );
+            return Err(StartError::new(error, self.db));
         }
         let node = self.seat.node;
         let state_timing = match node {
-            Some(node) => self.take_node(node)?,
+            Some(node) => self
+                .take_node(node)
+                .map_err(StartError::taking(&mut self.db))?,
             None => false,
         };
         let mut db = crate::local_device::prepare_database(
@@ -489,7 +494,10 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
         // effect through this server's ReinitializeDevice handler, as on a
         // server's own link.
         if let Some(oid) = self.node_port {
-            db.set_network_port_activation_internal(oid, self.config.on_reinitialize.is_some())?;
+            let activation = self.config.on_reinitialize.is_some();
+            if let Err(error) = db.set_network_port_activation_internal(oid, activation) {
+                return Err(StartError::new(error, Some(db)));
+            }
             self.config.registered_network_port = Some(oid);
         }
         // The Device states the node's timing: a stock one, and a supplied

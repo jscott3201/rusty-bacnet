@@ -4294,24 +4294,28 @@ the call (see [Builder checks](#builder-checks)): an identifier
 or name the Device or an earlier registration already has raises
 `ValueError`, and instance 4194303 raises `BacnetError`. A repeated
 identifier is refused, not replaced (#2748): register each object once.
-A start that is refused before it hands the registrations to the database
-keeps them, the Audit recipient and the forwarding configuration, so the
+A refused start keeps the registrations, the Audit recipient, the
+forwarders' save counters and the forwarding configuration, so the
 application can correct the fault and start again. `start()` checks first
 what the pending objects and the constructor's settings already show: a
 `registered_network_port` that names no Network Port, one of the wrong
 family, or one whose address or UDP port differs from the transport's raises
 `ValueError`. After that, an SC hub that refuses the dial and a router or
-Device that cannot be prepared are refused with the registrations kept. Only
-an SC dial and a router lookup wait before that hand-off, so cancelling a
-B/IP, B/IPv6 or MS/TP start does not give anything back. A refusal inside the
-Rust server's own startup, such as a transport that will not bind or a
-registered port its builder refuses for another reason, has consumed the
-registrations: build the server again. A running server raises
-`RuntimeError` from `start()`. `add_*`, the `set_file_*` calls, Audit
-selection and a second `start()` raise `RuntimeError` while a start is in
-progress; what a cancelled start gives back returns when the cancelled
-future is dropped on a runtime thread, so a retry straight after a cancel can
-meet that error once. Retry after a moment.
+Device that cannot be prepared are refused with the registrations kept
+(#2748). A refusal inside the Rust server's own startup keeps them too: its
+builder hands the database back (#2752). That covers a transport that will
+not bind, such as a port another program holds (`BacnetTransportError`), and
+the startup checks of the settings, the Device and the registered port. Such
+a refusal spends a router's application port, so start the router again
+before the next start. Only a cancel loses registrations: one that lands
+once they are in the Rust server's builder drops them with it. An SC dial
+and a router lookup wait before that hand-off; a B/IP, B/IPv6 or MS/TP start
+hands them over at once, so cancelling it once it runs drops them. A running
+server raises `RuntimeError` from `start()`. `add_*`, the `set_file_*`
+calls, Audit selection and a second `start()` raise `RuntimeError` while a
+start is in progress; what a cancelled start gives back returns when the
+cancelled future is dropped on a runtime thread, so a retry straight after a
+cancel can meet that error once. Retry after a moment.
 
 ### Constructor
 
@@ -5168,7 +5172,7 @@ selection can replace the sink; `start()` revalidates the selection before
 transport preparation or registration transfer. These validation failures preserve
 pending registrations and the previous configuration. Configuration while running
 or while a start is in progress raises `RuntimeError`. A refusal inside the Rust
-server's own startup still consumes the registrations (see `BACnetServer`).
+server's own startup keeps them too (#2752; see `BACnetServer`).
 
 **Migration:** existing constructors and `add_audit_log()` calls need no change and
 continue to deny inbound notifications. To opt in, register the log, call the new
@@ -5285,12 +5289,12 @@ finally:
   `TypeError`. Instance and address syntax validation precede the frozen-state
   check. For parsed bindings, frozen-state rejection precedes the new transport
   and six-byte shape checks. Configuration calls with otherwise valid inputs after
-  `start()` consumes registrations raise `RuntimeError`, including while startup
+  `start()` takes the registrations raise `RuntimeError`, including while startup
   is in flight and after stop.
-  Validation/TLS/serial preparation failures before transfer do not freeze these
-  settings. A refusal inside the Rust server's own startup consumes the registrations.
-  Recreate the server, register the same storage paths and reapply settings on
-  reopen: parent references and bindings are not durable snapshot data.
+  A refused start, the Rust server's own startup included (#2752), does not freeze
+  these settings and keeps the registrations. After a stop, recreate the server,
+  register the same storage paths and reapply settings on reopen: parent
+  references and bindings are not durable snapshot data.
 
 Only the **selected inbound sink** forwards accepted batches that change retained
 record content. Parent configuration alone does not enable receipt or Reporter
@@ -5414,9 +5418,9 @@ child.add_device_binding(9, await parent.local_address())
 - Startup revalidates every selected pending identity before draining registrations.
   Configuration freezes at ownership transfer: valid calls during startup, while
   running or after stop raise `RuntimeError`. Input validation precedes that check.
-  Validation and TLS/serial preparation failures before transfer leave it retryable;
-  a refusal inside the Rust server's own startup consumes the registrations. Recreate and reapply
-  static settings/bindings on a new server; they are not persisted.
+  A refused start leaves it retryable, a refusal inside the Rust server's own
+  startup included (#2752). After a stop, recreate and reapply static
+  settings/bindings on a new server; they are not persisted.
 
 By default `Monitored_Objects` remains absent (catch-all) and `Audit_Priority_Filter`
 selects all priorities; `Audit_Source_Reporter` remains false. The Rust producer covers inbound WP/WPM elements, AddListElement/RemoveListElement,
@@ -9017,8 +9021,8 @@ larger than 1048576 bytes`), as is a stream that never ends. Unreadable, empty, 
 credentials and cert/key mismatch raise `RuntimeError` with `TLS config error:`.
 Server **local TLS configuration** failures leave pending object registrations
 intact; repair files at the same paths and retry `start()`. The client also reloads
-files on retry. A refused dial, TLS peer rejection included, keeps them too (#2748); a failure
-inside the Rust server's own startup after the dial may consume them. Preflight checks rustls configuration validity,
+files on retry. A refused dial, TLS peer rejection included, keeps them too (#2748), as
+does a refusal inside the Rust server's own startup after the dial (#2752). Preflight checks rustls configuration validity,
 not the local certificate's date or issuer against the site store; the remote
 peer validates that certificate during the real handshake.
 

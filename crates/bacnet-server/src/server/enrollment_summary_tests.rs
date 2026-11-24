@@ -39,18 +39,21 @@ async fn enrollment_summary_defaults_and_all_builders_validate_before_start() {
             TestTransport::never_start(),
         )
         .await
+        .map_err(Error::from)
         .err();
         let generic = BACnetServer::generic_builder()
             .transport(TestTransport::never_start())
             .get_enrollment_summary_budget(budget)
             .build()
             .await
+            .map_err(Error::from)
             .err();
         let bip = BACnetServer::bip_builder()
             .port(0)
             .get_enrollment_summary_budget(budget)
             .build()
             .await
+            .map_err(Error::from)
             .err();
         for error in [direct, generic, bip] {
             assert!(
@@ -66,6 +69,7 @@ async fn enrollment_summary_defaults_and_all_builders_validate_before_start() {
                 .get_enrollment_summary_budget(budget)
                 .build()
                 .await
+                .map_err(Error::from)
                 .err();
             assert!(
                 matches!(result, Some(Error::Encoding(m)) if m.contains("enrollment_summary_max_"))

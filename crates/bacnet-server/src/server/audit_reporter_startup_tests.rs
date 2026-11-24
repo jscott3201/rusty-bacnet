@@ -53,6 +53,7 @@ async fn start_profiles(
         vec![DeviceBinding::local(oid(ObjectType::DEVICE, 20), LOGGER).unwrap()],
     )
     .await
+    .map_err(Error::from)
 }
 
 async fn assert_invalid_selection(selected: ObjectIdentifier) {

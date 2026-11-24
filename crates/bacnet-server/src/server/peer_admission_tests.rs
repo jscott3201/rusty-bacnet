@@ -377,6 +377,7 @@ async fn peer_admission_positive_validation_generic_bip_and_tiny_global() {
                 .request_admission_policy(policy)
                 .build()
                 .await
+                .map_err(Error::from)
                 .err()
                 .unwrap();
             assert!(matches!(error, Error::Encoding(m) if m.contains(name)));
@@ -387,6 +388,7 @@ async fn peer_admission_positive_validation_generic_bip_and_tiny_global() {
                 .request_admission_policy(policy)
                 .build()
                 .await
+                .map_err(Error::from)
                 .err()
                 .unwrap();
             assert!(matches!(error, Error::Encoding(m) if m.contains(name)));

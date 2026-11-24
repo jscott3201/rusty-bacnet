@@ -272,6 +272,7 @@ impl BACnetServer {
 
             // Validate the generated Device before SC I/O.
             let identity = identity.resolve(local_capacity).map_err(to_py_err)?;
+            let device_oid = identity.device_oid();
             let config = DeviceConfig {
                 identity,
                 ..DeviceConfig::default()
@@ -292,7 +293,8 @@ impl BACnetServer {
             let transport = match (prepared_transport, router) {
                 (Some(transport), _) => transport,
                 // Spend the router's port. A refusal after this one, in the
-                // Rust server's own startup, spends it with the registrations.
+                // Rust server's own startup, spends it: the registrations
+                // come back, the port only with the router's next start.
                 (None, Some(router)) => AppTransport::Router(router.take().await?),
                 (None, None) => {
                     let hub_url = sc_hub.ok_or_else(|| {
@@ -328,12 +330,12 @@ impl BACnetServer {
                 }
             };
 
-            // Move pending objects into the database, now that nothing
-            // before the Rust server's own startup can refuse. Each was
-            // checked against the Device and the others when it was added,
-            // so the database takes them all. The Device's Object_List is
-            // the database's own: the Device, then the objects in the order
-            // they were added (#2669).
+            // Move pending objects into the database. Each was checked
+            // against the Device and the others when it was added, so the
+            // database takes them all. The Device's Object_List is the
+            // database's own: the Device, then the objects in the order they
+            // were added (#2669). A refusal from the Rust server's start hands
+            // the database back, and the registrations go back with it.
             let mut db = ObjectDatabase::new();
             for obj in claim.hand_off_objects() {
                 db.add(obj).map_err(refused_object)?;
@@ -381,7 +383,18 @@ impl BACnetServer {
             if let Some(reinitialize) = reinitialize {
                 builder = builder.on_reinitialize(reinitialize.handler());
             }
-            let srv = builder.build().await.map_err(to_py_err)?;
+            let srv = match builder.build().await {
+                Ok(srv) => srv,
+                Err(refused) => {
+                    // A port in use, or start-up validation: the next start
+                    // has every registration again (#2752).
+                    let (error, db) = refused.into_parts();
+                    if let Some(db) = db {
+                        claim.take_back(db, device_oid);
+                    }
+                    return Err(to_py_err(error));
+                }
+            };
 
             // No fallible step once the server runs: it must reach `inner`.
             let mut published = inner.write().await;

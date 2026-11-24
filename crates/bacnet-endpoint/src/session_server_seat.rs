@@ -390,7 +390,16 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 }
             }));
         }
-        let server = seated.build().await?;
+        // A refused build hands the database back: it stays the session's,
+        // which lets go of it off the runtime as ever (#2752).
+        let server = match seated.build().await {
+            Ok(server) => server,
+            Err(refused) => {
+                let (error, db) = refused.into_parts();
+                self.database = db.map(|db| Arc::new(RwLock::new(db)));
+                return Err(error);
+            }
+        };
         self.database = Some(Arc::clone(server.database()));
         self.server = Some(server);
         self.server_gate = Some(gate);

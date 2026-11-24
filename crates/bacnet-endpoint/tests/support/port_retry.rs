@@ -79,8 +79,8 @@ pub async fn rerun_on_lost_port(mut run: impl AsyncFnMut() -> io::Result<()>) {
 /// which may be a lost port; anything else becomes one that is never a lost
 /// port, so it fails the test.
 #[allow(dead_code)] // Not every test binary that includes this file starts a transport.
-pub fn bind_error(err: bacnet_types::error::Error) -> io::Error {
-    match err {
+pub fn bind_error(err: impl Into<bacnet_types::error::Error>) -> io::Error {
+    match err.into() {
         bacnet_types::error::Error::Transport(err) => err,
         other => io::Error::other(other.to_string()),
     }

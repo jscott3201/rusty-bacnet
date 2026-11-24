@@ -594,3 +594,72 @@ fn a_session_with_its_server_drops_where_no_runtime_runs() {
         }
     }
 }
+
+/// A full server whose seated build the started link refuses hands the
+/// database back, and the session keeps it (#2752): target Audit's checks
+/// of the started link, which reports the Audit recipient's address as its
+/// broadcast once started, refuse after the link is up.
+#[tokio::test(start_paused = true)]
+async fn a_server_build_the_started_link_refuses_leaves_the_session_its_database() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    const STATION: std::net::SocketAddrV4 =
+        std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(10, 0, 0, 2), 0xBAC0);
+    let wire = Wire::new();
+    let started = Arc::new(AtomicBool::new(false));
+    let (on_start, on_broadcast) = (Arc::clone(&started), started);
+    let link = wire
+        .port(NODE)
+        .on_start(move || on_start.store(true, Ordering::Release))
+        .on_bip_broadcast_endpoint(move || {
+            Some(if on_broadcast.load(Ordering::Acquire) {
+                STATION
+            } else {
+                std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(10, 0, 0, 255), 0xBAC0)
+            })
+        })
+        .build();
+    let mut db = database();
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, NODE_DEVICE).unwrap();
+    let mut mac = STATION.ip().octets().to_vec();
+    mac.extend_from_slice(&STATION.port().to_be_bytes());
+    db.get_mut(&device)
+        .unwrap()
+        .device_authority_internal()
+        .unwrap()
+        .provision_audit_recipient(bacnet_types::constructed::BACnetRecipient::Address(
+            bacnet_types::constructed::BACnetAddress {
+                network_number: 0,
+                mac_address: MacAddr::from_slice(&mac),
+            },
+        ))
+        .unwrap();
+    let reporter = bacnet_objects::audit::AuditReporterObject::new(1, "Reporter").unwrap();
+    db.add(Box::new(reporter)).unwrap();
+    let objects: Vec<_> = db.object_list().collect();
+    let audited = read_only_server().audit_reporters(bacnet_server::server::AuditReportersConfig {
+        reporters: vec![ObjectIdentifier::new(ObjectType::AUDIT_REPORTER, 1).unwrap()],
+    });
+    let mut session = EndpointSession::new(link, SessionRole::Both, SessionConfig::default())
+        .unwrap()
+        .device(crate::DeviceIdentity::new(NODE_DEVICE, 42).unwrap())
+        .with_database(db)
+        .with_server(audited);
+    let error = session.start().await.unwrap_err();
+    assert!(
+        error.remote()
+            == Some(RemoteError::Error {
+                class: ErrorClass::SERVICES,
+                code: ErrorCode::SERVICE_REQUEST_DENIED,
+            }),
+        "{error}"
+    );
+    assert!(session.server().is_none());
+    let database = session
+        .database
+        .as_ref()
+        .expect("the session keeps its database");
+    assert_eq!(
+        database.read().await.object_list().collect::<Vec<_>>(),
+        objects
+    );
+}

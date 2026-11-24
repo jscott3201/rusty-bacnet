@@ -11806,6 +11806,27 @@ server.stop().await?;
 Use `bip_builder()` for B/IP, `sc_builder()` for BACnet/SC, or
 `generic_builder()` with a prebuilt transport.
 
+A refused `build()`, or `BACnetServer::start`, returns a `StartError` that
+hands back the database it took (#2752): a port already in use, a refused
+dial, a setting or Device the start refuses. The start releases what it
+began first, a bound socket and the outputs it drove among them, and puts a
+registered Network Port it published back as configured, so the same
+database can go into the next build. `?` turns it into
+`bacnet_types::error::Error`; `into_parts()` gives the error and the
+database:
+
+```rust
+let server = match BACnetServer::bip_builder().database(db).port(47808).build().await {
+    Ok(server) => server,
+    Err(refused) => {
+        let (error, db) = refused.into_parts();
+        tracing::warn!(%error, "port 47808 refused; trying 47809");
+        let db = db.expect("the builder was given one");
+        BACnetServer::bip_builder().database(db).port(47809).build().await?
+    }
+};
+```
+
 All three Rust builders accept `.policy(..)`, also available as
 `ServerConfig::policy`: one `bacnet_server::ServerPolicy` that makes the server's
 authorization decisions, each with a documented default

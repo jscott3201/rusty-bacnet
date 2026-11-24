@@ -29,7 +29,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         transport: T,
         clock_config: Option<ClockConfig>,
         configured_device_bindings: Vec<DeviceBinding>,
-    ) -> std::pin::Pin<Box<impl std::future::Future<Output = Result<Self, Error>>>> {
+    ) -> std::pin::Pin<Box<impl std::future::Future<Output = Result<Self, StartError>>>> {
         Self::start_on_link(
             config,
             db,
@@ -47,36 +47,38 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         link: L,
         clock_config: Option<ClockConfig>,
         configured_device_bindings: Vec<DeviceBinding>,
-    ) -> std::pin::Pin<Box<impl std::future::Future<Output = Result<Self, Error>>>> {
+    ) -> std::pin::Pin<Box<impl std::future::Future<Output = Result<Self, StartError>>>> {
         boxed(|| Self::start_on_heap(config, db, link, clock_config, configured_device_bindings))
     }
 
+    /// Every refusal hands the database back ([`StartError`], #2752).
     async fn start_on_heap<L: Link<T>>(
         mut config: ServerConfig,
         mut db: ObjectDatabase,
         link: L,
         clock_config: Option<ClockConfig>,
         configured_device_bindings: Vec<DeviceBinding>,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, StartError> {
         let transport = link.transport();
-        // Max_APDU_Length_Accepted is fixed here for the server's life; a
-        // later fall in the transport's capacity leaves it as is, and each
-        // reply is sized to its route instead (#2093).
-        super::network_port::validate_apdu_capacity(&mut config, transport)?;
         // Every setting, and every configured route against the concrete
         // transport, before mutating the database or starting network work.
         // No binding takes a group address (#1493). A node checks the same
         // before its own link starts (#2617).
+        let checked = settings::check(&mut config, &db, configured_device_bindings, transport);
         let settings::StartSettings {
             device_bindings,
             segment_timeout,
             request_tasks,
-        } = settings::settle(&mut config, configured_device_bindings, |mac| {
-            transport.is_group_destination(mac)
-        })?;
-        crate::local_device::validate_startup(&db, &config.device)?;
+        } = match checked {
+            Ok(settled) => settled,
+            Err(error) => return Err(StartError::new(error, Some(db))),
+        };
         crate::local_device::bind_database(&mut db, &config.device);
-        let audit_routes = AuditRoutes::prepare(&mut db, &config, &device_bindings, transport)?;
+        let audit_routes = match AuditRoutes::prepare(&mut db, &config, &device_bindings, transport)
+        {
+            Ok(routes) => routes,
+            Err(error) => return Err(StartError::new(error, Some(db))),
+        };
         super::audit_forwarder::initialize(&db, &config, &device_bindings, transport);
         // Settled now: every owner from here on shares it (#1521).
         let config = Arc::new(config);
@@ -107,9 +109,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             execution,
             dcc: node_dcc,
             number: seat_number,
-        } = boxed(|| link.start(outputs.db(), &config, audit_routes)).await?;
+        } = match boxed(|| link.start(outputs.db(), &config, audit_routes)).await {
+            Ok(started) => started,
+            Err(error) => return Err(StartError::new(error, Some(outputs.refuse()))),
+        };
         notification_transactions.set_retries(config.notification_retries);
         let local_mac = MacAddr::from_slice(network.local_mac());
+        // Before the database is shared, so a refusal hands it back once the
+        // link is let go of (#2752).
+        let target_audit = super::audit_recipient::TargetAudit::install(
+            outputs.db(),
+            &config,
+            audit_routes,
+            &network,
+            &notification_transactions,
+        );
+        let target_audit = match target_audit {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let error = L::abandon(network).await.err().unwrap_or(error);
+                return Err(StartError::new(error, Some(outputs.refuse())));
+            }
+        };
 
         // The limiter keeps this startup identity; changing Device membership
         // later does not rebind it.
@@ -137,20 +158,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let event_suppressions = Arc::new(super::event_suppression::EventSuppressions::default());
         let mutation_decisions = Arc::new(crate::mutation::MutationDecisions::default());
 
-        let target_audit = super::audit_recipient::TargetAudit::install(
-            &mut *db.write().await,
-            &config,
-            audit_routes,
-            &network,
-            &notification_transactions,
-        );
-        let target_audit = match target_audit {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                L::abandon(network).await?;
-                return Err(error);
-            }
-        };
         let network_number_task = match (network_controls, seat_number) {
             (Some(controls), _) => Some(super::network_port::spawn_number_worker(
                 &network,
