@@ -1,12 +1,14 @@
 //! The round trip from a point list (#2445): a database built from the
 //! list by `bacnet_objects::points::build_database`, served over the lab
 //! link and read back by `Device::inventory` under [`point_list_options`],
-//! gives the list again; an absent field reads back as the object's
-//! default; and what that reading costs, by RPM and by ReadProperty.
+//! gives the list again, every field but a binary point's Polarity, which
+//! the export doesn't read yet (see the tracking issue for the export's
+//! Polarity); an absent field reads back as the object's default; and what
+//! that reading costs, by RPM and by ReadProperty.
 
 use bacnet_objects::device_identity::DeviceIdentity;
 use bacnet_objects::points::build_database;
-use bacnet_types::enums::{BinaryPV, EngineeringUnits, ObjectType};
+use bacnet_types::enums::{BinaryPV, EngineeringUnits, ObjectType, Polarity};
 
 use super::tests::oid;
 use super::*;
@@ -29,9 +31,10 @@ fn plain<T>(writable: bool) -> Access<T> {
     }
 }
 
-/// One point of each of the ten types, every optional field given and
-/// every relinquish default other than the object's own; then a value of
-/// each family, the Integer Value's among them, for each other access.
+/// One point of each of the ten types, every optional field the export
+/// reads given (a binary point's Polarity isn't one) and every relinquish
+/// default other than the object's own; then a value of each family, the
+/// Integer Value's among them, for each other access.
 fn full_list() -> PointList {
     let celsius = EngineeringUnits::DEGREES_CELSIUS;
     let analog = |access| {
@@ -192,9 +195,10 @@ fn full() -> InventoryOptions {
 
 /// A list built into a database, served and read back with the point
 /// list's options is the list again, by RPM and by ReadProperty alike: the
-/// Device's name and Description, and every point's every field, a
-/// Writable value reading as ReadOnly. By RPM its fourteen objects (the
-/// Device object among them) take far fewer requests than one each.
+/// Device's name and Description, and every point's every field but a
+/// binary point's Polarity, a Writable value reading as ReadOnly. By RPM
+/// its fourteen objects (the Device object among them) take far fewer
+/// requests than one each.
 #[tokio::test(start_paused = true)]
 async fn a_full_list_reads_back_as_built() {
     let list = full_list();
@@ -216,6 +220,47 @@ async fn a_full_list_reads_back_as_built() {
     };
     let expected = Analog::new(EngineeringUnits::DEGREES_CELSIUS, commanded(None));
     assert_eq!(av, &expected);
+}
+
+/// The export doesn't read Polarity yet (see the tracking issue for the
+/// export's Polarity): a Binary Input and Output built REVERSE serve it,
+/// but read back with the point list's options their points have none,
+/// and the list rebuilt from them makes both NORMAL. The fix for that
+/// changes this test.
+#[tokio::test(start_paused = true)]
+async fn a_binary_points_polarity_is_not_read_back() {
+    let reversed = |object_type, name: &str, access| {
+        let kind = Binary::new(access).with_polarity(Polarity::REVERSE);
+        Point::new(oid(object_type, 1), name, kind)
+    };
+    let list = PointList::new(
+        DeviceInfo::new(LAB),
+        vec![
+            reversed(ObjectType::BINARY_INPUT, "bi", Access::ReadOnly),
+            reversed(ObjectType::BINARY_OUTPUT, "bo", commanded(None)),
+        ],
+    );
+    let bo = oid(ObjectType::BINARY_OUTPUT, 1);
+    let database = build_database(list.clone(), &identity()).unwrap();
+    for point in &list.points {
+        let served = database.get(&point.object).unwrap();
+        let polarity = served.read_property(PropertyIdentifier::POLARITY, None);
+        let reverse = bacnet_types::primitives::PropertyValue::Enumerated(1);
+        assert_eq!(polarity.unwrap(), reverse, "{}", point.name);
+    }
+    // Relinquished to INACTIVE, the REVERSE output drives ON.
+    assert_eq!(database.physical_output(&bo), Some(true));
+    let (model, _) = read_back(list, Faults::default(), &full()).await;
+    let read = model.point_list();
+    assert_eq!(read.points.len(), 2);
+    for point in &read.points {
+        let PointKind::Binary(binary) = &point.kind else {
+            panic!("{point:?}");
+        };
+        assert_eq!(binary.polarity, None, "{}", point.name);
+    }
+    let rebuilt = build_database(read, &identity()).unwrap();
+    assert_eq!(rebuilt.physical_output(&bo), Some(false));
 }
 
 /// With no optional field given and every relinquish default left to the

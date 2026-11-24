@@ -286,6 +286,11 @@ pub struct Binary {
     /// Binary Input or Output always has one, and `None` keeps the
     /// object's NORMAL; a Binary Value has none, so a builder refuses a
     /// point of that type that gives one.
+    ///
+    /// Present_Value and a relinquish default stay logical whatever the
+    /// Polarity (Clause 12.6.4 for an Input, 12.7.4 for an Output): under
+    /// REVERSE, an Output relinquished to INACTIVE drives its physical
+    /// output ON from the start, and an Input reads an OFF input as ACTIVE.
     pub polarity: Option<Polarity>,
     /// How Present_Value is written.
     pub access: Access<BinaryPV>,
@@ -304,7 +309,7 @@ impl Binary {
     }
 
     /// Give the point this Polarity: only a Binary Input or Output takes
-    /// one.
+    /// one. Its other settings stay logical; see [`Self::polarity`].
     pub const fn with_polarity(mut self, polarity: Polarity) -> Self {
         self.polarity = Some(polarity);
         self

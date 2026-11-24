@@ -6541,8 +6541,9 @@ anything else); Polarity stays read-only on the network. A point list gives
 it as `bacnet_types::points::Binary::with_polarity` (#2595), which
 `points::build_database` sets on an Input or Output and refuses on a Binary
 Value, a type with no Polarity, as `Refusal::PropertyNotInType`. On a
-running server, an endpoint session's included (`EndpointSession::server`,
-a full server since #2617; #2594), the routes are:
+running server, an endpoint session's server included
+(`EndpointSession::server`, a full server since #2617; #2594), the routes
+are:
 
 | Route | Object | What it does |
 | --- | --- | --- |
@@ -13428,7 +13429,9 @@ export's terms, a `bacnet_types::points::Point` an object
 (`PointRecord::to_point()`) or the reason it has none (`Skipped`), and
 `to_turtle(&model, &options)` writes the same Turtle as before.
 `point_list_options()` reads what `Model::point_list()` needs for a whole
-`PointList`.
+`PointList`, every field but a binary point's Polarity, which the export
+doesn't read yet and leaves `None` (see the tracking issue for the
+export's Polarity).
 
 | Was (`bacnet_ops::export::s223`) | Now |
 |---|---|
@@ -13436,7 +13439,7 @@ export's terms, a `bacnet_types::points::Point` an object
 | `Entry::Point(point)`, `Entry::Failed { object, property, error }` | `Result<Point, Skipped>`: `Ok(point)`, `Err(Skipped { object, property, error })`; `s223::exported(&record)` makes one from a record |
 | `Entry::object()`, `point()`, `error()` | match on the `Result` |
 | `InventoryOptions::default()`, `InventoryOptions::new(types)?` | `s223::inventory_options(None)?`, `s223::inventory_options(Some(types))?`, which give a `bacnet_ops::InventoryOptions` |
-| `Detail::Export`, `Detail::Full`, `InventoryOptions::with_detail` | `InventoryOptions::with_settings(bool)`; `s223::point_list_options()` for everything a `PointList` holds |
+| `Detail::Export`, `Detail::Full`, `InventoryOptions::with_detail` | `InventoryOptions::with_settings(bool)`; `s223::point_list_options()` for every field a `PointList` holds but a binary point's Polarity |
 | `read_inventory(&mut reader, &options)` | `bacnet_ops::raw::read_inventory(&mut reader, &options)`, then `Model::from(&inventory)` |
 | `Device::inventory(&options) -> s223::Inventory` | `Device::inventory(&options) -> bacnet_ops::Inventory` |
 | `Device::inventory_device(detail)` | `Device::describe_device()`, or `device.read((device_object, OBJECT_NAME))` for the name alone |

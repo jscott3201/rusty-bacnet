@@ -69,7 +69,7 @@ fn each_with_sets_its_own_field() {
     assert_eq!(binary.active_text.as_deref(), Some("On"));
     assert_eq!(binary.inactive_text.as_deref(), Some("Off"));
     assert_eq!(binary.polarity, Some(Polarity::REVERSE));
-    // A point list built at compile time can give one too.
+    // `with_polarity` is const, so a `const` Binary can carry one.
     const CONTACT: Binary = Binary::new(Access::ReadOnly).with_polarity(Polarity::REVERSE);
     assert_eq!(
         (CONTACT.polarity, CONTACT.active_text),

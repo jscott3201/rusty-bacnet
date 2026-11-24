@@ -54,9 +54,11 @@ use crate::objects::{self, ANALOG_VALUES, DEVICE, MAX_REPLY, VENDOR};
 /// off as the image builds it and the identity's 32 octets counted in each
 /// figure but the list's: the list at 1,712 octets, the build's peak at
 /// 22,344, the database it leaves at 21,808, and the scenario's peak at
-/// 25,456 (measured again with #2595, whose Polarity adds 8 octets to each
-/// point on the host). A host that keeps its list and builds from a clone,
-/// so that both are live, peaks at 24,056. Most of the database is the
+/// 25,456. A host that keeps its list and builds from a clone, so that
+/// both are live, peaks at 24,056. These were measured again with #2595,
+/// whose Polarity adds 8 octets to each point of the list on the host; the
+/// database's figures also take in the fields #2580 gave the Binary Input
+/// and Output since the last measurement. Most of the database is the
 /// outputs and values, about 2 KB each on the host, where an input takes
 /// about 0.5 KB.
 pub const ARENA: usize = objects::ARENA + 12 * 1024;

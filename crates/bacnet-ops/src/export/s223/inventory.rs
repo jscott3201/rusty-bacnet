@@ -8,7 +8,9 @@
 //! [`PointRecord`]s. A record made with
 //! [`inventory_options`](super::inventory_options) holds what the Turtle
 //! uses; one made with [`point_list_options`](super::point_list_options)
-//! holds the rest of a point list too.
+//! holds the rest of a point list too, but for a binary point's Polarity,
+//! which no record holds yet (see the tracking issue for the export's
+//! Polarity).
 //!
 //! An object is skipped when its record lacks its Object_Name, the Units
 //! of an analog object or an Integer Value, or a multi-state object's
@@ -172,6 +174,8 @@ fn point(record: &PointRecord, family: Family, role: Role) -> Result<Point, (P, 
             let mut binary = Binary::new(access(role, record, binary_pv));
             binary.active_text = record.state_texts.active.clone();
             binary.inactive_text = record.state_texts.inactive.clone();
+            // No record holds Polarity yet, so it stays `None` (see the
+            // tracking issue for the export's Polarity).
             PointKind::Binary(binary)
         }
         Family::MultiState => {
