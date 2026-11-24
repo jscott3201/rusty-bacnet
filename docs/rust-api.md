@@ -12952,13 +12952,17 @@ result it is pinned and knows the instance. The handle's async reads are
 `Readings`), `read_object` (an object's properties, all or a list),
 `list_objects`, `describe_device`, `read_trend` (trend, event and audit log
 pages), `alarms`, `alarm_summary` and `enrollment_summary`
-([values and errors](#values-readings-and-opserror)), `inventory` and
-`point_record` ([inventory](#inventory)), and its
+([values and errors](#values-readings-and-opserror)), `inventory`,
+`point_records` and `point_batch` ([inventory](#inventory)), and its
 writes are `write`, `relinquish`, `priority_array` and `preview_write`
-([writes and priorities](#writes-and-priorities)). A device's gate, turns and
-memory of an RPM refusal key on its `DeviceAddress` (network and MAC), so
-two devices sharing an instance stay apart and one device named two ways
-waits at one gate. A following handle moves to the one other address on its
+([writes and priorities](#writes-and-priorities)). A device's gate, turns,
+memory of an RPM refusal (`Client::refused_rpm`, for the client's life) and
+memory of the largest ReadPropertyMultiple of point records it could answer
+(`Client::rpm_limit`, in properties; it only shrinks, and goes with the
+instance read for the address when the discovery table loses the row there
+or another device announces itself at it) key on its `DeviceAddress`
+(network and MAC), so two devices sharing an instance stay apart and one
+device named two ways waits at one gate. A following handle moves to the one other address on its
 network claiming the instance, and tells `Client::events`
 (`ClientEvent::Moved`): before a request when another device has announced
 itself at its address; after a request times out, or finds no route to a
@@ -13499,16 +13503,29 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   read as the whole list failing. After that the call is `Ok`. A device that goes
   silent while its objects are read, or whose route is lost then, leaves
   the records read, `unread` (the objects not read) and `stopped` (why).
-- **One object.** `Device::point_record(object, &options)` reads one
-  record the same way in one request, for a front end that pages a
-  device's objects itself, as the MCP export does.
+- **Some objects.** `Device::point_records(&objects, &options)` reads
+  the records of the objects named, in the order named, in the same
+  batches and with the same fallbacks, into `PointRecords { points,
+  unread, stopped }`: for a front end that pages a device's objects
+  itself, a slice of its Object_List a call, as the MCP inventory and
+  export do. Nothing else is read. Its errors follow `read_many`'s: `Err`
+  only for what is decided before a request is sent or a local failure
+  with nothing read; a silent device is `stopped`, with whatever records
+  came before. The objects may be `ObjectIdentifier`s or their text
+  (`"ai:1"`), as anywhere on a handle. `Device::point_batch(&objects,
+  &options)` says how many of them, from the first, one request reads
+  (one once the device has refused ReadPropertyMultiple), for a caller
+  that stops between calls. A batch of several objects the device can't
+  send for its size leaves the client remembering half its properties for
+  that device (`Client::rpm_limit`), a limit that holds under other
+  options; an inventory keeps its own count instead, starting at 16
+  objects each time, so its cost stays as documented (#2785).
 - **Without a `Client`.** `bacnet_ops::raw::read_inventory(&mut reader,
-  &options)` and `raw::read_point_record` are the layer under
-  `Device::inventory`, for a caller that owns a low-level client and a
-  `raw::Reader`. `read_inventory` fails with `raw::InventoryHalt`
-  (`Cancelled(partial)`, `Device(error)` or `ObjectList(ListStop)`, the
-  last naming the element) and `read_point_record` with `Halt`; the
-  `bacnet` CLI uses them. A
+  &options)` is the layer under `Device::inventory`, for a caller that
+  owns a low-level client and a `raw::Reader`. It fails with
+  `raw::InventoryHalt` (`Cancelled(partial)`, `Device(error)` or
+  `ObjectList(ListStop)`, the last naming the element); the `bacnet` CLI
+  uses it. A
   reader's stop flag is checked before each batch and before each
   ReadProperty of a batch read property by property. A read stopped once
   the Object_List is in keeps what it read, as a silent device's does:
@@ -13571,7 +13588,7 @@ named among the record's problems.
 | `read_inventory(&mut reader, &options)` | `bacnet_ops::raw::read_inventory(&mut reader, &options)`, then `Model::from(&inventory)` |
 | `Device::inventory(&options) -> s223::Inventory` | `Device::inventory(&options) -> bacnet_ops::Inventory` |
 | `Device::inventory_device(detail)` | `Device::describe_device()`, or `device.read((device_object, OBJECT_NAME))` for the name alone |
-| `Device::inventory_object(object, detail)` | `Device::point_record(object, &options)`, then `s223::exported(&record)` |
+| `Device::inventory_object(object, detail)` | `Device::point_records(&[object], &options)`, then `s223::exported(&record)` for each record |
 | `WritePriority::new(n)`, `TurtleOptions::new(base, Option<WritePriority>)` | `bacnet_ops::Priority::new(n)`, `TurtleOptions::new(base, Option<Priority>)` |
 | `Inventory::stopped: Option<String>` | `bacnet_ops::Inventory::stopped: Option<OpsError>`, with `unread`; `Model::stopped` keeps the text |
 

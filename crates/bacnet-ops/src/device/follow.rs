@@ -396,10 +396,12 @@ impl<T: TransportPort + 'static> Client<T> {
     /// Forget what the discovery table's changes may have made stale: the
     /// instance remembered for an address whose row was lost (another
     /// device may answer there now) or where a device announced another
-    /// instance, and, after a loss, the follow table's entries no handle
-    /// holds. After a burst of the table's changes this client missed, it
-    /// forgets every remembered instance: a later call reads one again.
-    pub(super) fn sweep(&self) {
+    /// instance, the ReadPropertyMultiple size limit learned there
+    /// ([`Client::rpm_limit`]) on the same terms, and, after a loss, the
+    /// follow table's entries no handle holds. After a burst of the table's
+    /// changes this client missed, it forgets every remembered instance and
+    /// limit: a later call learns them again.
+    pub(crate) fn sweep(&self) {
         // Each address changed, with the instance announced there; `None`
         // for a row lost.
         let mut changed = Vec::new();
@@ -438,6 +440,20 @@ impl<T: TransportPort + 'static> Client<T> {
                 }
             }
         }
+        {
+            let mut limits = lock(&self.shared.rpm_limits);
+            if missed {
+                limits.clear();
+            }
+            for (address, named) in &changed {
+                if limits
+                    .get(address)
+                    .is_some_and(|&(instance, _)| Some(instance) != *named)
+                {
+                    limits.remove(address);
+                }
+            }
+        }
         if missed || changed.iter().any(|(_, named)| named.is_none()) {
             lock(&self.shared.follows).retain(|_, entry| entry.strong_count() > 0);
         }
@@ -446,7 +462,7 @@ impl<T: TransportPort + 'static> Client<T> {
 
 /// Make room in `map` for one more entry under [`REMEMBERED`]: drop the
 /// entries `alive` says nothing uses, then any one entry while still full.
-pub(super) fn keep_room<K: Eq + Hash + Clone, V>(
+pub(crate) fn keep_room<K: Eq + Hash + Clone, V>(
     map: &mut HashMap<K, V>,
     alive: impl Fn(&V) -> bool,
 ) {

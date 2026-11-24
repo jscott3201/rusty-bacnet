@@ -18,6 +18,7 @@ use bacnet_types::primitives::PropertyValue;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+use super::inventory::{asked, sent_frames};
 use super::site::{failed, ok};
 use super::{LAB, Lab};
 use crate::Policy;
@@ -105,9 +106,10 @@ async fn all_pages(lab: &mut Lab, args: &Value) -> Vec<(Value, usize)> {
 }
 
 /// The lab's six points fit one page: the Object_List, the device's name,
-/// then one request an object by ReadPropertyMultiple, N + 2. The Turtle
-/// passes the export's structural check and holds each kind of point; the
-/// summary counts them, and fits the tool's output schema.
+/// then one ReadPropertyMultiple for all six (3 + 3 + 3 + 4 + 5 + 4 = 22
+/// properties, under the batch's 32). The Turtle passes the export's
+/// structural check and holds each kind of point; the summary counts
+/// them, and fits the tool's output schema.
 #[tokio::test(start_paused = true)]
 async fn a_small_device_is_one_page() {
     let mut lab = export_lab(Policy::default(), Duration::ZERO, 0, false).await;
@@ -115,8 +117,8 @@ async fn a_small_device_is_one_page() {
     let before = lab.sends().len();
     let result = lab.agent.call(TOOL, json!({ "device": LAB })).await;
     let body = ok(&result);
-    assert_eq!(lab.sends().len() - before, 6 + 2);
-    assert_eq!(body["cost"]["requests"], json!(6 + 2));
+    assert_eq!(lab.sends().len() - before, 1 + 1 + 1);
+    assert_eq!(body["cost"]["requests"], json!(1 + 1 + 1));
     assert_eq!(
         (&body["listed"], &body["matching"], &body["start"]),
         (&json!(7), &json!(6), &json!(0)),
@@ -187,14 +189,19 @@ async fn a_small_device_is_one_page() {
 /// A device of 136 points comes in pages that follow one another: each a
 /// well-formed document, each object on exactly one page, and their points
 /// in order the whole export's. A page costs the device's name and its own
-/// objects, one request each, and the first the Object_List too: no page
-/// reads an object outside its range.
+/// batches, each object asked for in exactly one request, and the first
+/// page the Object_List too: no page reads an object outside its range.
 #[tokio::test(start_paused = true)]
 async fn a_large_device_comes_in_pages() {
     let mut lab = export_lab(Policy::default(), Duration::ZERO, 130, false).await;
     lab.agent.initialize().await;
+    let from = sent_frames(&lab);
     let pages = all_pages(&mut lab, &json!({ "device": LAB })).await;
     assert!(pages.len() >= 3, "{} pages", pages.len());
+    let batches = asked(&lab, from);
+    let asked_for = batches.iter().map(Vec::len).sum::<usize>();
+    assert_eq!(asked_for, 136, "each object asked for once");
+    let mut batch = 0;
     let mut joined = String::new();
     let mut next_start = 0;
     for (n, (result, sent)) in pages.iter().enumerate() {
@@ -203,7 +210,21 @@ async fn a_large_device_comes_in_pages() {
         assert_eq!(body["start"], json!(next_start), "page {n}");
         let read = usize::try_from(body["read"].as_u64().unwrap()).unwrap();
         let list = usize::from(n == 0);
-        assert_eq!(*sent, list + 1 + read, "page {n}");
+        // The page's own batches, which end where the page does.
+        let (mut own, mut held) = (0, 0);
+        while held < read {
+            held += batches[batch + own].len();
+            own += 1;
+        }
+        assert_eq!(held, read, "page {n} ends with a batch");
+        batch += own;
+        assert_eq!(*sent, list + 1 + own, "page {n}");
+        // Ten analog points a request, but a batch holds no more points
+        // than fit the Turtle left if each were as large as the page's
+        // largest so far: the first page, which holds analog input 3 and
+        // its long description, ends in a few small ones (10, 10, 9, 5, 2,
+        // 1, 1 for 38 points), the others in none.
+        assert!(own <= read.div_ceil(10) + 3, "page {n}: {own} for {read}");
         assert_eq!(body["cost"]["requests"], json!(sent));
         let (_, turtle) = texts(result);
         assert!(turtle.len() <= crate::tools::export::MAX_TURTLE, "page {n}");
@@ -246,7 +267,8 @@ async fn options_shape_the_export() {
                        "types": ["bo", "multi-state-value"], "write_priority": 8 });
     let result = lab.agent.call(TOOL, args).await;
     let body = ok(&result);
-    assert_eq!(lab.sends().len() - before, 2 + 2);
+    // The list, the name and one batch (4 + 5 properties).
+    assert_eq!(lab.sends().len() - before, 2 + 1);
     assert_eq!(body["matching"], json!(2));
     assert_eq!(
         body["by_type"],
@@ -385,20 +407,23 @@ async fn refuses_a_cursor_not_its_own() {
 
 /// A call budget that runs out mid-page ends the page there, with a
 /// cursor: the next call goes on from the first object not read, and the
-/// pages together hold every object once.
+/// pages together hold every object once. The budget is checked between
+/// batches, so a batch answered after it is spent is kept.
 #[tokio::test(start_paused = true)]
 async fn a_spent_budget_ends_the_page_and_the_cursor_resumes() {
-    // The list and the name take 0.6 s, then an object each 0.3 s: the
-    // 2 s budget is spent with the fifth object in.
+    // The list and the name take 0.6 s, then a batch of ten analog points
+    // (30 properties) each 0.3 s: the second is answered at 1.2 s, past
+    // the 1 s budget, and kept.
     let delay = Duration::from_millis(300);
-    let mut lab = export_lab(fast(Duration::from_secs(2)), delay, 20, false).await;
+    let mut lab = export_lab(fast(Duration::from_secs(1)), delay, 60, false).await;
     lab.agent.initialize().await;
     let pages = all_pages(&mut lab, &json!({ "device": LAB })).await;
     let first = ok(&pages[0].0);
-    assert_eq!(first["read"], json!(5), "{first}");
+    assert_eq!(first["read"], json!(10 + 10), "{first}");
+    assert_eq!(pages[0].1, 2 + 2, "the list, the name and two batches");
     assert_eq!(first["truncated"], json!(true));
     assert!(
-        first["cost"]["elapsed_ms"].as_u64().unwrap() <= 2_100,
+        first["cost"]["elapsed_ms"].as_u64().unwrap() <= 1_300,
         "{first}"
     );
     let mut next_start = 0;
@@ -411,7 +436,7 @@ async fn a_spent_budget_ends_the_page_and_the_cursor_resumes() {
         check_structure(turtle);
         seen += turtle.matches(" a s223:BACnetExternalReference ;").count();
     }
-    assert_eq!((next_start, seen), (26, 26));
+    assert_eq!((next_start, seen), (66, 66));
     lab.stop().await;
 }
 
@@ -465,16 +490,19 @@ async fn a_cancel_stops_the_export() {
     let cancel = CancellationToken::new();
     let args = json!({ "device": LAB }).as_object().unwrap().clone();
     let call = crate::tools::call(lab.mcp.ctx(), TOOL, args, cancel.clone());
-    // The list, the name and three objects are in; the fourth is on its way.
+    // The list, the name and a batch of ten are in by 1.5 s; the second
+    // batch is on its way.
     let cancelling = async {
-        tokio::time::sleep(Duration::from_millis(2_700)).await;
+        tokio::time::sleep(Duration::from_millis(1_700)).await;
         cancel.cancel();
+        lab.sends().len()
     };
-    let (result, ()) = tokio::join!(call, cancelling);
+    let (result, at_cancel) = tokio::join!(call, cancelling);
     let error = result.unwrap_err();
     assert_eq!(error.message, "the call was cancelled");
+    assert_eq!(at_cancel - before, 2 + 2);
     tokio::time::sleep(Duration::from_secs(20)).await;
-    assert_eq!(lab.sends().len() - before, 2 + 4, "none after the cancel");
+    assert_eq!(lab.sends().len(), at_cancel, "none after the cancel");
 
     let before = lab.sends().len();
     let id = lab
@@ -484,12 +512,12 @@ async fn a_cancel_stops_the_export() {
             json!({ "name": TOOL, "arguments": { "device": LAB } }),
         )
         .await;
-    tokio::time::sleep(Duration::from_millis(2_700)).await;
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
     lab.agent.cancel(id).await;
     tokio::time::sleep(Duration::from_secs(20)).await;
-    // The Object_List came from the cache: the name, four objects answered
-    // and a fifth on its way.
-    assert_eq!(lab.sends().len() - before, 1 + 5, "none after the cancel");
+    // The Object_List came from the cache: the name and a batch answered,
+    // the second batch on its way.
+    assert_eq!(lab.sends().len() - before, 1 + 2, "none after the cancel");
     // Any answer to the cancelled call would have come before this one.
     lab.agent.request("tools/list", json!({})).await;
     assert!(
@@ -550,13 +578,14 @@ async fn a_list_changed_between_pages_is_refused() {
 /// timeout, and its cursor tries that object again once the device answers.
 #[tokio::test(start_paused = true)]
 async fn a_device_silent_mid_page() {
-    let mut lab = export_lab(Policy::default(), Duration::ZERO, 0, false).await;
+    let mut lab = export_lab(Policy::default(), Duration::ZERO, 20, false).await;
     lab.agent.initialize().await;
-    // The list, the name and two objects; the third goes unanswered.
-    lab.go_silent_after(4);
+    // The list, the name and a batch of ten; the second batch goes
+    // unanswered.
+    lab.go_silent_after(3);
     let result = lab.agent.call(TOOL, json!({ "device": LAB })).await;
     let body = ok(&result);
-    assert_eq!(body["read"], json!(2), "{body}");
+    assert_eq!(body["read"], json!(10), "{body}");
     assert_eq!(body["stopped"]["error"], json!("timeout"), "{body}");
     assert_eq!(body["truncated"], json!(true));
     assert_eq!(body["cost"]["timeouts"], json!(1));
@@ -573,8 +602,55 @@ async fn a_device_silent_mid_page() {
         .call(TOOL, json!({ "device": LAB, "cursor": cursor }))
         .await;
     let rest = ok(&rest);
-    assert_eq!((&rest["start"], &rest["read"]), (&json!(2), &json!(4)));
+    assert_eq!((&rest["start"], &rest["read"]), (&json!(10), &json!(16)));
     assert_eq!(rest["next_cursor"], Value::Null);
+    lab.stop().await;
+}
+
+/// A later batch still being read 7 s past the budget is let go, as the
+/// inventory lets one go: the page keeps the batch before it, ends with a
+/// cursor there, and the next call asks for half as many objects. Another
+/// caller takes the device's gate while the first batch is answered and
+/// keeps it.
+#[tokio::test(start_paused = true)]
+async fn a_later_batch_well_past_the_budget_is_let_go() {
+    let delay = Duration::from_millis(300);
+    let mut lab = export_lab(fast(Duration::from_secs(2)), delay, 30, false).await;
+    lab.agent.initialize().await;
+    lab.agent
+        .call("bacnet_list_objects", json!({ "device": LAB }))
+        .await;
+    let limits = std::sync::Arc::clone(&lab.limits);
+    // The name is read by 0.3 s and the first batch by 0.6 s; the holder
+    // queues for the gate at 0.45 s, takes it then, and keeps it.
+    let holder = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(450)).await;
+        let at = bacnet_ops::DeviceAddress::local(&super::LAB_MAC).unwrap();
+        let turn = limits.turn(&at).await;
+        tokio::time::sleep(Duration::from_secs(300)).await;
+        drop(turn);
+    });
+    let from = sent_frames(&lab);
+    let first = lab.agent.call(TOOL, json!({ "device": LAB })).await;
+    let body = ok(&first);
+    assert_eq!(body["read"], json!(10), "{body}");
+    assert_eq!(body["truncated"], json!(true));
+    assert_eq!(body["cost"]["timeouts"], json!(1));
+    let elapsed = body["cost"]["elapsed_ms"].as_u64().unwrap();
+    assert!((9_000..9_500).contains(&elapsed), "{elapsed}");
+    check_structure(texts(&first).1);
+    holder.abort();
+    let cursor = body["next_cursor"].clone();
+    let rest = lab
+        .agent
+        .call(TOOL, json!({ "device": LAB, "cursor": cursor }))
+        .await;
+    assert_eq!(ok(&rest)["start"], json!(10));
+    // Ten analog points a batch; the second, let go, never went (it
+    // waited for the gate); then half its 30 properties, five.
+    let batches = asked(&lab, from);
+    let sizes: Vec<usize> = batches.iter().take(2).map(Vec::len).collect();
+    assert_eq!(sizes, [10, 5]);
     lab.stop().await;
 }
 

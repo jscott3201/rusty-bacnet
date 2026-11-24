@@ -77,67 +77,171 @@ pub async fn read_inventory<T: TransportPort + 'static>(
         .collect();
     let mut inventory = Inventory::new(reader.device.clone(), device);
     inventory.cov = cov;
-    inventory.points.reserve(wanted.len());
-    let mut next = 0;
-    let mut most = MAX_BATCH;
-    while next < wanted.len() {
-        if reader.cancel.load(Ordering::Relaxed) {
-            return Err(cancelled(inventory, &wanted[next..]));
-        }
-        let count = one_batch(&wanted[next..], most, options, &own);
-        let objects = &wanted[next..next + count];
-        let read = match records(reader, objects, options, Some(&own)).await {
-            Ok(read) => read,
-            // No route to the device any more: as a device gone silent.
-            Err(Halt::Device(error)) => Records::stopped(error),
-            // Before the batch's first request.
-            Err(Halt::Cancelled) => return Err(cancelled(inventory, &wanted[next..])),
-        };
-        next += read.records.len();
-        inventory.points.extend(read.records);
-        if read.cancelled {
-            return Err(cancelled(inventory, &wanted[next..]));
-        }
-        if let Some(error) = read.stopped {
-            inventory.unread = wanted[next..].to_vec();
-            inventory.stopped = Some(OpsError::at(&reader.device, error));
-            break;
-        }
-        if read.too_large {
-            most = (count / 2).max(1);
-        }
+    let sizing = Sizing::scan();
+    let read = match read_objects(reader, &wanted, options, Some(&own), sizing).await {
+        Ok(read) => read,
+        // No route to the device any more, or the link failed the first
+        // batch: as a device gone silent.
+        Err(error) => Objects::stopped(error),
+    };
+    let next = read.points.len();
+    inventory.points = read.points;
+    if read.cancelled {
+        inventory.unread = wanted[next..].to_vec();
+        return Err(InventoryHalt::Cancelled(Some(Box::new(inventory))));
+    }
+    if let Some(error) = read.stopped {
+        inventory.unread = wanted[next..].to_vec();
+        inventory.stopped = Some(OpsError::at(&reader.device, error));
     }
     Ok(inventory)
 }
 
-/// The halt for a stop flag raised with `unread` still to read: the
-/// inventory so far, its records kept.
-fn cancelled(mut inventory: Inventory, unread: &[ObjectIdentifier]) -> InventoryHalt {
-    inventory.unread = unread.to_vec();
-    InventoryHalt::Cancelled(Some(Box::new(inventory)))
+/// What [`read_objects`] read of a run of objects.
+pub(super) struct Objects {
+    /// A record for each object read, in the order asked: the first
+    /// `points.len()` of them.
+    pub(super) points: Vec<PointRecord>,
+    /// The device stopped answering, or the way to it failed once a batch
+    /// was read: the objects after `points` weren't read.
+    pub(super) stopped: Option<Error>,
+    /// The reader's stop flag went up: the objects after `points` weren't
+    /// read.
+    pub(super) cancelled: bool,
+    /// The batches' size at the end: smaller than it began once the device
+    /// couldn't send a batch's answer for its size.
+    pub(super) sizing: Sizing,
 }
 
-/// One object's record as [`read_inventory`] reads it, for a caller that
-/// pages a device's objects itself over a [`Reader`]: one
-/// ReadPropertyMultiple, or a ReadProperty each property.
+impl Objects {
+    /// Nothing read, for `error`.
+    fn stopped(error: Error) -> Self {
+        Self {
+            points: Vec::new(),
+            stopped: Some(error),
+            cancelled: false,
+            sizing: Sizing::scan(),
+        }
+    }
+}
+
+/// How [`read_objects`] fills its batches, and how it shrinks them after
+/// an answer the device couldn't send for its size: a batch the device
+/// couldn't send, of more than one object, is the only thing that shrinks
+/// them, never a timeout or an error of another kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Sizing {
+    /// The most objects a batch holds.
+    pub(super) objects: usize,
+    /// The most properties a batch asks for, all its objects together.
+    pub(super) properties: usize,
+    /// Whether a batch too large to send halves `properties` (from the
+    /// refused batch's count), so the limit carries over to other options;
+    /// otherwise it halves `objects`, as the inventory always has.
+    pub(super) by_properties: bool,
+}
+
+impl Sizing {
+    /// The inventory's: [`MAX_BATCH`] objects and [`MAX_BATCH_PROPERTIES`]
+    /// properties, the objects halved after a refusal.
+    pub(super) fn scan() -> Self {
+        Self {
+            objects: MAX_BATCH,
+            properties: MAX_BATCH_PROPERTIES,
+            by_properties: false,
+        }
+    }
+
+    /// Point records': [`MAX_BATCH`] objects and at most `properties`
+    /// properties, the properties halved after a refusal.
+    pub(super) fn pager(properties: usize) -> Self {
+        Self {
+            objects: MAX_BATCH,
+            properties: properties.clamp(1, MAX_BATCH_PROPERTIES),
+            by_properties: true,
+        }
+    }
+
+    /// The sizing after the batch of `count` objects and `properties`
+    /// properties came back too large to send.
+    fn shrunk(self, count: usize, properties: usize) -> Self {
+        if self.by_properties {
+            Self {
+                properties: (properties / 2).max(1),
+                ..self
+            }
+        } else {
+            Self {
+                objects: (count / 2).max(1),
+                ..self
+            }
+        }
+    }
+}
+
+/// The records of `objects`, in the order asked, read in batches of at
+/// most `sizing`'s objects and properties, one batch a call of
+/// [`records`], so each batch's answers become records before the next is
+/// sent. A batch the device couldn't send for its size shrinks the
+/// batches after it ([`Sizing`]), down to one object. What `own` holds
+/// of the Device object is taken from it instead of asked for. The loop
+/// under [`read_inventory`] and [`Device::point_records`]: the same
+/// records, problems and halts for the same objects.
+///
+/// [`Device::point_records`]: crate::Device::point_records
 ///
 /// # Errors
 ///
-/// A device that doesn't answer or has no route, and [`Halt::Cancelled`]
-/// once the reader's stop flag is set.
-pub async fn read_point_record<T: TransportPort + 'static>(
+/// The way to the device failing the first batch before anything was read
+/// (no route, or a link that refuses the send): later, the same ends the
+/// reading with what was read, in [`Objects::stopped`], as a device going
+/// silent does.
+pub(super) async fn read_objects<T: TransportPort + 'static>(
     reader: &mut Reader<'_, T>,
-    object: ObjectIdentifier,
+    objects: &[ObjectIdentifier],
     options: &InventoryOptions,
-) -> Result<PointRecord, Halt> {
-    let read = records(reader, &[object], options, None).await?;
-    match (read.records.into_iter().next(), read.stopped) {
-        (_, Some(error)) => Err(Halt::Device(error)),
-        // The flag went up part way through the object's properties.
-        (None, None) if read.cancelled => Err(Halt::Cancelled),
-        (Some(record), None) => Ok(record),
-        (None, None) => unreachable!("a batch of one object reads it, stops or is stopped"),
+    own: Option<&Own>,
+    sizing: Sizing,
+) -> Result<Objects, Error> {
+    let mut read = Objects {
+        points: Vec::with_capacity(objects.len()),
+        stopped: None,
+        cancelled: false,
+        sizing,
+    };
+    let mut next = 0;
+    while next < objects.len() {
+        if reader.cancel.load(Ordering::Relaxed) {
+            read.cancelled = true;
+            break;
+        }
+        let (count, properties) = one_batch(&objects[next..], read.sizing, options, own);
+        let batch = match records(reader, &objects[next..next + count], options, own).await {
+            Ok(batch) => batch,
+            Err(Halt::Device(error)) if read.points.is_empty() => return Err(error),
+            // No route to the device any more: as a device gone silent.
+            Err(Halt::Device(error)) => Records::stopped(error),
+            // Before the batch's first request.
+            Err(Halt::Cancelled) => {
+                read.cancelled = true;
+                break;
+            }
+        };
+        next += batch.records.len();
+        read.points.extend(batch.records);
+        if batch.cancelled {
+            read.cancelled = true;
+            break;
+        }
+        if let Some(error) = batch.stopped {
+            read.stopped = Some(error);
+            break;
+        }
+        if batch.too_large {
+            read.sizing = read.sizing.shrunk(count, properties);
+        }
     }
+    Ok(read)
 }
 
 /// Why [`read_inventory`] failed.
@@ -234,27 +338,29 @@ fn asked(
         .collect()
 }
 
-/// How many of `objects`, from the first, make one ReadPropertyMultiple:
-/// at most `most` objects and [`MAX_BATCH_PROPERTIES`] properties, and at
-/// least one object. The batch reader would split a longer run itself, so
-/// a call is exactly one request while the device answers it.
-fn one_batch(
+/// How many of `objects`, from the first, make one ReadPropertyMultiple,
+/// and the properties they ask for: at most `sizing`'s objects and
+/// properties, and at least one object (none of none). The batch reader
+/// splits a run only past [`MAX_BATCH`] objects or [`MAX_BATCH_PROPERTIES`]
+/// properties, which `sizing` never exceeds, so a call is exactly one
+/// request while the device answers it.
+pub(super) fn one_batch(
     objects: &[ObjectIdentifier],
-    most: usize,
+    sizing: Sizing,
     options: &InventoryOptions,
-    own: &Own,
-) -> usize {
+    own: Option<&Own>,
+) -> (usize, usize) {
     let mut count = 0;
     let mut total = 0;
-    for &object in objects.iter().take(most) {
-        let more = asked(object, options, Some(own)).len();
-        if count > 0 && total + more > MAX_BATCH_PROPERTIES {
+    for &object in objects.iter().take(sizing.objects.max(1)) {
+        let more = asked(object, options, own).len();
+        if count > 0 && total + more > sizing.properties {
             break;
         }
         total += more;
         count += 1;
     }
-    count.max(1)
+    (count, total)
 }
 
 /// The records of `objects`, read together ([`batch::read_until`]). What

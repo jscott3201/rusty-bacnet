@@ -583,47 +583,6 @@ async fn a_stop_flag_cancels_the_reading() {
     assert_eq!(sent.len(), last, "none of the batch's other 30");
 }
 
-/// One object's record costs one request and is the inventory's own; an
-/// object the device doesn't have is a record of problems, and a silent
-/// device an error.
-#[tokio::test(start_paused = true)]
-async fn one_record_reads_as_the_inventory_does() {
-    let (client, server, log) = lab_logged(Faults::default()).await;
-    let device = lab_device(&client).await;
-    let options = InventoryOptions::new().with_values(true);
-    let inventory = device.inventory(&options).await.unwrap();
-    let before = services(&log).len();
-    for expected in &inventory.points {
-        let read = device.point_record(expected.object, &options).await;
-        assert_eq!(&read.unwrap(), expected);
-    }
-    assert_eq!(services(&log).len() - before, inventory.points.len());
-    let by_text = device.point_record("msv:1", &options).await.unwrap();
-    assert_eq!(by_text.object, oid(ObjectType::MULTI_STATE_VALUE, 1));
-
-    let missing = device.point_record("ai:99", &options).await.unwrap();
-    assert!(missing.name.is_none());
-    assert_eq!(
-        missing.problems.len(),
-        7,
-        "every property asked: {missing:?}"
-    );
-    // A record read on its own asks for everything, the Device's name too.
-    let own = device.point_record(oid(ObjectType::DEVICE, LAB), &options);
-    assert_eq!(own.await.unwrap().name.as_deref(), Some("Lab \"AHU\""));
-    let parse = device.point_record("nothing", &options).await.unwrap_err();
-    assert!(matches!(parse, OpsError::Parse { .. }), "{parse}");
-    drop(device);
-    stop(client, server).await;
-
-    let (client, server) = lab(passing(0)).await;
-    let device = lab_device(&client).await;
-    let error = device.point_record("ai:1", &options).await.unwrap_err();
-    assert!(error.unreachable(), "{error}");
-    drop(device);
-    stop(client, server).await;
-}
-
 /// `count` analog inputs, each `name` a few characters.
 fn inputs(count: u32) -> Vec<Box<dyn BACnetObject>> {
     (1..=count)
