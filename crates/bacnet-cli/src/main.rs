@@ -472,15 +472,21 @@ fn main() -> std::process::ExitCode {
     })
 }
 
-/// Write a fatal error as `Error: ` and its Display text, then each source
-/// whose text the line doesn't already hold, after `: `. Most errors here
-/// put their source in their own message, and that isn't repeated. A
-/// BACnet/SC connection failure ends with its error code by name (#2438).
+/// Write a fatal error as `Error: ` and its [`error_text`].
 fn report(
     error: &(dyn std::error::Error + 'static),
     out: &mut dyn std::io::Write,
 ) -> std::io::Result<()> {
-    let mut line = format!("Error: {error}");
+    writeln!(out, "Error: {}", error_text(error))
+}
+
+/// A fatal error's text: its Display text, then each source whose text the
+/// line doesn't already hold, after `: `. Most errors here put their source
+/// in their own message, and that isn't repeated. A BACnet/SC connection
+/// failure ends with its error code by name (#2438). Stderr gets it after
+/// `Error: `, and a JSON stream that fails ends with it (#2783).
+pub(crate) fn error_text(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut line = error.to_string();
     let mut source = error.source();
     while let Some(cause) = source {
         let text = cause.to_string();
@@ -496,7 +502,7 @@ fn report(
     if loopback_broadcast_refused(error) {
         line.push_str(" (the -b/--broadcast option)");
     }
-    writeln!(out, "{line}")
+    line
 }
 
 /// Whether `error` or one of its sources is a broadcast a B/IP transport

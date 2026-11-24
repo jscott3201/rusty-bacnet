@@ -17,6 +17,7 @@ use bacnet_ops::target::routed_station;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
+use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::output::{self, OutputFormat};
@@ -82,6 +83,11 @@ pub(crate) async fn stop_signal() {
 /// Subscribe to COV notifications for an object on a remote device and
 /// print them until `stop` completes. A finite subscription is renewed
 /// meanwhile and cancelled at the end, however the watch ends.
+///
+/// Once the subscription is in place stdout is a stream (#2783): the
+/// opening line, then a line a notification, JSON Lines in JSON. A failure
+/// after that (a renewal, the cancel, stdout itself) ends the stream with an
+/// error line; a refused subscription prints nothing.
 pub async fn subscribe_cmd<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     to: &Destination,
@@ -95,32 +101,86 @@ pub async fn subscribe_cmd<T: TransportPort + 'static>(
         lifetime,
         confirmed,
     } = subscription;
-    let oid = ObjectIdentifier::new(object_type, instance)?;
-    let process_id = std::process::id(); // Use PID instead of hardcoded 1
-    // Absent with Issue Confirmed Notifications present is indefinite too
-    // (Clause 13.14.2), and is what the CLI has always sent for it.
-    let wire_lifetime = (lifetime != 0).then_some(lifetime);
-
-    let mut rx = client.cov_notifications();
-    to.subscribe_cov(client, process_id, oid, confirmed, wire_lifetime)
-        .await?;
-
-    let kept = match lifetime {
-        0 => "indefinite: it stays after the CLI exits".to_string(),
-        _ => format!("lifetime {lifetime}s, renewed while watching, cancelled on exit"),
+    let held = Held {
+        process_id: std::process::id(), // Use PID instead of hardcoded 1
+        oid: ObjectIdentifier::new(object_type, instance)?,
+        confirmed,
+        lifetime,
     };
-    output::print_success(
-        &format!(
-            "Subscribed to {}:{} (process_id={}; {kept}). Watching... (Ctrl+C to stop)",
-            object_type, instance, process_id
-        ),
-        format,
-    );
 
-    let renew_every = renewal_interval(lifetime);
+    let rx = client.cov_notifications();
+    held.subscribe(client, to).await?;
+
+    let watched = watch(client, to, held, rx, format, stop).await;
+    let ended = if lifetime != 0
+        && let Err(error) = to.unsubscribe_cov(client, held.process_id, held.oid).await
+    {
+        let message = format!("cancelling the subscription failed: {error}");
+        Err(match watched {
+            Ok(_) => message,
+            Err(watch) => format!("{watch}; {message}"),
+        }
+        .into())
+    } else {
+        watched
+    };
+    let last = match &ended {
+        Ok(note) => note.map(str::to_owned),
+        Err(error) => Some(crate::error_text(&**error)),
+    };
+    if let Some(message) = last {
+        output::end_stream(&message, format);
+    }
+    ended.map(|_| ())
+}
+
+/// The subscription the command holds.
+#[derive(Debug, Clone, Copy)]
+struct Held {
+    process_id: u32,
+    oid: ObjectIdentifier,
+    confirmed: bool,
+    /// Seconds; 0 for one that never expires.
+    lifetime: u32,
+}
+
+impl Held {
+    /// Send its SubscribeCOV: the first, or a renewal.
+    async fn subscribe<T: TransportPort + 'static>(
+        &self,
+        client: &BACnetClient<T>,
+        to: &Destination,
+    ) -> Result<(), bacnet_types::error::Error> {
+        // Absent with Issue Confirmed Notifications present is indefinite
+        // too (Clause 13.14.2), and is what the CLI has always sent for it.
+        let lifetime = (self.lifetime != 0).then_some(self.lifetime);
+        to.subscribe_cov(client, self.process_id, self.oid, self.confirmed, lifetime)
+            .await
+    }
+}
+
+/// How a watch ended: `Ok(None)` when stopped; `Ok(Some(note))` on a note
+/// stderr already has that leaves the exit status 0; or the error.
+type Watched = Result<Option<&'static str>, Box<dyn std::error::Error>>;
+
+/// What stderr says when the client's notifications end.
+const CHANNEL_CLOSED: &str = "Notification channel closed";
+
+/// Print the opening line, then each notification until `stop` completes,
+/// renewing a finite subscription on the way.
+async fn watch<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    to: &Destination,
+    held: Held,
+    mut rx: broadcast::Receiver<COVEvent>,
+    format: OutputFormat,
+    stop: impl Future<Output = ()>,
+) -> Watched {
+    output::print_line(&opening_text(&held, format)).map_err(output::stdout_failed)?;
+    let renew_every = renewal_interval(held.lifetime);
     let mut renew_at = renew_every.map(|every| tokio::time::Instant::now() + every);
     tokio::pin!(stop);
-    let watched: Result<(), Box<dyn std::error::Error>> = loop {
+    loop {
         let renew = async {
             match renew_at {
                 Some(at) => tokio::time::sleep_until(at).await,
@@ -129,18 +189,18 @@ pub async fn subscribe_cmd<T: TransportPort + 'static>(
         };
         tokio::select! {
             biased;
-            () = &mut stop => break Ok(()),
+            () = &mut stop => return Ok(None),
             () = renew => {
-                if let Err(error) = to
-                    .subscribe_cov(client, process_id, oid, confirmed, wire_lifetime)
-                    .await
-                {
-                    break Err(format!("renewing the subscription failed: {error}").into());
+                if let Err(error) = held.subscribe(client, to).await {
+                    return Err(format!("renewing the subscription failed: {error}").into());
                 }
                 renew_at = renew_every.map(|every| tokio::time::Instant::now() + every);
             }
             result = rx.recv() => match result {
-                Ok(COVEvent::Object(notification)) => print_cov_notification(&notification, format),
+                Ok(COVEvent::Object(notification)) => {
+                    output::print_line(&cov_notification_text(&notification, format))
+                        .map_err(output::stdout_failed)?;
+                }
                 // A COV-multiple notification answers a
                 // SubscribeCOVPropertyMultiple, which this command never
                 // sends: nothing it watches.
@@ -149,28 +209,35 @@ pub async fn subscribe_cmd<T: TransportPort + 'static>(
                     output::print_error(&format!("Missed {n} notifications (buffer overflow)"));
                 }
                 Err(RecvError::Closed) => {
-                    output::print_error("Notification channel closed");
-                    break Ok(());
+                    output::print_error(CHANNEL_CLOSED);
+                    return Ok(Some(CHANNEL_CLOSED));
                 }
             },
         }
-    };
-
-    if lifetime != 0
-        && let Err(error) = to.unsubscribe_cov(client, process_id, oid).await
-    {
-        let message = format!("cancelling the subscription failed: {error}");
-        return Err(match watched {
-            Ok(()) => message,
-            Err(watch) => format!("{watch}; {message}"),
-        }
-        .into());
     }
-    watched
 }
 
-fn print_cov_notification(received: &ReceivedCOVNotification, format: OutputFormat) {
-    println!("{}", cov_notification_text(received, format));
+/// The opening line, once the subscription is in place: the status line,
+/// or in JSON `{"type": "subscribed", "status": "ok", "message"}`.
+fn opening_text(held: &Held, format: OutputFormat) -> String {
+    let kept = match held.lifetime {
+        0 => "indefinite: it stays after the CLI exits".to_string(),
+        lifetime => format!("lifetime {lifetime}s, renewed while watching, cancelled on exit"),
+    };
+    let message = format!(
+        "Subscribed to {}:{} (process_id={}; {kept}). Watching... (Ctrl+C to stop)",
+        held.oid.object_type(),
+        held.oid.instance_number(),
+        held.process_id
+    );
+    match format {
+        OutputFormat::Table => output::success_text(&message, format),
+        OutputFormat::Json => output::json_line(&serde_json::json!({
+            "type": "subscribed",
+            "status": "ok",
+            "message": message,
+        })),
+    }
 }
 
 /// A COV notification as printed in `format`. A routed source prints in
@@ -265,6 +332,41 @@ mod tests {
         assert_eq!(renewal_interval(0), None);
     }
     use bacnet_ops::target::{Target, parse_target};
+
+    /// The opening line is one line in either format: the status line, or
+    /// one compact JSON object of type `subscribed` that keeps the status
+    /// object's keys (#2783).
+    #[test]
+    fn the_opening_line_is_one_line() {
+        use super::{Held, opening_text};
+        use crate::output::OutputFormat;
+        use bacnet_types::enums::ObjectType;
+        use bacnet_types::primitives::ObjectIdentifier;
+
+        let held = |lifetime| Held {
+            process_id: 7,
+            oid: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap(),
+            confirmed: false,
+            lifetime,
+        };
+        let line = opening_text(&held(300), OutputFormat::Json);
+        assert!(!line.contains('\n'), "{line}");
+        let json: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "subscribed",
+                "status": "ok",
+                "message": "Subscribed to ANALOG_INPUT:2 (process_id=7; lifetime 300s, \
+                            renewed while watching, cancelled on exit). Watching... \
+                            (Ctrl+C to stop)",
+            })
+        );
+        let table = opening_text(&held(0), OutputFormat::Table);
+        assert!(!table.contains('\n'), "{table}");
+        assert!(table.contains("indefinite: it stays after the CLI exits"));
+        assert!(serde_json::from_str::<serde_json::Value>(&table).is_err());
+    }
 
     /// A COV source on B/IPv6 prints as the `bip6:` VMAC a target takes back;
     /// other MACs print as hex.
