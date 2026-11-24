@@ -80,8 +80,26 @@ fn with<'a>(args: &[&'a str], extra: &[&'a str]) -> Vec<&'a str> {
     args.iter().chain(extra).copied().collect()
 }
 
-fn names(formats: Vec<Format>) -> Vec<String> {
+fn names(formats: Vec<Format>) -> Vec<&'static str> {
     formats.into_iter().map(name).collect()
+}
+
+/// [`name`] spells each value as clap parses it, and each output type's
+/// variant prints the `--format` value of its own name.
+#[test]
+fn names_are_clap_s_and_each_variant_prints_its_own() {
+    fn spelled<F: ValueEnum>(value: &F) -> String {
+        value.to_possible_value().unwrap().get_name().to_owned()
+    }
+    for format in Format::value_variants() {
+        assert_eq!(name(*format), spelled(format));
+    }
+    for format in OutputFormat::value_variants() {
+        assert_eq!(name(format.format()), spelled(format));
+    }
+    for layout in Layout::value_variants() {
+        assert_eq!(name(layout.format()), spelled(layout));
+    }
 }
 
 /// The refusal [`check`] gives `args`, as clap prints it.
@@ -115,8 +133,8 @@ fn every_command_takes_the_formats_it_prints() {
         assert_eq!(declared, expected, "{args:?}");
         for format in Format::value_variants() {
             let given = name(*format);
-            let cli = parse(&with(args, &["--format", &given])).unwrap();
-            let takes = expected.contains(&given.as_str());
+            let cli = parse(&with(args, &["--format", given])).unwrap();
+            let takes = expected.contains(&given);
             assert_eq!(check(&cli).is_ok(), takes, "{args:?} --format {given}");
         }
         let cli = parse(&with(args, &["--json"])).unwrap();
@@ -181,6 +199,27 @@ fn a_refusal_names_the_command_and_its_formats() {
         "error: bacnet sc-check: --format csv is not available; \
          this command supports table and json\n"
     );
+}
+
+/// `inventory --csv-exact` needs the CSV: refused with a table, JSON
+/// (`--json` outranks `--format csv`) or no format, taken with
+/// `--format csv`.
+#[test]
+fn csv_exact_needs_the_csv() {
+    let inventory = ["inventory", "10.0.0.1", "--csv-exact"];
+    let needs = "error: bacnet inventory: --csv-exact needs --format csv\n";
+    let without = "error: bacnet inventory: --csv-exact needs --format csv without --json\n";
+    for (extra, message) in [
+        (&[][..], needs),
+        (&["--format", "table"], needs),
+        (&["--format", "json"], needs),
+        (&["--json"], without),
+        (&["--format", "csv", "--json"], without),
+    ] {
+        assert_eq!(refusal(&with(&inventory, extra)), message, "{extra:?}");
+    }
+    let csv = parse(&with(&inventory, &["--format", "csv"])).unwrap();
+    assert!(check(&csv).is_ok());
 }
 
 /// An unknown `--format` is clap's usage error, on either side of the

@@ -383,6 +383,9 @@ JSON in this shape, which scripts can rely on:
 | 3 | `sc-check` could not complete (see [the SC check guide](sc-check.md)) |
 | 4 | The write guard refused the command; nothing is sent |
 
+A usage error (2) is decided before the write guard (4): `write` with a
+format it doesn't print exits 2 whether or not `--allow-write` is given.
+
 ## Commands
 
 ### Offline SC credential inspection
@@ -1709,7 +1712,7 @@ included.
 | `--settings` | Also read each object's COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default and Polarity, where its type has them |
 | `--details` | Also read each object's Device_Type and Profile_Name: two more properties an object |
 | `--format table\|json\|csv`, `--json` | How to print; a table at a terminal and JSON through a pipe unless given |
-| `--csv-exact` | With `--format csv`: write device text exactly, without the formula guard |
+| `--csv-exact` | Write device text exactly in the CSV, without the formula guard; needs `--format csv`, and is refused with any other output (status 2) |
 
 - **What is read.** Object_Name and Description of every object; Units of
   the analog and integer types, Accumulator and Pulse Converter; a binary

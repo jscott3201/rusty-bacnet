@@ -99,7 +99,7 @@ These options go before or after the command, except `--routed-path-limit`, `--n
 - `--json`: JSON output shorthand; it outranks --format.
 - `-v, --verbose`: Verbosity (-v, -vv, -vvv). Repeat it for more.
 - `--no-tui`: With no command, print the usage instead of opening the terminal UI (as does BACNET\_NO\_TUI set to anything but "" or "0").
-- `-h, --help`: Print help (see a summary with '-h').
+- `-h, --help`: Print help.
 - `-V, --version`: Print version.
 
 ## Commands
@@ -348,7 +348,7 @@ Options:
 - `--values`: Also read each object's Present\_Value, Status\_Flags, Event\_State and Reliability, and the priority in control of a commandable one: four more properties an object (five on an output), so a request holds 3 to 5 objects.
 - `--settings`: Also read each object's COV\_Increment, Min\_Pres\_Value, Max\_Pres\_Value, Relinquish\_Default and Polarity, where it has them.
 - `--details`: Also read each object's Device\_Type and Profile\_Name, where it has them: two more properties an object.
-- `--csv-exact`: With --format csv: write device text exactly. Without it, a name, description, device type, profile name, state text or string value that starts with =, +, -, @, a tab or a carriage return gets an apostrophe before it, so a spreadsheet doesn't run it as a formula.
+- `--csv-exact`: Write device text exactly in the CSV; needs --format csv. Without it, a name, description, device type, profile name, state text or string value that starts with =, +, -, @, a tab or a carriage return gets an apostrophe before it, so a spreadsheet doesn't run it as a formula.
 
 ### bacnet readm
 

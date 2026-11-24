@@ -7,9 +7,12 @@
 //! command doesn't compile until it says. A [`Printer`] names the type the
 //! command's output matches on: [`OutputFormat`] for most, the inventory's
 //! [`Layout`], or none. The formats a command takes are that type's
-//! variants, read from its derived [`ValueEnum`], so they are exactly the
-//! arms its output has. [`check`] refuses any other, and `dispatch` runs it
+//! variants (listed by its derived [`ValueEnum`], each mapped to its
+//! [`Format`] by a match, [`Printed::format`]), so they are exactly the arms
+//! its output has. [`check`] refuses any other, and `dispatch` runs it
 //! ([`refuse`]) before the write guard, a runtime, a transport or a request.
+//! Plain `bacnet` with either flag is refused while parsing, where it would
+//! open the terminal UI ([`plain_refusal`]).
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
@@ -21,14 +24,50 @@ use crate::commands::inventory::Layout;
 use crate::output::OutputFormat;
 
 /// A `--format` value: each format some command prints.
+// No doc comments on the variants: clap would list them in `--help` and
+// point `-h` there, for nothing the names don't say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum Format {
-    /// A table, or lines, for people.
+    // A table, or lines, for people.
     Table,
-    /// JSON.
     Json,
-    /// CSV, one row an object (inventory only).
+    // One row an object: the inventory's alone.
     Csv,
+}
+
+/// `format` as `--format` spells it (a test holds it to clap's names).
+fn name(format: Format) -> &'static str {
+    match format {
+        Format::Table => "table",
+        Format::Json => "json",
+        Format::Csv => "csv",
+    }
+}
+
+/// A type a command's output matches on: its variants are the formats the
+/// command prints.
+trait Printed: ValueEnum + Copy {
+    /// The `--format` value this variant prints.
+    fn format(self) -> Format;
+}
+
+impl Printed for OutputFormat {
+    fn format(self) -> Format {
+        match self {
+            Self::Table => Format::Table,
+            Self::Json => Format::Json,
+        }
+    }
+}
+
+impl Printed for Layout {
+    fn format(self) -> Format {
+        match self {
+            Self::Table => Format::Table,
+            Self::Json => Format::Json,
+            Self::Csv => Format::Csv,
+        }
+    }
 }
 
 /// The type a command's output matches on, which says the formats it
@@ -99,60 +138,58 @@ pub(crate) fn printer(command: &Command) -> Printer {
     }
 }
 
-/// `F`'s variants as the `--format` values of the same names.
-fn variants<F: ValueEnum>() -> Vec<Format> {
-    F::value_variants().iter().map(as_format).collect()
-}
-
-/// `value` as the `--format` value of its name.
-fn as_format<F: ValueEnum>(value: &F) -> Format {
-    let name = value.to_possible_value().expect("no skipped variant");
-    Format::from_str(name.get_name(), false).expect("every printed format is a --format value")
-}
-
-/// The variant of `F` that `format` names, if `F` has one.
-fn pick<F: ValueEnum>(format: Format) -> Option<F> {
+/// `F`'s variants as the `--format` values they print.
+fn variants<F: Printed>() -> Vec<Format> {
     F::value_variants()
         .iter()
-        .find(|value| as_format(*value) == format)
-        .cloned()
+        .map(|value| value.format())
+        .collect()
 }
 
-/// `format` as `--format` spells it.
-fn name(format: Format) -> String {
-    let value = format.to_possible_value().expect("no skipped variant");
-    value.get_name().to_owned()
+/// The variant of `F` that prints `format`, if `F` has one.
+fn pick<F: Printed>(format: Format) -> Option<F> {
+    F::value_variants()
+        .iter()
+        .copied()
+        .find(|value| value.format() == format)
 }
 
 /// `a`, `a and b`, `a, b and c`.
 fn listed(formats: &[Format]) -> String {
-    let names: Vec<String> = formats.iter().copied().map(name).collect();
+    let names: Vec<&str> = formats.iter().copied().map(name).collect();
     match names.split_last() {
         Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
         _ => names.concat(),
     }
 }
 
+/// The formats the command line names, `--format` first, each with the
+/// flag as given.
+fn given(cli: &Cli) -> impl Iterator<Item = (Format, String)> {
+    let format = cli
+        .format
+        .map(|format| (format, format!("--format {}", name(format))));
+    let json = cli.json.then(|| (Format::Json, "--json".to_owned()));
+    format.into_iter().chain(json)
+}
+
+/// A usage error with `message` (clap's status, 2).
+fn conflict(message: String) -> clap::Error {
+    clap::Error::raw(clap::error::ErrorKind::ArgumentConflict, message)
+}
+
 /// Refuse a `--format`, or `--json`, that the command doesn't print: a
 /// usage error naming the formats it does. `--format` is checked even
-/// with `--json`, which outranks it.
+/// with `--json`, which outranks it. The inventory's `--csv-exact` needs
+/// the CSV, so it is refused with any other layout.
 pub(crate) fn check(cli: &Cli) -> Result<(), clap::Error> {
     let Some(command) = &cli.command else {
         return Ok(());
     };
     let printer = printer(command);
     let formats = printer.formats();
-    let given = [
-        cli.format
-            .map(|format| (format, format!("--format {}", name(format)))),
-        cli.json.then(|| (Format::Json, "--json".to_owned())),
-    ];
-    let Some((_, flag)) = given
-        .into_iter()
-        .flatten()
-        .find(|(format, _)| !formats.contains(format))
-    else {
-        return Ok(());
+    let Some((_, flag)) = given(cli).find(|(format, _)| !formats.contains(format)) else {
+        return check_csv_exact(cli, command);
     };
     let command = cli
         .command_name
@@ -164,10 +201,41 @@ pub(crate) fn check(cli: &Cli) -> Result<(), clap::Error> {
             format!("this command supports {}", listed(&formats))
         }
     };
-    Err(clap::Error::raw(
-        clap::error::ErrorKind::ArgumentConflict,
-        format!("{command}: {flag} is not available; {why}\n"),
-    ))
+    Err(conflict(format!(
+        "{command}: {flag} is not available; {why}\n"
+    )))
+}
+
+/// Refuse `inventory --csv-exact` unless the layout is the CSV, whose
+/// formula guard it turns off: with a table, JSON (`--json` outranks
+/// `--format csv`) or the default, it would change nothing.
+fn check_csv_exact(cli: &Cli, command: &Command) -> Result<(), clap::Error> {
+    let Command::Inventory {
+        csv_exact: true, ..
+    } = command
+    else {
+        return Ok(());
+    };
+    match layout(cli) {
+        Layout::Csv => Ok(()),
+        Layout::Table | Layout::Json => {
+            let without = if cli.json { " without --json" } else { "" };
+            Err(conflict(format!(
+                "bacnet inventory: --csv-exact needs --format csv{without}\n"
+            )))
+        }
+    }
+}
+
+/// The refusal of `--format` or `--json` on plain `bacnet` where it opens
+/// the terminal UI, named as the user typed it (see `entry`, which calls
+/// this before it becomes `bacnet tui`).
+pub(crate) fn plain_refusal(cli: &Cli) -> Option<clap::Error> {
+    let (_, flag) = given(cli).next()?;
+    Some(conflict(format!(
+        "bacnet: {flag} is not available; plain bacnet opens the terminal UI, \
+         which takes no output format\n"
+    )))
 }
 
 /// [`check`]'s refusal printed as clap prints a usage error, and the exit

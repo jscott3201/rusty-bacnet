@@ -153,3 +153,40 @@ async fn the_flags_need_an_ip_transport_and_each_other() {
     let output = run(["--foreign-bbmd", "127.0.0.1:0", "discover"]).await;
     failure(&output, "is not a BBMD a device can register with");
 }
+
+/// `register`, `bdt` and `fdt` against the BBMD print each format they
+/// take: a line or a table, or JSON (#2778).
+#[tokio::test]
+async fn the_bbmd_commands_print_each_format_they_take() {
+    let mut server = bbmd(3204, true).await;
+    let target = address(&server);
+    for command in ["register", "bdt", "fdt"] {
+        for format in ["table", "json"] {
+            let output = run([
+                "--interface",
+                "127.0.0.1",
+                "--port",
+                "0",
+                "--format",
+                format,
+                command,
+                &target,
+            ])
+            .await;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success(),
+                "{command} {format}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!stdout.trim().is_empty(), "{command} {format}");
+            let json = serde_json::from_slice::<Value>(&output.stdout);
+            assert_eq!(
+                json.is_ok(),
+                format == "json",
+                "{command} {format}: {stdout}"
+            );
+        }
+    }
+    server.stop().await.unwrap();
+}

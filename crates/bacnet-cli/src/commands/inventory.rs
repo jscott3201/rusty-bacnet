@@ -20,8 +20,9 @@ use crate::output::screen;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 /// How `bacnet inventory` prints ([`crate::formats::layout`] picks it). Its
-/// derived `ValueEnum` lists its variants for [`crate::formats`]: they are
-/// the formats the inventory takes, by the `--format` names.
+/// derived `ValueEnum` lists its variants for [`crate::formats`], which maps
+/// each to the `--format` value it prints: they are the formats the
+/// inventory takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Layout {
     /// A table for people, device text cleaned for the screen.

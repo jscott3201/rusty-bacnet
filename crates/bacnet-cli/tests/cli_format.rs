@@ -28,7 +28,8 @@ async fn a_format_the_command_does_not_print_is_refused_before_anything_is_sent(
     let source = device.source_port().to_string();
     let target = format!("127.0.0.1:{}", device.port());
     let read = "bacnet read: --format csv is not available; this command supports table and json";
-    let cases: [(Vec<&str>, &str); 6] = [
+    let csv_exact = "bacnet inventory: --csv-exact needs --format csv";
+    let cases: [(Vec<&str>, &str); 9] = [
         (
             vec!["--format", "jsn", "read", &target, "ai:1", "pv"],
             "[possible values: table, json, csv]",
@@ -48,6 +49,16 @@ async fn a_format_the_command_does_not_print_is_refused_before_anything_is_sent(
         (
             vec!["--json", "tui"],
             "bacnet tui: --json is not available; this command takes no output format",
+        ),
+        // The default through a pipe (JSON), a table, or JSON: not the CSV.
+        (vec!["inventory", &target, "--csv-exact"], csv_exact),
+        (
+            vec!["inventory", &target, "--csv-exact", "--format", "table"],
+            csv_exact,
+        ),
+        (
+            vec!["--json", "inventory", &target, "--csv-exact"],
+            "bacnet inventory: --csv-exact needs --format csv without --json",
         ),
     ];
     for (args, diagnostic) in cases {

@@ -32,8 +32,8 @@ pub fn screen(text: &str) -> String {
 }
 
 /// Output format for CLI results. Its derived `ValueEnum` lists its
-/// variants for [`crate::formats`]: the formats a command printing through
-/// it takes are its variants, by the `--format` names.
+/// variants for [`crate::formats`], which maps each to the `--format` value
+/// it prints: they are the formats a command printing through it takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum OutputFormat {
     /// Human-readable table layout.
@@ -248,16 +248,19 @@ pub fn print_rpm_table(entries: &[RpmEntry], format: OutputFormat) {
     }
 }
 
-/// Print a success/status message.
+/// Print a success/status message: the status line of the commands that
+/// change a device, of the file and BBMD commands, and `subscribe`'s first.
 pub fn print_success(msg: &str, format: OutputFormat) {
+    println!("{}", success_text(msg, format));
+}
+
+/// [`print_success`]'s text: the message, or `{"status": "ok", "message"}`.
+fn success_text(msg: &str, format: OutputFormat) -> String {
     match format {
-        OutputFormat::Table => println!("{}", msg.green()),
+        OutputFormat::Table => msg.green().to_string(),
         OutputFormat::Json => {
             let result = serde_json::json!({ "status": "ok", "message": msg });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&result).expect("serialize success")
-            );
+            serde_json::to_string_pretty(&result).expect("serialize success")
         }
     }
 }
@@ -307,6 +310,23 @@ mod tests {
     fn output_format_equality() {
         assert_eq!(OutputFormat::Table, OutputFormat::Table);
         assert_ne!(OutputFormat::Table, OutputFormat::Json);
+    }
+
+    /// The status line each command without a table of its own prints
+    /// (write, writem, control, reinit, ack-alarm, delete-object,
+    /// time-sync, the file and BBMD commands): the message as a line, or
+    /// as JSON (#2778).
+    #[test]
+    fn a_status_prints_as_a_line_or_as_json() {
+        let line = success_text("Alarm acknowledged", OutputFormat::Table);
+        assert!(line.contains("Alarm acknowledged"), "{line}");
+        assert!(serde_json::from_str::<serde_json::Value>(&line).is_err());
+        let json: serde_json::Value =
+            serde_json::from_str(&success_text("Alarm acknowledged", OutputFormat::Json)).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"status": "ok", "message": "Alarm acknowledged"})
+        );
     }
 
     #[test]

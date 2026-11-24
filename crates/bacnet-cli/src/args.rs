@@ -489,11 +489,11 @@ pub(crate) enum Command {
         /// has them: two more properties an object.
         #[arg(long)]
         details: bool,
-        /// With --format csv: write device text exactly. Without it, a
-        /// name, description, device type, profile name, state text or
-        /// string value that starts with =, +, -, @, a tab or a carriage
-        /// return gets an apostrophe before it, so a spreadsheet doesn't
-        /// run it as a formula.
+        /// Write device text exactly in the CSV; needs --format csv.
+        /// Without it, a name, description, device type, profile name,
+        /// state text or string value that starts with =, +, -, @, a tab or
+        /// a carriage return gets an apostrophe before it, so a spreadsheet
+        /// doesn't run it as a formula.
         #[arg(long)]
         csv_exact: bool,
     },
