@@ -9,16 +9,17 @@
 //! could reach the requester before the answer and report a failure for a
 //! request that took effect.
 //!
-//! So the segment branch notes, beside the request's pending entry, the
-//! acknowledgment that completed it, and answers a repeat from the same
-//! peer (same requester, trust context and route) and invoke ID with it.
-//! The note lives exactly as long as the pending entry: one whose entry has
-//! ended is dropped when the next note is made or looked up, and a repeat
-//! after the answer finds no transfer and draws the Abort it always did. A
-//! request the tracker doesn't follow (over its size bound, past its entry
-//! cap, or a LifeSafetyOperation, which has its own replay) gets no note.
-//! Only the segment branch touches the notes, so a request that isn't
-//! segmented pays nothing for them.
+//! So the segment branch notes, beside the pending entry `begin` made for
+//! the request, the acknowledgment that completed it, and answers a repeat
+//! from the same peer (same requester, trust context and route) and invoke
+//! ID with it. The note lives as long as that entry, which ends when the
+//! answer is handed to the link (for a segmented answer, at its final
+//! acknowledgment); a requester's Abort for the invoke ID ends the note
+//! sooner. After that a repeat finds no transfer and draws the Abort it
+//! always did. A request the tracker doesn't follow (past its entry cap, or
+//! a LifeSafetyOperation, which has its own replay) gets no note. Only the
+//! segment branch and a requester's Abort touch the notes, so a request that
+//! isn't segmented pays nothing for them.
 
 use super::*;
 use bacnet_network::response_route::ResponseRoute;
@@ -34,23 +35,41 @@ pub(super) struct Record {
 }
 
 impl TrackerState {
-    /// Drop the notes whose request has been answered.
-    fn prune(&mut self) {
-        let Self {
-            entries, segmented, ..
-        } = self;
-        segmented.retain(|record| entries.iter().any(|entry| entry.id == record.id));
+    /// The pending entries of this requester and invoke ID.
+    fn ids_of<'a>(
+        &'a self,
+        requester: &'a CanonicalRequester,
+        direct_identity: &'a Option<DirectScIdentity>,
+        invoke_id: u8,
+    ) -> impl Iterator<Item = u64> + 'a {
+        self.entries
+            .iter()
+            .filter(move |entry| {
+                entry.requester == *requester
+                    && entry.direct_identity == *direct_identity
+                    && entry.invoke_id == invoke_id
+            })
+            .map(|entry| entry.id)
     }
 }
 
 impl ConfirmedRequestTracker {
-    /// Note that the request `invoke_id` from this peer, reassembled from
-    /// segments, ended with a Segment-ACK naming `last_sequence` and
-    /// `window`. Nothing is noted when the request isn't pending (answered
-    /// already, or not followed).
+    /// The id `begin` gives the next request it admits. The dispatch loop
+    /// alone calls `begin`, so the request it dispatches next gets this one,
+    /// if any (#2751).
+    pub(in crate::server) fn next_admission(&self) -> u64 {
+        self.lock().next_id
+    }
+
+    /// Note that the request admitted as `id` from this peer, reassembled
+    /// from segments, ended with a Segment-ACK naming `last_sequence` and
+    /// `window`. Nothing is noted unless that entry is pending (it may have
+    /// been answered already, or never admitted). Notes of ended entries go
+    /// here, so there are never more than the entries.
     #[allow(clippy::too_many_arguments)]
     pub(in crate::server) fn note_segmented(
         &self,
+        id: u64,
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
         provenance: TransportProvenance,
@@ -61,25 +80,17 @@ impl ConfirmedRequestTracker {
     ) {
         let requester = canonical_requester(source_mac, source_network);
         let direct_identity = provenance.direct_sc_identity();
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.prune();
-        let Some(id) = state
-            .entries
-            .iter()
-            .filter(|entry| {
-                entry.requester == requester
-                    && entry.direct_identity == direct_identity
-                    && entry.invoke_id == invoke_id
-            })
-            .map(|entry| entry.id)
-            .max()
-        else {
+        let mut state = self.lock();
+        let TrackerState {
+            entries, segmented, ..
+        } = &mut *state;
+        segmented.retain(|record| entries.iter().any(|entry| entry.id == record.id));
+        if !state
+            .ids_of(&requester, &direct_identity, invoke_id)
+            .any(|pending| pending == id)
+        {
             return;
-        };
-        state.segmented.retain(|record| record.id != id);
+        }
         state.segmented.push(Record {
             id,
             provenance,
@@ -100,42 +111,62 @@ impl ConfirmedRequestTracker {
         route: &ResponseRoute,
         invoke_id: u8,
     ) -> Option<(u8, u8)> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = self.lock();
         if state.segmented.is_empty() {
             return None;
         }
-        state.prune();
         let requester = canonical_requester(source_mac, source_network);
         let direct_identity = provenance.direct_sc_identity();
-        let TrackerState {
-            entries, segmented, ..
-        } = &*state;
-        segmented
-            .iter()
-            .find(|record| {
-                record.provenance == *provenance
-                    && record.route.same_origin(route)
-                    && entries.iter().any(|entry| {
-                        entry.id == record.id
-                            && entry.requester == requester
-                            && entry.direct_identity == direct_identity
-                            && entry.invoke_id == invoke_id
-                    })
+        // The pending entries first (few), then their notes by id.
+        state
+            .ids_of(&requester, &direct_identity, invoke_id)
+            .find_map(|id| {
+                state.segmented.iter().find(|record| {
+                    record.id == id
+                        && record.provenance == *provenance
+                        && record.route.same_origin(route)
+                })
             })
             .map(|record| (record.last_sequence, record.window))
     }
 
-    /// Notes kept, for tests.
+    /// A requester's Abort for `invoke_id` ends the notes of its requests:
+    /// a new transfer under that invoke ID is not answered with an old
+    /// acknowledgment.
+    #[cold]
+    pub(in crate::server) fn requester_aborted(
+        &self,
+        source_mac: &[u8],
+        source_network: Option<&NpduAddress>,
+        provenance: &TransportProvenance,
+        invoke_id: u8,
+    ) {
+        let mut state = self.lock();
+        if state.segmented.is_empty() {
+            return;
+        }
+        let requester = canonical_requester(source_mac, source_network);
+        let direct_identity = provenance.direct_sc_identity();
+        let ended: Vec<u64> = state
+            .ids_of(&requester, &direct_identity, invoke_id)
+            .collect();
+        state.segmented.retain(|record| !ended.contains(&record.id));
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, TrackerState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Notes of pending requests, for tests.
     #[cfg(test)]
     pub(in crate::server) fn segmented_notes(&self) -> usize {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.prune();
-        state.segmented.len()
+        let state = self.lock();
+        state
+            .segmented
+            .iter()
+            .filter(|record| state.entries.iter().any(|entry| entry.id == record.id))
+            .count()
     }
 }

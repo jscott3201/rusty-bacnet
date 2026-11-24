@@ -195,6 +195,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let provenance = received.provenance.clone();
                 let opening = done.opening.route.clone();
                 received.set_response_route(done.opening.route);
+                let tracker = &dispatch_context.confirmed_request_tracker;
+                let admission = tracker.next_admission();
                 // On the heap: the loop holds this future in its own state,
                 // which this branch's notes would otherwise grow.
                 Box::pin(Self::dispatch(
@@ -204,9 +206,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     received,
                 ))
                 .await;
-                // Pending now, unless already answered (then nothing is
-                // noted and a repeat draws an Abort, as in IDLE).
-                dispatch_context.confirmed_request_tracker.note_segmented(
+                // Pending now as `admission`, unless already answered or
+                // never admitted (then nothing is noted and a repeat draws
+                // an Abort, as in IDLE).
+                tracker.note_segmented(
+                    admission,
                     source_mac,
                     source_network.as_ref(),
                     provenance,

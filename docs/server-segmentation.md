@@ -58,11 +58,22 @@ completes: the segments it sends again after segment zero's acknowledgment
 are duplicates and are discarded. While the whole request still executes, a
 segment of it sent again by the same requester, in the same trust context
 and by a route of the same origin, is acknowledged again with the last
-sequence number and window instead (Clause 5.4.5.3, #2751). That note lives
-as long as the request is pending in the duplicate-request tracker, so a
-request the tracker doesn't follow (over 64 KiB, past 256 pending, or a
-LifeSafetyOperation) has none; once the request is answered, a segment sent
-again draws the invalid-state Abort above. This workspace's client sends segment zero alone and
+sequence number and window instead (Clause 5.4.5.3, #2751). So does a
+requester that retries the whole request from segment zero while the first
+copy still executes: each segment is acknowledged again, and the request is
+not reassembled or executed a second time. That note lives as long as the
+request is pending in the duplicate-request tracker, which keeps a request
+over 64 KiB by its length and a digest of its data rather than the data. It
+ends when the answer is handed to the link, or, for an answer sent in
+segments, at that answer's final acknowledgment; a requester's Abort for
+the invoke ID ends it sooner. After that a segment sent again draws the
+invalid-state Abort above, as a request sent whole again is executed again:
+the tracker keeps nothing about answered requests. In the moment between
+the hand-off and the answer leaving the link, a repeat can still draw that
+Abort, which on a multi-thread runtime can reach the requester first. A
+request the tracker doesn't follow (past its 256 pending requests, or a
+LifeSafetyOperation, which has its own replay) has no note. This
+workspace's client sends segment zero alone and
 waits for its answer, so it sends nothing twice to a server that answers at
 once; a receiver that never answers segment zero alone costs it one segment
 timeout, once (see the client's segmented requests in

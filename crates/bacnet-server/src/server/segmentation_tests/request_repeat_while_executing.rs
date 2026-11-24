@@ -114,7 +114,7 @@ impl Rig {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn repeated_segments_before_the_answer_are_acknowledged_again() {
     let mut rig = Rig::start().await;
     let text = "repeated while executing";
@@ -148,7 +148,7 @@ async fn repeated_segments_before_the_answer_are_acknowledged_again() {
     rig.server.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_repeat_after_the_answer_or_from_another_peer_or_unknown_draws_an_abort() {
     let mut rig = Rig::start().await;
     let text = "answered, then repeated";
@@ -178,5 +178,75 @@ async fn a_repeat_after_the_answer_or_from_another_peer_or_unknown_draws_an_abor
     let (reply, _) = rig.reply().await;
     assert_server_abort(reply, 6, AbortReason::INVALID_APDU_IN_THIS_STATE);
     assert_eq!(present_value(&rig.server).await, text);
+    rig.server.stop().await.unwrap();
+}
+
+/// An oversized request (over the 64 KiB the tracker keeps whole) has its
+/// note too (#2751): its last window sent again, and the whole request sent
+/// again from segment zero, while it executes, are each acknowledged again
+/// with the last segment, and it runs once.
+#[tokio::test(start_paused = true)]
+async fn an_oversized_request_repeated_while_executing_runs_once() {
+    let mut rig = Rig::start().await;
+    let text = "o".repeat(70 * 1024);
+    let payload = write_property_payload(&text);
+    let chunks: Vec<&[u8]> = payload.chunks(1400).collect();
+    let total = chunks.len();
+    let last = (total - 1) as u8;
+    let db = Arc::clone(rig.server.database());
+    let guard = db.write().await;
+    for (seq, chunk) in chunks.iter().enumerate() {
+        rig.segment(5, seq as u8, 8, seq + 1 < total, chunk).await;
+    }
+    for seq in (0..total).filter(|seq| seq % 8 == 0 || seq + 1 == total) {
+        rig.expect_ack(5, seq as u8, 8, "in order").await;
+    }
+    rig.quiet().await;
+    assert_eq!(rig.notes(), 1, "noted, though oversized");
+    for (seq, chunk) in chunks.iter().enumerate().skip(total - 8) {
+        rig.segment(5, seq as u8, 8, seq + 1 < total, chunk).await;
+        rig.expect_ack(5, last, 8, "the last window again").await;
+    }
+    for (seq, chunk) in chunks.iter().enumerate() {
+        rig.segment(5, seq as u8, 8, seq + 1 < total, chunk).await;
+        rig.expect_ack(5, last, 8, "the whole request again").await;
+    }
+    rig.quiet().await;
+    drop(guard);
+    let (answer, _) = rig.reply().await;
+    assert!(matches!(answer, Apdu::SimpleAck(ack) if ack.invoke_id == 5));
+    rig.quiet().await;
+    assert_eq!(present_value(&rig.server).await, text);
+    rig.server.stop().await.unwrap();
+}
+
+/// A requester's Abort ends the note (#2751): a new transfer under that
+/// invoke ID opens as new, with its own acknowledgment, not the old one.
+#[tokio::test(start_paused = true)]
+async fn a_requesters_abort_ends_the_note() {
+    let mut rig = Rig::start().await;
+    let chunks = split_into(&write_property_payload("aborted, then opened again"), 3);
+    let db = Arc::clone(rig.server.database());
+    let guard = db.write().await;
+    for (seq, chunk) in chunks.iter().enumerate() {
+        rig.segment(8, seq as u8, 1, seq < 2, chunk).await;
+        rig.expect_ack(8, seq as u8, 1, "in order").await;
+    }
+    rig.quiet().await;
+    assert_eq!(rig.notes(), 1);
+    let abort = Apdu::Abort(AbortPdu {
+        sent_by_server: false,
+        invoke_id: 8,
+        abort_reason: AbortReason::OTHER,
+    });
+    inject_routed_apdu(&rig.incoming, &rig.router, &rig.peer, &abort).await;
+    rig.segment(8, 0, 2, true, &chunks[0]).await;
+    rig.expect_ack(8, 0, 2, "a new transfer").await;
+    assert_eq!(rig.notes(), 0);
+    inject_routed_apdu(&rig.incoming, &rig.router, &rig.peer, &abort).await;
+    rig.quiet().await;
+    drop(guard);
+    let (answer, _) = rig.reply().await;
+    assert!(matches!(answer, Apdu::SimpleAck(ack) if ack.invoke_id == 8));
     rig.server.stop().await.unwrap();
 }

@@ -398,6 +398,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let routed_segmented = if abort.sent_by_server {
                     false
                 } else {
+                    // A segmented request it ends is answered no more (#2751).
+                    confirmed_request_tracker.requester_aborted(
+                        source_mac,
+                        received.source_network.as_ref(),
+                        &received.provenance,
+                        invoke_id,
+                    );
                     let key = segmented_transaction_key(
                         source_mac,
                         received.source_network.as_ref(),

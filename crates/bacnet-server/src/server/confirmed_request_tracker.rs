@@ -6,9 +6,10 @@ use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_transport::port::{DirectScIdentity, TransportProvenance};
 
-// Local detection bounds, not transaction lifetimes. Above either bound,
+// Local detection bounds, not transaction lifetimes. Above the entry bound,
 // Clause 5.3.5.3 permits normal service when exact duplicate detection is unavailable.
 const MAX_ENTRIES: usize = 256;
+// Above this an entry keeps the request's digest, not its data (#2751).
 const MAX_TRACKED_SERVICE_REQUEST_BYTES: usize = 64 * 1024;
 
 struct Entry {
@@ -61,10 +62,10 @@ impl ConfirmedRequestTracker {
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
         provenance: TransportProvenance,
-        request: ConfirmedRequest,
+        mut request: ConfirmedRequest,
     ) -> ConfirmedRequestAdmission {
         if request.service_request.len() > MAX_TRACKED_SERVICE_REQUEST_BYTES {
-            return ConfirmedRequestAdmission::New(PendingConfirmedRequest::untracked(self));
+            digest(&mut request);
         }
         let requester = canonical_requester(source_mac, source_network);
         let direct_identity = provenance.direct_sc_identity();
@@ -103,6 +104,24 @@ impl ConfirmedRequestTracker {
         })
     }
 }
+/// Keep an oversized request by its header and a digest of its service data
+/// (its length and a SipHash of it), not the data: only a reassembled
+/// request can be this long, so a request that came whole never gets here.
+/// Two such requests with equal headers and digests count as the same
+/// request. The `segmented` flag marks the digest form: no request `begin`
+/// is given has it set, so the form never equals one kept whole (#2751).
+#[cold]
+fn digest(request: &mut ConfirmedRequest) {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    request.service_request.hash(&mut hasher);
+    let mut kept = Vec::with_capacity(16);
+    kept.extend_from_slice(&(request.service_request.len() as u64).to_be_bytes());
+    kept.extend_from_slice(&hasher.finish().to_be_bytes());
+    request.service_request = bytes::Bytes::from(kept);
+    request.segmented = true;
+}
+
 impl ConfirmedRequestTracker {
     /// Whether to ignore a confirmed request from link-layer `source_mac`
     /// because that address reaches a group of nodes (`is_group`, the

@@ -134,18 +134,43 @@ fn all_pending_capacity_keeps_detection_and_untracked_fallback() {
     drop((a, b, owners, admitted));
     assert!(tracker.state.lock().unwrap().entries.is_empty());
 }
+/// An oversized request (only a reassembled one can be) is kept by its
+/// digest, not its data (#2751): a copy of it is a duplicate while it is
+/// pending, another request of the same length is not, and its release
+/// frees the identity as a kept one does. Its entry counts as any other.
 #[test]
-fn oversized_requests_are_untracked_without_consuming_capacity() {
+fn oversized_requests_are_kept_by_digest() {
     let tracker = Arc::new(ConfirmedRequestTracker::default());
-    let req = request(1, vec![0; MAX_TRACKED_SERVICE_REQUEST_BYTES + 1]);
+    let big = MAX_TRACKED_SERVICE_REQUEST_BYTES + 1;
+    let req = request(1, vec![7; big]);
     let a = new(begin(&tracker, req.clone()));
-    let b = new(begin(&tracker, req));
-    assert!(a.id.is_none() && b.id.is_none());
+    assert!(a.id.is_some());
+    assert!(matches!(
+        begin(&tracker, req.clone()),
+        ConfirmedRequestAdmission::Duplicate
+    ));
+    let mut other = vec![7; big];
+    other[big - 1] = 8;
+    let b = new(begin(&tracker, request(1, other)));
+    assert!(b.id.is_some(), "same length, other data: another request");
+    {
+        let state = tracker.state.lock().unwrap();
+        let kept = &state.entries[0].request;
+        assert!(kept.segmented, "the digest form");
+        assert_eq!(kept.service_request.len(), 16, "length and hash only");
+    }
+    drop(a);
+    assert!(new(begin(&tracker, req)).id.is_some(), "released");
     let boundary = new(begin(
         &tracker,
         request(1, vec![0; MAX_TRACKED_SERVICE_REQUEST_BYTES]),
     ));
-    assert!(boundary.id.is_some());
+    let state = tracker.state.lock().unwrap();
+    let kept = state
+        .entries
+        .iter()
+        .find(|entry| Some(entry.id) == boundary.id);
+    assert!(!kept.unwrap().request.segmented, "at the bound: kept whole");
 }
 #[test]
 fn cancellation_panic_and_counter_exhaustion_leave_no_alias() {
@@ -196,4 +221,40 @@ fn concurrent_exact_admission_has_one_owner_until_release() {
     );
     drop(results);
     drop(new(begin(&tracker, request(1, Bytes::new()))));
+}
+
+/// A note attaches only to the entry `begin` admitted for the request just
+/// reassembled (its id), never to another pending entry of the same
+/// requester and invoke ID (#2751).
+#[test]
+fn a_segment_note_attaches_to_the_admitted_entry_only() {
+    let tracker = Arc::new(ConfirmedRequestTracker::default());
+    let route = bacnet_network::response_route::ResponseRoute::unverified();
+    let older = new(begin(&tracker, request(3, Bytes::from_static(b"older"))));
+    let note = |id| {
+        tracker.note_segmented(
+            id,
+            b"peer",
+            None,
+            TransportProvenance::unverified(),
+            route.clone(),
+            3,
+            9,
+            2,
+        )
+    };
+    // The request was never admitted (or already answered): its id isn't
+    // pending, and the older entry gets no note.
+    note(tracker.next_admission());
+    assert_eq!(tracker.segmented_notes(), 0);
+    let admitted = tracker.next_admission();
+    let newer = new(begin(&tracker, request(3, Bytes::from_static(b"newer"))));
+    note(admitted);
+    assert_eq!(tracker.segmented_notes(), 1);
+    let repeat =
+        tracker.repeated_segment(b"peer", None, &TransportProvenance::unverified(), &route, 3);
+    assert_eq!(repeat, Some((9, 2)));
+    drop(newer);
+    assert_eq!(tracker.segmented_notes(), 0, "it ends with its entry");
+    drop(older);
 }
