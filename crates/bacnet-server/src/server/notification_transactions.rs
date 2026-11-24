@@ -8,7 +8,7 @@ use bacnet_encoding::apdu::Apdu;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_endpoint_core::coordinator::{
     Admission, AdmissionKind, AdmissionOutcome, CanonicalPeer, LeaseMetadata, LeaseOwner,
-    LeaseToken, OutboundTransactionCoordinator, ReserveError,
+    LeaseToken, OutboundTransactionCoordinator, ReserveError, Room,
 };
 use bacnet_objects::audit::AuditReporterStatus;
 use bacnet_transport::warn_throttle::WarnThrottle;
@@ -122,18 +122,17 @@ impl Drop for AuditWorkerWake {
 }
 
 // Operations retain transaction state, never the owner of their JoinSet.
+// Lock order: `state`, then the coordinator's (a leaf).
 struct NotificationCore {
+    /// The pool these transactions lease from: the server's own, or on a
+    /// node's seat the node's, whose reserves decide how much of it the
+    /// server may hold (#2617).
     coordinator: Arc<OutboundTransactionCoordinator>,
     state: Mutex<NotificationState>,
-    /// How many invoke IDs these transactions may hold at once:
-    /// `usize::MAX` on a server's own link, [`SEAT_LEASES`] on a node's
-    /// seat (#2617).
-    lease_cap: usize,
 }
 
-#[path = "notification_lease_cap.rs"]
-mod lease_cap;
-pub(super) use lease_cap::SEAT_LEASES;
+#[path = "notification_room.rs"]
+mod room;
 
 #[path = "notification_waiters.rs"]
 mod waiters;
@@ -206,17 +205,11 @@ impl NotificationTransactions {
         Self::with_coordinator(Arc::new(OutboundTransactionCoordinator::new()))
     }
 
+    /// Lease from `coordinator`: a node's pool, on a seat or for a session's
+    /// source Audit, whose reserves (#2617) decide how much of it these
+    /// transactions may hold.
     #[doc(hidden)]
     pub fn with_coordinator(coordinator: Arc<OutboundTransactionCoordinator>) -> Arc<Self> {
-        Self::with_lease_cap(coordinator, usize::MAX)
-    }
-
-    /// [`Self::with_coordinator`], holding at most `lease_cap` invoke IDs
-    /// at once: [`SEAT_LEASES`] on a node's seat.
-    pub(super) fn with_lease_cap(
-        coordinator: Arc<OutboundTransactionCoordinator>,
-        lease_cap: usize,
-    ) -> Arc<Self> {
         Arc::new(Self {
             audit_batch: std::sync::OnceLock::new(),
             application_sealed: std::sync::atomic::AtomicBool::new(false),
@@ -228,7 +221,6 @@ impl NotificationTransactions {
                     pending: HashMap::new(),
                     waiters: waiters::Waiters::default(),
                 }),
-                lease_cap,
             }),
             workers: Mutex::new(NotificationWorkers::default()),
             audit_permits: Arc::new(tokio::sync::Semaphore::new(64)),

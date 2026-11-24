@@ -7963,10 +7963,13 @@ async with endpoint:
   reaches the new server: `await endpoint.server()` again. `configure_*`
   raises `RuntimeError` too. The endpoint's `client()` doesn't wait for a
   server call in flight.
-- **Invoke IDs.** The server and the client share the endpoint's 256: the
-  server holds at most 64 at once for its confirmed COV, event and Audit
-  notifications. Past them a confirmed COV notification waits for one to
-  come back and then goes, if its value still differs from what the
+- **Invoke IDs.** The server and the client share the endpoint's 256, and
+  each keeps a reserve the other can't take: 128 for the client's requests,
+  64 for the server's confirmed COV, event and Audit notifications. Beyond
+  it either borrows from the quarter neither keeps, so the client holds at
+  most 192 at once and the server 128 (#2617). A client call past its share
+  raises at once. Past the server's, a confirmed COV notification waits for
+  an ID to come back and then goes, if its value still differs from what the
   subscriber last acknowledged (#2661). A report held back by the
   subscriber's in-flight limit or the server's pool of 255 waits the same
   way, until its reports, or any reports, end and leave it room (#2671).

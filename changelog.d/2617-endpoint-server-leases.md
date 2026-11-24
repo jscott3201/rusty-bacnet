@@ -1,6 +1,8 @@
 ---
 section: Changed
 ---
-- **Rust API:** A session's full server holds at most 64 of the node's 256
-  invoke IDs, so its client keeps the rest. Past that a confirmed COV
-  notification waits for one to come back (#2617).
+- **Breaking (Rust and Python API):** An endpoint's client and server share
+  its 256 invoke IDs by reserves: with both roles the client always finds
+  128 and may hold 192 (256 before, with the server idle), the server 64
+  and up to 128 (a fixed 64 before). One role alone may take all 256
+  (#2617).

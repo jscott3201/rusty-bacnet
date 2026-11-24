@@ -39,9 +39,12 @@
 //! names ([`SeatedServerBuilder::node_registered_port`]) for wildcard reads,
 //! refusing one the builder names itself.
 //!
-//! The seat holds at most a quarter of the node's invoke IDs at once
-//! ([`SEAT_LEASES`](super::notification_transactions::SEAT_LEASES)), so the
-//! node's client keeps the rest.
+//! The server and the node's client share the node's pool of invoke IDs by
+//! the reserves the node gave it (#2617): on a node with both roles each
+//! always finds its own ([`NOTIFICATION_RESERVE`] for the server), and
+//! beyond it borrows what the other's doesn't keep.
+//!
+//! [`NOTIFICATION_RESERVE`]: bacnet_endpoint_core::coordinator::NOTIFICATION_RESERVE
 
 use std::any::Any;
 use std::future::Future;
@@ -214,10 +217,7 @@ impl<T: TransportPort + 'static> Link<T> for Seat<T> {
             },
             audit_routes: Arc::new(audit_routes),
             controls: None,
-            notification_transactions: NotificationTransactions::with_lease_cap(
-                coordinator,
-                super::notification_transactions::SEAT_LEASES,
-            ),
+            notification_transactions: NotificationTransactions::with_coordinator(coordinator),
             seated: Some(Seated::new(&holds)),
             execution: DeviceExecution::server(
                 node.is_some_and(|node| node.client),
@@ -687,3 +687,8 @@ mod tests;
 #[cfg(test)]
 #[path = "server_seat_node_tests.rs"]
 mod node_tests;
+
+/// The server's share of the node's invoke IDs beside its client (#2617).
+#[cfg(test)]
+#[path = "server_seat_reserve_tests.rs"]
+mod reserve_tests;

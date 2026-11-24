@@ -12,7 +12,9 @@ use eventually::eventually;
 use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, decode_apdu, encode_apdu};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_endpoint::session::{EndpointSession, SessionConfig, SessionRole};
-use bacnet_endpoint_core::coordinator::{CanonicalPeer, LeaseMetadata, TerminalPolicy};
+use bacnet_endpoint_core::coordinator::{
+    CanonicalPeer, LeaseMetadata, NOTIFICATION_RESERVE, REQUESTER_RESERVE, TerminalPolicy,
+};
 use bacnet_endpoint_core::endpoint_ingress::EndpointIngress;
 use bacnet_network::layer::NetworkLayer;
 use bacnet_objects::analog::AnalogInputObject;
@@ -253,4 +255,107 @@ async fn malformed_apdu_is_policy_owned() {
 
     client.stop().await.unwrap();
     peer.stop().await.unwrap();
+}
+
+/// What the session's client leases for a read of the peer.
+fn client_read() -> LeaseMetadata {
+    LeaseMetadata::requester(
+        CanonicalPeer::direct(&[0x02]),
+        ConfirmedServiceChoice::READ_PROPERTY,
+        TerminalPolicy::ComplexAck,
+    )
+}
+
+/// On a session with both roles, a server flooding its confirmed
+/// notifications takes at most the pool less the client's reserve: the
+/// client's own request still leases an ID and goes out. Past its reserve,
+/// the server's share full, a request fails at once (#2617).
+#[tokio::test(start_paused = true)]
+async fn a_server_flood_leaves_the_client_its_reserve() {
+    let (transport, _peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let mut session = EndpointSession::new(transport, SessionRole::Both, session_config())
+        .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(902, 42).unwrap());
+    session.start().await.unwrap();
+    let coordinator = session.coordinator();
+    let pool = std::sync::Arc::clone(session.server().unwrap().notification_pool());
+    let flood: Vec<_> = std::iter::from_fn(|| {
+        pool.reserve(
+            CanonicalPeer::direct(&[0x02]),
+            ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+        )
+        .ok()
+    })
+    .collect();
+    assert_eq!(flood.len(), 256 - REQUESTER_RESERVE, "the server's ceiling");
+
+    let client = std::sync::Arc::new(session.client().unwrap());
+    let read = {
+        let client = std::sync::Arc::clone(&client);
+        tokio::spawn(async move {
+            client
+                .read_property(
+                    &[0x02],
+                    object_id(5),
+                    PropertyIdentifier::PRESENT_VALUE,
+                    None,
+                )
+                .await
+        })
+    };
+    eventually(WAIT, "the client's request leased an ID", async || {
+        coordinator.active_count().unwrap() == flood.len() + 1
+    })
+    .await;
+    let rest: Vec<_> = std::iter::from_fn(|| coordinator.reserve(client_read()).ok()).collect();
+    assert_eq!(rest.len(), REQUESTER_RESERVE - 1, "the rest of its reserve");
+    let refused = client
+        .read_property(
+            &[0x02],
+            object_id(5),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+        )
+        .await
+        .expect_err("no ID the client may take");
+    assert!(refused.to_string().contains("exhausted"), "{refused}");
+    // Unanswered, the first read times out and gives its ID back.
+    assert!(read.await.unwrap().is_err());
+    for token in rest {
+        coordinator.release(token).unwrap();
+    }
+    drop(flood);
+    drop(client);
+    session.stop().await.unwrap();
+}
+
+/// A session with one role keeps no reserve for the other: a server-only
+/// session's server may take all 256, as a client-only session's client may
+/// (`lease_exhaustion_release_reuse`).
+#[tokio::test(start_paused = true)]
+async fn a_server_only_session_gives_its_server_the_whole_pool() {
+    let (transport, _peer) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let mut session = EndpointSession::new(transport, SessionRole::ServerOnly, session_config())
+        .unwrap()
+        .device(bacnet_endpoint::DeviceIdentity::new(903, 42).unwrap());
+    session.start().await.unwrap();
+    let pool = std::sync::Arc::clone(session.server().unwrap().notification_pool());
+    let whole: Vec<_> = std::iter::from_fn(|| {
+        pool.reserve(
+            CanonicalPeer::direct(&[0x02]),
+            ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
+        )
+        .ok()
+    })
+    .collect();
+    assert_eq!(whole.len(), 256);
+    drop(whole);
+    // A client on it borrows, up to all but the server's reserve.
+    let coordinator = session.coordinator();
+    let borrowed: Vec<_> = std::iter::from_fn(|| coordinator.reserve(client_read()).ok()).collect();
+    assert_eq!(borrowed.len(), 256 - NOTIFICATION_RESERVE);
+    for token in borrowed {
+        coordinator.release(token).unwrap();
+    }
+    session.stop().await.unwrap();
 }
