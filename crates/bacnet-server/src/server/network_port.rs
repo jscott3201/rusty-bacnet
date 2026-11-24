@@ -210,8 +210,12 @@ pub(super) async fn start<T: TransportPort + 'static>(
     .await;
     match started {
         Ok((apdu_rx, routes, controls)) => Ok((starting.finish(), apdu_rx, routes, controls)),
+        // The refusal stays the start's own, a port in use among them; a
+        // cleanup that fails too is logged beside it (#2752).
         Err(error) => {
-            starting.cleanup().await?;
+            if let Err(cleanup) = starting.cleanup().await {
+                tracing::warn!(%cleanup, "startup cleanup after a refused start failed");
+            }
             Err(error)
         }
     }

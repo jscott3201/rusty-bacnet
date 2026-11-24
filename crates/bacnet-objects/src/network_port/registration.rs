@@ -64,6 +64,32 @@ impl NetworkPortObject {
         Ok(())
     }
 
+    /// What a publication replaces, as the reservation leaves it.
+    pub(crate) fn reserved_internal(&self) -> Reserved {
+        Reserved {
+            ip: self.ip.clone(),
+            mac_address: self.mac_address.clone(),
+            apdu_length: self.apdu_length,
+        }
+    }
+
+    /// Put the port back as its reservation left it, after an owner that
+    /// published went without starting (#2752), so the next reservation
+    /// matches the configured address and UDP port again.
+    pub(crate) fn withdraw_internal(&mut self, reserved: Reserved) {
+        if let Some(config) = &reserved.ip {
+            self.network_number = NetworkNumber::configured(config.network_number())
+                .expect("validated Network Number");
+        }
+        self.ip = reserved.ip;
+        self.mac_address = reserved.mac_address;
+        self.apdu_length = reserved.apdu_length;
+        self.mode = bip_mode::LiveMode::Normal;
+        self.pending = Default::default();
+        self.multicast = Default::default();
+        self.activation = false;
+    }
+
     /// Publish the matching owner's actual bind, supported capacity and
     /// B/IP or B/IPv6 mode. A BBMD's tables stay the owner's: the object
     /// reads them live.
@@ -122,4 +148,12 @@ impl NetworkPortObject {
     pub(super) fn is_bound(&self) -> bool {
         self.binding.strong_count() != 0
     }
+}
+
+/// The configured bind, MAC address and APDU length a reserved port held
+/// before its owner published, for [`NetworkPortObject::withdraw_internal`].
+pub(crate) struct Reserved {
+    ip: Option<IpConfig>,
+    mac_address: MacAddr,
+    apdu_length: u32,
 }

@@ -17,6 +17,25 @@ pub(in crate::server) struct StartSettings {
     pub(in crate::server) request_tasks: Arc<RequestTasks>,
 }
 
+/// What a start checks before it changes `db` or starts its link: the
+/// Device's Max_APDU_Length_Accepted against `transport`, fixed here for the
+/// server's life (a later fall in the transport's capacity leaves it as is,
+/// and each reply is sized to its route instead, #2093); [`settle`] with the
+/// link's group rule; and `db`'s Device against the identity.
+pub(in crate::server) fn check<T: TransportPort>(
+    config: &mut ServerConfig,
+    db: &ObjectDatabase,
+    configured: Vec<DeviceBinding>,
+    transport: &T,
+) -> Result<StartSettings, Error> {
+    super::super::network_port::validate_apdu_capacity(config, transport)?;
+    let settled = settle(config, configured, |mac| {
+        transport.is_group_destination(mac)
+    })?;
+    crate::local_device::validate_startup(db, &config.device)?;
+    Ok(settled)
+}
+
 /// Check `config` and put its Audit Reporters in order; check `configured`
 /// against the link's group rule `is_group`; check the Device's segment
 /// timeout and every policy and budget the request owner holds. A Device

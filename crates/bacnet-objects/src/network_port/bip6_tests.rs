@@ -331,6 +331,14 @@ fn registration_publishes_the_bound_port_vmac_and_group() {
     );
     drop(lease);
     assert_eq!(db.registered_port_internal(), None);
+    // Withdrawn once its owner has gone, as a refused start withdraws it
+    // (#2752): the configured address, UDP port 0, VMAC and group again,
+    // and the next reservation matches them.
+    db.withdraw_network_port_internal();
+    assert_eq!(db.configured_bip6_port_internal(&oid()), Some(config()));
+    let object = db.get(&oid()).unwrap();
+    assert_eq!(read(object, P::MAC_ADDRESS), octets(&[0x0A, 0x0B, 0x0C]));
+    assert!(db.reserve_bip6_port_internal(oid(), ip(5), 0).is_ok());
 }
 
 #[test]

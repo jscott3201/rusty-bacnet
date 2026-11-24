@@ -106,18 +106,21 @@ mod tests {
                 TestTransport::never_start(),
             )
             .await
+            .map_err(Error::from)
             .err();
             let generic = BACnetServer::generic_builder()
                 .transport(TestTransport::never_start())
                 .get_alarm_summary_budget(budget)
                 .build()
                 .await
+                .map_err(Error::from)
                 .err();
             let bip = BACnetServer::bip_builder()
                 .port(0)
                 .get_alarm_summary_budget(budget)
                 .build()
                 .await
+                .map_err(Error::from)
                 .err();
             for error in [direct, generic, bip] {
                 assert!(

@@ -63,10 +63,11 @@ async fn bip_server(policy: Option<LocalWritesOnly>) -> Result<BACnetServer<BipT
         .port(0)
         .broadcast_address(Ipv4Addr::LOCALHOST)
         .database(setup::benchmark_db());
-    match policy {
+    let built = match policy {
         Some(policy) => builder.policy(policy).build().await,
         None => builder.build().await,
-    }
+    };
+    built.map_err(Error::from)
 }
 
 fn real(value: f32) -> Vec<u8> {

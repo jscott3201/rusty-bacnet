@@ -436,6 +436,7 @@ async fn time_sync_defaults_and_all_builders_validate_before_start_or_dial() {
             TestTransport::never_start(),
         )
         .await
+        .map_err(Error::from)
         .err();
         let clockless = BACnetServer::start_clockless(
             config,
@@ -443,18 +444,21 @@ async fn time_sync_defaults_and_all_builders_validate_before_start_or_dial() {
             TestTransport::never_start(),
         )
         .await
+        .map_err(Error::from)
         .err();
         let generic = BACnetServer::generic_builder()
             .transport(TestTransport::never_start())
             .time_sync_policy(policy.clone())
             .build()
             .await
+            .map_err(Error::from)
             .err();
         let bip = BACnetServer::bip_builder()
             .port(0)
             .time_sync_policy(policy.clone())
             .build()
             .await
+            .map_err(Error::from)
             .err();
         for error in [direct, clockless, generic, bip] {
             assert!(
@@ -470,6 +474,7 @@ async fn time_sync_defaults_and_all_builders_validate_before_start_or_dial() {
                 .time_sync_policy(policy)
                 .build()
                 .await
+                .map_err(Error::from)
                 .err();
             assert!(
                 matches!(error, Some(Error::Encoding(message)) if message.starts_with("time sync:"))

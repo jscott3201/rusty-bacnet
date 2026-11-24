@@ -91,15 +91,19 @@ impl BipServerBuilder {
         self
     }
 
-    /// Build and start the server, constructing a BipTransport from the config.
-    pub async fn build(mut self) -> Result<BACnetServer<BipTransport>, Error> {
+    /// Build and start the server, constructing a BipTransport from the
+    /// config. A refusal, a socket that won't bind among them, hands back
+    /// the database ([`StartError`]).
+    pub async fn build(mut self) -> Result<BACnetServer<BipTransport>, StartError> {
         let config = &self.config;
         let mut transport =
             BipTransport::new(config.interface, config.port, config.broadcast_address);
         transport.set_share_port_by_address(config.share_port_by_address);
         transport.set_share_wildcard_port(config.share_wildcard_port);
         transport.set_mode(self.mode);
-        transport.set_multicast(self.multicast)?;
+        transport
+            .set_multicast(self.multicast)
+            .map_err(StartError::taking(&mut self.db))?;
         let db = crate::local_device::prepare_database(
             &mut self.config,
             self.db,

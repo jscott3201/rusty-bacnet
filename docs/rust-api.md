@@ -7690,7 +7690,10 @@ request selects, the times, and whether Start_Time has come) and returns a
 levels), and `stop` says that a request it was asked about ended. Removing
 the object from its database, or replacing it there, during a request ends
 the request and calls `stop` (#2479), through the `Timed::retire` hook the
-database calls on an object leaving it, with a `Retirement` saying how. Replacing the shedder doesn't: the
+database calls on an object leaving it, with a `Retirement` saying how. A
+server start that looked at the request and then failed calls `stop` too,
+through `Timed::release_output`, and keeps the request for the next start
+over the same objects (#2752). Replacing the shedder doesn't: the
 old one isn't told, and the new one hears of the request's end only once it
 has been asked about it. Both run under
 the database's write guard, so they must return quickly and not touch the
@@ -11810,6 +11813,30 @@ server.stop().await?;
 
 Use `bip_builder()` for B/IP, `sc_builder()` for BACnet/SC, or
 `generic_builder()` with a prebuilt transport.
+
+A refused `build()`, or `BACnetServer::start`, returns a `StartError` that
+hands back the database it took (#2752): a port already in use, a refused
+dial, a setting or Device the start refuses. The start releases what it
+began first, a bound socket and the outputs it drove among them (a Load
+Control's application is told to stop, and the object keeps its request),
+and puts a registered Network Port it published back as configured, so the
+same database can go into the next build; `StartError`'s documentation
+lists what else a start leaves set. `?` turns it into
+`bacnet_types::error::Error`, and a refusal dropped without taking its
+database lets go of it off the runtime; `into_parts()` gives the error and
+the database:
+
+```rust
+let server = match BACnetServer::bip_builder().database(db).port(47808).build().await {
+    Ok(server) => server,
+    Err(refused) => {
+        let (error, db) = refused.into_parts();
+        tracing::warn!(%error, "port 47808 refused; trying 47809");
+        let db = db.expect("the builder was given one");
+        BACnetServer::bip_builder().database(db).port(47809).build().await?
+    }
+};
+```
 
 All three Rust builders accept `.policy(..)`, also available as
 `ServerConfig::policy`: one `bacnet_server::ServerPolicy` that makes the server's

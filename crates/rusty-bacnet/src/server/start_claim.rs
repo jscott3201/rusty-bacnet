@@ -4,27 +4,31 @@
 //! At ownership transfer `start()` takes the pending registrations, the
 //! save counters of the pending Notification Forwarders and the Audit
 //! recipient, and freezes the forwarding configuration. All of it moves
-//! into the startup future, which can still fail before the objects reach
-//! the database: a transport that cannot be prepared, a router that has no
-//! port, a Device that cannot be built, an SC dial that is refused. A
-//! [`StartClaim`] holds what was taken, and its drop puts it back unless
-//! the objects have gone into the database, so the application can correct
-//! the fault and start again. The drop runs when the future is dropped, a
-//! cancelled start's on a runtime thread some time after the cancel.
+//! into the startup future, which can still fail: a transport that cannot
+//! be prepared, a router that has no port, a Device that cannot be built,
+//! an SC dial that is refused, and then the Rust server's own start, such
+//! as a port already in use or start-up validation. A [`StartClaim`] holds
+//! what was taken, and its drop puts it back unless the objects have gone
+//! into a running server, so the application can correct the fault and
+//! start again. A refusal from the Rust server's start hands its database
+//! back (#2752), and [`StartClaim::take_back`] takes the objects out of it.
+//! The drop runs when the future is dropped, a cancelled start's on a
+//! runtime thread some time after the cancel.
 //!
-//! Only an SC dial and a router's lookups wait before the hand-off, so a
-//! cancel reaches that window for them alone. A B/IP, B/IPv6 or MS/TP start
-//! hands the objects over without waiting, and a refusal or cancel after
-//! that, from the Rust server's own startup (a bind), cannot give them back:
-//! the builder consumes the database and the objects do not clone. Such a
-//! start leaves the server with no registrations, and `start()` checks
-//! beforehand what the pending objects and the configuration already show.
+//! What a cancel can't give back: a start cancelled once the objects are in
+//! the Rust server's builder drops them with the builder's future, and the
+//! objects do not clone. A B/IP, B/IPv6 or MS/TP start hands them over
+//! without waiting, so a cancel that reaches it at all reaches the builder;
+//! only an SC dial and a router's lookups wait before the hand-off.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetRecipient;
+use bacnet_types::error::Error;
+use bacnet_types::primitives::ObjectIdentifier;
 
 use super::ForwarderSaveCounterEntry;
 
@@ -53,6 +57,37 @@ pub(super) struct StartClaim {
 
 fn relock<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
     lock.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A registration as the claim keeps it: the objects are `Send` already.
+fn sendable(object: Box<dyn BACnetObject>) -> Box<dyn BACnetObject + Send> {
+    object
+}
+
+/// Put `object` into `db`, asking first whether the database takes it
+/// ([`ObjectDatabase::check_addable`], the checks its add makes), so a
+/// refused object stays the claim's.
+fn admit(
+    db: &mut ObjectDatabase,
+    object: Box<dyn BACnetObject + Send>,
+) -> Result<(), (Error, Option<Box<dyn BACnetObject + Send>>)> {
+    if let Err(error) = db.check_addable(object.as_ref()) {
+        return Err((error, Some(object)));
+    }
+    db.add(object).map_err(|error| (error, None))
+}
+
+/// Let go of `objects` on the runtime's blocking pool when a runtime is
+/// current, as `drop_database_off_runtime` lets go of a database: an object
+/// with storage waits for its saves as it drops.
+fn drop_off_runtime(objects: Objects) {
+    if objects.is_empty() {
+        return;
+    }
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => drop(runtime.spawn_blocking(move || drop(objects))),
+        Err(_) => drop(objects),
+    }
 }
 
 impl StartClaim {
@@ -84,11 +119,61 @@ impl StartClaim {
         self.recipient.as_ref()
     }
 
-    /// The registrations, for the database: from here a refusal cannot
-    /// give them back, so nothing else is returned either.
-    pub(super) fn hand_off_objects(&mut self) -> Objects {
-        self.handed_off = true;
-        std::mem::take(&mut self.objects)
+    /// The database the start serves: the registrations in the order they
+    /// were added, and the start's `device`, which Object_List puts first
+    /// (#2669). Each was checked at its `add_*` call, so the database takes
+    /// them all. Should it refuse one anyway, the claim keeps every
+    /// registration, the refused one included, and gives them back as for a
+    /// refusal before the hand-off (#2752). Once it is filled, only
+    /// [`take_back`](Self::take_back) returns them.
+    pub(super) fn fill_database(
+        &mut self,
+        device: Box<dyn BACnetObject + Send>,
+    ) -> Result<ObjectDatabase, Error> {
+        let mut db = ObjectDatabase::new();
+        let mut pending = std::mem::take(&mut self.objects).into_iter();
+        let mut refusal = None;
+        for object in pending.by_ref() {
+            if let Err(refused) = admit(&mut db, object) {
+                refusal = Some(refused);
+                break;
+            }
+        }
+        let (error, kept) = match refusal {
+            Some(refused) => refused,
+            None => match admit(&mut db, device) {
+                Ok(()) => {
+                    self.handed_off = true;
+                    return Ok(db);
+                }
+                Err((error, device)) => {
+                    drop_off_runtime(device.into_iter().collect());
+                    (error, None)
+                }
+            },
+        };
+        let mut back: Objects = db.into_objects().into_iter().map(sendable).collect();
+        back.extend(kept);
+        back.extend(pending);
+        self.objects = back;
+        Err(error)
+    }
+
+    /// Take the registrations back from `database`, which the Rust server's
+    /// refused start handed back (#2752), leaving out the Device the start
+    /// built: the claim then gives back everything it took, as for a refusal
+    /// before the hand-off. They come back in the order they were added,
+    /// which the database's Object_List keeps. The Device goes off the
+    /// runtime, as the server lets go of a database.
+    pub(super) fn take_back(&mut self, database: ObjectDatabase, device: ObjectIdentifier) {
+        let (built, registered): (Objects, Objects) = database
+            .into_objects()
+            .into_iter()
+            .map(sendable)
+            .partition(|object| object.object_identifier() == device);
+        drop_off_runtime(built);
+        self.objects = registered;
+        self.handed_off = false;
     }
 
     /// The forwarders' save counters, for the running server.
@@ -150,7 +235,35 @@ mod tests {
 
     /// A claim over two objects, one forwarder's counters and a recipient.
     fn claim(cells: &StartCells) -> StartClaim {
-        let mut pending = vec![object(1), object(2)];
+        claim_over(cells, vec![object(1), object(2)])
+    }
+
+    /// The start's Device, instance 9, named "Host".
+    fn device() -> Box<dyn BACnetObject + Send> {
+        use bacnet_objects::device::{DeviceConfig, DeviceObject};
+        let config = DeviceConfig {
+            identity: bacnet_objects::DeviceIdentity::new(9, 0)
+                .unwrap()
+                .with_name("Host"),
+            ..DeviceConfig::default()
+        };
+        Box::new(DeviceObject::new(config).unwrap())
+    }
+
+    /// Everything but the objects the claim took is back in the cells.
+    fn given_back_whole(cells: &StartCells) {
+        assert_eq!(relock(&cells.pending_forwarder_save_counters).len(), 1);
+        assert!(relock(&cells.audit_recipient).is_some());
+        assert!(
+            !cells
+                .forwarding_configuration_started
+                .load(Ordering::Acquire)
+        );
+        assert!(!cells.start_in_flight.load(Ordering::Acquire));
+    }
+
+    /// A claim over `pending`, one forwarder's counters and a recipient.
+    fn claim_over(cells: &StartCells, mut pending: Objects) -> StartClaim {
         StartClaim::take(
             StartCells {
                 pending_objects: Arc::clone(&cells.pending_objects),
@@ -199,10 +312,10 @@ mod tests {
     }
 
     #[test]
-    fn a_claim_that_handed_off_its_objects_gives_back_nothing_but_the_start() {
+    fn a_claim_that_filled_its_database_gives_back_nothing_but_the_start() {
         let cells = cells();
         let mut claim = claim(&cells);
-        assert_eq!(claim.hand_off_objects().len(), 2);
+        assert_eq!(claim.fill_database(device()).unwrap().len(), 3);
         assert_eq!(claim.take_forwarder_save_counters().len(), 1);
         drop(claim);
         assert!(instances(&cells).is_empty());
@@ -215,6 +328,43 @@ mod tests {
                 .load(Ordering::Acquire)
         );
         assert!(!cells.start_in_flight.load(Ordering::Acquire));
+    }
+
+    /// A database the Rust server's refused start hands back gives the
+    /// registrations back in the order they were added, without the Device
+    /// the start built, and with them everything else the claim took (#2752).
+    #[test]
+    fn objects_taken_back_from_a_refused_database_are_given_back_whole() {
+        let cells = cells();
+        let mut claim = claim(&cells);
+        let db = claim.fill_database(device()).unwrap();
+        claim.take_back(db, ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap());
+        relock(&cells.pending_objects).push(object(3));
+        drop(claim);
+        assert_eq!(instances(&cells), [1, 2, 3]);
+        given_back_whole(&cells);
+    }
+
+    /// A database that refuses a registration, which the `add_*` checks
+    /// rule out, leaves every registration the claim's, the refused one
+    /// included, in the order they were added; so does one that refuses
+    /// the start's Device, which goes (#2752).
+    #[test]
+    fn a_registration_the_database_refuses_leaves_them_all_the_claims() {
+        let named = |instance, name: &str| -> Box<dyn BACnetObject + Send> {
+            Box::new(BinaryValueObject::new(instance, name).unwrap())
+        };
+        for (pending, expected) in [
+            (vec![object(1), named(2, "BV-1"), object(3)], vec![1, 2, 3]),
+            (vec![object(1), named(2, "Host")], vec![1, 2]),
+        ] {
+            let cells = cells();
+            let mut claim = claim_over(&cells, pending);
+            assert!(claim.fill_database(device()).is_err());
+            drop(claim);
+            assert_eq!(instances(&cells), expected);
+            given_back_whole(&cells);
+        }
     }
 
     #[test]

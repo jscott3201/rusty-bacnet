@@ -60,6 +60,7 @@ pub async fn bip_server() -> Result<BACnetServer<BipTransport>, Error> {
         .database(benchmark_db())
         .build()
         .await
+        .map_err(Error::from)
 }
 
 /// A B/IP client on 127.0.0.1, ephemeral port.

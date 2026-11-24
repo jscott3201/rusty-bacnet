@@ -9,7 +9,9 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::primitives::{Date, Time};
 
-use super::{BACnetServer, BipServerBuilder, ServerBuilder, ServerConfig, time_sync_policy};
+use super::{
+    BACnetServer, BipServerBuilder, ServerBuilder, ServerConfig, StartError, time_sync_policy,
+};
 
 const HUNDREDTHS_PER_SECOND: i128 = 100;
 const HUNDREDTHS_PER_MINUTE: i128 = 60 * HUNDREDTHS_PER_SECOND;
@@ -53,7 +55,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: ObjectDatabase,
         transport: T,
         clock_config: Option<ClockConfig>,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, StartError> {
         Self::start_with_clock_mode_and_bindings(config, db, transport, clock_config, Vec::new())
             .await
     }
@@ -67,11 +69,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// by then only when they made no event notification; otherwise it
     /// follows the notifications, waiting for them at most the APDU timeout
     /// (#2573).
+    ///
+    /// A refusal, a transport that won't start among them, hands back the
+    /// database ([`StartError`]).
     pub async fn start(
         config: ServerConfig,
         db: ObjectDatabase,
         transport: T,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, StartError> {
         Self::start_with_clock(config, db, transport, ClockConfig::default()).await
     }
 
@@ -82,7 +87,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: ObjectDatabase,
         transport: T,
         clock_config: ClockConfig,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, StartError> {
         Self::start_with_clock_mode(config, db, transport, Some(clock_config)).await
     }
 
@@ -92,7 +97,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         config: ServerConfig,
         db: ObjectDatabase,
         transport: T,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, StartError> {
         Self::start_with_clock_mode(config, db, transport, None).await
     }
 
