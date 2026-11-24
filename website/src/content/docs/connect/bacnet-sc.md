@@ -69,6 +69,8 @@ The [Python credential example](https://github.com/jscott3201/rusty-bacnet/blob/
 
 Rust builds an `ScNodeTlsConfig` from the same three PEM files with `ScNodeTlsConfig::from_pem_files(ca, cert, key)` (an error names the file at fault) and uses the transport's configured device identity. Raw `ScTransport::new(ws, vmac)` is initially unconfigured; set a valid UUID before start. Because the caller can dial `ws` first, transport validation cannot undo that earlier connection. A shared endpoint uses `ScEndpointBuilder` with a caller-dialed TLS WebSocket; see [shared endpoints](/rusty-bacnet/integrate/shared-endpoints/).
 
+Key memory: the Rust constructors clear the key file's text and every key they decode when they finish, on error paths too, and keep no copy of the key's PEM or DER in the configuration; it holds the parsed private key inside the TLS library, which clears that memory when the configuration drops. Not covered: the PEM decoder's own transient buffers, bytes or text you passed to `from_pem` (clear your own buffer), and Python `str` or `bytes` objects, which the interpreter owns.
+
 ## Know how idle links stay up
 
 A node sends a heartbeat once a heartbeat interval passes with nothing received, keeps a hub link that answers, and drops the link when the heartbeat stays unanswered one timeout after the last frame it received. Direct connections take part as well: an accepted connection answers Heartbeat-Request, and a dialed one sends a heartbeat after an interval of silence and closes the link when that goes unanswered.

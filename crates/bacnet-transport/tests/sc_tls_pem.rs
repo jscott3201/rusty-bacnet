@@ -512,3 +512,106 @@ fn no_error_or_configuration_shows_key_material() {
         assert_eq!(format!("{config:?}"), "ScHubTlsConfig { .. }");
     }
 }
+
+/// The key check is rustls's own (#2621). For the leaf's key, another leaf's
+/// key and a key the provider can't load, `CertifiedKey::from_der` and the
+/// rustls builders the configurations are built with reach one verdict; both
+/// configurations, from PEM and from DER, reach that verdict mapped to our
+/// errors, and the offline inspection reports that verdict. A rustls
+/// upgrade that changes the verdict for any of these fails here.
+#[test]
+fn key_verdicts_are_the_ones_rustls_reaches() {
+    use bacnet_transport::sc_hub::ScHubTlsConfig;
+    use bacnet_transport::sc_tls::inspection::{ScKeyConsistency, inspect_sc_pem};
+    use rustls::pki_types::pem::PemObject;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    use rustls::{Error, InconsistentKeys, sign::CertifiedKey};
+    use std::sync::Arc;
+
+    let site = Site::new();
+    let leaf = site.leaf();
+    let chain: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(leaf.chain.as_bytes())
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let root = CertificateDer::from_pem_slice(site.root.as_bytes()).unwrap();
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(root.clone()).unwrap();
+    let roots = Arc::new(roots);
+    let unloadable = "-----BEGIN PRIVATE KEY-----\nAQID\n-----END PRIVATE KEY-----\n";
+    let cases = [
+        (
+            "the leaf's key",
+            leaf.key.serialize_pem(),
+            ScKeyConsistency::Match,
+        ),
+        (
+            "another leaf's key",
+            site.leaf().key.serialize_pem(),
+            ScKeyConsistency::Mismatch,
+        ),
+        (
+            "an unloadable key",
+            unloadable.to_owned(),
+            ScKeyConsistency::Unusable,
+        ),
+    ];
+    for (name, key_pem, expected) in cases {
+        let key = || PrivateKeyDer::from_pem_slice(key_pem.as_bytes()).unwrap();
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        let tls13 = [&rustls::version::TLS13];
+        let library = CertifiedKey::from_der(chain.clone(), key(), &provider).map(drop);
+        let client = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+            .with_protocol_versions(&tls13)
+            .unwrap()
+            .with_root_certificates(Arc::clone(&roots))
+            .with_client_auth_cert(chain.clone(), key())
+            .map(drop);
+        let server = rustls::ServerConfig::builder_with_provider(Arc::clone(&provider))
+            .with_protocol_versions(&tls13)
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(chain.clone(), key())
+            .map(drop);
+        assert_eq!(client, library, "{name}: the client builder");
+        assert_eq!(server, library, "{name}: the server builder");
+        let verdict = match &library {
+            Ok(()) => ScKeyConsistency::Match,
+            Err(Error::InconsistentKeys(InconsistentKeys::KeyMismatch)) => {
+                ScKeyConsistency::Mismatch
+            }
+            Err(_) => ScKeyConsistency::Unusable,
+        };
+        assert_eq!(verdict, expected, "{name}: rustls's verdict {library:?}");
+        // Ours: a mismatch by name, any other refusal as an unusable key
+        // carrying rustls's reason.
+        let ours = both(&site.root, &leaf.chain, &key_pem);
+        let agrees = match (&library, &ours) {
+            (Ok(()), Ok(())) => true,
+            (
+                Err(Error::InconsistentKeys(InconsistentKeys::KeyMismatch)),
+                Err(ScTlsConfigError::KeyMismatch),
+            ) => true,
+            (Err(Error::InconsistentKeys(_)), _) => false,
+            (Err(reason), Err(ScTlsConfigError::UnusableKey { source, .. })) => reason == source,
+            _ => false,
+        };
+        assert!(agrees, "{name}: rustls {library:?}, ours {ours:?}");
+        let ours = ours.map_err(|error| error.to_string());
+        let from_der = [
+            ScNodeTlsConfig::from_der(vec![root.clone()], chain.clone(), key()).map(drop),
+            ScHubTlsConfig::from_der(vec![root.clone()], chain.clone(), key()).map(drop),
+        ];
+        for result in from_der {
+            assert_eq!(result.map_err(|e| e.to_string()), ours, "{name}: from_der");
+        }
+        let report = inspect_sc_pem(
+            leaf.chain.as_bytes(),
+            None,
+            Some(key_pem.as_bytes()),
+            Some(0),
+        )
+        .unwrap();
+        // The offline check (the CLI's pre-dial lint) calls `from_der` too.
+        assert_eq!(report.key_consistency, verdict, "{name}: the inspection");
+    }
+}

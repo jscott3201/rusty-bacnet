@@ -79,6 +79,10 @@ impl ScNodeTlsConfig {
     /// and belong to the leaf; [`ScTlsConfigError`] names the input that
     /// fails and why. No ambient trust, filesystem access, or networking is
     /// used. [`Self::from_pem`] and [`Self::from_pem_files`] take PEM.
+    ///
+    /// An owned `key` is cleared when this returns, on every path (a
+    /// `PrivateKeyDer` that borrows static bytes cannot be). See
+    /// [`Self::from_pem_files`], "Key memory".
     pub fn from_der(
         ca_certs: Vec<CertificateDer<'static>>,
         cert_chain: Vec<CertificateDer<'static>>,
@@ -100,6 +104,9 @@ impl ScNodeTlsConfig {
     /// OpenSSL `TRUSTED CERTIFICATE` or PKCS#7 sections is refused as
     /// [`ScTlsConfigError::UnsupportedCertificate`]. The key input skips
     /// certificates and EC parameters, so a key may share a file with them.
+    ///
+    /// The decoded key is cleared on return, but `private_key` is your
+    /// buffer: clear it yourself. See [`Self::from_pem_files`], "Key memory".
     pub fn from_pem(
         ca_bundle: &[u8],
         cert_chain: &[u8],
@@ -113,6 +120,18 @@ impl ScNodeTlsConfig {
     /// are read. Each file is read once, here, up to
     /// [`MAX_PEM_FILE_BYTES`](super::MAX_PEM_FILE_BYTES); a later change to
     /// them takes a new configuration.
+    ///
+    /// # Key memory
+    ///
+    /// The key file's text and every key decoded from it are cleared when
+    /// this returns, error paths included; rustls's key loader clears each
+    /// copy it is handed. The configuration keeps no copy of the key's PEM
+    /// or DER: it holds the parsed private key inside the TLS library,
+    /// whose memory aws-lc clears when the configuration drops. Not
+    /// cleared: the PEM decoder's transient buffers, which hold the key's
+    /// base64 text while it decodes. A key given as PEM bytes or DER is
+    /// also held by the caller, who must clear their own copy (`zeroize`);
+    /// this call clears an owned DER key it takes.
     ///
     /// ```no_run
     /// use bacnet_transport::sc_tls::{ScNodeTlsConfig, ScTlsConfigError};
@@ -172,7 +191,7 @@ impl ScNodeTlsConfig {
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(refused)?
             .with_client_cert_verifier(verifier)
-            .with_single_cert(chain, key)
+            .with_single_cert(chain, key.clone_key())
             .map_err(refused)?;
         Ok(Self {
             inner: Arc::new(config),
