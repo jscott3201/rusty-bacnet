@@ -80,7 +80,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             bacnet_transport::port::TransportProvenance::unverified(),
             req.clone(),
         ) {
-            ConfirmedRequestAdmission::Duplicate => return,
+            ConfirmedRequestAdmission::Duplicate | ConfirmedRequestAdmission::AbortsAnswer => {
+                return;
+            }
             ConfirmedRequestAdmission::New(pending) => pending,
         };
 

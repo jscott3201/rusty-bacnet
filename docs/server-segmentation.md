@@ -75,6 +75,30 @@ moment between the hand-off and the answer leaving the link, a repeat can
 still draw that Abort, which on a multi-thread runtime can reach the
 requester first. A request the tracker doesn't follow (past its 256 pending
 requests, or a LifeSafetyOperation, which has its own replay) has no note.
+
+While an answer still goes out in segments, before the requester's final
+Segment-ACK, a request from the same requester, in the same trust context
+and under the same invoke ID, is compared with the request being answered
+(#2770). The same request sent again keeps its duplicate handling: one that
+comes whole is dropped, and a segment of one that came in segments, other
+than segment zero, is acknowledged again with its last acknowledgment. The
+answer goes on, so a requester that lost the answer's first segment and sent
+its request again still gets the answer from the server's own resend. Any
+other request, a LifeSafetyOperation among them, is not executed: the server
+sends nothing more of the answer and answers the request with one Abort
+(INVALID_APDU_IN_THIS_STATE), which the answer's sending task sends after any
+segment already on its way, so no segment follows it; the invoke ID is then
+free for the requester's next request. A request that comes in segments is
+known whole only once its last segment is in, so its segments are
+acknowledged before that Abort; for that reason a segment zero during such an
+answer opens a transfer of its own rather than drawing the last
+acknowledgment above, the same request sent again from segment zero too,
+which is then dropped once whole. Other requesters are unaffected, another
+network behind the same address among them. An answer whose task has stopped
+sending (its retries spent) is over, and a request after it is new. Before
+any answer, while the request still executes, the rules above for a segment
+sent again stand, and a different request that comes whole is executed as a
+new one.
 This workspace's client sends segment zero alone and
 waits for its answer, so it sends nothing twice to a server that answers at
 once; a receiver that never answers segment zero alone costs it one segment

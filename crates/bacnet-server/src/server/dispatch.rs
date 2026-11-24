@@ -186,6 +186,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // Pending in-flight duplicates preserve DISCARD. This is a
                 // local service-specific extension, not a Standard mandate.
                 if req.service_choice == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION {
+                    // Never the request a segmented answer answers: during
+                    // one under its requester and invoke ID, it draws the
+                    // Abort and ends that answer (#2770).
+                    if confirmed_request_tracker.supersede_answer(
+                        source_mac,
+                        received.source_network.as_ref(),
+                        &received.provenance,
+                        req.invoke_id,
+                    ) {
+                        return;
+                    }
                     let lso_pending = match confirmed_request_tracker.lso.begin(
                         source_mac,
                         received.source_network.as_ref(),
@@ -253,7 +264,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     received.provenance.clone(),
                     req.clone(),
                 ) {
-                    ConfirmedRequestAdmission::Duplicate => return,
+                    ConfirmedRequestAdmission::Duplicate
+                    | ConfirmedRequestAdmission::AbortsAnswer => return,
                     ConfirmedRequestAdmission::New(pending) => pending,
                 };
                 let invoke_id = req.invoke_id;

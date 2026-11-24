@@ -210,6 +210,17 @@ async fn audit_reporter_query_outbound_segmentation_and_divergence_are_silent() 
         assert_eq!(reads.load(Ordering::Acquire), 1);
         assert!(records(&fixture).is_empty());
         assert_idle(&fixture);
+        if segmented {
+            // The requester ends the answer it won't acknowledge: another
+            // request under its invoke ID while that answer is still sent
+            // would draw an Abort instead (#2770).
+            let abort = AbortPdu {
+                sent_by_server: false,
+                invoke_id: 77,
+                abort_reason: AbortReason::OTHER,
+            };
+            ingress_apdu(&fixture.server, Apdu::Abort(abort), None).await;
+        }
         assert!(matches!(
             dispatch(&fixture.server, SERVICE, encode(&query(None, 0))).await,
             Apdu::ComplexAck(_)

@@ -15,7 +15,10 @@
 //! ID with it. The note lives as long as that entry, which ends when the
 //! answer is handed to the link (for a segmented answer, as the dispatch
 //! loop takes its final acknowledgment, before the next frame); a
-//! requester's Abort for the invoke ID ends the note sooner. After that a
+//! requester's Abort for the invoke ID ends the note sooner. Once the answer
+//! goes out in segments, a segment zero opens a transfer instead, so that a
+//! different request can be told from the same one sent again
+//! (`confirmed_answers.rs`, #2770). After that a
 //! repeat finds no transfer and draws the Abort it always did. A request
 //! the tracker doesn't follow (past its entry cap, or a LifeSafetyOperation,
 //! which has its own replay) gets no note. Only the segment branch and a
@@ -103,7 +106,10 @@ impl ConfirmedRequestTracker {
 
     /// The last sequence number and window to acknowledge again, when a
     /// segment from this peer, in this trust context and by a route of the
-    /// same origin, repeats a request still executing.
+    /// same origin, repeats a request still executing. A segment zero
+    /// (`opening`) while that request's answer is sent in segments draws
+    /// none: it opens a transfer, whose request, once whole, is dropped if
+    /// it is the same one and draws the Abort if not (#2770).
     pub(in crate::server) fn repeated_segment(
         &self,
         source_mac: &[u8],
@@ -111,6 +117,7 @@ impl ConfirmedRequestTracker {
         provenance: &TransportProvenance,
         route: &ResponseRoute,
         invoke_id: u8,
+        opening: bool,
     ) -> Option<(u8, u8)> {
         let state = self.lock();
         if state.segmented.is_empty() {
@@ -130,6 +137,7 @@ impl ConfirmedRequestTracker {
                         && record.route.same_origin(route)
                 })
             })
+            .filter(|record| !(opening && state.answering(record.id)))
             .map(|record| (record.last_sequence, record.window))
     }
 

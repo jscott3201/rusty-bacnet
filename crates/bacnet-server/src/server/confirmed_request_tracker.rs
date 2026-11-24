@@ -20,6 +20,23 @@ struct Entry {
     request: ConfirmedRequest,
 }
 
+impl Entry {
+    /// Whether this entry is under that requester, direct identity and
+    /// invoke ID: the key duplicates are judged under, and an answer in
+    /// progress is ended under (#2770).
+    #[inline]
+    fn is_under(
+        &self,
+        requester: &CanonicalRequester,
+        direct_identity: &Option<DirectScIdentity>,
+        invoke_id: u8,
+    ) -> bool {
+        self.requester == *requester
+            && self.direct_identity == *direct_identity
+            && self.invoke_id == invoke_id
+    }
+}
+
 #[derive(Default)]
 struct TrackerState {
     next_id: u64,
@@ -28,6 +45,10 @@ struct TrackerState {
     /// answered with (#2751). Only the segmented branch reads or writes it;
     /// `begin` and the drop of a pending request never touch it.
     segmented: Vec<segment_repeats::Record>,
+    /// The answers sent in segments, oldest first (#2770). `begin` reads
+    /// them only once an entry under its request's key is pending, and the
+    /// drop of a pending request never touches them.
+    answers: Vec<answers::Answer>,
 }
 
 /// Exact duplicate detection only while the ordinary server transaction is live.
@@ -49,6 +70,10 @@ pub(super) struct ConfirmedRequestTracker {
 pub(super) enum ConfirmedRequestAdmission {
     Duplicate,
     New(PendingConfirmedRequest),
+    /// Another request than the one answered in segments under its
+    /// requester and invoke ID: that answer and its entry end, its task
+    /// sends the Abort, and this request is not executed (#2770).
+    AbortsAnswer,
 }
 
 /// Non-cloneable ownership of one pending transaction. Move into its response
@@ -78,13 +103,15 @@ impl ConfirmedRequestTracker {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.entries.iter().any(|entry| {
-            entry.requester == requester
-                && entry.direct_identity == direct_identity
-                && entry.invoke_id == invoke_id
-                && entry.request == request
-        }) {
-            return ConfirmedRequestAdmission::Duplicate;
+        // Nothing more for a request with no entry under its key pending.
+        if let Some(first) = state
+            .entries
+            .iter()
+            .position(|entry| entry.is_under(&requester, &direct_identity, invoke_id))
+            && let Some(admission) =
+                state.admit_same_key(first, &requester, &direct_identity, invoke_id, &request)
+        {
+            return admission;
         }
         if state.entries.len() >= MAX_ENTRIES {
             return ConfirmedRequestAdmission::New(PendingConfirmedRequest::untracked(self));
@@ -177,6 +204,13 @@ impl PendingConfirmedRequest {
     pub(super) fn id(&self) -> Option<u64> {
         self.id
     }
+
+    /// Note that `handle` answers this request in segments (#2770).
+    pub(super) fn answering(&self, handle: &Arc<super::segmented_send::SegmentedSendHandle>) {
+        if let Some(id) = self.id {
+            self.tracker.note_answer(id, handle);
+        }
+    }
 }
 
 impl ConfirmedRequestTracker {
@@ -203,6 +237,9 @@ impl Drop for PendingConfirmedRequest {
 
 #[path = "confirmed_segment_repeats.rs"]
 mod segment_repeats;
+
+#[path = "confirmed_answers.rs"]
+mod answers;
 
 #[cfg(test)]
 #[path = "confirmed_tracker_tests.rs"]

@@ -251,8 +251,8 @@ fn a_segment_note_attaches_to_the_admitted_entry_only() {
     let newer = new(begin(&tracker, request(3, Bytes::from_static(b"newer"))));
     note(admitted);
     assert_eq!(tracker.segmented_notes(), 1);
-    let repeat =
-        tracker.repeated_segment(b"peer", None, &TransportProvenance::unverified(), &route, 3);
+    let unverified = TransportProvenance::unverified();
+    let repeat = tracker.repeated_segment(b"peer", None, &unverified, &route, 3, true);
     assert_eq!(repeat, Some((9, 2)));
     drop(newer);
     assert_eq!(tracker.segmented_notes(), 0, "it ends with its entry");
@@ -283,8 +283,8 @@ fn a_repeat_is_answered_from_the_newest_note() {
     let second_id = tracker.next_admission();
     let second = new(begin(&tracker, request(5, Bytes::from_static(b"second"))));
     note(second_id, 2);
-    let repeat =
-        || tracker.repeated_segment(b"peer", None, &TransportProvenance::unverified(), &route, 5);
+    let unverified = TransportProvenance::unverified();
+    let repeat = || tracker.repeated_segment(b"peer", None, &unverified, &route, 5, true);
     assert_eq!(repeat(), Some((2, 1)), "the newer request's");
     drop(second);
     assert_eq!(repeat(), Some((5, 1)), "then the older one's");

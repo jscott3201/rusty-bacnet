@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -96,6 +96,9 @@ pub(crate) enum SegmentedSendEvent {
 pub(crate) enum SegmentedSendControlEvent {
     Abort(AbortPdu),
     Cancel,
+    /// A different request came under the answer's requester and invoke
+    /// ID: stop, and send the Abort that answers it ([`SegmentedSendHandle::supersede`]).
+    Supersede,
 }
 
 pub(crate) struct SegmentedSendHandle {
@@ -107,7 +110,18 @@ pub(crate) struct SegmentedSendHandle {
     /// The duplicate tracker's entry for the request this answers, if it
     /// has one: see [`Self::end_request`].
     request: Option<u64>,
+    /// Whether the sending task still sends, owes the Abort for a different
+    /// request, or has stopped sending: see [`Self::supersede`].
+    phase: AtomicU8,
 }
+
+/// The sending task sends, or waits for an acknowledgment.
+const SENDING: u8 = 0;
+/// A different request came: the task sends nothing more of the answer,
+/// and the Abort once it stops.
+const SUPERSEDED: u8 = 1;
+/// The task sends nothing more.
+const FINISHED: u8 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SegmentAckDisposition {
@@ -155,6 +169,7 @@ impl SegmentedSendHandle {
             current_sequence: AtomicU16::new(u16::MAX),
             total_segments,
             request,
+            phase: AtomicU8::new(SENDING),
         }
     }
 
@@ -169,6 +184,33 @@ impl SegmentedSendHandle {
         if let Some(id) = self.request {
             tracker.end(id);
         }
+    }
+
+    /// End the answer for a different request that came under its
+    /// requester and invoke ID (Clause 5.4.5.4, #2770). True when the
+    /// sending task still sends: it sends nothing more of the answer, and
+    /// once it stops, after any segment already on its way, it sends the
+    /// Abort (INVALID_APDU_IN_THIS_STATE) itself, so no segment can follow
+    /// that Abort. False when the answer is over already, stopped by the
+    /// task (its last segment sent, or given up), cancelled by a newer one
+    /// or aborted by the requester: then nothing changes here.
+    pub(super) fn supersede(&self) -> bool {
+        if self.closed.load(Ordering::Acquire)
+            || self
+                .phase
+                .compare_exchange(SENDING, SUPERSEDED, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return false;
+        }
+        self.send_control(SegmentedSendControlEvent::Supersede);
+        true
+    }
+
+    /// The sending task sends nothing more; true when it owes the Abort a
+    /// [`Self::supersede`] asked for. Once only, after its last send.
+    pub(super) fn finish(&self) -> bool {
+        self.phase.swap(FINISHED, Ordering::AcqRel) == SUPERSEDED
     }
 
     pub(crate) fn accepts_segment_ack(&self, ack: &SegmentAckPdu) -> bool {

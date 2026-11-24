@@ -237,10 +237,19 @@ pub(super) async fn ingress(
     req: ConfirmedRequestPdu,
     reply_tx: Option<oneshot::Sender<Bytes>>,
 ) {
+    ingress_apdu(server, Apdu::ConfirmedRequest(req), reply_tx).await;
+}
+
+/// Any APDU from [`SOURCE`], through `dispatch`.
+pub(super) async fn ingress_apdu(
+    server: &BACnetServer<TestTransport>,
+    apdu: Apdu,
+    reply_tx: Option<oneshot::Sender<Bytes>>,
+) {
     BACnetServer::dispatch(
         &server.test_dispatch_context(),
         SOURCE,
-        Apdu::ConfirmedRequest(req),
+        apdu,
         bacnet_network::layer::ReceivedApdu {
             router_response: None,
             direct_response: None,
