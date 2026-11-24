@@ -357,3 +357,36 @@ async fn a_window_of_one_never_touches_the_table() {
     assert_eq!(rig.remembers(), None);
     rig.stop().await;
 }
+
+/// A peer that answers segment zero only after the segment timeout, every
+/// time, stays remembered: its acknowledgment of segment zero, coming after
+/// the whole first window's timeout ran out, forgets nothing (else it would
+/// be forgotten and learned again on every other request).
+#[tokio::test(start_paused = true)]
+async fn a_peer_answering_segment_zero_late_stays_remembered() {
+    let mut rig = Rig::new(4, 2).await;
+    let task = rig.request(SIX_SEGMENTS);
+    let (id, _) = rig.window(1).await;
+    assert_eq!(rig.segments(1).await, [0], "sent again");
+    rig.ack(id, 0, 4, false).await;
+    assert_eq!(rig.segments(4).await, [1, 2, 3, 4]);
+    rig.ack(id, 4, 4, false).await;
+    assert_eq!(rig.segments(1).await, [5]);
+    rig.ack(id, 5, 4, false).await;
+    rig.answer(id).await;
+    task.await.unwrap().unwrap();
+
+    let task = rig.request(SIX_SEGMENTS);
+    let (id, first) = rig.window(4).await;
+    assert_eq!(first, [0, 1, 2, 3], "the whole first window");
+    assert_eq!(rig.segments(4).await, [0, 1, 2, 3], "sent again");
+    rig.ack(id, 0, 4, false).await;
+    assert_eq!(rig.segments(4).await, [1, 2, 3, 4]);
+    rig.ack(id, 4, 4, false).await;
+    assert_eq!(rig.segments(1).await, [5]);
+    rig.ack(id, 5, 4, false).await;
+    rig.answer(id).await;
+    task.await.unwrap().unwrap();
+    assert_eq!(rig.remembers(), Some(true), "a late answer forgets nothing");
+    rig.stop().await;
+}

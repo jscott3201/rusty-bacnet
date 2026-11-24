@@ -353,7 +353,7 @@ async fn abort_with_server_false_does_not_end_the_transaction() {
         .expect("the server=FALSE Abort aborted the transaction");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn segment_ack_with_server_false_does_not_advance_the_send_window() {
     let mut config = config();
     // Force segmentation of the outbound request and a two-segment window.

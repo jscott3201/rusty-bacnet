@@ -41,7 +41,7 @@ async fn expect_silence(
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn incomplete_window_silences_ndup_duplicates_then_naks_the_next() {
     let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let text = "duplicate-window";
@@ -91,7 +91,7 @@ async fn incomplete_window_silences_ndup_duplicates_then_naks_the_next() {
     assert_eq!(present_value(&server).await, text);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn out_of_order_segment_naks_immediately_and_resets_duplicate_state() {
     let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let text = "gap-window";

@@ -16,10 +16,13 @@
 //!
 //! A conforming peer can be remembered too: one that lost a segment, was
 //! offline, or answered slower than the segment timeout. Sent a whole first
-//! window, it acknowledges segment zero at once, which a peer of the other
-//! kind never does (it acknowledges the window's end, or answers a repeat
-//! negatively), and that acknowledgement forgets it, so its next request
-//! sends segment zero alone again.
+//! window, it acknowledges segment zero before the segment timeout runs
+//! out, which a peer of the other kind never does (it acknowledges the
+//! window's end, or answers a repeat negatively), and that acknowledgement
+//! forgets it, so its next request sends segment zero alone again. One
+//! that comes only after the timeout forgets nothing: a peer that always
+//! answers that late would otherwise be forgotten and learned again on
+//! every other request.
 //!
 //! The table is bounded ([`PEERS`], the oldest out first); a peer leaves it
 //! that way, by that acknowledgement, or when the client ends. It sits
@@ -78,6 +81,9 @@ pub(super) enum FirstWindow {
     Alone,
     /// The whole first window, to a peer remembered for it.
     Whole,
+    /// The whole first window, whose segment timeout ran out before any
+    /// answer.
+    Late,
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -95,15 +101,21 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// A segment timeout ran out on the window starting at `window_start`;
-    /// when that was segment zero sent alone, remember the peer.
+    /// when that was segment zero sent alone, remember the peer. Returns how
+    /// the first window now stands: a whole one goes late.
     pub(super) fn segment_zero_unanswered(
         &self,
         first: FirstWindow,
         window_start: usize,
         tsm_mac: &[u8],
-    ) {
-        if first != FirstWindow::Alone || window_start != 0 {
-            return;
+    ) -> FirstWindow {
+        if window_start != 0 {
+            return first;
+        }
+        match first {
+            FirstWindow::Alone => {}
+            FirstWindow::Whole => return FirstWindow::Late,
+            FirstWindow::One | FirstWindow::Late => return first,
         }
         self.device_table
             .whole_first_window
@@ -111,6 +123,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .get_or_insert_with(Box::default)
             .remember(tsm_mac);
         debug!("A peer that waits for a whole first window: sending it one from now on");
+        first
     }
 
     /// The window `ack` grants, from one to the window proposed. A positive

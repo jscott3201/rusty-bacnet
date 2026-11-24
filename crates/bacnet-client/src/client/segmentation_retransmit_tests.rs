@@ -43,7 +43,7 @@ async fn recv_confirmed_segment(
 /// continues from segment 1. (The old reading — "resend from 0" — made a
 /// lost first ack unrecoverable: the retransmitted segment 0 draws NAK(0)
 /// from the peer's live session, and resending 0 loops forever.)
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn negative_ack_zero_advances_past_the_acknowledged_segment() {
     let client_mac = vec![0x01];
     let server_mac = vec![0x02];
@@ -135,7 +135,7 @@ async fn negative_ack_zero_advances_past_the_acknowledged_segment() {
     server_transport.stop().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn segmented_request_ignores_stale_negative_ack_zero_after_progress() {
     let client_mac = vec![0x01];
     let server_mac = vec![0x02];
@@ -352,7 +352,7 @@ async fn start_three_segment_request(
 /// reused invoke ID — is Clause 5.4.4.2 DuplicateACK_Received: discard and
 /// keep waiting. Before the fix it failed the whole request with
 /// "sequence out of range".
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn stale_out_of_range_positive_ack_is_discarded() {
     let (task, server_transport, mut rx, client_mac, _server_mac) =
         start_three_segment_request(140).await;
@@ -421,7 +421,7 @@ async fn stale_out_of_range_positive_ack_is_discarded() {
 
 /// #368's companion: the stale ack in its negative flavor — before the fix it
 /// hit the same fatal range check before the window filter could discard it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn stale_out_of_range_negative_ack_is_discarded() {
     let (task, server_transport, mut rx, client_mac, _server_mac) =
         start_three_segment_request(140).await;
@@ -493,7 +493,7 @@ async fn stale_out_of_range_negative_ack_is_discarded() {
 /// `next_seq` (which would replay segment 1 and corrupt the strict sequence
 /// the peer asserts). Passed before the fix too — this is the
 /// vacuity guard the removal leans on.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn stale_in_range_out_of_window_ack_is_discarded() {
     // 304 bytes at max-APDU 50 → seven segments (6 × 44 + 40), window 2.
     let (task, server_transport, mut rx, client_mac, _server_mac) =
@@ -588,7 +588,7 @@ async fn stale_in_range_out_of_window_ack_is_discarded() {
 /// duplicate. Per Clause 5.4.4.2 the client must advance to segment 1; the
 /// old "resend from 0" reading looped NAK(0) → segment 0 forever until the
 /// NAK bound failed the transfer.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn lost_first_ack_recovers_via_negative_ack_zero() {
     let client_mac = vec![0x01];
     let server_mac = vec![0x02];
@@ -683,7 +683,7 @@ async fn lost_first_ack_recovers_via_negative_ack_zero() {
 /// whole window, continue" — Clause 5.4.2.1's InWindow accepts it, and the
 /// client must advance to the next window rather than discard it and stall
 /// into a timeout.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn negative_ack_naming_last_of_window_advances_the_window() {
     let (task, server_transport, mut rx, client_mac, _server_mac) =
         start_three_segment_request(140).await;

@@ -529,7 +529,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // the receiver's answer to it grants the window every later group
         // uses (Clause 5.4.4.1), unless this peer once left it unanswered
         // (`first_window`, #2742).
-        let (mut window_size, first) = self.first_window(&tsm_mac);
+        let (mut window_size, mut first) = self.first_window(&tsm_mac);
         let mut next_seq: usize = 0;
         let mut neg_ack_retries: u32 = 0;
         // A local livelock bound with no counterpart in Clause 5.4.4.2, which
@@ -663,7 +663,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 }
                             },
                             _ = &mut segment_timer => {
-                                self.segment_zero_unanswered(first, window_start, &tsm_mac);
+                                first = self.segment_zero_unanswered(first, window_start, &tsm_mac);
                                 ack_retries += 1;
                                 if ack_retries > max_ack_retries {
                                     return Err(Error::abort(bacnet_types::enums::AbortReason::TSM_TIMEOUT));
