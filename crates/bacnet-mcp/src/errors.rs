@@ -52,6 +52,15 @@ pub(crate) enum ToolError {
     /// body names each write's outcome, and `error` says what went wrong
     /// (`timeout` when one may or may not have been applied).
     Write(Value),
+    /// `error`, met while reading `object` (`analog-input:1`), with the way
+    /// past it in `hint`: what a tool that reads object by object says when
+    /// one object alone outlasts the call (#2779). Its body is `error`'s,
+    /// with `object` and `hint` beside.
+    At {
+        error: Box<ToolError>,
+        object: String,
+        hint: String,
+    },
 }
 
 impl ToolError {
@@ -186,6 +195,16 @@ impl ToolError {
             }
             Self::Failed(message) => json!({ "error": "failed", "message": message }),
             Self::Write(body) => body.clone(),
+            Self::At {
+                error,
+                object,
+                hint,
+            } => {
+                let mut body = error.json();
+                body["object"] = json!(object);
+                body["hint"] = json!(hint);
+                body
+            }
         }
     }
 
@@ -224,6 +243,11 @@ impl ToolError {
                 "not every write took ({}); see each write's outcome",
                 body["error"].as_str().unwrap_or("failed")
             ),
+            Self::At {
+                error,
+                object,
+                hint,
+            } => format!("{}, reading {object}; {hint}", error.summary()),
         }
     }
 }

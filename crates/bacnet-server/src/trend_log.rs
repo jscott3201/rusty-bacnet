@@ -8,6 +8,11 @@ use tokio::sync::RwLock;
 /// Select, acquire and append under one exclusive database guard.
 /// The returned wait includes the database's bounded configuration reconciliation
 /// and failure retry policy. No polling ownership escapes the database.
+///
+/// It waits for the database in its caller's task, as a guard the
+/// application takes on it does: a call left unpolled while it waits can be
+/// handed the database, and holds up whatever else uses it, a running
+/// server's requests included (#2772). Await it to the end, or drop it.
 pub async fn poll_trend_logs(db: &Arc<RwLock<ObjectDatabase>>) -> Duration {
     db.write().await.poll_trend_logs()
 }

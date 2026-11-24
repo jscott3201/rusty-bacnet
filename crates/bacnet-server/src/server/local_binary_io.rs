@@ -34,6 +34,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Tokio runtime, failing before anything is written outside one, and a
     /// caller dropped once the write has committed skips none of the work
     /// the write owes (#1367).
+    /// A call dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn set_physical_input_local(
         &self,
         oid: &ObjectIdentifier,
@@ -69,6 +71,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Tokio runtime, failing before anything is written outside one, and a
     /// caller dropped once the write has committed skips none of the work
     /// the write owes (#1367).
+    /// A call dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn set_polarity_local(
         &self,
         oid: &ObjectIdentifier,
@@ -95,14 +99,32 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. The Python binding exposes
     /// this as `BACnetServer.physical_output_local`.
     pub async fn physical_output_local(&self, oid: &ObjectIdentifier) -> Result<bool, Error> {
-        let db = self.db.read().await;
-        if db.get(oid).is_none() {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::UNKNOWN_OBJECT,
-            ));
+        let target = *oid;
+        let read = move |db: tokio::sync::OwnedRwLockReadGuard<ObjectDatabase>| {
+            physical_output(&db, &target)
+        };
+        // Never waited for in the caller's task (#2772).
+        let output = self
+            .request_tasks
+            .for_caller(Arc::clone(&self.db).read_owned(), read)
+            .await;
+        match output {
+            Some(output) => output,
+            // Its runtime dropped the task before it read: read here.
+            None => physical_output(&*self.db.read().await, oid),
         }
-        db.physical_output(oid)
-            .ok_or_else(bacnet_objects::traits::not_supported)
     }
+}
+
+/// The state `oid`'s physical output is driven to, as
+/// [`BACnetServer::physical_output_local`] reads it.
+fn physical_output(db: &ObjectDatabase, oid: &ObjectIdentifier) -> Result<bool, Error> {
+    if db.get(oid).is_none() {
+        return Err(Error::protocol(
+            ErrorClass::OBJECT,
+            ErrorCode::UNKNOWN_OBJECT,
+        ));
+    }
+    db.physical_output(oid)
+        .ok_or_else(bacnet_objects::traits::not_supported)
 }
