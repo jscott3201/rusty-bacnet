@@ -116,6 +116,22 @@ impl Rig {
         inject_apdu(&self.inbound, &PEER, None, Apdu::SegmentAck(ack)).await;
     }
 
+    /// A Segment-ACK written by hand, so its window can be one the encoder
+    /// refuses.
+    async fn raw_ack(&self, invoke_id: u8, seq: u8, window: u8) {
+        let npdu = bytes::Bytes::from(vec![0x01, 0x00, 0x41, invoke_id, seq, window]);
+        let frame = ReceivedNpdu {
+            direct_response: None,
+            npdu,
+            source_mac: bacnet_types::MacAddr::from_slice(&PEER),
+            link_layer_group: false,
+            data_attributes: Vec::new(),
+            provenance: bacnet_transport::port::TransportProvenance::unverified(),
+            reply_tx: None,
+        };
+        self.inbound.send(frame).await.unwrap();
+    }
+
     async fn answer(&self, invoke_id: u8) {
         let ack = SimpleAck {
             invoke_id,
@@ -206,6 +222,78 @@ async fn a_peer_that_answers_only_the_repeat_costs_one_segment_timeout_once() {
     rig.answer(invoke_id).await;
     task.await.unwrap().unwrap();
     assert!(start.elapsed() < TSEG, "no wait the second time");
+    assert_eq!(rig.remembers(), Some(true), "it never answers segment zero");
+    rig.stop().await;
+}
+
+/// A conforming peer that once missed segment zero (lost, offline, slow) is
+/// remembered, sent its next request's whole first window, and forgotten
+/// when it acknowledges segment zero at once; the request after that sends
+/// segment zero alone again.
+#[tokio::test(start_paused = true)]
+async fn a_remembered_peer_answering_segment_zero_at_once_is_forgotten() {
+    let mut rig = Rig::new(4, 2).await;
+    let task = rig.request(SIX_SEGMENTS);
+    let (id, lost) = rig.window(1).await;
+    assert_eq!(lost, [0]);
+    assert_eq!(rig.segments(1).await, [0], "sent again");
+    rig.ack(id, 0, 4, false).await;
+    assert_eq!(rig.segments(4).await, [1, 2, 3, 4]);
+    rig.ack(id, 4, 4, false).await;
+    assert_eq!(rig.segments(1).await, [5]);
+    rig.ack(id, 5, 4, false).await;
+    rig.answer(id).await;
+    task.await.unwrap().unwrap();
+    assert_eq!(rig.remembers(), Some(true));
+
+    let task = rig.request(SIX_SEGMENTS);
+    let (id, first) = rig.window(4).await;
+    assert_eq!(first, [0, 1, 2, 3], "the whole first window");
+    rig.ack(id, 0, 4, false).await;
+    assert_eq!(rig.segments(4).await, [1, 2, 3, 4]);
+    assert_eq!(rig.remembers(), Some(false), "forgotten");
+    rig.ack(id, 4, 4, false).await;
+    assert_eq!(rig.segments(1).await, [5]);
+    rig.ack(id, 5, 4, false).await;
+    rig.answer(id).await;
+    task.await.unwrap().unwrap();
+
+    let task = rig.request(SIX_SEGMENTS);
+    let (id, first) = rig.window(1).await;
+    assert_eq!(first, [0]);
+    rig.quiet().await;
+    rig.ack(id, 0, 4, false).await;
+    assert_eq!(rig.segments(4).await, [1, 2, 3, 4]);
+    rig.ack(id, 4, 4, false).await;
+    assert_eq!(rig.segments(1).await, [5]);
+    rig.ack(id, 5, 4, false).await;
+    rig.answer(id).await;
+    task.await.unwrap().unwrap();
+    rig.stop().await;
+}
+
+/// The window an answer grants is taken from one to the window proposed. A
+/// window of 0 or of 200 can't be written in a Segment-ACK: such an answer
+/// doesn't decode and is dropped, and the transfer waits for a good one. A
+/// grant of 100 against a proposal of four sends four.
+#[tokio::test(start_paused = true)]
+async fn the_window_granted_is_at_least_one_and_at_most_the_window_proposed() {
+    let mut rig = Rig::new(4, 2).await;
+    let task = rig.request(SIX_SEGMENTS);
+    let (id, first) = rig.window(1).await;
+    assert_eq!(first, [0]);
+    for window in [0, 200] {
+        rig.raw_ack(id, 0, window).await;
+        rig.quiet().await;
+    }
+    rig.ack(id, 0, 100, false).await;
+    assert_eq!(rig.segments(4).await, [1, 2, 3, 4]);
+    rig.quiet().await;
+    rig.ack(id, 4, 1, false).await;
+    assert_eq!(rig.segments(1).await, [5]);
+    rig.ack(id, 5, 1, false).await;
+    rig.answer(id).await;
+    task.await.unwrap().unwrap();
     rig.stop().await;
 }
 

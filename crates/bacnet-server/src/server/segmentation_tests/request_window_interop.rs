@@ -222,6 +222,118 @@ async fn this_workspaces_client_sends_each_segment_once() {
     }
 }
 
+type Events = Arc<std::sync::Mutex<Vec<String>>>;
+
+/// A full server and this workspace's client at a window of four, with a
+/// segment timeout of 300 ms, and one log of what the server takes in and
+/// sends, in order. Setting the flag loses the next segment on its way in.
+async fn logged_server_and_client() -> (
+    BACnetServer<TestTransport>,
+    BACnetClient<LoopbackTransport>,
+    Events,
+    Arc<AtomicBool>,
+) {
+    let (server_end, client_end) = LoopbackTransport::pair(SERVER_MAC.to_vec(), vec![0x01]);
+    let events: Events = Arc::default();
+    let lose = Arc::new(AtomicBool::new(false));
+    let (inbound, outbound, lose_next) =
+        (Arc::clone(&events), Arc::clone(&events), Arc::clone(&lose));
+    let transport = TestTransport::builder()
+        .inner(server_end)
+        .start(StartMode::Relay(64))
+        .on_inbound(move |frame| {
+            let npdu = decode_npdu(frame.npdu.clone()).unwrap();
+            let mut kept = Some(frame);
+            if let Ok(Apdu::ConfirmedRequest(request)) = decode_apdu(npdu.payload) {
+                let seq = request.sequence_number.unwrap_or(0);
+                if lose_next.swap(false, Ordering::SeqCst) {
+                    kept = None;
+                    inbound.lock().unwrap().push(format!("lost {seq}"));
+                } else {
+                    inbound.lock().unwrap().push(format!("in {seq}"));
+                }
+            }
+            async move { kept }
+        })
+        .on_send(move |frame| {
+            let npdu = decode_npdu(frame.npdu).unwrap();
+            let event = match decode_apdu(npdu.payload).unwrap() {
+                Apdu::SegmentAck(ack) if !ack.negative_ack => {
+                    format!("ack {}", ack.sequence_number)
+                }
+                Apdu::SimpleAck(_) => "answer".into(),
+                Apdu::Abort(_) => "abort".into(),
+                other => format!("{other:?}"),
+            };
+            outbound.lock().unwrap().push(event);
+            async { Ok(()) }
+        })
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Ignore)
+        .build();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(
+        CharacterStringValueObject::new(1, "CSV-1").unwrap(),
+    ))
+    .unwrap();
+    let config = ServerConfig {
+        device: bacnet_objects::DeviceIdentity::default()
+            .with_segmentation(Segmentation::SEGMENTED_BOTH),
+        ..ServerConfig::default()
+    };
+    let server = BACnetServer::start(config, db, transport).await.unwrap();
+    let client = BACnetClient::generic_builder()
+        .transport(client_end)
+        .apdu_timeout_ms(300)
+        .max_apdu_length(480)
+        .proposed_window_size(4)
+        .build()
+        .await
+        .unwrap();
+    (server, client, events, lose)
+}
+
+/// What the log holds once the link is quiet, emptied for the next request.
+async fn take_events(events: &Events) -> Vec<String> {
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    std::mem::take(&mut *events.lock().unwrap())
+}
+
+/// This server lost one copy of segment zero, so the client remembered it
+/// and sends its next request's whole first window (#2742). The server
+/// acknowledges segment zero at once, which forgets it; the request ends
+/// with the answer and no Abort, and the next one sends segment zero alone.
+#[tokio::test]
+async fn a_server_that_missed_segment_zero_once_is_forgotten_at_its_next_answer() {
+    let (mut server, mut client, events, lose_next) = logged_server_and_client().await;
+    let text = "r".repeat(1_100);
+    lose_next.store(true, Ordering::SeqCst);
+    write_text(&client, &text).await.unwrap();
+    assert_eq!(
+        take_events(&events).await,
+        ["lost 0", "in 0", "ack 0", "in 1", "in 2", "ack 2", "answer"]
+    );
+
+    write_text(&client, &text).await.unwrap();
+    let whole = take_events(&events).await;
+    assert_eq!(whole[..3], ["in 0", "in 1", "in 2"], "{whole:?}");
+    assert_eq!(
+        whole.iter().filter(|event| *event == "answer").count(),
+        1,
+        "{whole:?}"
+    );
+    assert!(!whole.iter().any(|event| event == "abort"), "{whole:?}");
+
+    write_text(&client, &text).await.unwrap();
+    assert_eq!(
+        take_events(&events).await,
+        ["in 0", "ack 0", "in 1", "in 2", "ack 2", "answer"]
+    );
+    assert_eq!(present_value(&server).await, text);
+    client.stop().await.unwrap();
+    server.stop().await.unwrap();
+}
+
 /// A requester that sends its whole first window unasked (as this
 /// workspace's client did before #2742), played by hand: all three segments
 /// of a request at once at a window of four, then, on segment zero's

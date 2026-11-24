@@ -66,7 +66,11 @@ again draws the invalid-state Abort above. This workspace's client sends segment
 waits for its answer, so it sends nothing twice to a server that answers at
 once; a receiver that never answers segment zero alone costs it one segment
 timeout, once (see the client's segmented requests in
-[the Rust API](rust-api.md#segmented-requests)).
+[the Rust API](rust-api.md#segmented-requests)). A requester that ignores
+any acknowledgment short of its window's end, for the record, now sees the
+segments it sends after segment zero's acknowledgment dropped as duplicates
+and then asked for again with a negative acknowledgment: about two segment
+timeouts for each request that spans more than one window.
 
 `DeviceIdentity` is shared by full servers and endpoints, with a 5000 ms
 segment timeout. `with_apdu_segment_timeout_ms(...)` changes both. An

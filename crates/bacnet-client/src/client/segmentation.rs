@@ -529,7 +529,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // the receiver's answer to it grants the window every later group
         // uses (Clause 5.4.4.1), unless this peer once left it unanswered
         // (`first_window`, #2742).
-        let (mut window_size, alone) = self.first_window(&tsm_mac);
+        let (mut window_size, first) = self.first_window(&tsm_mac);
         let mut next_seq: usize = 0;
         let mut neg_ack_retries: u32 = 0;
         // A local livelock bound with no counterpart in Clause 5.4.4.2, which
@@ -663,7 +663,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 }
                             },
                             _ = &mut segment_timer => {
-                                self.segment_zero_unanswered(alone && window_start == 0, &tsm_mac);
+                                self.segment_zero_unanswered(first, window_start, &tsm_mac);
                                 ack_retries += 1;
                                 if ack_retries > max_ack_retries {
                                     return Err(Error::abort(bacnet_types::enums::AbortReason::TSM_TIMEOUT));
@@ -714,7 +714,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     "Received SegmentAck"
                 );
 
-                window_size = ack.actual_window_size.max(1) as usize;
+                window_size = self.granted_window(first, window_start, &ack, &tsm_mac);
 
                 // Clause 5.4.4.2 gives positive and negative acks the same
                 // effect on the window: 'sequence-number' is the last segment
@@ -759,6 +759,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
         }
         .await;
+        self.segment_zero_answered(first, &mut seg_ack_rx, &tsm_mac);
         self.note_answer(limits.sized_by, &result);
         if let Some(lease) = limits.routed_path_lease.as_ref() {
             self.settle_routed(lease, (&tsm_mac, invoke_id, &owner), &mut result);

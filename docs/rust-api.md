@@ -9520,15 +9520,19 @@ prebuilt transport.
 A request too long for one APDU goes as segments. The client sends segment
 zero alone, carrying the window it proposes
 (`ClientConfig::proposed_window_size`, 1 by default), and takes the window
-for the rest from the receiver's answer (Clause 5.4.4.1, #2742). At a window
-above one, a receiver that leaves segment zero unanswered for a whole
-segment timeout is remembered, and from then on gets the whole first window
-at once, as such receivers expect: the request that taught it waits that
-one segment timeout and goes on if the receiver answers segment zero sent
-again, or fails if it drops that too, and its next request works. The
-client remembers up to 256 such peers (a routed peer apart from its
-router), forgets one only to make room for another, and forgets them all
-when it ends. A window of one is unchanged.
+for the rest from the receiver's answer, at least one and never more than
+it proposed (Clause 5.4.4.1, #2742). At a window above one, a receiver that
+leaves segment zero unanswered for a whole segment timeout is remembered,
+and from then on gets the whole first window at once, as receivers that
+never answer segment zero alone expect: the request that taught it waits
+that one segment timeout and goes on if the receiver answers segment zero
+sent again, or fails if it drops that too, and its next request works. A
+conforming receiver that was offline, lost a segment or answered slower
+than the segment timeout is remembered the same way; sent a whole first
+window, it acknowledges segment zero at once, and that forgets it. The
+client remembers up to 256 peers (a routed peer apart from its router),
+forgets the oldest to make room, and forgets them all when it ends. A
+window of one is unchanged.
 
 ### Choosing the client transport at runtime
 
