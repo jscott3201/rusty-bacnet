@@ -71,6 +71,25 @@ fn write(invoke_id: u8, text: &str) -> ConfirmedRequestPdu {
     }
 }
 
+/// A LifeSafetyOperation, which the CSV object can't take: executed, it
+/// draws an Error.
+fn life_safety_operation(invoke_id: u8) -> ConfirmedRequestPdu {
+    let mut body = BytesMut::new();
+    bacnet_services::life_safety::LifeSafetyOperationRequest {
+        requesting_process_identifier: 41,
+        requesting_source: "operator".into(),
+        request: bacnet_types::enums::LifeSafetyOperation::SILENCE,
+        object_identifier: None,
+    }
+    .encode(&mut body)
+    .unwrap();
+    ConfirmedRequestPdu {
+        service_choice: ConfirmedServiceChoice::LIFE_SAFETY_OPERATION,
+        service_request: body.freeze(),
+        ..write(invoke_id, "")
+    }
+}
+
 /// `request` sent in `count` segments at a window of one.
 fn in_segments(request: &ConfirmedRequestPdu, count: usize) -> Vec<Apdu> {
     let chunks = split_into(&request.service_request, count);
@@ -242,6 +261,26 @@ impl Rig {
                 return seq + 1;
             }
         }
+    }
+
+    /// Segments `seqs` of the answer to `invoke_id`, none the last, each
+    /// taken and acknowledged.
+    async fn take_and_ack(&mut self, invoke_id: u8, seqs: std::ops::Range<u8>) {
+        for seq in seqs {
+            assert!(self.answer_segment(invoke_id, seq).await);
+            self.ack(invoke_id, seq).await;
+        }
+    }
+
+    /// How many segments the answer to [`read`] has: one read under
+    /// another invoke ID, taken whole.
+    async fn segments_in_answer(&mut self) -> u8 {
+        let probe = INVOKE + 1;
+        self.request(read(probe)).await;
+        assert!(self.answer_segment(probe, 0).await);
+        let total = self.rest_of_answer(probe, 0).await;
+        assert!(total > 2);
+        total
     }
 
     async fn expect_ack(&mut self, invoke_id: u8, seq: u8, window: u8, context: &str) {
@@ -458,21 +497,7 @@ async fn a_life_safety_operation_during_the_answer_draws_the_abort() {
     let mut rig = Rig::start().await;
     rig.request(read(INVOKE)).await;
     assert!(rig.answer_segment(INVOKE, 0).await);
-    let mut body = BytesMut::new();
-    bacnet_services::life_safety::LifeSafetyOperationRequest {
-        requesting_process_identifier: 41,
-        requesting_source: "operator".into(),
-        request: bacnet_types::enums::LifeSafetyOperation::SILENCE,
-        object_identifier: None,
-    }
-    .encode(&mut body)
-    .unwrap();
-    rig.request(ConfirmedRequestPdu {
-        service_choice: ConfirmedServiceChoice::LIFE_SAFETY_OPERATION,
-        service_request: body.freeze(),
-        ..write(INVOKE, "")
-    })
-    .await;
+    rig.request(life_safety_operation(INVOKE)).await;
     rig.expect_abort(INVOKE).await;
     rig.quiet(PAST_EVERY_RESEND).await;
     rig.server.stop().await.unwrap();
@@ -480,7 +505,9 @@ async fn a_life_safety_operation_during_the_answer_draws_the_abort() {
 
 /// A segment already on its way when the different request comes goes out
 /// first, and the Abort after it: the sending task sends the Abort once it
-/// stops, never the dispatch loop beside it.
+/// stops, never the dispatch loop beside it. Until that Abort is issued,
+/// requests under the invoke ID are dropped, so none runs ahead of it and
+/// has its answer meet that Abort; after it, the invoke ID is free.
 #[tokio::test(start_paused = true)]
 async fn the_abort_follows_a_segment_already_on_its_way() {
     let mut rig = Rig::start().await;
@@ -491,10 +518,140 @@ async fn the_abort_follows_a_segment_already_on_its_way() {
     // Recorded as the send starts, then held.
     assert!(rig.answer_segment(INVOKE, 1).await);
     rig.request(write(INVOKE, "not executed")).await;
+    rig.request(write(INVOKE, "not executed")).await;
+    rig.request(write(INVOKE, "a third")).await;
+    rig.request(life_safety_operation(INVOKE)).await;
     rig.quiet(Duration::from_secs(1)).await;
     rig.link.release_sends(1);
     rig.expect_abort(INVOKE).await;
     rig.quiet(PAST_EVERY_RESEND).await;
     assert_eq!(rig.value().await, long_value());
+    rig.request(write(INVOKE, "a third")).await;
+    rig.expect_simple_ack(INVOKE).await;
+    assert_eq!(rig.value().await, "a third");
+    rig.server.stop().await.unwrap();
+}
+
+/// Once every segment has gone out, with none on its way and only the
+/// final Segment-ACK due, a different request takes that acknowledgment as
+/// lost: no Abort, nothing more of the answer, and the request is served,
+/// whole or in segments.
+#[tokio::test(start_paused = true)]
+async fn after_the_last_segment_a_different_request_is_served() {
+    let mut rig = Rig::start().await;
+    let total = rig.segments_in_answer().await;
+    for (round, segmented) in [false, true].into_iter().enumerate() {
+        // As long as the value read, so the next read's answer has as many
+        // segments.
+        let text = if segmented { "s" } else { "w" }.repeat(long_value().len());
+        rig.request(read(INVOKE)).await;
+        rig.take_and_ack(INVOKE, 0..total - 1).await;
+        assert!(!rig.answer_segment(INVOKE, total - 1).await);
+        if segmented {
+            let segments = in_segments(&write(INVOKE, &text), 3);
+            for (seq, segment) in segments.into_iter().enumerate() {
+                rig.send(segment).await;
+                rig.expect_ack(INVOKE, seq as u8, 1, "a segment of the new request")
+                    .await;
+            }
+        } else {
+            rig.request(write(INVOKE, &text)).await;
+        }
+        rig.expect_simple_ack(INVOKE).await;
+        assert_eq!(rig.value().await, text, "round {round}");
+        // Not the last segment again: the answer is over.
+        rig.quiet(PAST_EVERY_RESEND).await;
+    }
+    rig.server.stop().await.unwrap();
+}
+
+/// The same request again after the last segment is still a duplicate: the
+/// answer goes on, its last segment sent again until acknowledged.
+#[tokio::test(start_paused = true)]
+async fn after_the_last_segment_the_same_request_again_is_dropped() {
+    let mut rig = Rig::start().await;
+    let total = rig.segments_in_answer().await;
+    rig.request(read(INVOKE)).await;
+    rig.take_and_ack(INVOKE, 0..total - 1).await;
+    assert!(!rig.answer_segment(INVOKE, total - 1).await);
+    rig.request(read(INVOKE)).await;
+    rig.quiet(BEFORE_THE_RESEND).await;
+    assert!(!rig.answer_segment(INVOKE, total - 1).await);
+    rig.ack(INVOKE, total - 1).await;
+    rig.quiet(PAST_EVERY_RESEND).await;
+    rig.server.stop().await.unwrap();
+}
+
+/// A last segment still on its way, the first time or sent again, is not
+/// yet out: a different request draws the Abort, after that segment.
+#[tokio::test(start_paused = true)]
+async fn a_last_segment_on_its_way_leaves_the_answer_midway() {
+    for resent in [false, true] {
+        let mut rig = Rig::start().await;
+        let total = rig.segments_in_answer().await;
+        rig.request(read(INVOKE)).await;
+        rig.take_and_ack(INVOKE, 0..total - 2).await;
+        assert!(rig.answer_segment(INVOKE, total - 2).await);
+        if resent {
+            rig.ack(INVOKE, total - 2).await;
+            assert!(!rig.answer_segment(INVOKE, total - 1).await);
+            rig.link.block_next_send();
+            rig.quiet(BEFORE_THE_RESEND).await;
+        } else {
+            rig.link.block_next_send();
+            rig.ack(INVOKE, total - 2).await;
+        }
+        // Recorded as its send starts, then held.
+        assert!(!rig.answer_segment(INVOKE, total - 1).await);
+        rig.request(write(INVOKE, "not executed")).await;
+        rig.quiet(Duration::from_secs(1)).await;
+        rig.link.release_sends(1);
+        rig.expect_abort(INVOKE).await;
+        rig.quiet(PAST_EVERY_RESEND).await;
+        assert_eq!(rig.value().await, long_value(), "resent: {resent}");
+        rig.server.stop().await.unwrap();
+    }
+}
+
+/// A request in segments is judged when it is whole: one whose segment
+/// zero came midway, completed after the last segment went out, is served.
+#[tokio::test(start_paused = true)]
+async fn a_request_in_segments_is_judged_when_whole() {
+    let mut rig = Rig::start().await;
+    let total = rig.segments_in_answer().await;
+    rig.request(read(INVOKE)).await;
+    assert!(rig.answer_segment(INVOKE, 0).await);
+    let mut segments = in_segments(&write(INVOKE, "judged when whole"), 3).into_iter();
+    rig.send(segments.next().unwrap()).await;
+    rig.expect_ack(INVOKE, 0, 1, "segment zero, midway").await;
+    rig.ack(INVOKE, 0).await;
+    rig.take_and_ack(INVOKE, 1..total - 1).await;
+    assert!(!rig.answer_segment(INVOKE, total - 1).await);
+    for (seq, segment) in (1u8..).zip(segments) {
+        rig.send(segment).await;
+        rig.expect_ack(INVOKE, seq, 1, "the rest, after the last segment")
+            .await;
+    }
+    rig.expect_simple_ack(INVOKE).await;
+    assert_eq!(rig.value().await, "judged when whole");
+    rig.quiet(PAST_EVERY_RESEND).await;
+    rig.server.stop().await.unwrap();
+}
+
+/// A LifeSafetyOperation after the last segment is served too.
+#[tokio::test(start_paused = true)]
+async fn after_the_last_segment_a_life_safety_operation_is_served() {
+    let mut rig = Rig::start().await;
+    let total = rig.segments_in_answer().await;
+    rig.request(read(INVOKE)).await;
+    rig.take_and_ack(INVOKE, 0..total - 1).await;
+    assert!(!rig.answer_segment(INVOKE, total - 1).await);
+    rig.request(life_safety_operation(INVOKE)).await;
+    let reply = rig.reply_to_peer().await;
+    assert!(
+        matches!(reply, Apdu::Error(ref error) if error.invoke_id == INVOKE),
+        "executed, as it would be in IDLE: {reply:?}"
+    );
+    rig.quiet(PAST_EVERY_RESEND).await;
     rig.server.stop().await.unwrap();
 }

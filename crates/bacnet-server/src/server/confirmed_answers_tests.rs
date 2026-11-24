@@ -3,7 +3,7 @@
 //! are in `segmentation_tests/request_during_answer.rs`.
 
 use super::*;
-use crate::server::segmented_send::SegmentedSendControlEvent;
+use crate::server::segmented_send::{SegmentedSendControlEvent, Superseded};
 use bacnet_encoding::apdu::AbortPdu;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
@@ -69,8 +69,12 @@ fn closed(handle: &SegmentedSendHandle) -> bool {
     handle.closed.load(Ordering::Acquire)
 }
 
+/// A different request ends the answer, and its task owes the Abort. Until
+/// that Abort is issued (the task's guard drops at issue), the entry stays
+/// and any request under the key is dropped, so none runs ahead of it; then
+/// the invoke ID is free, and the late guard spares newer entries.
 #[test]
-fn a_different_request_ends_the_answer_and_frees_its_invoke_id() {
+fn a_different_request_ends_the_answer_and_the_abort_frees_its_invoke_id() {
     let tracker = Arc::new(ConfirmedRequestTracker::default());
     let answered = request(4, b"answered");
     let other = request(4, b"other");
@@ -87,17 +91,59 @@ fn a_different_request_ends_the_answer_and_frees_its_invoke_id() {
         *control.borrow(),
         Some(SegmentedSendControlEvent::Supersede)
     ));
+    let third = request(4, b"third");
+    assert!(aborts(begin(&tracker, other.clone())), "the same one again");
+    assert!(
+        aborts(begin(&tracker, third.clone())),
+        "a third, before the Abort"
+    );
     assert!(handle.finish(), "the task owes the Abort");
-    // The entry is over: either request is new, and the late guard of the
-    // answered one ends neither.
-    let other_again = new(begin(&tracker, other.clone()));
-    let answered_again = new(begin(&tracker, answered.clone()));
+    assert!(aborts(begin(&tracker, third.clone())), "while it is issued");
+    assert!(!handle.finish(), "owed once");
     drop(pending);
-    for body in [other, answered] {
+    let third_pending = new(begin(&tracker, third.clone()));
+    let other_again = new(begin(&tracker, other.clone()));
+    drop(handle);
+    for body in [third, other] {
         assert!(duplicate(begin(&tracker, body)));
     }
-    drop((other_again, answered_again));
+    drop((third_pending, other_again));
     assert!(tracker.state.lock().unwrap().entries.is_empty());
+}
+
+/// A requester's own Abort, routed while the server's Abort for a
+/// different request is still to be issued, leaves the entry to that issue.
+#[test]
+fn a_requesters_abort_leaves_the_entry_to_a_pending_abort() {
+    let tracker = Arc::new(ConfirmedRequestTracker::default());
+    let pending = new(begin(&tracker, request(4, b"answered")));
+    let (handle, _control) = answer(&pending);
+    assert!(aborts(begin(&tracker, request(4, b"other"))));
+    handle.end_request(&tracker);
+    assert!(aborts(begin(&tracker, request(4, b"third"))));
+    drop(pending);
+    drop(new(begin(&tracker, request(4, b"third"))));
+}
+
+/// A request over 64 KiB is kept by its digest: the same one again is a
+/// duplicate during the answer, and one differing in a single octet ends it.
+#[test]
+fn an_oversized_request_is_judged_by_its_digest_during_the_answer() {
+    let tracker = Arc::new(ConfirmedRequestTracker::default());
+    let body = vec![0x5A; 70 * 1024];
+    let oversized = |body: &Vec<u8>| ConfirmedRequest {
+        service_request: Bytes::copy_from_slice(body),
+        ..request(4, b"")
+    };
+    let pending = new(begin(&tracker, oversized(&body)));
+    let (handle, _control) = answer(&pending);
+    assert!(duplicate(begin(&tracker, oversized(&body))));
+    assert!(!closed(&handle));
+    let mut other = body.clone();
+    other[40_000] ^= 1;
+    assert!(aborts(begin(&tracker, oversized(&other))));
+    assert!(closed(&handle) && handle.finish());
+    drop(pending);
 }
 
 /// The service choice is part of the request.
@@ -252,14 +298,73 @@ fn a_note_whose_task_is_gone_ends_nothing() {
 #[test]
 fn the_abort_is_owed_once_and_only_by_an_answer_ended_while_sending() {
     let (sending, _control) = handle(None);
-    assert!(sending.supersede());
-    assert!(!sending.supersede(), "ended once");
-    assert!(sending.finish());
+    assert!(sending.sending());
+    assert_eq!(sending.supersede(), Some(Superseded::Aborted));
+    assert_eq!(
+        sending.supersede(),
+        Some(Superseded::AbortPending),
+        "ended once, its Abort pending"
+    );
+    assert!(!sending.sending(), "nothing more of the answer");
+    sending.last_sent();
+    assert!(sending.finish(), "still owed after its last send");
     assert!(!sending.finish(), "owed once");
     let (stopped, control) = handle(None);
     assert!(!stopped.finish());
-    assert!(!stopped.supersede());
+    assert_eq!(stopped.supersede(), None);
     assert!(!closed(&stopped) && control.borrow().is_none());
+}
+
+/// With every segment out and none on its way, a different request takes
+/// the final acknowledgment as lost: no Abort owed, and the task may not
+/// send again. A segment sent again after the last one puts the answer
+/// back on its way, and then the request draws the Abort.
+#[test]
+fn after_the_last_segment_the_final_ack_is_taken_unless_one_is_on_its_way() {
+    let (waiting, control) = handle(None);
+    waiting.last_sent();
+    assert_eq!(waiting.supersede(), Some(Superseded::FinalAckTaken));
+    assert!(closed(&waiting));
+    assert!(matches!(
+        *control.borrow(),
+        Some(SegmentedSendControlEvent::Supersede)
+    ));
+    assert!(!waiting.sending(), "no segment again");
+    assert!(!waiting.finish(), "no Abort owed");
+    let (resending, _control) = handle(None);
+    resending.last_sent();
+    assert!(resending.sending(), "the last segment again, on its way");
+    assert_eq!(resending.supersede(), Some(Superseded::Aborted));
+    resending.last_sent();
+    assert!(resending.finish());
+}
+
+/// The tracker's side of it: the answer's entry ends and the request is
+/// admitted as new, served; a LifeSafetyOperation is not refused either.
+#[test]
+fn after_the_last_segment_a_different_request_is_admitted_as_new() {
+    for lso in [false, true] {
+        let tracker = Arc::new(ConfirmedRequestTracker::default());
+        let answered = request(4, b"answered");
+        let pending = new(begin(&tracker, answered.clone()));
+        let (handle, _control) = answer(&pending);
+        handle.last_sent();
+        let other = if lso {
+            let unverified = TransportProvenance::unverified();
+            assert!(!tracker.supersede_answer(b"peer", None, &unverified, 4));
+            None
+        } else {
+            Some(new(begin(&tracker, request(4, b"other"))))
+        };
+        assert!(closed(&handle) && !handle.finish());
+        let again = new(begin(&tracker, answered.clone()));
+        drop(pending);
+        assert!(
+            duplicate(begin(&tracker, answered)),
+            "the late guard spared it"
+        );
+        drop((again, other));
+    }
 }
 
 /// While its answer goes out in segments, a segment zero under a request

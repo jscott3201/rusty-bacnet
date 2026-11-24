@@ -48,11 +48,7 @@ impl TrackerState {
     ) -> impl DoubleEndedIterator<Item = u64> + 'a {
         self.entries
             .iter()
-            .filter(move |entry| {
-                entry.requester == *requester
-                    && entry.direct_identity == *direct_identity
-                    && entry.invoke_id == invoke_id
-            })
+            .filter(move |entry| entry.is_under(requester, direct_identity, invoke_id))
             .map(|entry| entry.id)
     }
 }

@@ -83,22 +83,41 @@ and under the same invoke ID, is compared with the request being answered
 comes whole is dropped, and a segment of one that came in segments, other
 than segment zero, is acknowledged again with its last acknowledgment. The
 answer goes on, so a requester that lost the answer's first segment and sent
-its request again still gets the answer from the server's own resend. Any
-other request, a LifeSafetyOperation among them, is not executed: the server
-sends nothing more of the answer and answers the request with one Abort
-(INVALID_APDU_IN_THIS_STATE), which the answer's sending task sends after any
-segment already on its way, so no segment follows it; the invoke ID is then
-free for the requester's next request. A request that comes in segments is
-known whole only once its last segment is in, so its segments are
-acknowledged before that Abort; for that reason a segment zero during such an
-answer opens a transfer of its own rather than drawing the last
-acknowledgment above, the same request sent again from segment zero too,
-which is then dropped once whole. Other requesters are unaffected, another
-network behind the same address among them. An answer whose task has stopped
-sending (its retries spent) is over, and a request after it is new. Before
-any answer, while the request still executes, the rules above for a segment
-sent again stand, and a different request that comes whole is executed as a
-new one.
+its request again still gets the answer from the server's own resend.
+
+Any other request, a LifeSafetyOperation among them, ends the answer: the
+server sends nothing more of it. What happens to the request depends on
+where the answer is at that moment:
+
+- Midway (a segment still to send, or one on its way): the request is not
+  executed and gets one Abort (INVALID_APDU_IN_THIS_STATE). The answer's
+  sending task sends that Abort after any segment already on its way, so no
+  segment follows it. Until the Abort is issued, any further request under
+  the invoke ID is dropped, so none runs ahead of it; then the invoke ID is
+  free.
+- Every segment sent, none on its way, only the final Segment-ACK due: that
+  acknowledgment is taken as lost, since a requester reuses the invoke ID
+  only once it is done with the answer. No Abort goes out, and the request
+  is served as a new one, as in 0.15.0. A last segment sent again on its
+  segment timeout is on its way until its send completes.
+
+A request that comes in segments is known whole only once its last segment
+is in, so its segments are acknowledged first and the answer's state when it
+is whole decides. For that reason a segment zero during such an answer opens
+a transfer of its own rather than drawing the last acknowledgment above, the
+same request sent again from segment zero too, which is then dropped once
+whole. A copy of segment zero is not taken for a repeat even when it matches
+the first segment of the request being answered: a requester that resends
+its whole request starts again at segment zero with a window of one, and the
+last acknowledgment lies outside that window. The cost is that a stray copy
+of segment zero with nothing after it opens a transfer that ends with an
+Abort (OTHER) at the 16-second limit above, as it does once the answer is
+over. Other requesters are unaffected, another network behind the same
+address among them. An answer whose task has stopped sending (its retries
+spent) is over, and a request after it is new. Before any answer, while the
+request still executes, the rules above for a segment sent again stand, and
+a different request that comes whole is executed as a new one.
+
 This workspace's client sends segment zero alone and
 waits for its answer, so it sends nothing twice to a server that answers at
 once; a receiver that never answers segment zero alone costs it one segment

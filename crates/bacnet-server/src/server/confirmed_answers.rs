@@ -15,21 +15,35 @@
 //! The sending task notes its answer here as it starts, beside the pending
 //! entry. `begin` looks at the notes only once an entry under the request's
 //! requester, identity and invoke ID is pending, so a request with none pays
-//! nothing for them. A different request then ends that entry, so the invoke
-//! ID is free, and the answer: its task sends the Abort once it stops, after
-//! any segment already on its way ([`SegmentedSendHandle::supersede`]). The
-//! request itself is not executed. An answer whose task has stopped sending
-//! is over, and the request is admitted as new.
+//! nothing for them. A different request then ends the answer
+//! ([`SegmentedSendHandle::supersede`]). Midway, the answer's task sends the
+//! Abort once it stops, after any segment already on its way, and the
+//! request is not executed; the entry lasts until that Abort is issued, and
+//! any request under the key meanwhile is dropped, so nothing runs ahead of
+//! the Abort under the invoke ID. Once every segment has gone out, with
+//! none on its way and only the final Segment-ACK due, that acknowledgment
+//! is taken as lost: a conforming requester reuses the invoke ID only once
+//! it is done with the answer. The entry ends, no Abort goes out, and the
+//! request is admitted as new, as in 0.15.0. So is one after an answer whose
+//! task has stopped sending.
 //!
 //! A request that comes in segments is known whole only once its last
 //! segment is in; its segments are acknowledged first. A segment zero during
 //! the answer therefore opens a transfer of its own rather than drawing the
 //! note of a request that came in segments
 //! ([`ConfirmedRequestTracker::repeated_segment`]), and the whole request is
-//! judged here: dropped when it is the same request, an Abort when not.
+//! judged here, by the answer's state when it is whole: dropped when it is
+//! the same request; else the Abort or served, as above. A segment zero is
+//! not taken for a repeat even when it matches the request's first segment:
+//! a requester that lost the answer's first segment sends its whole request
+//! again from segment zero at a window of one, and the note's acknowledgment
+//! of the last segment is outside that window, so it would stall (Clause
+//! 5.4.4.2). The cost is a stray copy of segment zero with nothing after it,
+//! which opens a transfer that ends with an Abort (OTHER) at the receiver's
+//! 16 s no-progress limit, as one does once the answer is over.
 
 use super::*;
-use crate::server::segmented_send::SegmentedSendHandle;
+use crate::server::segmented_send::{SegmentedSendHandle, Superseded};
 use std::sync::Weak;
 
 /// An answer the task `handle` sends in segments for pending entry `id`.
@@ -59,8 +73,12 @@ impl ConfirmedRequestTracker {
 
     /// End the segmented answer in progress under this requester, trust
     /// context and invoke ID for a request that differs from the one it
-    /// answers; see [`TrackerState::supersede_answer`]. A LifeSafetyOperation,
-    /// which the tracker's entries don't follow, asks this first.
+    /// answers; see [`TrackerState::supersede_answer`]. True when that
+    /// request is not executed (it draws the Abort, or one is still to be
+    /// issued under the key); false when it is served (no answer in
+    /// progress, or its final acknowledgment taken as lost). A
+    /// LifeSafetyOperation, which the tracker's entries don't follow, asks
+    /// this first.
     pub(in crate::server) fn supersede_answer(
         &self,
         source_mac: &[u8],
@@ -74,7 +92,10 @@ impl ConfirmedRequestTracker {
         }
         let requester = canonical_requester(source_mac, source_network);
         let direct_identity = provenance.direct_sc_identity();
-        state.supersede_answer(&requester, &direct_identity, invoke_id)
+        matches!(
+            state.supersede_answer(&requester, &direct_identity, invoke_id),
+            Some(Superseded::Aborted | Superseded::AbortPending)
+        )
     }
 
     fn lock_state(&self) -> std::sync::MutexGuard<'_, TrackerState> {
@@ -87,8 +108,9 @@ impl ConfirmedRequestTracker {
 impl TrackerState {
     /// The rest of `begin`'s decision once entry `first` is pending under the
     /// request's requester, identity and invoke ID: a duplicate when one such
-    /// entry holds this very request; else the Abort when one such entry's
-    /// answer is in progress; else nothing (admit it as new).
+    /// entry holds this very request; else dropped when one such entry's
+    /// answer is in progress midway or its Abort still to be issued; else
+    /// nothing (admit it as new).
     #[cold]
     pub(super) fn admit_same_key(
         &mut self,
@@ -103,20 +125,30 @@ impl TrackerState {
         }) {
             return Some(ConfirmedRequestAdmission::Duplicate);
         }
-        self.supersede_answer(requester, direct_identity, invoke_id)
-            .then_some(ConfirmedRequestAdmission::AbortsAnswer)
+        match self.supersede_answer(requester, direct_identity, invoke_id) {
+            Some(Superseded::Aborted | Superseded::AbortPending) => {
+                Some(ConfirmedRequestAdmission::AbortsAnswer)
+            }
+            // Its final acknowledgment taken as lost, the answer is over and
+            // its entry ended: the request is admitted as new.
+            Some(Superseded::FinalAckTaken) | None => None,
+        }
     }
 
-    /// Supersede the answer under this key that is still sending, and end
-    /// its entry. Newest first: a newer answer under a key cancels the
-    /// older one, so at most one is sending once that lands. False, with
-    /// nothing changed, when none is.
+    /// Supersede the answer under this key that is still in progress.
+    /// Newest first: a newer answer under a key cancels the older one, so
+    /// at most one is in progress once that lands. Its final acknowledgment
+    /// taken as lost, its entry ends now. Ended with an Abort, its entry
+    /// lasts until the task issues that Abort, and a request under the key
+    /// meanwhile is dropped ([`Superseded::AbortPending`]), so none runs
+    /// ahead of the Abort. `None`, with nothing changed, when none is in
+    /// progress.
     fn supersede_answer(
         &mut self,
         requester: &CanonicalRequester,
         direct_identity: &Option<DirectScIdentity>,
         invoke_id: u8,
-    ) -> bool {
+    ) -> Option<Superseded> {
         let Self {
             entries, answers, ..
         } = self;
@@ -125,18 +157,22 @@ impl TrackerState {
             let under_key = entries.iter().any(|entry| {
                 entry.id == answer.id && entry.is_under(requester, direct_identity, invoke_id)
             });
-            if under_key
-                && answer
-                    .handle
-                    .upgrade()
-                    .is_some_and(|handle| handle.supersede())
+            if !under_key {
+                continue;
+            }
+            if let Some(ended) = answer
+                .handle
+                .upgrade()
+                .and_then(|handle| handle.supersede())
             {
-                let id = answers.remove(at).id;
-                entries.retain(|entry| entry.id != id);
-                return true;
+                if ended == Superseded::FinalAckTaken {
+                    let id = answers.remove(at).id;
+                    entries.retain(|entry| entry.id != id);
+                }
+                return Some(ended);
             }
         }
-        false
+        None
     }
 
     /// Whether pending entry `id` is answered in segments.

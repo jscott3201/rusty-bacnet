@@ -348,9 +348,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         'send_segments: while seg_idx < total_segments {
             // Before every send, not only while waiting: a segment sent
-            // again after a requester's Abort could reach a new request
-            // under the same invoke ID.
-            if send_closed(&send_handle, &mut control_rx, seg_ack_senders, invoke_id) {
+            // again after a requester's Abort, or after a different request
+            // took the final acknowledgment as lost (#2770), could reach a
+            // new request under the same invoke ID.
+            if send_closed(&send_handle, &mut control_rx, seg_ack_senders, invoke_id)
+                || !send_handle.sending()
+            {
                 break;
             }
             let is_last = seg_idx == total_segments - 1;
@@ -387,6 +390,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
 
             debug!(seq = seg_idx, is_last, "Sent ComplexAck segment");
+            if is_last {
+                send_handle.last_sent();
+            }
 
             let ack_deadline = tokio::time::Instant::now() + seg_timeout;
             loop {
@@ -468,10 +474,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                     retries = retransmission_retries,
                                     "Too many negative SegmentAck retries, aborting segmented send"
                                 );
+                                // Settled first, so this is the one Abort
+                                // even if a different request has just
+                                // ended the answer (#2770): then it is that
+                                // request's.
+                                let abort_reason = if send_handle.finish() {
+                                    AbortReason::INVALID_APDU_IN_THIS_STATE
+                                } else {
+                                    AbortReason::TSM_TIMEOUT
+                                };
                                 let abort = Apdu::Abort(AbortPdu {
                                     sent_by_server: true,
                                     invoke_id,
-                                    abort_reason: AbortReason::TSM_TIMEOUT,
+                                    abort_reason,
                                 });
                                 let mut abort_buf = BytesMut::new();
                                 encode_apdu(&mut abort_buf, &abort).expect("valid APDU encoding");
@@ -545,8 +560,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         }
         // A different request came under this requester and invoke ID
-        // (Clause 5.4.5.4, #2770): its Abort goes out here, after the last
-        // segment this task sent, so no segment follows it.
+        // midway (Clause 5.4.5.4, #2770): its Abort goes out here, after the
+        // last segment this task sent, so no segment follows it.
         if send_handle.finish() {
             let abort = Apdu::Abort(AbortPdu {
                 sent_by_server: true,
