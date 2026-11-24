@@ -13,13 +13,18 @@
 //! own timeout drops them; a page's first batch still being read
 //! [`FIRST_GRACE`] past it fails the call, naming the batch ([`stuck`]).
 //!
-//! Either way the device is slow at that size, so its slow limit
-//! ([`Ctx::slow`](crate::context::Ctx)) becomes half the properties of the
-//! batch dropped: the next attempt there asks for fewer objects, down to
-//! one, which is #2786's per-object rule. No page is stuck for good on a
-//! batch too slow to read whole, and the limit lives in the server, not
-//! the cursor, since a stuck first batch returns no cursor.
+//! Either way, for a batch of several objects, the device is slow at that
+//! size, so its slow limit ([`Ctx::slow`](crate::context::Ctx)) becomes
+//! half the properties of the batch dropped: the next attempt there asks
+//! for fewer objects, down to one, which is #2786's per-object rule. No
+//! page is stuck for good on a batch too slow to read whole. The limit
+//! lives in the server, not the cursor, since a stuck first batch returns
+//! no cursor; it lasts [`LIST_TTL`], as a cached Object_List does, so a
+//! device slowed by one passing blip is asked in full batches again, and a
+//! device still slow pays one dropped batch again.
 
+use std::collections::HashMap;
+use std::sync::PoisonError;
 use std::time::Duration;
 
 use bacnet_ops::inventory::properties;
@@ -27,9 +32,10 @@ use bacnet_ops::label::kebab;
 use bacnet_ops::{DeviceAddress, InventoryOptions, OpsError, PointRecords};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::primitives::ObjectIdentifier;
+use tokio::time::Instant;
 
 use super::{GRACE, out_of_budget};
-use crate::context::{Call, Ctx, Device, LIST_CAP};
+use crate::context::{Call, Ctx, Device, LIST_CAP, LIST_TTL, SlowLimit};
 use crate::errors::ToolError;
 use crate::value::object_text;
 
@@ -74,7 +80,7 @@ pub(super) async fn next_batch<'a, T: TransportPort + 'static>(
     opening: bool,
 ) -> Result<(&'a [ObjectIdentifier], Batch), ToolError> {
     let count = device.handle.point_batch(rest, options);
-    let count = count.min(within(slow_limit(ctx, &device.address), rest, options));
+    let count = count.min(within(slow_limit(ctx, device), rest, options));
     let batch = &rest[..count];
     let grace = if opening { FIRST_GRACE } else { OBJECT_GRACE };
     let read = device.handle.point_records(batch, options);
@@ -82,7 +88,7 @@ pub(super) async fn next_batch<'a, T: TransportPort + 'static>(
         Ok(Ok(read)) => Ok((batch, Batch::Read(read))),
         Ok(Err(error)) => Ok((batch, Batch::Failed(error))),
         Err(_) => {
-            slowed(ctx, &device.address, batch, options);
+            slowed(ctx, device, batch, options);
             if opening {
                 let budget = ctx.policy.caps.budget;
                 return Err(stuck(call, budget, device.instance, batch));
@@ -93,14 +99,28 @@ pub(super) async fn next_batch<'a, T: TransportPort + 'static>(
     }
 }
 
-/// The most properties a batch asks the device at `address` for, once a
-/// batch outlasted a call's budget there.
-fn slow_limit<T: TransportPort + 'static>(ctx: &Ctx<T>, address: &DeviceAddress) -> Option<usize> {
-    let slow = ctx
-        .slow
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    slow.get(address).copied()
+/// The most properties a batch asks `device` for, once a batch of several
+/// objects outlasted a call's budget there.
+fn slow_limit<T: TransportPort + 'static>(ctx: &Ctx<T>, device: &Device<T>) -> Option<usize> {
+    let mut slow = ctx.slow.lock().unwrap_or_else(PoisonError::into_inner);
+    limit_of(&mut slow, &device.address, device.instance, Instant::now())
+}
+
+/// The limit `slow` holds for the device `instance` at `address` at `now`,
+/// forgetting one learned [`LIST_TTL`] or more before, or for another
+/// instance: another device may answer there now.
+fn limit_of(
+    slow: &mut HashMap<DeviceAddress, SlowLimit>,
+    address: &DeviceAddress,
+    instance: u32,
+    now: Instant,
+) -> Option<usize> {
+    let limit = slow.get(address)?;
+    if limit.instance != instance || now.saturating_duration_since(limit.learned) >= LIST_TTL {
+        slow.remove(address);
+        return None;
+    }
+    Some(limit.properties)
 }
 
 /// How many of `objects`, from the first, ask for no more than `limit`
@@ -121,31 +141,59 @@ fn within(limit: Option<usize>, objects: &[ObjectIdentifier], options: &Inventor
     fitting.max(1).min(objects.len())
 }
 
-/// Remember that `batch` outlasted a call's budget at `address`: batches
-/// there ask for half its properties from now on, down to one object.
+/// Remember that `batch` outlasted a call's budget at `device`: batches
+/// there ask for half its properties for the next [`LIST_TTL`], down to
+/// one object. A batch of one teaches nothing, one being the least a batch
+/// holds: one slow object, which the agent can step around, leaves the
+/// rest of the device's batches as they were.
 fn slowed<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
-    address: &DeviceAddress,
+    device: &Device<T>,
     batch: &[ObjectIdentifier],
     options: &InventoryOptions,
 ) {
+    if batch.len() < 2 {
+        return;
+    }
     let asked: usize = batch
         .iter()
         .map(|object| properties(object.object_type(), options).len())
         .sum();
-    let limit = (asked / 2).max(1);
-    let mut slow = ctx
-        .slow
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut slow = ctx.slow.lock().unwrap_or_else(PoisonError::into_inner);
+    let limit = SlowLimit {
+        properties: (asked / 2).max(1),
+        instance: device.instance,
+        learned: Instant::now(),
+    };
+    remember(&mut slow, &device.address, limit);
+}
+
+/// Keep `limit` for `address`, or the smaller one still kept for the same
+/// device, learned now; when [`LIST_CAP`] devices are kept, the one
+/// learned longest ago goes.
+fn remember(
+    slow: &mut HashMap<DeviceAddress, SlowLimit>,
+    address: &DeviceAddress,
+    limit: SlowLimit,
+) {
+    let kept = limit_of(slow, address, limit.instance, limit.learned);
+    let properties = kept.map_or(limit.properties, |kept| kept.min(limit.properties));
     if !slow.contains_key(address) && slow.len() >= LIST_CAP {
-        // Full: an arbitrary device's limit goes, to be learned again.
-        if let Some(gone) = slow.keys().next().cloned() {
-            slow.remove(&gone);
+        let oldest = slow
+            .iter()
+            .min_by_key(|(_, kept)| kept.learned)
+            .map(|(address, _)| address.clone());
+        if let Some(oldest) = oldest {
+            slow.remove(&oldest);
         }
     }
-    let known = slow.entry(address.clone()).or_insert(limit);
-    *known = (*known).min(limit);
+    slow.insert(
+        address.clone(),
+        SlowLimit {
+            properties,
+            ..limit
+        },
+    );
 }
 
 /// The error for a page's first batch, `batch`, still being read
@@ -196,5 +244,77 @@ pub(super) fn stuck(
         error: Box::new(error),
         object: object_text(object.object_type(), object.instance_number()),
         hint,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bacnet_types::enums::ObjectType;
+
+    use super::*;
+
+    fn at(n: u8) -> DeviceAddress {
+        DeviceAddress::local(&[10, 0, 0, n, 0xBA, 0xC0]).unwrap()
+    }
+
+    fn limit(properties: usize, instance: u32, learned: Instant) -> SlowLimit {
+        SlowLimit {
+            properties,
+            instance,
+            learned,
+        }
+    }
+
+    /// A limit below one object's properties still reads that one object.
+    #[test]
+    fn a_limit_below_one_object_reads_one() {
+        let options = InventoryOptions::new().with_values(true);
+        let inputs: Vec<ObjectIdentifier> = (1..=4)
+            .map(|n| ObjectIdentifier::new(ObjectType::ANALOG_INPUT, n).unwrap())
+            .collect();
+        // An analog input with values asks for seven.
+        assert_eq!(within(Some(1), &inputs, &options), 1);
+        assert_eq!(within(Some(6), &inputs, &options), 1);
+        assert_eq!(within(Some(14), &inputs, &options), 2);
+        assert_eq!(within(None, &inputs, &options), 4);
+    }
+
+    /// A limit lasts five minutes, the Object_List cache's time, and is
+    /// forgotten when the address has another instance; the same device
+    /// keeps the smaller of two.
+    #[tokio::test(start_paused = true)]
+    async fn a_limit_expires_and_belongs_to_its_device() {
+        let mut slow = HashMap::new();
+        remember(&mut slow, &at(2), limit(16, 7, Instant::now()));
+        remember(&mut slow, &at(2), limit(20, 7, Instant::now()));
+        assert_eq!(limit_of(&mut slow, &at(2), 7, Instant::now()), Some(16));
+        tokio::time::advance(LIST_TTL - Duration::from_secs(1)).await;
+        assert_eq!(limit_of(&mut slow, &at(2), 7, Instant::now()), Some(16));
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let expired = limit_of(&mut slow, &at(2), 7, Instant::now());
+        assert_eq!(expired, None, "expired");
+        assert!(slow.is_empty());
+        remember(&mut slow, &at(3), limit(8, 7, Instant::now()));
+        let other = limit_of(&mut slow, &at(3), 8, Instant::now());
+        assert_eq!(other, None, "another device at the address");
+        assert!(slow.is_empty());
+    }
+
+    /// At the cap the limit learned longest ago goes, whatever the map's
+    /// order.
+    #[tokio::test(start_paused = true)]
+    async fn the_oldest_limit_goes_at_the_cap() {
+        let mut slow = HashMap::new();
+        let cap = u8::try_from(LIST_CAP).unwrap();
+        // Learned from the last address down, so the oldest is the last.
+        for n in (1..=cap).rev() {
+            remember(&mut slow, &at(n), limit(4, u32::from(n), Instant::now()));
+            tokio::time::advance(Duration::from_millis(10)).await;
+        }
+        assert_eq!(slow.len(), LIST_CAP);
+        remember(&mut slow, &at(200), limit(4, 200, Instant::now()));
+        assert_eq!(slow.len(), LIST_CAP);
+        assert!(!slow.contains_key(&at(cap)), "the oldest went");
+        assert!(slow.contains_key(&at(1)) && slow.contains_key(&at(200)));
     }
 }

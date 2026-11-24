@@ -222,11 +222,16 @@ settings and details. Read-only; not listed in passive mode.
   naming its first object and `hint` the ways past it: for a batch of
   several, its range (`the 16 objects from it to trend-log:16`) and that
   calling again reads fewer at a time; for one object, #2786's `bacnet_read`
-  on it; and `types` leaving its type out. Either way the server
-  remembers the device as slow at that size (for up to 64 devices, while
-  it runs): every later batch there asks for half the properties of the
-  one dropped, down to one object, so calling again makes progress, and a
-  slow device ends every page with at least one record. The cursor holds the next object's place and a fingerprint of
+  on it; and `types` leaving its type out. Either way, for a batch of
+  several objects, the server remembers the device as slow at that size:
+  every later batch there asks for half the properties of the one
+  dropped, down to one object, so calling again makes progress, and a
+  slow device ends every page with at least one record. The limit is the
+  server session's, kept 5 minutes (as a cached Object_List is) or until
+  another instance is seen at the address, for up to 64 devices, the
+  oldest going first; a device still slow then pays one dropped batch
+  again. A batch of one object dropped changes nothing: that object alone
+  is slow, and the agent can step around it. The cursor holds the next object's place and a fingerprint of
   the matching objects, bound as every cursor is to the call's other
   arguments, the principal and ten minutes; a list changed since the
   cursor's page is refused (`failed`) after the list read, with nothing

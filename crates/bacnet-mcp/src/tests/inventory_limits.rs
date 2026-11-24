@@ -165,6 +165,9 @@ async fn a_batch_well_past_the_budget_is_let_go() {
     again["cursor"] = body["next_cursor"].clone();
     let rest = lab.agent.call(TOOL, again).await;
     assert_eq!(object(&points(&rest)[0]), "analog-input:10");
+    // A batch of one let go teaches nothing: the device's batches stay as
+    // they were.
+    assert!(lab.mcp.ctx().slow.lock().unwrap().is_empty());
     lab.stop().await;
 }
 
@@ -230,6 +233,18 @@ async fn a_stuck_first_object_is_named() {
         hint.starts_with("it alone outlasted the call's budget. Read it with bacnet_read"),
         "{hint}"
     );
+    // The two inputs' 14 properties halved; the one stuck alone after
+    // them changes nothing.
+    let at = bacnet_ops::DeviceAddress::local(&super::LAB_MAC).unwrap();
+    let slow = lab
+        .mcp
+        .ctx()
+        .slow
+        .lock()
+        .unwrap()
+        .get(&at)
+        .map(|limit| limit.properties);
+    assert_eq!(slow, Some(7));
     holder.abort();
     lab.stop().await;
 }

@@ -162,8 +162,11 @@ impl DeviceSummary {
 /// [`Device::point_records`] can ask it for, once it couldn't send a larger
 /// batch's answer ([`rpm_limit`](Self::rpm_limit)). The last two go when
 /// the discovery table loses its row at that address or a device there
-/// announces another instance, since another device may answer there now;
-/// each is kept for at most 4,096 addresses.
+/// announces another instance, since another device may answer there now,
+/// and all of them go when more of the table's changes came at once than
+/// the client's channel holds, as it then can't tell which addresses
+/// changed: each device's next point records cost one refused request to
+/// learn the limit again. Each is kept for at most 4,096 addresses.
 ///
 /// The transport type defaults to [`AnyTransport`], which the connect
 /// builders ([`bip`](Client::bip) and the others) make, so an application
@@ -435,8 +438,11 @@ impl<T: TransportPort + 'static> Client<T> {
     /// smaller batches, which cost more requests but are never refused for
     /// their size again. It goes, with the instance read for the address,
     /// when the discovery table loses its row at that address or a device
-    /// there announces another instance, and then starts again from 32. A
-    /// timeout, a silent device or any other error leaves it as it was. An
+    /// there announces another instance, and then starts again from 32;
+    /// every device's goes when a burst of the table's changes overran the
+    /// client's channel, and its next point records cost one refused
+    /// request to learn it again. A timeout, a silent device or any other
+    /// error leaves it as it was. An
     /// [`inventory`](crate::Device::inventory) keeps its own count, which
     /// starts at 16 objects for each inventory and never reads or sets
     /// this.

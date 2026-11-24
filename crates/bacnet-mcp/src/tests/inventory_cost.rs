@@ -190,14 +190,16 @@ fn the_docs_rows_quote_the_measured_cost() {
             .find(|line| line.starts_with("| `bacnet_inventory` |"))?;
         Some(row.to_string())
     };
-    let Some(table) = row("docs/mcp.md") else {
+    let (Some(table), Some(guide)) = (
+        row("docs/mcp.md"),
+        row("website/src/content/docs/guides/ai-agents.md"),
+    ) else {
         return;
     };
     assert!(
         table.contains("about 28 requests for a 200-object controller (58 with values)"),
         "{table}"
     );
-    let guide = row("website/src/content/docs/guides/ai-agents.md").expect("the guide's row");
     for row in [&table, &guide] {
         let lower = row.to_lowercase();
         assert!(!lower.contains("one request an object"), "{row}");

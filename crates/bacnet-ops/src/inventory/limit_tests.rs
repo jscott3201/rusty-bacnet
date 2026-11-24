@@ -185,3 +185,14 @@ async fn the_limit_goes_with_the_device_at_its_address() {
         "another address's stays"
     );
 }
+
+/// A limit below one object's properties still reads that one object.
+#[test]
+fn a_limit_below_one_object_still_reads_one() {
+    use super::read::{Sizing, one_batch};
+    let objects = outputs(1..=3);
+    let one = one_batch(&objects, Sizing::pager(1), &every_option(), None);
+    assert_eq!(one, (1, 14), "one output, all of its properties");
+    let two = one_batch(&objects, Sizing::pager(28), &every_option(), None);
+    assert_eq!(two, (2, 28));
+}
