@@ -22,7 +22,9 @@
 //! leaves it out ([`oversized_text`]). A page's later object still being
 //! read [`OBJECT_GRACE`] past the budget is let go and read again on the
 //! next page, so the records before it come back before the call's own
-//! timeout. `ended` says which of these ended the page. The cursor holds
+//! timeout; a first object still being read [`FIRST_GRACE`] past it fails
+//! the call, naming the object and the ways past it ([`stuck`]). `ended`
+//! says which of these ended the page. The cursor holds
 //! the next object's place and a fingerprint of the matching objects (the
 //! export's [`Position`]), so a list changed between pages is refused
 //! rather than paged wrong.
@@ -48,7 +50,7 @@ use serde_json::{Map, Value, json};
 use super::export::{Position, fingerprint};
 use super::inventory_data::{point, problem_schema, problems_of, record_json};
 use super::list::listing;
-use super::{GRACE, MAX_TEXT, Spec, next, render, schema, start};
+use super::{GRACE, MAX_TEXT, Spec, next, out_of_budget, render, schema, start};
 use crate::context::{Call, Ctx, Device, DeviceArg};
 use crate::errors::ToolError;
 use crate::value::object_text;
@@ -313,12 +315,17 @@ impl Page {
     }
 
     /// Hand the last record back to the next page, which starts with it;
-    /// the page's records begin at `first` among the matching objects.
+    /// the page's records begin at `first` among the matching objects. A
+    /// page the device ended keeps saying so, beside its `stopped`.
     fn hand_back(&mut self, first: usize) {
         if let Some((_, size)) = self.points.pop() {
             self.size -= size;
         }
-        self.end(first + self.points.len(), Ended::Size);
+        let why = match self.ended {
+            Ended::Device => Ended::Device,
+            _ => Ended::Size,
+        };
+        self.end(first + self.points.len(), why);
     }
 
     /// Why the page ends before its next object, if it does: it holds
@@ -344,6 +351,39 @@ impl Page {
 /// the call's own timeout drops them.
 const OBJECT_GRACE: Duration = Duration::from_secs(GRACE.as_secs() / 2);
 
+/// How long past the budget a page's first object may take: the call's
+/// grace, less a second, so it is this tool that names the object rather
+/// than the call's own timeout saying nothing of it.
+const FIRST_GRACE: Duration = GRACE.saturating_sub(Duration::from_secs(1));
+
+/// The error for a page's first object, `object`, still being read
+/// [`FIRST_GRACE`] past the budget: the call's own (a timeout once it has
+/// sent requests), naming the object and the ways past it that exist.
+fn stuck(call: &Call, budget: Duration, device: u32, object: ObjectIdentifier) -> ToolError {
+    let error = match out_of_budget(call, budget) {
+        ToolError::Timeout { busy, .. } => {
+            call.timed_out();
+            let after = call.started.elapsed().as_millis();
+            ToolError::Timeout {
+                device: Some(device),
+                after_ms: u64::try_from(after).unwrap_or(u64::MAX),
+                busy,
+            }
+        }
+        refused => refused,
+    };
+    let kind = kebab(object.object_type());
+    ToolError::At {
+        error: Box::new(error),
+        object: object_text(object.object_type(), object.instance_number()),
+        hint: format!(
+            "it alone outlasted the call's budget. Read it with bacnet_read, a property at a \
+             time; or leave its type, {kind}, out: give types the device's other types \
+             (bacnet_describe_device lists them) and start again without a cursor"
+        ),
+    }
+}
+
 /// Read a page of `matching` from `first`, one object a request.
 async fn read_page<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
@@ -361,23 +401,27 @@ async fn read_page<T: TransportPort + 'static>(
             break;
         }
         let read = device.handle.point_record(object, options);
-        // The first object is read whatever it takes, so every page reads
-        // one; a later one is let go once well past the budget, its
-        // requests wasted, and read again on the next page.
-        let read = if page.points.is_empty() {
-            Some(read.await)
-        } else {
-            tokio::time::timeout_at(call.deadline + OBJECT_GRACE, read)
-                .await
-                .ok()
-        };
+        // A later object is let go once well past the budget, its requests
+        // wasted, and read again on the next page; the first one, which
+        // every page reads, gets the call's grace, and then fails the call
+        // naming it.
+        let first = page.points.is_empty();
+        let grace = if first { FIRST_GRACE } else { OBJECT_GRACE };
+        let read = tokio::time::timeout_at(call.deadline + grace, read)
+            .await
+            .ok();
         match read {
+            None if first => {
+                let budget = ctx.policy.caps.budget;
+                return Err(stuck(call, budget, device.instance, object));
+            }
             None => {
+                call.timed_out();
                 page.end(at, Ended::Budget);
                 break;
             }
             Some(Ok(record)) => page.push(record_json(&record, ctx.policy.caps.text)),
-            Some(Err(error)) if page.points.is_empty() => {
+            Some(Err(error)) if first => {
                 return Err(ToolError::device(device.instance, &error));
             }
             Some(Err(error)) => {
@@ -481,10 +525,18 @@ pub(super) fn oversized_text(result: &mut CallToolResult) {
         return;
     }
     let bytes = body["points"].to_string().len();
+    let object = &body["points"][0]["object"];
+    // The record's object, from its type's name and number, never from
+    // device text.
+    let object = format!(
+        "{}:{}",
+        object["type"].as_str().unwrap_or_default(),
+        object["instance"]
+    );
     let mut short = body.clone();
     short["points"] = json!(format!(
-        "one record of {bytes} bytes, too large for this text: it is whole in the structured \
-         content"
+        "the record of {object} ({bytes} bytes) is too large for this text: it is whole in \
+         this result's structured content, and bacnet_read reads its properties one at a time"
     ));
     if let Some(ContentBlock::Text(text)) = result.content.first_mut() {
         text.text = render(NAME, &short, None);

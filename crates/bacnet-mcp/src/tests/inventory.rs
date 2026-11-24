@@ -485,6 +485,12 @@ async fn pages_stay_within_the_bound() {
             // The text leaves the record out, and stays whole.
             let text = whole_text(result);
             assert!(text.contains("too large for this text"), "{text}");
+            // It names the record it leaves out, and where to find it.
+            assert!(
+                text.contains("the record of multi-state-value:9 (")
+                    && text.contains("structured content, and bacnet_read"),
+                "{text}"
+            );
             assert!(text.len() < BOUND, "{}", text.len());
         } else {
             assert!(size <= BOUND, "{size}");

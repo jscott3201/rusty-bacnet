@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::inventory::{TOOL, all_pages, inventory_lab, listed, object, point, points};
-use super::site::ok;
+use super::site::{failed, ok};
 use super::{LAB, Lab};
 use crate::Policy;
 use crate::policy::{Caps, Rates};
@@ -154,7 +154,61 @@ async fn an_object_well_past_the_budget_is_let_go() {
     assert_eq!(body["read"], json!(1), "{body}");
     assert_eq!(body["ended"], json!("budget"));
     assert_eq!(body["next_object"], json!("analog-input:3"));
+    assert_eq!(body["cost"]["timeouts"], json!(1), "the object let go");
     let elapsed = body["cost"]["elapsed_ms"].as_u64().unwrap();
     assert!((21_000..22_000).contains(&elapsed), "{elapsed}");
+    lab.stop().await;
+}
+
+/// A page's first object still being read the call's grace less a second
+/// past the budget fails the call as a timeout, before the call's own
+/// timeout would, naming the object and the ways past it: here another
+/// caller takes the device's gate between the object's ReadProperty
+/// requests (a token a second) and keeps it.
+#[tokio::test(start_paused = true)]
+async fn a_stuck_first_object_is_named() {
+    let policy = Policy {
+        rates: Rates {
+            principal: 1,
+            burst: 1,
+            ..Rates::default()
+        },
+        ..Policy::default()
+    };
+    let mut lab = inventory_lab(policy, Duration::ZERO, 0, false).await;
+    lab.refuse_rpm();
+    lab.agent.initialize().await;
+    // The Object_List, read and kept.
+    lab.agent
+        .call("bacnet_list_objects", json!({ "device": LAB }))
+        .await;
+    let limits = std::sync::Arc::clone(&lab.limits);
+    let holder = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(2_500)).await;
+        let at = bacnet_ops::DeviceAddress::local(&super::LAB_MAC).unwrap();
+        let turn = limits.turn(&at).await;
+        tokio::time::sleep(Duration::from_secs(300)).await;
+        drop(turn);
+    });
+    let args = json!({ "device": LAB, "types": ["ai"], "values": true });
+    let result = lab.agent.call(TOOL, args).await;
+    let body = failed(&result);
+    assert_eq!(body["error"], json!("timeout"), "{body}");
+    assert_eq!(
+        (&body["device"], &body["object"]),
+        (&json!(LAB), &json!("analog-input:1"))
+    );
+    let hint = body["hint"].as_str().unwrap();
+    assert!(
+        hint.contains("bacnet_read") && hint.contains("analog-input, out"),
+        "{hint}"
+    );
+    assert_eq!(body["cost"]["timeouts"], json!(1));
+    // The 30 s budget, then 14 s: before the call's own timeout at 45 s.
+    let elapsed = body["cost"]["elapsed_ms"].as_u64().unwrap();
+    assert!((44_000..45_000).contains(&elapsed), "{elapsed}");
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("reading analog-input:1"), "{text}");
+    holder.abort();
     lab.stop().await;
 }

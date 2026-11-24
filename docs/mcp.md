@@ -196,11 +196,16 @@ settings and details. Read-only; not listed in passive mode.
   result would pass 24,000 bytes, so the text rendering holds it whole: it
   stops before an object likely to pass that, judged by its largest record
   so far, and a record that passes it anyway goes back to the next page,
-  where it is read again. A page's first object is read whatever it takes;
-  a later one still being read 7 s past the budget (half the call's 15 s
-  grace) is let go, its requests wasted, and read again on the next page,
-  so the records before it come back before the call's own timeout would
-  drop them. The cursor holds the next object's place and a fingerprint of
+  where it is read again. A later object still being read 7 s past the
+  budget (half the call's 15 s grace) is let go, its requests wasted and
+  counted in `cost.timeouts`, and read again on the next page, so the
+  records before it come back before the call's own timeout would drop
+  them; what that read learned of the device refusing ReadPropertyMultiple
+  is lost with it, and costs one refused request again. A page's first
+  object gets 14 s past the budget; still being read then, it fails the
+  call as `timeout` (or `refused` when nothing was sent) with `object`
+  naming it and `hint` the ways past it: `bacnet_read` on it, or `types`
+  leaving its type out. The cursor holds the next object's place and a fingerprint of
   the matching objects, bound as every cursor is to the call's other
   arguments, the principal and ten minutes; a list changed since the
   cursor's page is refused (`failed`) after the list read, with nothing
@@ -215,9 +220,10 @@ settings and details. Read-only; not listed in passive mode.
 - **One record larger than the bound.** A page whose one record, with the
   page's other fields, passes 24,000 bytes goes out with `oversized: true`
   (only ever with one record). Its structured content holds the record
-  whole; its text block renders the result with that record left out and a
-  note in its place, so the text stays whole JSON instead of being cut
-  inside the record.
+  whole; its text block renders the result with that record left out and,
+  in its place, a note naming its object and where it is (the structured
+  content; `bacnet_read` reads its properties one at a time), so the text
+  stays whole JSON instead of being cut inside the record.
 - **Cost.** One ReadPropertyMultiple an object, and the Object_List once
   (until the cache expires): about N + 1 requests for a device of N
   objects, up to 50 a page. A 200-object device is about 200 requests,
