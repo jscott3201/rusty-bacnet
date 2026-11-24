@@ -113,13 +113,8 @@ impl RoutingTableInfo {
                 .map(|entry| RoutingEntryInfo {
                     network: entry.network,
                     port_id: entry.port_id,
-                    port_info: (!entry.port_info.is_empty()).then(|| {
-                        entry
-                            .port_info
-                            .iter()
-                            .map(|octet| format!("{octet:02x}"))
-                            .collect()
-                    }),
+                    port_info: (!entry.port_info.is_empty())
+                        .then(|| bacnet_ops::octets::hex(&entry.port_info)),
                 })
                 .collect(),
             truncated: table.truncated,

@@ -125,10 +125,7 @@ impl Routed {
             let shown = format!(
                 "{}:0x{}",
                 self.network,
-                self.station
-                    .iter()
-                    .map(|octet| format!("{octet:02X}"))
-                    .collect::<String>()
+                bacnet_ops::octets::hex_upper(&self.station)
             );
             return match core.get_device_at(self.network, &self.station).await {
                 Some(row) => Ok(
