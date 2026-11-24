@@ -1,4 +1,5 @@
 use super::*;
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard};
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Return the last bound local MAC snapshot, including after stop.
@@ -77,66 +78,37 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// ([`ReadPropertyMultipleBudget::max_result_elements`](bacnet_device_core::read::ReadPropertyMultipleBudget))
     /// as for network ReadProperty; past it the read fails with
     /// [`Error::abort`] carrying OUT_OF_RESOURCES.
+    ///
+    /// The read never waits for a lock in its caller's task (#2772): with
+    /// the database or a table it reads busy, a task of the server's waits
+    /// and reads, and the call returns what that task read, so a caller that
+    /// polls the call once and then leaves it unpolled holds up none of the
+    /// requests the server serves. [`write_local`](Self::write_local)'s Cancellation section
+    /// describes this for every local call, and what a dropped call does.
     pub async fn read_local(
         &self,
         oid: &ObjectIdentifier,
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        let db = self.db.read().await;
-        let view = crate::device_view::DeviceReadContext::new(&db, self.execution)
-            .with_identity(Some(&self.config.device));
-        // The local read resolves the Network_Port wildcard to the registered
-        // port, but plans a Group's members without it.
-        let scope = bacnet_device_core::read::ReadScope {
-            work_limit: self
-                .config
-                .read_property_multiple_budget
-                .max_result_elements,
-            registered_port: None,
-            device: view.device_oid(),
-        };
-        let lookup_oid = bacnet_device_core::read::resolve_target(
-            &db,
-            &bacnet_device_core::read::ReadScope {
-                registered_port: self.config.registered_network_port,
-                ..scope
-            },
-            oid,
-        );
-        let plan = bacnet_device_core::read::plan_property(
-            &db,
-            &scope,
-            Some(&view),
-            lookup_oid,
-            property,
-            array_index,
-        )
-        .map_err(|failure| match failure {
-            bacnet_device_core::read::ReadFailure::Service(error) => error,
-            // Work, and any other limit the core reports.
-            _ => Error::abort(AbortReason::OUT_OF_RESOURCES),
-        })?;
-        use super::requests::confirmed_response::{active_cov_snapshot, address_bindings};
-        let live = match plan.live_lists(&db) {
-            Some(selection) if self.dispatch_task.is_none() => {
-                let bindings = address_bindings(&self.device_bindings, selection).await;
-                Some(
-                    bacnet_device_core::cov::active::LiveDeviceCov::stopped(selection)
-                        .with_address_bindings(selection, bindings),
-                )
-            }
-            Some(selection) => {
-                let tables = super::requests::confirmed_response::LiveTables {
-                    cov: &self.cov_table,
-                    bindings: &self.device_bindings,
-                };
-                Some(active_cov_snapshot(&db, tables, selection).await)
-            }
-            None => None,
-        };
-        let view = view.with_live(live.as_ref());
-        bacnet_device_core::read::read_value(&db, Some(&view), plan)
+        let read = self.local_read().read(*oid, property, array_index);
+        match self.request_tasks.for_caller(read, |value| value).await {
+            Some(value) => value,
+            // Its runtime dropped the task before it read: read here.
+            None => self.local_read().read(*oid, property, array_index).await,
+        }
+    }
+
+    /// The handles [`read_local`](Self::read_local) reads with.
+    fn local_read(&self) -> LocalRead {
+        LocalRead {
+            db: Arc::clone(&self.db),
+            config: Arc::clone(&self.config),
+            execution: self.execution,
+            cov_table: Arc::clone(&self.cov_table),
+            device_bindings: Arc::clone(&self.device_bindings),
+            stopped: self.dispatch_task.is_none(),
+        }
     }
 
     /// Write one local property from its encoded value: the octets a network
@@ -155,7 +127,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// Like `write_local`, it must be awaited inside a Tokio runtime, failing
     /// before anything is written outside one, and a caller dropped once the
-    /// write has committed skips none of the work the write owes (#1367).
+    /// write has committed skips none of the work the write owes (#1367). A
+    /// call dropped part way is as
+    /// [`write_local`](Self::write_local)'s Cancellation section describes (#2772).
     pub async fn write_local_encoded(
         &self,
         oid: &ObjectIdentifier,
@@ -166,14 +140,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         source: bacnet_device_core::write::local::LocalCommandSource,
     ) -> Result<(), Error> {
         self.active_network()?;
-        let value = {
-            let db = self.db.read().await;
-            let object = db.get(oid).ok_or(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::UNKNOWN_OBJECT,
-            ))?;
-            bacnet_device_core::write::gate_and_decode_write(object, property, array_index, value)?
+        let (target, encoded) = (*oid, value.to_vec());
+        let decode = move |db: OwnedRwLockReadGuard<ObjectDatabase>| {
+            decode_local(&db, &target, property, array_index, &encoded)
         };
+        let decoded = self
+            .request_tasks
+            .for_caller(Arc::clone(&self.db).read_owned(), decode)
+            .await;
+        let value = match decoded {
+            Some(value) => value,
+            // Its runtime dropped the task before it decoded: decode here.
+            None => decode_local(&*self.db.read().await, oid, property, array_index, value),
+        }?;
         self.write_local(oid, property, array_index, value, priority, source)
             .await
     }
@@ -201,10 +180,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// application versions, and the protocol version and revision come from the served Device object,
     /// so the PICS can't contradict what the device reports.
     pub async fn generate_pics(&self, pics_config: &crate::pics::PicsConfig) -> crate::pics::Pics {
-        let db = self.db.read().await;
-        crate::pics::PicsGenerator::new(&db, &self.config, pics_config)
-            .for_server(self.execution)
-            .generate()
+        let (config, execution) = (Arc::clone(&self.config), self.execution);
+        let owned = pics_config.clone();
+        let generate = move |db: OwnedRwLockReadGuard<ObjectDatabase>| {
+            crate::pics::PicsGenerator::new(&db, &config, &owned)
+                .for_server(execution)
+                .generate()
+        };
+        // Never waited for in the caller's task (#2772).
+        let generated = self
+            .request_tasks
+            .for_caller(Arc::clone(&self.db).read_owned(), generate)
+            .await;
+        match generated {
+            Some(pics) => pics,
+            // Its runtime dropped the task before it read: read here.
+            None => {
+                crate::pics::PicsGenerator::new(&*self.db.read().await, &self.config, pics_config)
+                    .for_server(self.execution)
+                    .generate()
+            }
+        }
     }
 }
 
@@ -244,16 +240,130 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Remove COV subscriptions using this current immediate MAC and routed source.
     /// Cleanup of an obsolete router leaves subscriptions renewed onto another route.
     /// Only removed entries release their contribution to the shared quota group.
+    /// The table is never waited for in the caller's task, and a call
+    /// dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn remove_peer_subscriptions(
         &self,
         mac: &[u8],
         network: Option<&NpduAddress>,
     ) -> usize {
-        let mut table = self.cov_table.write().await;
-        table.remove_peer_subscriptions(mac, network)
+        let (owned_mac, owned_network) = (mac.to_vec(), network.cloned());
+        let remove = move |mut table: OwnedRwLockWriteGuard<CovSubscriptionTable>| {
+            table.remove_peer_subscriptions(&owned_mac, owned_network.as_ref())
+        };
+        let removed = self
+            .request_tasks
+            .for_caller(Arc::clone(&self.cov_table).write_owned(), remove)
+            .await;
+        match removed {
+            Some(removed) => removed,
+            // Its runtime dropped the task before it removed anything:
+            // remove here.
+            None => {
+                let mut table = self.cov_table.write().await;
+                table.remove_peer_subscriptions(mac, network)
+            }
+        }
+    }
+}
+
+/// The value `encoded` is for `property` of `oid`, decoded as the
+/// WriteProperty handler decodes it.
+fn decode_local(
+    db: &ObjectDatabase,
+    oid: &ObjectIdentifier,
+    property: PropertyIdentifier,
+    array_index: Option<u32>,
+    encoded: &[u8],
+) -> Result<PropertyValue, Error> {
+    let object = db.get(oid).ok_or(Error::protocol(
+        ErrorClass::OBJECT,
+        ErrorCode::UNKNOWN_OBJECT,
+    ))?;
+    bacnet_device_core::write::gate_and_decode_write(object, property, array_index, encoded)
+}
+
+/// What [`BACnetServer::read_local`] reads with, owned, so a task of the
+/// server's can make the read when the database or a table is busy (#2772).
+struct LocalRead {
+    db: Arc<RwLock<ObjectDatabase>>,
+    config: Arc<ServerConfig>,
+    execution: crate::device_view::DeviceExecution,
+    cov_table: Arc<RwLock<CovSubscriptionTable>>,
+    device_bindings: Arc<RwLock<DeviceBindingTable>>,
+    /// The server has stopped: it serves no subscriptions.
+    stopped: bool,
+}
+
+impl LocalRead {
+    async fn read(
+        self,
+        oid: ObjectIdentifier,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        let db = self.db.read().await;
+        let view = crate::device_view::DeviceReadContext::new(&db, self.execution)
+            .with_identity(Some(&self.config.device));
+        // The local read resolves the Network_Port wildcard to the registered
+        // port, but plans a Group's members without it.
+        let scope = bacnet_device_core::read::ReadScope {
+            work_limit: self
+                .config
+                .read_property_multiple_budget
+                .max_result_elements,
+            registered_port: None,
+            device: view.device_oid(),
+        };
+        let lookup_oid = bacnet_device_core::read::resolve_target(
+            &db,
+            &bacnet_device_core::read::ReadScope {
+                registered_port: self.config.registered_network_port,
+                ..scope
+            },
+            &oid,
+        );
+        let plan = bacnet_device_core::read::plan_property(
+            &db,
+            &scope,
+            Some(&view),
+            lookup_oid,
+            property,
+            array_index,
+        )
+        .map_err(|failure| match failure {
+            bacnet_device_core::read::ReadFailure::Service(error) => error,
+            // Work, and any other limit the core reports.
+            _ => Error::abort(AbortReason::OUT_OF_RESOURCES),
+        })?;
+        use super::requests::confirmed_response::{active_cov_snapshot, address_bindings};
+        let live = match plan.live_lists(&db) {
+            Some(selection) if self.stopped => {
+                let bindings = address_bindings(&self.device_bindings, selection).await;
+                Some(
+                    bacnet_device_core::cov::active::LiveDeviceCov::stopped(selection)
+                        .with_address_bindings(selection, bindings),
+                )
+            }
+            Some(selection) => {
+                let tables = super::requests::confirmed_response::LiveTables {
+                    cov: &self.cov_table,
+                    bindings: &self.device_bindings,
+                };
+                Some(active_cov_snapshot(&db, tables, selection).await)
+            }
+            None => None,
+        };
+        let view = view.with_live(live.as_ref());
+        bacnet_device_core::read::read_value(&db, Some(&view), plan)
     }
 }
 
 #[cfg(test)]
 #[path = "local_encoded_writes_tests.rs"]
 mod local_encoded_writes_tests;
+
+#[cfg(test)]
+#[path = "caller_waits_tests.rs"]
+mod caller_waits_tests;
