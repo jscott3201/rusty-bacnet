@@ -253,3 +253,58 @@ fn required_settings_and_values_are_problems_when_lacking() {
         assert!(problems(none).is_empty(), "{none}");
     }
 }
+
+/// Status_Flags read with values are the four flags by name, a bit
+/// string too short for all four reading the rest as clear (#2620). One
+/// that isn't a bit string is kept as it came and is a problem saying what
+/// came, with no flags.
+#[test]
+fn status_flags_are_typed_by_name() {
+    use bacnet_types::bitstring::StatusFlags;
+    let bits = |unused_bits, octet| PropertyValue::BitString {
+        unused_bits,
+        data: vec![octet],
+    };
+    let flags_of = |value| {
+        let rows = vec![
+            row(P::OBJECT_NAME, text("Zone")),
+            row(P::STATUS_FLAGS, value),
+        ];
+        of(ObjectType::ANALOG_INPUT, rows)
+    };
+
+    let read = flags_of(bits(4, 0b1001_0000));
+    assert_eq!(
+        read.flags(),
+        Some(StatusFlags::IN_ALARM | StatusFlags::OUT_OF_SERVICE)
+    );
+    assert_eq!(
+        read.status_flags.as_ref().unwrap().text,
+        "in-alarm | out-of-service"
+    );
+    assert!(read.problems.is_empty(), "{read:?}");
+    // Two bits only: fault set, the other two absent and clear.
+    let read = flags_of(bits(6, 0b0100_0000));
+    assert_eq!(read.flags(), Some(StatusFlags::FAULT));
+    assert!(read.problems.is_empty(), "{read:?}");
+
+    let read = flags_of(PropertyValue::Unsigned(5));
+    assert_eq!(read.flags(), None);
+    assert_eq!(
+        read.status_flags.as_ref().unwrap().as_u64(),
+        Some(5),
+        "kept"
+    );
+    assert_eq!(
+        read.problem(P::STATUS_FLAGS).unwrap().to_string(),
+        "not a bit string (got an Unsigned, 5)"
+    );
+
+    // Not read: no flags, and no problem.
+    let read = of(
+        ObjectType::ANALOG_INPUT,
+        vec![row(P::OBJECT_NAME, text("Zone"))],
+    );
+    assert_eq!(read.flags(), None);
+    assert!(read.problems.is_empty(), "{read:?}");
+}

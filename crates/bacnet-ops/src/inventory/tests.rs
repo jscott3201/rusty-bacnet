@@ -196,6 +196,8 @@ async fn values_and_settings_are_read_when_asked() {
     assert_eq!(value.text, "0 °F", "the units are named");
     let flags = ai.status_flags.as_ref().unwrap();
     assert!(matches!(flags.data, Datum::Bits { .. }), "{flags:?}");
+    let clear = bacnet_types::bitstring::StatusFlags::empty();
+    assert_eq!(ai.flags(), Some(clear), "{flags:?}");
     let bo = point(ObjectType::BINARY_OUTPUT, 1)
         .present_value
         .as_ref()
@@ -504,50 +506,71 @@ async fn answers_pair_with_their_objects() {
 
 /// A reader whose stop flag goes up is cancelled: before the next batch,
 /// and before the next ReadProperty of a batch read property by property,
-/// so a stop doesn't wait out the batch.
+/// so a stop doesn't wait out the batch. What was read before it is kept
+/// in the halt, as a silent device's is in the inventory (#2620): the
+/// objects read whole, and the rest as `unread`.
 #[tokio::test(start_paused = true)]
 async fn a_stop_flag_cancels_the_reading() {
-    let flag = Arc::new(AtomicBool::new(false));
-    let faults = Faults {
-        cancel: Some((2, Arc::clone(&flag))),
-        ..Faults::default()
+    /// The raw inventory of the lab through a link with `faults`, whose
+    /// flag goes up as request `at` leaves, and the services sent.
+    async fn cancelled_at(at: usize, faults: Faults) -> (Option<Box<Inventory>>, Vec<u8>) {
+        let flag = Arc::new(AtomicBool::new(false));
+        let faults = Faults {
+            cancel: Some((at, Arc::clone(&flag))),
+            ..faults
+        };
+        let (client, server, log) = lab_logged(faults).await;
+        let mut reader = Reader {
+            client: client.low_level(),
+            device: lab_at(),
+            instance: Some(LAB),
+            rate: client.limits(),
+            cancel: &flag,
+            rpm: true,
+        };
+        let read = crate::raw::read_inventory(&mut reader, &InventoryOptions::new()).await;
+        stop(client, server).await;
+        match read {
+            Err(InventoryHalt::Cancelled(partial)) => (partial, services(&log)),
+            read => panic!("not cancelled: {read:?}"),
+        }
+    }
+    let objects = lab_objects();
+    let read = |inventory: &Inventory| -> Vec<ObjectIdentifier> {
+        inventory.points.iter().map(|point| point.object).collect()
     };
-    let (client, server, log) = lab_logged(faults).await;
-    let mut reader = Reader {
-        client: client.low_level(),
-        device: lab_at(),
-        instance: Some(LAB),
-        rate: client.limits(),
-        cancel: &flag,
-        rpm: true,
-    };
-    // The flag goes up as the Object_List's request leaves.
-    let read = crate::raw::read_inventory(&mut reader, &InventoryOptions::new()).await;
-    assert!(matches!(read, Err(InventoryHalt::Cancelled)), "{read:?}");
-    assert_eq!(services(&log), [RPM, RP], "no object asked for");
-    stop(client, server).await;
+
+    // As the summary's request leaves: no list, so nothing to keep.
+    let (partial, sent) = cancelled_at(1, Faults::default()).await;
+    assert!(partial.is_none(), "{partial:?}");
+    assert_eq!(sent, [RPM]);
+
+    // As the Object_List's: every object unread, none asked for.
+    let (partial, sent) = cancelled_at(2, Faults::default()).await;
+    let partial = partial.unwrap();
+    assert!(partial.points.is_empty() && partial.stopped.is_none());
+    assert_eq!(partial.unread, objects);
+    assert_eq!(partial.device.name().as_deref(), Some("Lab \"AHU\""));
+    assert_eq!(sent, [RPM, RP], "no object asked for");
+
+    // As the first batch's: its nine records kept, the next not asked.
+    let (partial, sent) = cancelled_at(3, Faults::default()).await;
+    let partial = partial.unwrap();
+    assert_eq!(read(&partial), objects[..9]);
+    assert_eq!(partial.unread, objects[9..]);
+    assert!(partial.stopped.is_none(), "the device didn't stop it");
+    assert_eq!(sent, [RPM, RP, RPM]);
 
     // By ReadProperty: the refused RPM, 13 + 1, the Device's Description,
     // and the flag goes up as the input's second property is asked for.
+    // The Device object, read whole, is kept; the input, read in part,
+    // is not.
     let last = 1 + 14 + 1 + 2;
-    let flag = Arc::new(AtomicBool::new(false));
-    let faults = Faults {
-        cancel: Some((last, Arc::clone(&flag))),
-        ..refusing_rpm()
-    };
-    let (client, server, log) = lab_logged(faults).await;
-    let mut reader = Reader {
-        client: client.low_level(),
-        device: lab_at(),
-        instance: Some(LAB),
-        rate: client.limits(),
-        cancel: &flag,
-        rpm: true,
-    };
-    let read = crate::raw::read_inventory(&mut reader, &InventoryOptions::new()).await;
-    assert!(matches!(read, Err(InventoryHalt::Cancelled)), "{read:?}");
-    assert_eq!(services(&log).len(), last, "none of the batch's other 30");
-    stop(client, server).await;
+    let (partial, sent) = cancelled_at(last, refusing_rpm()).await;
+    let partial = partial.unwrap();
+    assert_eq!(read(&partial), objects[..1]);
+    assert_eq!(partial.unread, objects[1..]);
+    assert_eq!(sent.len(), last, "none of the batch's other 30");
 }
 
 /// One object's record costs one request and is the inventory's own; an

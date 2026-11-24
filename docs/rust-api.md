@@ -13413,11 +13413,21 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   builder won't take, a Real that isn't finite, a negative COV_Increment,
   Min_Pres_Value above Max_Pres_Value, a state or Polarity the object
   can't hold) is kept as the device gave it and listed in `problems` too.
+  `PointRecord::flags()` gives the Status_Flags read with values as a
+  `bacnet_types::bitstring::StatusFlags` (`IN_ALARM`, `FAULT`,
+  `OVERRIDDEN`, `OUT_OF_SERVICE`); a Status_Flags that isn't a bit string
+  is kept in `status_flags` with a problem beside it, and `flags()` is
+  `None` (#2620).
 - **The inventory.** `Inventory { address, device, cov, points, unread,
   stopped }`. `device` is the `DeviceSummary` (`describe_device`'s). `cov`
   is the device's `CovSupport` for SubscribeCOV, known from the summary at
-  no request of its own; whether one point reports changes is known only
-  once a watch has asked it. `Inventory::point(object)` finds a record.
+  no request of its own. Whether one point reports changes is known once a
+  watch has asked it, or, read with settings, from an analog object's or
+  integer value's `cov_increment`: on those six types the property exists
+  exactly when the object reports changes of its Present_Value (the
+  footnotes to their tables in Clause 12), so a value there says a
+  subscription is worth trying and `None` with no problem says it isn't
+  (#2620). `Inventory::point(object)` finds a record.
 - **What it costs.** By ReadPropertyMultiple: the summary, the Object_List,
   then one request for each batch, filled in Object_List order up to 16
   objects or 32 properties, whichever comes first: 16 objects of a type
@@ -13466,12 +13476,15 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   &options)` and `raw::read_point_record` are the layer under
   `Device::inventory`, for a caller that owns a low-level client and a
   `raw::Reader`. `read_inventory` fails with `raw::InventoryHalt`
-  (`Cancelled`, `Device(error)` or `ObjectList(ListStop)`, the last naming
-  the element) and `read_point_record` with `Halt`; the `bacnet` CLI uses
-  them. A
+  (`Cancelled(partial)`, `Device(error)` or `ObjectList(ListStop)`, the
+  last naming the element) and `read_point_record` with `Halt`; the
+  `bacnet` CLI uses them. A
   reader's stop flag is checked before each batch and before each
-  ReadProperty of a batch read property by property; a stopped read is
-  `Cancelled` and what it had read is dropped.
+  ReadProperty of a batch read property by property. A read stopped once
+  the Object_List is in keeps what it read, as a silent device's does:
+  `Cancelled(Some(inventory))` holds the records read whole and lists the
+  rest in `unread`, with `stopped` empty; one stopped while the summary or
+  the list was read is `Cancelled(None)` (#2620).
 - **JSON and CSV.** `Inventory` and `PointRecord` implement
   `serde::Serialize` with stable field names, and `Inventory::to_json()`
   is the indented document `bacnet inventory --json` prints: `address`,

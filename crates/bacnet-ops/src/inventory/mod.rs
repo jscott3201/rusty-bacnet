@@ -81,7 +81,10 @@
 //!
 //! [`raw::read_inventory`](crate::raw::read_inventory) is the layer under
 //! [`Device::inventory`], for a caller that owns a low-level client and a
-//! [`raw::Reader`](crate::raw::Reader).
+//! [`raw::Reader`](crate::raw::Reader). A raw read whose stop flag goes up
+//! once the Object_List is in keeps its records the same way, in the
+//! [`raw::InventoryHalt::Cancelled`](InventoryHalt::Cancelled) it ends
+//! with.
 //!
 //! # JSON and CSV
 //!
@@ -102,8 +105,9 @@ mod settings;
 mod write;
 
 use bacnet_transport::port::TransportPort;
+use bacnet_types::bitstring::{StatusFlags, status_flags_from_bacnet};
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use serde::Serialize;
 
 pub use self::plan::properties;
@@ -216,7 +220,9 @@ impl Problem {
 /// the options didn't ask for it, or its read failed, a value of another
 /// datatype than the property's included; only the last is listed in
 /// [`problems`](Self::problems). A value a point list builder would refuse
-/// is kept as the device gave it and listed there too.
+/// is kept as the device gave it and listed there too, and so are the
+/// values read with [`values`](InventoryOptions::values): a Status_Flags
+/// that isn't a bit string is kept beside its problem.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct PointRecord {
@@ -262,6 +268,16 @@ pub struct PointRecord {
     /// object, an Unsigned for an Integer or Positive Integer Value, a
     /// Double for a Large Analog Value. One of another datatype is a
     /// problem instead.
+    ///
+    /// It is also a sign, at no cost of its own, of whether a
+    /// subscription to the object's Present_Value is worth trying: on
+    /// those six types the property exists exactly when the object
+    /// reports changes of its Present_Value (the footnotes to their
+    /// property tables, from Table 12-2 on). So with settings read, a
+    /// value here says the object reports them, and `None` with no
+    /// [`problem`](Self::problem) for it says a conforming device's
+    /// object doesn't; [`Inventory::cov`] says whether the device offers
+    /// SubscribeCOV at all. Other types have no such sign.
     #[serde(serialize_with = "write::value")]
     pub cov_increment: Option<Value>,
     /// Its Min_Pres_Value, read with settings, of its Present_Value's
@@ -282,7 +298,10 @@ pub struct PointRecord {
     /// "decoded": 72.5}`, the text and the typed form.
     #[serde(serialize_with = "write::value")]
     pub present_value: Option<Value>,
-    /// Its Status_Flags, read with values.
+    /// Its Status_Flags, read with values, its text and JSON naming the
+    /// flags set (`in-alarm | fault`); [`flags`](Self::flags) gives them
+    /// typed. Kept whatever the device sent: one that isn't a bit string
+    /// is a problem beside it too.
     #[serde(serialize_with = "write::value")]
     pub status_flags: Option<Value>,
     /// The properties asked for that gave no usable value, in the order
@@ -293,7 +312,8 @@ pub struct PointRecord {
     /// 0208`), and each property of an object the device doesn't have or
     /// left out of its answer. A State_Text entry that isn't a string is
     /// one too (`state 2 is not a character string (got an Unsigned,
-    /// 5)`), the entry held as an empty text.
+    /// 5)`), the entry held as an empty text, and so is a Status_Flags
+    /// that isn't a bit string, held as it came.
     ///
     /// So is a value kept as the device gave it that a point list builder
     /// (`bacnet_objects::points::build_database`) would refuse, so the
@@ -345,6 +365,36 @@ impl PointRecord {
             .find(|problem| problem.property == property)
             .map(|problem| &problem.error)
     }
+
+    /// Its [`status_flags`](Self::status_flags) as the four flags, each by
+    /// name: [`StatusFlags::IN_ALARM`], `FAULT`, `OVERRIDDEN` and
+    /// `OUT_OF_SERVICE`. A flag the device's bit string is too short to
+    /// hold reads as clear. `None` when the flags weren't read (no
+    /// [`values`](InventoryOptions::values), or a type without them) or
+    /// didn't come as a bit string, which is a
+    /// [`problem`](Self::problem) then.
+    ///
+    /// ```
+    /// use bacnet_ops::inventory::Inventory;
+    /// use bacnet_types::bitstring::StatusFlags;
+    ///
+    /// /// The names of an inventory's points in fault, read with values.
+    /// fn faulted(inventory: &Inventory) -> Vec<&str> {
+    ///     let fault = |flags: StatusFlags| flags.contains(StatusFlags::FAULT);
+    ///     inventory
+    ///         .points
+    ///         .iter()
+    ///         .filter(|point| point.flags().is_some_and(fault))
+    ///         .filter_map(|point| point.name.as_deref())
+    ///         .collect()
+    /// }
+    /// ```
+    pub fn flags(&self) -> Option<StatusFlags> {
+        match self.status_flags.as_ref()?.decode().ok()? {
+            PropertyValue::BitString { data, .. } => Some(status_flags_from_bacnet(&data)),
+            _ => None,
+        }
+    }
 }
 
 /// What [`Device::inventory`] read: the device, and a [`PointRecord`] for
@@ -367,13 +417,17 @@ pub struct Inventory {
     /// own: what the summary's Protocol_Services_Supported lists, or what
     /// the device did when this client's watches asked
     /// ([`Device::cov_support`]). It is the device's, not a point's:
-    /// whether one object reports changes is known only once a watch has
-    /// asked it.
+    /// whether one object reports changes is known once a watch has asked
+    /// it, or, for an analog object or an integer value read with
+    /// [`settings`](InventoryOptions::settings), from whether it has a
+    /// [`cov_increment`](PointRecord::cov_increment).
     pub cov: CovSupport,
     /// The objects read, in Object_List order.
     pub points: Vec<PointRecord>,
     /// The objects of the selected types not read because the reading
-    /// stopped, in Object_List order; empty when it didn't.
+    /// stopped, or a raw read's stop flag ended it
+    /// ([`raw::InventoryHalt::Cancelled`](InventoryHalt::Cancelled)),
+    /// in Object_List order; empty when neither did.
     #[serde(serialize_with = "write::objects")]
     pub unread: Vec<ObjectIdentifier>,
     /// Why the reading stopped early: the device went silent
@@ -438,7 +492,7 @@ impl<T: TransportPort + 'static> Device<T> {
                     element = Some((stop.index, stop.total));
                     stop.error
                 }
-                InventoryHalt::Cancelled => device_error(Halt::Cancelled),
+                InventoryHalt::Cancelled(_) => device_error(Halt::Cancelled),
             })
         });
         let mut inventory = match (read, element) {
@@ -503,6 +557,9 @@ mod tests;
 
 #[cfg(test)]
 mod record_tests;
+
+#[cfg(test)]
+mod routed_tests;
 
 #[cfg(test)]
 mod settings_tests;
