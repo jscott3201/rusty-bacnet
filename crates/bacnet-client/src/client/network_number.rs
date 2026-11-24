@@ -198,6 +198,10 @@ impl Asking {
 pub(super) struct Discovery {
     pub(super) table: SyncMutex<DeviceTable>,
     pub(super) asking: Asking,
+    /// Peers sent a segmented request's whole first window at once (#2742),
+    /// after the table and the asking, so neither moves. Only a segmented
+    /// request proposing a window above one touches it.
+    pub(super) whole_first_window: SyncMutex<Option<Box<super::first_window::WholeFirstWindow>>>,
 }
 
 impl Discovery {
@@ -208,6 +212,7 @@ impl Discovery {
                 seated,
                 ..Asking::new(numbers)
             },
+            whole_first_window: SyncMutex::new(None),
         }
     }
 }

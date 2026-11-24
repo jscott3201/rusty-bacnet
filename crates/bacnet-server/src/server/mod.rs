@@ -31,9 +31,7 @@ use bacnet_encoding::apdu::{
 use bacnet_encoding::apdu::ErrorPdu;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_encoding::primitives::encode_property_value;
-use bacnet_encoding::segmentation::{
-    SegmentReceiver, SegmentedPduType, duplicate_in_window, max_segment_payload, split_payload,
-};
+use bacnet_encoding::segmentation::{SegmentedPduType, max_segment_payload, split_payload};
 use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;
 use bacnet_objects::database::ObjectDatabase;
@@ -88,24 +86,6 @@ use request_services::{DispatchContext, RequestOrigin, RequestServices, Unconfir
 use requests::ConfirmedRequestOwnership;
 use requests::confirmed_response::ResponseTarget;
 use segmentation::{ComplexAckParams, SegmentedSendResources};
-
-/// Maximum number of concurrent segmented reassembly sessions.
-const MAX_SEG_RECEIVERS: usize = 128;
-
-/// Hard per-request reassembly ceiling: the sequence-number space (#364).
-///
-/// A local storage bound, not a protocol one. Clause 20.1.2.7 makes the
-/// request sequence number modulo 256, so a longer request is entirely
-/// representable on the wire — this server simply keys its segment store by
-/// that `u8` and cannot tell segment 256 from segment 0. A Device object
-/// configured to receive segments does publish a tighter advertisement — its
-/// `Max_Segments_Accepted` (Clause 12.11) defaults to `Unsigned(65)` — but
-/// enforcing it here is deliberately not done: accepting more segments than
-/// advertised is permissive, not a violation, while the sequence space is the
-/// line past which acceptance silently corrupts. Exactly 256 segments
-/// reassemble correctly and must keep working; 257 is the first that would
-/// corrupt the payload.
-const MAX_REQUEST_SEGMENTS: usize = 256;
 
 /// Maximum number of concurrent segmented response send sessions.
 const MAX_SEG_SENDERS: usize = 128;

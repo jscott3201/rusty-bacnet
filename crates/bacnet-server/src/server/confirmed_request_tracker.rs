@@ -6,9 +6,10 @@ use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_transport::port::{DirectScIdentity, TransportProvenance};
 
-// Local detection bounds, not transaction lifetimes. Above either bound,
+// Local detection bounds, not transaction lifetimes. Above the entry bound,
 // Clause 5.3.5.3 permits normal service when exact duplicate detection is unavailable.
 const MAX_ENTRIES: usize = 256;
+// Above this an entry keeps the request's digest, not its data (#2751).
 const MAX_TRACKED_SERVICE_REQUEST_BYTES: usize = 64 * 1024;
 
 struct Entry {
@@ -23,6 +24,10 @@ struct Entry {
 struct TrackerState {
     next_id: u64,
     entries: Vec<Entry>,
+    /// What a repeated segment of a reassembled request still executing is
+    /// answered with (#2751). Only the segmented branch reads or writes it;
+    /// `begin` and the drop of a pending request never touch it.
+    segmented: Vec<segment_repeats::Record>,
 }
 
 /// Exact duplicate detection only while the ordinary server transaction is live.
@@ -35,6 +40,10 @@ pub(super) struct ConfirmedRequestTracker {
     pub(super) lso: Arc<super::lso_replay::LsoReplayCache>,
     /// See [`super::BACnetServer::group_source_request_drops`].
     group_source_drops: AtomicU64,
+    /// Keys for the digest of an oversized request: this tracker's own, so
+    /// a peer can't craft two requests with one digest ahead of time
+    /// (#2751). Last, after every field the plain path reads.
+    digest_keys: std::collections::hash_map::RandomState,
 }
 
 pub(super) enum ConfirmedRequestAdmission {
@@ -57,10 +66,10 @@ impl ConfirmedRequestTracker {
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
         provenance: TransportProvenance,
-        request: ConfirmedRequest,
+        mut request: ConfirmedRequest,
     ) -> ConfirmedRequestAdmission {
         if request.service_request.len() > MAX_TRACKED_SERVICE_REQUEST_BYTES {
-            return ConfirmedRequestAdmission::New(PendingConfirmedRequest::untracked(self));
+            digest(&self.digest_keys, &mut request);
         }
         let requester = canonical_requester(source_mac, source_network);
         let direct_identity = provenance.direct_sc_identity();
@@ -99,6 +108,24 @@ impl ConfirmedRequestTracker {
         })
     }
 }
+/// Keep an oversized request by its header and a digest of its service data
+/// (its length and a keyed SipHash of it), not the data: only a reassembled
+/// request can be this long, so a request that came whole never gets here.
+/// Two such requests with equal headers and digests count as the same
+/// request. The `segmented` flag marks the digest form: no request `begin`
+/// is given has it set, so the form never equals one kept whole (#2751).
+#[cold]
+#[inline(never)]
+fn digest(keys: &std::collections::hash_map::RandomState, request: &mut ConfirmedRequest) {
+    use std::hash::BuildHasher;
+    let hash = keys.hash_one(&request.service_request[..]);
+    let mut kept = Vec::with_capacity(16);
+    kept.extend_from_slice(&(request.service_request.len() as u64).to_be_bytes());
+    kept.extend_from_slice(&hash.to_be_bytes());
+    request.service_request = bytes::Bytes::from(kept);
+    request.segmented = true;
+}
+
 impl ConfirmedRequestTracker {
     /// Whether to ignore a confirmed request from link-layer `source_mac`
     /// because that address reaches a group of nodes (`is_group`, the
@@ -158,6 +185,9 @@ impl Drop for PendingConfirmedRequest {
         }
     }
 }
+
+#[path = "confirmed_segment_repeats.rs"]
+mod segment_repeats;
 
 #[cfg(test)]
 #[path = "confirmed_tracker_tests.rs"]

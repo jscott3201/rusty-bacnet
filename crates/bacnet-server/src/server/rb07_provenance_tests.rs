@@ -1,10 +1,11 @@
 //! RB-07 server threading tests (in-memory, deterministic, no sleeps).
 //!
-//! Covers: SegRecvKey gains provenance comparison (cross-peer isolation),
-//! cross-segment mismatch fails closed (predicate), TimeSyncData and audit
-//! contexts thread provenance (compat: decisions unchanged).
+//! Covers: the segmented-request key (the shared receiver's, #2742) gains
+//! provenance comparison (cross-peer isolation), cross-segment mismatch
+//! fails closed (predicate), TimeSyncData and audit contexts thread
+//! provenance (compat: decisions unchanged).
 
-use super::segmented_send::{SegmentedRequestState, segmented_receive_key};
+use bacnet_endpoint_core::segmented_request::{SegmentedRequests, transfer_key};
 use bacnet_transport::port::{TransportPort, TransportProvenance};
 use bacnet_transport::sc::{LoopbackWebSocket, ScTransport, WebSocketPort};
 use bacnet_transport::sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message};
@@ -65,10 +66,10 @@ async fn verified_relayed_provenance() -> TransportProvenance {
 #[test]
 fn seg_recv_key_gains_provenance_comparison_for_isolation() {
     let mac = &[0x02];
-    let a = segmented_receive_key(mac, None, 7, TransportProvenance::unverified());
-    let b = segmented_receive_key(mac, None, 7, TransportProvenance::unverified());
+    let a = transfer_key(mac, None, 7, TransportProvenance::unverified());
+    let b = transfer_key(mac, None, 7, TransportProvenance::unverified());
     assert_eq!(a, b);
-    let c = segmented_receive_key(&[0x03], None, 7, TransportProvenance::unverified());
+    let c = transfer_key(&[0x03], None, 7, TransportProvenance::unverified());
     assert_ne!(a, c);
 }
 
@@ -86,9 +87,9 @@ async fn cross_segment_provenance_mismatch_is_detected_fail_closed() {
         ),
         (),
     > = HashMap::new();
-    keys.insert(segmented_receive_key(mac, None, 7, unverified), ());
+    keys.insert(transfer_key(mac, None, 7, unverified), ());
     let conflict = keys.keys().find(|existing| {
-        let expected = segmented_receive_key(mac, None, 7, verified.clone());
+        let expected = transfer_key(mac, None, 7, verified.clone());
         existing.0 == expected.0
             && existing.1 == expected.1
             && existing.2 == expected.2
@@ -103,5 +104,5 @@ fn diagnostic_contexts_thread_provenance_without_changing_decisions() {
     // Decisions remain claim-based (compat mode); RB-09 consumes provenance.
     let provenance = TransportProvenance::unverified();
     assert!(provenance.is_unverified());
-    let _ = std::mem::size_of::<SegmentedRequestState>();
+    let _ = std::mem::size_of::<SegmentedRequests>();
 }

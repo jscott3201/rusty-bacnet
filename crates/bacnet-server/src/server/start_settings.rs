@@ -10,8 +10,9 @@ use super::super::*;
 pub(in crate::server) struct StartSettings {
     /// The configured routes, checked against the link's group rule.
     pub(in crate::server) device_bindings: DeviceBindingTable,
-    /// How long a segmented request may wait for its next segment.
-    pub(in crate::server) receive_timeout: Duration,
+    /// The Device's segment timeout (Tseg): a segmented request whose
+    /// requester is silent for four of them ends.
+    pub(in crate::server) segment_timeout: Duration,
     /// The request owner, with every policy and budget it holds checked.
     pub(in crate::server) request_tasks: Arc<RequestTasks>,
 }
@@ -30,11 +31,11 @@ pub(in crate::server) fn settle(
         profile.canonicalize()?;
     }
     let device_bindings = DeviceBindingTable::from_configured(configured, is_group)?;
-    let receive_timeout = super::super::segmented_receive::validate_segment_timeout(config)?;
+    let segment_timeout = super::super::segmented_receive::validate_segment_timeout(config)?;
     let request_tasks = RequestTasks::for_server(config)?;
     Ok(StartSettings {
         device_bindings,
-        receive_timeout,
+        segment_timeout,
         request_tasks,
     })
 }

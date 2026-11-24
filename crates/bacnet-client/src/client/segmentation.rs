@@ -525,7 +525,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // Tseg: the segment timeout, which defaults to the APDU timeout.
         let timeout_duration = Duration::from_millis(self.config.segment_timeout_ms());
         let max_ack_retries = self.config.apdu_retries;
-        let mut window_size = self.config.proposed_window_size.max(1) as usize;
+        // Segment zero goes alone, carrying the window this side proposes;
+        // the receiver's answer to it grants the window every later group
+        // uses (Clause 5.4.4.1), unless this peer once left it unanswered
+        // (`first_window`, #2742).
+        let (mut window_size, mut first) = self.first_window(&tsm_mac);
         let mut next_seq: usize = 0;
         let mut neg_ack_retries: u32 = 0;
         // A local livelock bound with no counterpart in Clause 5.4.4.2, which
@@ -659,6 +663,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 }
                             },
                             _ = &mut segment_timer => {
+                                first = self.segment_zero_unanswered(first, window_start, &tsm_mac);
                                 ack_retries += 1;
                                 if ack_retries > max_ack_retries {
                                     return Err(Error::abort(bacnet_types::enums::AbortReason::TSM_TIMEOUT));
@@ -709,7 +714,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     "Received SegmentAck"
                 );
 
-                window_size = ack.actual_window_size.max(1) as usize;
+                window_size = self.granted_window(first, window_start, &ack, &tsm_mac);
 
                 // Clause 5.4.4.2 gives positive and negative acks the same
                 // effect on the window: 'sequence-number' is the last segment
@@ -754,6 +759,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
         }
         .await;
+        self.segment_zero_answered(first, &mut seg_ack_rx, &tsm_mac);
         self.note_answer(limits.sized_by, &result);
         if let Some(lease) = limits.routed_path_lease.as_ref() {
             self.settle_routed(lease, (&tsm_mac, invoke_id, &owner), &mut result);

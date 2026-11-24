@@ -454,11 +454,13 @@ fn default_apdu_retries_constant() {
     assert_eq!(DEFAULT_APDU_RETRIES, 3);
 }
 
+/// The receiver ends a silent transfer after four of these (the shared
+/// receiver's rule, #2742).
 #[test]
-fn seg_receiver_timeout_is_four_times_configured_tseg() {
+fn seg_receiver_timeout_is_the_configured_tseg() {
     let timeout =
         super::segmented_receive::validate_segment_timeout(&ServerConfig::default()).unwrap();
-    assert_eq!(timeout, Duration::from_secs(20));
+    assert_eq!(timeout, Duration::from_secs(5));
 }
 
 #[test]

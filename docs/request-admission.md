@@ -134,10 +134,14 @@ global pool. COV, reassembly, and endpoint-core identity contracts are not chang
   Last-guard drop removes all its peer registrations before releasing its partition
   permit, including never-polled cancellation. There are no historical peer
   entries, timestamps, eviction rules, or exposed identity maps.
-- Detectable exact pending/completed confirmed duplicates are discarded before
-  capacity admission. They do not count as admitted or overloaded. The existing
-  bounded duplicate retention, source canonicalization, and oversized untracked
-  fallback remain. A denied new request is not marked completed and may retry.
+- Detectable exact duplicates of a pending confirmed request are discarded
+  before capacity admission; nothing is kept once a request is answered. They
+  do not count as admitted or overloaded. The existing bounded duplicate
+  detection and source canonicalization remain. A request over 64 KiB (only a
+  reassembled one can be) is followed by its length and a keyed digest of its
+  data (#2751); a LifeSafetyOperation that large is still served untracked by
+  its own replay cache. A denied new request is not marked completed and may
+  retry.
 - Confirmed overload schedules a server Abort with the original Invoke ID and
   `OUT_OF_RESOURCES`, retaining direct, routed, and MS/TP reply-channel paths.
   A separate private pool permits at most **eight owned Abort send workers**.

@@ -5,9 +5,9 @@
 //! what each received segment draws (a Segment-ACK, nothing, an Abort) and
 //! hands back the whole request once its last segment is in. The caller sends
 //! what it is told to, along the segment's own reply path, and executes the
-//! request it gets back as if it had come in one APDU. A full client uses it
-//! for the notifications it executes; its rules are the full server's (the
-//! same limits, reasons and timers), so the server can move onto it too.
+//! request it gets back as if it had come in one APDU. The full server
+//! reassembles every segmented request with it (#2742), and a full client
+//! the notifications it executes, under the same limits, reasons and timers.
 //!
 //! # What a segment draws
 //!
@@ -271,18 +271,40 @@ impl SegmentedRequests {
     }
 
     /// Transfers in progress.
+    #[inline]
     pub fn len(&self) -> usize {
         self.transfers.len()
     }
 
     /// Whether no transfer is in progress.
+    ///
+    /// Inline: the full server asks it twice for every APDU its dispatch
+    /// loop takes, a request's plain path among them (#2742).
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.transfers.is_empty()
     }
 
     /// Saved segment bytes across every transfer.
+    #[inline]
     pub fn saved_bytes(&self) -> usize {
         self.saved_bytes
+    }
+
+    /// Whether a transfer is open for segments from `source_mac` (and
+    /// `source_network`, behind a router) with `invoke_id`, in the trust
+    /// context `provenance`. A segment with none either opens one or draws
+    /// an Abort; the full server asks first whether it repeats a request
+    /// already whole (#2751).
+    pub fn is_open(
+        &self,
+        source_mac: &[u8],
+        source_network: Option<&NpduAddress>,
+        invoke_id: u8,
+        provenance: TransportProvenance,
+    ) -> bool {
+        let key = transfer_key(source_mac, source_network, invoke_id, provenance);
+        self.transfers.contains_key(&key)
     }
 
     /// End every transfer, without a word.

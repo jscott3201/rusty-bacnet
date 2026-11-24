@@ -353,7 +353,7 @@ async fn abort_with_server_false_does_not_end_the_transaction() {
         .expect("the server=FALSE Abort aborted the transaction");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn segment_ack_with_server_false_does_not_advance_the_send_window() {
     let mut config = config();
     // Force segmentation of the outbound request and a two-segment window.
@@ -364,11 +364,8 @@ async fn segment_ack_with_server_false_does_not_advance_the_send_window() {
     let mut link =
         PeerLink::issuing(config, ConfirmedServiceChoice::WRITE_PROPERTY, service_data).await;
 
+    // Segment zero goes alone and waits for its answer (#2742).
     let invoke_id = link.request_invoke_id().await;
-    match link.recv("second segment of initial window").await {
-        Apdu::ConfirmedRequest(req) => assert_eq!(req.sequence_number, Some(1)),
-        other => panic!("expected ConfirmedRequest, got {other:?}"),
-    }
 
     // A SegmentACK a *receiver* emits. Clause 5.4.4.2's NewACK_Received
     // requires 'server' = TRUE, so this must not open the next window.
@@ -376,7 +373,7 @@ async fn segment_ack_with_server_false_does_not_advance_the_send_window() {
         negative_ack: false,
         sent_by_server: false,
         invoke_id,
-        sequence_number: 1,
+        sequence_number: 0,
         actual_window_size: 2,
     }))
     .await;
@@ -387,12 +384,12 @@ async fn segment_ack_with_server_false_does_not_advance_the_send_window() {
         negative_ack: false,
         sent_by_server: true,
         invoke_id,
-        sequence_number: 1,
+        sequence_number: 0,
         actual_window_size: 2,
     }))
     .await;
-    for expected_seq in [2, 3] {
-        match link.recv("second window").await {
+    for expected_seq in [1, 2] {
+        match link.recv("the window segment zero's answer grants").await {
             Apdu::ConfirmedRequest(req) => {
                 assert_eq!(req.sequence_number, Some(expected_seq));
             }

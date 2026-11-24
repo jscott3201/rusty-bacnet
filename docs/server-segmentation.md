@@ -47,6 +47,43 @@ segment received after removal still gets the normal invalid-state Abort;
 segment zero can start a fresh transfer. The existing 128 global / 16 per-peer
 slots, 4 MiB saved-payload budget and 256-segment limit remain in force.
 
+The full server reassembles with `bacnet_endpoint_core::segmented_request`,
+the receiver its clients use too (#2742). It acknowledges segment zero at
+once, with the window the requester proposed, so a requester that sends
+segment zero alone and waits for that answer (Clause 5.4.4.1) goes on at
+once. After that it acknowledges each full window, counted from its last
+acknowledgment, positive or negative (Clause 5.4.5.2), and the last segment.
+A requester that sends its whole first window without waiting still
+completes: the segments it sends again after segment zero's acknowledgment
+are duplicates and are discarded. While the whole request still executes, a
+segment of it sent again by the same requester, in the same trust context
+and by a route of the same origin, is acknowledged again with the last
+sequence number and window instead (Clause 5.4.5.3, #2751). So does a
+requester that retries the whole request from segment zero while the first
+copy still executes: each segment is acknowledged again, and the request is
+not reassembled or executed a second time. That note lives as long as the
+request is pending in the duplicate-request tracker, which keeps a request
+over 64 KiB by its length and a digest of its data rather than the data. It
+ends when the answer is handed to the link, or, for an answer sent in
+segments, at that answer's final acknowledgment; a requester's Abort for
+the invoke ID ends it sooner. After that a segment sent again draws the
+invalid-state Abort above, except segment zero, which opens a fresh
+transfer, as a request sent whole again is executed again:
+the tracker keeps nothing about answered requests. In the moment between
+the hand-off and the answer leaving the link, a repeat can still draw that
+Abort, which on a multi-thread runtime can reach the requester first. A
+request the tracker doesn't follow (past its 256 pending requests, or a
+LifeSafetyOperation, which has its own replay) has no note. This
+workspace's client sends segment zero alone and
+waits for its answer, so it sends nothing twice to a server that answers at
+once; a receiver that never answers segment zero alone costs it one segment
+timeout, once (see the client's segmented requests in
+[the Rust API](rust-api.md#segmented-requests)). A requester that ignores
+any acknowledgment short of its window's end, for the record, now sees the
+segments it sends after segment zero's acknowledgment dropped as duplicates
+and then asked for again with a negative acknowledgment: about two segment
+timeouts for each request that spans more than one window.
+
 `DeviceIdentity` is shared by full servers and endpoints, with a 5000 ms
 segment timeout. `with_apdu_segment_timeout_ms(...)` changes both. An
 `EndpointSession` takes any of the four modes (#2617): its full server follows
@@ -56,11 +93,9 @@ when it transmits them, and taking the identity's Tseg as its segment timeout.
 A selected Device database must state the identity's mode. The client's APDU
 timeout and retries stay the session's. When the Device receives segments, the
 session's client also reassembles a segmented COV notification of either form
-(#2646), with the full server's limits and timers
-(`bacnet_endpoint_core::segmented_request`): it acknowledges segment zero at
-once with the window the requester proposed, then each full window and the
-last segment, all with the server bit set, and answers the whole notification
-as one that came in one APDU. A standalone client, or one on a session with no
+(#2646) with the full server's receiver, acknowledging as the full server
+does, all with the server bit set, and answers the whole notification as one
+that came in one APDU. A standalone client, or one on a session with no
 server role, reassembles every segmented confirmed request the same way,
 unless its `ClientConfig::segmentation` receives no segments: it executes a
 notification and rejects any other service as unrecognized, as it does an

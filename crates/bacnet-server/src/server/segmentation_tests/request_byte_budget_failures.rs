@@ -1,14 +1,15 @@
-//! Routed byte refusal, failure and saved-owner release at real async boundaries.
+//! Routed byte refusal, failure and the release of saved bytes at real async
+//! boundaries. The shared receiver (#2742) releases a transfer's bytes inside
+//! the call that ends it, before the server sends anything; these tests see
+//! the release as capacity the next transfer can use.
 
 use super::*;
-use crate::server::segmented_receive::tests::observe_payload_drops;
 use bacnet_objects::value_types::CharacterStringValueObject;
 use bacnet_transport::port::ReceivedNpdu;
 use request_peer_quota::{assert_positive_ack, assert_server_abort, next_routed_apdu};
 use request_reassembly::{
     inject_routed_segment, present_value, routed_injection_transport, write_property_payload,
 };
-use std::sync::atomic::AtomicUsize;
 use tokio::time::timeout;
 
 struct Fixture {
@@ -101,22 +102,13 @@ impl Fixture {
 }
 
 #[tokio::test]
-async fn request_byte_budget_routed_abort_removes_current_before_failed_send_and_stop_releases_rest()
- {
-    let drops = Arc::new(AtomicUsize::new(0));
-    let _probe = observe_payload_drops(&drops);
+async fn request_byte_budget_routed_abort_frees_exactly_its_bytes_despite_a_failed_send() {
     let mut f = Fixture::start().await;
     let next = f.fill(4 * 1024 * 1024).await;
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
     f.router = test_mac(31); // Same routed transaction, new immediate path.
     f.block_and_fail_next_send();
     f.segment(0, next[0], true, &[1]).await;
     f.wait_blocked().await;
-    assert_eq!(
-        drops.load(Ordering::SeqCst),
-        237,
-        "current saved owners released BEFORE Abort await"
-    );
     assert_server_abort(f.reply().await, 0, AbortReason::BUFFER_OVERFLOW);
     f.control.release_sends(1);
     f.segment(0, next[0], true, &[1]).await;
@@ -129,20 +121,12 @@ async fn request_byte_budget_routed_abort_removes_current_before_failed_send_and
     }
     f.segment(13, 0, true, &[1]).await;
     assert_server_abort(f.reply().await, 13, AbortReason::BUFFER_OVERFLOW);
-    assert_eq!(drops.load(Ordering::SeqCst), 237);
     assert_eq!(present_value(&f.server).await, "");
     f.stop().await;
-    assert_eq!(
-        drops.load(Ordering::SeqCst),
-        2842 + 237,
-        "explicit stop joins dispatch and drops all remaining saved owners"
-    );
 }
 
 #[tokio::test]
-async fn request_byte_budget_final_ack_attempt_precedes_consuming_release_before_blocked_service() {
-    let drops = Arc::new(AtomicUsize::new(0));
-    let _probe = observe_payload_drops(&drops);
+async fn request_byte_budget_failed_final_ack_still_hands_on_the_request_before_blocked_service() {
     let mut f = Fixture::start().await;
     let text = "release saved storage before async service work";
     let write = write_property_payload(text);
@@ -155,21 +139,12 @@ async fn request_byte_budget_final_ack_attempt_precedes_consuming_release_before
     f.segment(1, 1, false, last).await;
     f.wait_blocked().await;
     assert_positive_ack(f.reply().await, 1, 1);
-    assert_eq!(
-        drops.load(Ordering::SeqCst),
-        0,
-        "do not complete before final ACK attempt finishes"
-    );
+    assert_eq!(sent_count(&f.sent), f.index, "the final ACK goes first");
     f.control.release_sends(1);
     // ACK failure still continues completion as before. This next input's ACK
-    // proves the loop passed consuming completion; the service remains blocked.
+    // proves the loop handed the request on; the service remains blocked.
     f.segment(2, 0, true, &[9]).await;
     assert_positive_ack(f.reply().await, 2, 0);
-    assert_eq!(
-        drops.load(Ordering::SeqCst),
-        2,
-        "first and final saved owners released before blocked service"
-    );
     assert_eq!(
         sent_count(&f.sent),
         f.index,
@@ -179,24 +154,20 @@ async fn request_byte_budget_final_ack_attempt_precedes_consuming_release_before
     assert!(matches!(f.reply().await, Apdu::SimpleAck(ack) if ack.invoke_id == 1));
     assert_eq!(present_value(&f.server).await, text);
     f.stop().await;
-    assert_eq!(drops.load(Ordering::SeqCst), 3);
 }
 
 #[tokio::test]
 async fn request_byte_budget_validation_failures_do_not_charge_or_retain_input() {
-    let drops = Arc::new(AtomicUsize::new(0));
-    let _probe = observe_payload_drops(&drops);
     let mut f = Fixture::start().await;
     let next = f.fill(4 * 1024 * 1024 - 1477).await;
-    // Budget fits this length exactly, so authoritative per-segment validation
-    // (not the aggregate cap) rejects these initial and continuation inputs.
+    // Budget fits this length exactly, so per-segment validation (not the
+    // aggregate cap) refuses these initial and continuation inputs.
     f.segment(12, 0, true, &[7; 1477]).await;
     assert_server_abort(f.reply().await, 12, AbortReason::BUFFER_OVERFLOW);
     f.segment(12, 1, true, &[7]).await;
     assert_server_abort(f.reply().await, 12, AbortReason::INVALID_APDU_IN_THIS_STATE);
     f.segment(0, next[0], true, &[7; 1477]).await;
     assert_server_abort(f.reply().await, 0, AbortReason::BUFFER_OVERFLOW);
-    assert_eq!(drops.load(Ordering::SeqCst), usize::from(next[0]));
     let write = write_property_payload("capacity after failed saves");
     f.segment(12, 0, false, &write).await;
     assert_positive_ack(f.reply().await, 12, 0);
@@ -205,11 +176,21 @@ async fn request_byte_budget_validation_failures_do_not_charge_or_retain_input()
         present_value(&f.server).await,
         "capacity after failed saves"
     );
+    // Free now: the 1477 bytes the refused segments never took, and request
+    // 0's full segments, which its Abort gave back. Exactly that fits again.
+    assert_eq!(next[0], 237);
+    let mut left = 1477 + usize::from(next[0]) * 1476;
+    let mut seq = 0;
+    while left != 0 {
+        let size = left.min(1476);
+        f.segment(20, seq, true, &vec![20; size]).await;
+        assert_positive_ack(f.reply().await, 20, seq);
+        left -= size;
+        seq += 1;
+    }
+    f.segment(20, seq, true, &[1]).await;
+    assert_server_abort(f.reply().await, 20, AbortReason::BUFFER_OVERFLOW);
     f.stop().await;
-    assert_eq!(
-        drops.load(Ordering::SeqCst),
-        next.iter().map(|n| usize::from(*n)).sum::<usize>() + 1
-    );
 }
 
 #[tokio::test]
