@@ -84,6 +84,7 @@ impl BACnetServer {
                 .map(|value| crate::types::device_object_reference(&value, "accompaniment"))
                 .transpose()?,
         };
+        self.precheck_pending(ObjectType::ACCESS_RIGHTS, instance, name)?;
         let obj = access_rights(instance, name, storage_path, settings).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }

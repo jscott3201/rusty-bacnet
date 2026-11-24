@@ -14,41 +14,19 @@
 use super::super::*;
 use crate::algorithm_keywords::AlgorithmKeywords;
 use crate::object_options::{object_profile, present_value_access};
-use crate::point_registration::{Registration, RegistrationKind, Storage, admit, value_keywords};
+use crate::point_registration::{Registration, RegistrationKind, Storage, value_keywords};
 use crate::types::PyBitString;
-use bacnet_types::enums::{ObjectType, Polarity};
+use bacnet_types::enums::Polarity;
 
 impl BACnetServer {
     /// Keep `point`, built once with `storage`, for start (#2711), once
-    /// [`admit`] has checked it as an endpoint checks it, against the
-    /// Device and the registrations so far. Every check comes before the
-    /// object is built, or inside the build before storage attaches, so a
-    /// refused registration has touched no storage file and leaves the
-    /// others as they were.
+    /// it has been admitted as an endpoint admits it (#2748: through the
+    /// path every builder takes). Every check comes before the object is
+    /// built, or inside the build before storage attaches, so a refused
+    /// registration has touched no storage file and leaves the others as
+    /// they were.
     fn register_point(&self, point: Registration, storage: Storage<'_>) -> PyResult<()> {
-        let mut pending = self.lock_pending()?;
-        self.check_takes_objects()?;
-        let device = (
-            ObjectType::DEVICE,
-            self.device_instance,
-            self.device_name.as_str(),
-        );
-        let kept = pending.iter().map(|object| {
-            let identifier = object.object_identifier();
-            (
-                identifier.object_type(),
-                identifier.instance_number(),
-                object.object_name(),
-            )
-        });
-        let object = admit(
-            point.identity(),
-            std::iter::once(device).chain(kept),
-            || point.check(),
-            || point.build(storage),
-        )?;
-        pending.push(object);
-        Ok(())
+        self.admit_pending(point.identity(), || point.check(), || point.build(storage))
     }
 }
 

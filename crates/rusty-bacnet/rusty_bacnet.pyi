@@ -7350,8 +7350,20 @@ class BACnetServer:
     start() loads the explicit site CA and operational cert/key, each file read
     up to 1 MiB, before dialing or draining registrations. Local TLS
     configuration errors, a larger file included, raise RuntimeError;
-    repair the files and retry on the same server. Later startup failures do not
-    have a general registration rollback guarantee.
+    repair the files and retry on the same server. So does a start refused
+    before it hands the registrations to the database (#2748): a
+    ``registered_network_port`` that names no Network Port or differs from
+    the transport's, an SC hub that refuses the dial, or a Device that cannot
+    be prepared. Only an SC dial and a router lookup wait before that
+    hand-off, so cancelling a B/IP, B/IPv6 or MS/TP start gives nothing
+    back. A refusal inside the Rust server's own startup (a transport that
+    will not bind, another refusal of the registered port) has consumed the
+    registrations: build the server again.
+
+    Every ``add_*`` builder checks its object at the call (#2711, #2748):
+    instance 4194303 raises BacnetError; an identifier or name the Device or
+    an earlier registration already has raises ValueError. A repeated
+    identifier is refused, not replaced: register each object once.
 
     SC also requires keyword-only sc_device_uuid: exactly 16 bytes, not all zero,
     copied at construction. Missing, None, wrong length, or all-zero values
@@ -7485,8 +7497,10 @@ class BACnetServer:
         which go to the client, and confirmed event notifications, which
         reach both with only this server's answer sent; confirmed audit
         notifications reach this server alone. Unconfirmed requests reach
-        both. A start refused before the server runs, such as for a
-        duplicate object name, leaves the share for the next start. Its
+        both. A start refused before the Rust server's own startup, such as
+        a Device that cannot be prepared, leaves the share
+        for the next start; one that server refuses after it took the share
+        spends it. Its
         local broadcasts, such as its I-Am and an unconfirmed event
         notification to a local-broadcast recipient, go to each of the
         router's networks, isolated ports included (#2601); a recipient
@@ -9084,11 +9098,21 @@ class BACnetServer:
     def start(self) -> Awaitable[None]:
         """Start the server and begin accepting BACnet requests.
 
-        An added object the database won't take raises ValueError: "duplicate
-        object name: ..." for a name another object holds, or "object
-        refused: ..." for any other reason, an instance of 4194303 among them
-        (#2171). An endpoint's server (``await endpoint.server()``) raises
-        RuntimeError: it started with its endpoint.
+        Every registration was checked at its ``add_*`` call, so the database
+        takes them all. A start refused before it hands them to the database
+        (a ``registered_network_port`` that names no port or differs from the
+        transport's, an SC hub that refuses the dial, a Device that cannot be
+        prepared) keeps them, with the Audit recipient and the forwarding
+        configuration, for the next call (#2748); one the Rust server's
+        startup refuses after that (a transport that will not bind) has
+        consumed them. Only an SC dial and a router lookup wait before the
+        hand-off, so cancelling a B/IP, B/IPv6 or MS/TP start gives nothing
+        back; what a cancelled SC start gives back returns when its future is
+        dropped, so an immediate retry can raise "in progress" once. A running
+        server raises RuntimeError; so do ``add_*``, ``set_file_*``, Audit
+        selection and a second ``start()`` while a start is in progress. An endpoint's server
+        (``await endpoint.server()``) raises RuntimeError: it started with its
+        endpoint.
         """
         ...
 

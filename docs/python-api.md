@@ -4289,15 +4289,29 @@ Async BACnet server that hosts objects and responds to remote requests.
 
 `device_instance` takes 0 to 4194302. Instance 4194303 is reserved, since no
 object may have it (Clause 12.1.1), so the constructor raises `ValueError` for
-it or anything larger (#2171). The nine analog, binary and multi-state
-builders check each registration at the call, as the endpoints' builders do
-(see [Point registration checks](#point-registration-checks)). The other
-builders check less at the call. An object they add under an identifier
-already registered replaces the earlier one silently, the last one winning.
-An object the database won't take raises `ValueError` at `start()`:
-"duplicate object name" for a name another object holds, the Device's
-included, and "object refused" for any other reason, such as an object at
-instance 4194303.
+it or anything larger (#2171). Every `add_*` builder checks its object at
+the call (see [Builder checks](#builder-checks)): an identifier
+or name the Device or an earlier registration already has raises
+`ValueError`, and instance 4194303 raises `BacnetError`. A repeated
+identifier is refused, not replaced (#2748): register each object once.
+A start that is refused before it hands the registrations to the database
+keeps them, the Audit recipient and the forwarding configuration, so the
+application can correct the fault and start again. `start()` checks first
+what the pending objects and the constructor's settings already show: a
+`registered_network_port` that names no Network Port, one of the wrong
+family, or one whose address or UDP port differs from the transport's raises
+`ValueError`. After that, an SC hub that refuses the dial and a router or
+Device that cannot be prepared are refused with the registrations kept. Only
+an SC dial and a router lookup wait before that hand-off, so cancelling a
+B/IP, B/IPv6 or MS/TP start does not give anything back. A refusal inside the
+Rust server's own startup, such as a transport that will not bind or a
+registered port its builder refuses for another reason, has consumed the
+registrations: build the server again. A running server raises
+`RuntimeError` from `start()`. `add_*`, the `set_file_*` calls, Audit
+selection and a second `start()` raise `RuntimeError` while a start is in
+progress; what a cancelled start gives back returns when the cancelled
+future is dropped on a runtime thread, so a retry straight after a cancel can
+meet that error once. Retry after a moment.
 
 ### Constructor
 
@@ -4404,12 +4418,19 @@ server.add_multistate_output(instance=1, name="Speed", number_of_states=3)
 server.add_multistate_value(instance=1, name="Season", number_of_states=4)
 ```
 
-#### Point registration checks
+#### Builder checks
 
-These nine builders, on `BACnetServer` and on each endpoint, read their
-arguments into one registration and check it with the same code (#2711).
-The checks run at the call, before anything is kept, in this order, so a
-call with two faults raises the same error on every surface:
+Every `BACnetServer.add_*` builder, and each endpoint's nine point
+builders, checks its object with the same code at the call (#2711, #2748),
+before anything is kept. The nine analog, binary and multi-state builders
+read their arguments into one registration first and check it in this order,
+so a call with two faults raises the same error on every surface; every
+other builder makes steps 1 and 2, and the pure checks of its list keywords
+(a timer's state-change set, a forwarder's recipients), before it opens or
+clears a `storage_path` file, then builds as it did. On a free-threaded
+interpreter two calls for one identifier can both pass those checks before
+either keeps its object: the second is still refused when kept, but its
+storage may have been opened or cleared first:
 
 1. An instance of 4194303 or more raises `BacnetError`: no object may have
    4194303 (#2171).
@@ -4429,9 +4450,11 @@ call with two faults raises the same error on every surface:
 A refused registration keeps nothing and leaves the earlier ones for
 start. On `BACnetServer` it also leaves any `storage_path` file alone,
 `clear_written_reporting=True` included: every check comes before storage
-attaches. Until #2711 these builders, like the other `BACnetServer`
-builders still, took a repeated identifier as a silent replacement of the
-earlier registration and found a duplicate name only at `start()`.
+attaches. Until #2711 these builders took a repeated identifier as a silent
+replacement of the earlier registration and found a duplicate name only at
+`start()`; the other `BACnetServer` builders did until #2748. There is no
+call that removes or replaces a registration before start: register the
+final form of each object once, or build the server again.
 
 #### Keeping written reporting settings
 
@@ -5138,14 +5161,14 @@ remain in use.
 
 Malformed policy or instance (including booleans, non-integers and values outside
 `0..=4194303`) raises `ValueError`, except an instance outside unsigned32, which
-raises `OverflowError`. Missing/wrong-type registrations and duplicate
-registrations of the selected Audit Log instance also raise `ValueError`. An object
-of another type with the same instance number is not an Audit Log. Selection is
-revalidated at `start()` before transport preparation or registration transfer, so
-a duplicate registered after selection cannot silently replace the sink. These
-validation failures preserve pending registrations and the previous configuration.
-Configuration while running raises `RuntimeError`. This does not add general
-rollback for unrelated later startup failures.
+raises `OverflowError`. Missing/wrong-type registrations also raise `ValueError`. An object
+of another type with the same instance number is not an Audit Log. A repeated Audit
+Log instance is refused at `add_audit_log` (#2748), so nothing registered after
+selection can replace the sink; `start()` revalidates the selection before
+transport preparation or registration transfer. These validation failures preserve
+pending registrations and the previous configuration. Configuration while running
+or while a start is in progress raises `RuntimeError`. A refusal inside the Rust
+server's own startup still consumes the registrations (see `BACnetServer`).
 
 **Migration:** existing constructors and `add_audit_log()` calls need no change and
 continue to deny inbound notifications. To opt in, register the log, call the new
@@ -5265,7 +5288,7 @@ finally:
   `start()` consumes registrations raise `RuntimeError`, including while startup
   is in flight and after stop.
   Validation/TLS/serial preparation failures before transfer do not freeze these
-  settings. Later startup failures retain the existing lack of general rollback.
+  settings. A refusal inside the Rust server's own startup consumes the registrations.
   Recreate the server, register the same storage paths and reapply settings on
   reopen: parent references and bindings are not durable snapshot data.
 
@@ -5392,7 +5415,7 @@ child.add_device_binding(9, await parent.local_address())
   Configuration freezes at ownership transfer: valid calls during startup, while
   running or after stop raise `RuntimeError`. Input validation precedes that check.
   Validation and TLS/serial preparation failures before transfer leave it retryable;
-  later failures retain the existing lack of general rollback. Recreate and reapply
+  a refusal inside the Rust server's own startup consumes the registrations. Recreate and reapply
   static settings/bindings on a new server; they are not persisted.
 
 By default `Monitored_Objects` remains absent (catch-all) and `Audit_Priority_Filter`
@@ -7752,7 +7775,7 @@ An object name and its type/instance pair must each be unique across the
 Device, its Network Ports and the pending objects. An invalid addition raises
 at the builder call and preserves earlier registrations. `BACnetServer`'s
 builders make the same checks with the same code; see
-[Point registration checks](#point-registration-checks).
+[Builder checks](#builder-checks).
 
 The endpoint's server serves those objects as a standalone server serves
 its own, and a peer writes them as far as the endpoint's `mutation_policy`
@@ -8994,9 +9017,8 @@ larger than 1048576 bytes`), as is a stream that never ends. Unreadable, empty, 
 credentials and cert/key mismatch raise `RuntimeError` with `TLS config error:`.
 Server **local TLS configuration** failures leave pending object registrations
 intact; repair files at the same paths and retry `start()`. The client also reloads
-files on retry. This is not general startup rollback: later failures, including
-TLS peer rejection after dialing, retain existing lifecycle behavior and may
-consume server registrations. Preflight checks rustls configuration validity,
+files on retry. A refused dial, TLS peer rejection included, keeps them too (#2748); a failure
+inside the Rust server's own startup after the dial may consume them. Preflight checks rustls configuration validity,
 not the local certificate's date or issuer against the site store; the remote
 peer validates that certificate during the real handshake.
 

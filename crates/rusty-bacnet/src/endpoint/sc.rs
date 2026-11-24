@@ -141,12 +141,7 @@ impl PyScEndpoint {
     }
 
     fn vmac_hex(&self) -> String {
-        self.config
-            .vmac
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<_>>()
-            .join(":")
+        bacnet_ops::octets::hex_sep(&self.config.vmac, ":")
     }
 }
 
@@ -518,12 +513,7 @@ impl PyScEndpoint {
                 dict.set_item("transport", "sc")?;
                 dict.set_item(
                     "local_address",
-                    config
-                        .vmac
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect::<Vec<_>>()
-                        .join(":"),
+                    bacnet_ops::octets::hex_sep(&config.vmac, ":"),
                 )?;
                 dict.set_item("active_leases", snapshot.1)?;
                 dict.set_item("ingress_policy", snapshot.0.ingress_policy)?;
