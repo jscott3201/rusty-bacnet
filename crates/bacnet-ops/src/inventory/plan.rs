@@ -9,21 +9,24 @@ use crate::write::Commandability;
 /// The properties an inventory reads of an object of `object_type` under
 /// `options`, in the order it asks for them:
 ///
-/// | Object type | Always | With `settings` |
-/// |---|---|---|
-/// | every type, a vendor's or a later standard's included | Object_Name, Description | |
-/// | Analog Input, Output and Value; Integer, Positive Integer and Large Analog Value | Units | COV_Increment, Min_Pres_Value, Max_Pres_Value |
-/// | Accumulator, Pulse Converter | Units | |
-/// | Binary Input, Output and Value | Active_Text, Inactive_Text | |
-/// | Binary Input and Output | | Polarity |
-/// | Multi-state Input, Output and Value | Number_Of_States, State_Text | |
-/// | a type whose Present_Value may be commandable ([`Commandability::Optional`]): the value types, and any type this release doesn't know | Priority_Array | Relinquish_Default |
-/// | a type whose Present_Value always is ([`Commandability::Always`]), except Channel | | Relinquish_Default |
+/// | Object type | Always | With `details` | With `settings` | With `values` |
+/// |---|---|---|---|---|
+/// | every type, a vendor's or a later standard's included | Object_Name, Description | Device_Type, Profile_Name | | Present_Value, Status_Flags, Event_State, Reliability |
+/// | Analog Input, Output and Value; Integer, Positive Integer and Large Analog Value | Units | | COV_Increment, Min_Pres_Value, Max_Pres_Value | |
+/// | Accumulator, Pulse Converter | Units | | | |
+/// | Binary Input, Output and Value | Active_Text, Inactive_Text | | | |
+/// | Binary Input and Output | | | Polarity | |
+/// | Multi-state Input, Output and Value | Number_Of_States, State_Text | | | |
+/// | a type whose Present_Value may be commandable ([`Commandability::Optional`]): the value types, and any type this release doesn't know | Priority_Array | | Relinquish_Default | |
+/// | a type whose Present_Value always is ([`Commandability::Always`]), except Channel | | | Relinquish_Default | Current_Command_Priority |
 ///
-/// With `values`, every object's Present_Value and Status_Flags follow. An
-/// object type this release doesn't know therefore reads its name, its
+/// Each column's properties follow the previous column's, in that order,
+/// except that `details` puts its two right after Description. An object
+/// type this release doesn't know therefore reads its name, its
 /// description and whether it has a Priority_Array, and with values
-/// whatever Present_Value and Status_Flags it has.
+/// whatever run-time state it has. The priority in control of a value
+/// type comes from the Priority_Array it already reads, at no request of
+/// its own ([`PointRecord::command_priority`](super::PointRecord::command_priority)).
 ///
 /// Some of these every object of the type has, and one the device can't
 /// give is a [`problem`](super::PointRecord::problems) whatever its error:
@@ -36,9 +39,17 @@ use crate::write::Commandability;
 /// Pattern Value, Access Door, both lighting outputs, Accumulator, Pulse
 /// Converter, Loop, the life safety types, Channel, Schedule, Load
 /// Control, Timer, Staging, Global Group and Credential Data Input
-/// (Present_Value alone for Group, Color and Color Temperature). Any other
-/// is optional: an object that lacks it (the device answers that the
-/// property is unknown) reads as `None` with no problem.
+/// (Present_Value alone for Group, Color and Color Temperature); and the
+/// Event_State of the types whose tables require it with no condition
+/// (`has_event_state`). Any other is optional: an object that lacks it (the
+/// device answers that the property is unknown; any other error is a
+/// problem) reads as `None` with no problem. Reliability and
+/// Current_Command_Priority are treated as optional on every type, though
+/// some tables require them (Reliability on Access Door, Schedule and
+/// Network Port among others, Current_Command_Priority on the six types
+/// that always take commands): a device built to an earlier revision of
+/// the standard may lack them. Device_Type and Profile_Name are optional
+/// wherever a table lists them.
 ///
 /// ```
 /// use bacnet_ops::inventory::{InventoryOptions, properties};
@@ -59,9 +70,21 @@ use crate::write::Commandability;
 ///         P::PRIORITY_ARRAY,
 ///         P::PRESENT_VALUE,
 ///         P::STATUS_FLAGS,
+///         P::EVENT_STATE,
+///         P::RELIABILITY,
 ///     ]
 /// );
+/// // An output's priority in control is its own property.
+/// let values = plain.clone().with_values(true);
+/// assert_eq!(
+///     properties(ObjectType::ANALOG_OUTPUT, &values).last(),
+///     Some(&P::CURRENT_COMMAND_PRIORITY)
+/// );
 /// assert_eq!(properties(ObjectType::TREND_LOG, &plain).len(), 2);
+/// assert_eq!(
+///     properties(ObjectType::TREND_LOG, &plain.clone().with_details(true)),
+///     [P::OBJECT_NAME, P::DESCRIPTION, P::DEVICE_TYPE, P::PROFILE_NAME]
+/// );
 /// // Settings: a Binary Output's Polarity and relinquish default; a
 /// // Binary Value has no Polarity to ask for.
 /// let settings = plain.with_settings(true);
@@ -73,6 +96,9 @@ use crate::write::Commandability;
 /// ```
 pub fn properties(object_type: ObjectType, options: &InventoryOptions) -> Vec<P> {
     let mut list = vec![P::OBJECT_NAME, P::DESCRIPTION];
+    if options.details {
+        list.extend([P::DEVICE_TYPE, P::PROFILE_NAME]);
+    }
     if has_units(object_type) {
         list.push(P::UNITS);
     }
@@ -99,9 +125,27 @@ pub fn properties(object_type: ObjectType, options: &InventoryOptions) -> Vec<P>
         }
     }
     if options.values {
-        list.extend([P::PRESENT_VALUE, P::STATUS_FLAGS]);
+        list.extend([
+            P::PRESENT_VALUE,
+            P::STATUS_FLAGS,
+            P::EVENT_STATE,
+            P::RELIABILITY,
+        ]);
+        // A value type's comes from its Priority_Array, read above.
+        if always_commanded(object_type) {
+            list.push(P::CURRENT_COMMAND_PRIORITY);
+        }
     }
     list
+}
+
+/// Whether every object of `object_type` takes commands at its
+/// Present_Value and keeps them in a Priority_Array: the outputs, Access
+/// Door and the two lighting outputs ([`Commandability::Always`], less
+/// Channel, which passes its commands on).
+fn always_commanded(object_type: ObjectType) -> bool {
+    Commandability::of(object_type, P::PRESENT_VALUE) == Commandability::Always
+        && crate::write::keeps_priorities(object_type)
 }
 
 /// Whether every object of `object_type` has `property`, among those
@@ -122,21 +166,67 @@ pub fn properties(object_type: ObjectType, options: &InventoryOptions) -> Vec<P>
 ///   (Table 12-69). In the value types' tables it is conditional on the
 ///   object being commandable, so it stays optional there;
 /// - Present_Value, in the tables of [`has_value`]'s types, and
-///   Status_Flags, in those of [`has_flags`]'s.
+///   Status_Flags, in those of [`has_flags`]'s;
+/// - Event_State, in the tables of [`has_event_state`]'s types.
+///
+/// Reliability and Current_Command_Priority are treated as optional on
+/// every type, even where a table requires them: a device built to an
+/// earlier revision of the standard may not have them, and a record of
+/// one shouldn't be all problems for it (#2620). Device_Type and
+/// Profile_Name are optional in the tables.
 pub(super) fn required(object_type: ObjectType, property: P) -> bool {
     match property {
         P::OBJECT_NAME => true,
         P::UNITS => has_units(object_type),
         P::NUMBER_OF_STATES => is_multistate(object_type),
         P::POLARITY => has_polarity(object_type),
-        P::RELINQUISH_DEFAULT => {
-            Commandability::of(object_type, P::PRESENT_VALUE) == Commandability::Always
-                && crate::write::keeps_priorities(object_type)
-        }
+        P::RELINQUISH_DEFAULT => always_commanded(object_type),
+        P::EVENT_STATE => has_event_state(object_type),
         P::PRESENT_VALUE => has_value(object_type),
         P::STATUS_FLAGS => has_flags(object_type),
         _ => false,
     }
+}
+
+/// The types whose tables require Event_State with no condition (#2620):
+/// the analog, binary and multi-state inputs, outputs and values (Tables
+/// 12-2 to 12-4, 12-6, 12-8, 12-10 and 12-21 to 12-23), Event Enrollment
+/// (12-14), Life Safety Point and Zone (12-18, 12-19), Loop (12-20), Pulse
+/// Converter (12-27), Trend Log (12-29), Access Door (12-30), Event Log
+/// (12-31), Load Control (12-32), Trend Log Multiple (12-35), Access Point
+/// and Zone (12-36, 12-37), Global Group (12-57), Alert Enrollment
+/// (12-61), Accumulator (12-79), Staging (12-80), Audit Reporter (12-82)
+/// and Audit Log (12-83). In the other tables that list it, it is
+/// optional or present only with intrinsic reporting, which a read can't
+/// tell, so it stays optional there.
+fn has_event_state(object_type: ObjectType) -> bool {
+    type O = ObjectType;
+    is_binary(object_type)
+        || is_multistate(object_type)
+        || [
+            O::ANALOG_INPUT,
+            O::ANALOG_OUTPUT,
+            O::ANALOG_VALUE,
+            O::EVENT_ENROLLMENT,
+            O::LIFE_SAFETY_POINT,
+            O::LIFE_SAFETY_ZONE,
+            O::LOOP,
+            O::PULSE_CONVERTER,
+            O::TREND_LOG,
+            O::ACCESS_DOOR,
+            O::EVENT_LOG,
+            O::LOAD_CONTROL,
+            O::TREND_LOG_MULTIPLE,
+            O::ACCESS_POINT,
+            O::ACCESS_ZONE,
+            O::GLOBAL_GROUP,
+            O::ALERT_ENROLLMENT,
+            O::ACCUMULATOR,
+            O::STAGING,
+            O::AUDIT_REPORTER,
+            O::AUDIT_LOG,
+        ]
+        .contains(&object_type)
 }
 
 /// The types whose tables require Present_Value, as far as this list was

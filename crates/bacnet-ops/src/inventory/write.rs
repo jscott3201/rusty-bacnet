@@ -22,7 +22,8 @@
 //! leading spaces and line breaks, gets an apostrophe before it, which a
 //! spreadsheet shows as text and a program reading the CSV back sees. The
 //! guarded
-//! cells are `name`, `description` and `state_texts` (the joined cell).
+//! cells are `name`, `description`, `device_type`, `profile_name` and
+//! `state_texts` (the joined cell).
 //! A value cell is guarded too when its value may hold device text
 //! ([`Value::may_hold_device_text`]), though none starts with one of those
 //! characters as values are written today: a character string's text is
@@ -50,8 +51,9 @@ use crate::label;
 ///   `2:0x05`);
 /// - `device_instance`;
 /// - `object`: `analog-input:1`, the type in kebab case;
-/// - `name`, `description`: as the device sent them, behind an apostrophe
-///   when they would read as a formula ([`CsvOptions`]);
+/// - `name`, `description`, `device_type`, `profile_name`: as the device
+///   sent them, behind an apostrophe when they would read as a formula
+///   ([`CsvOptions`]);
 /// - `units`: the unit's name in kebab case (`degrees-fahrenheit`);
 /// - `state_texts`: a binary object's Inactive_Text then Active_Text, or
 ///   a multi-state object's State_Text from state 1, joined with `|`; a
@@ -60,14 +62,16 @@ use crate::label;
 /// - `number_of_states`;
 /// - `commandable`: `true` or `false`;
 /// - `relinquish_default`, `cov_increment`, `min_present_value`,
-///   `max_present_value`, `polarity`, `present_value`, `status_flags`:
-///   each value's text ([`Value::text`]);
+///   `max_present_value`, `polarity`, `present_value`, `command_priority`,
+///   `status_flags`, `event_state`, `reliability`: each value's text
+///   ([`Value::text`]);
 /// - `problems`: each as `property: error`, joined with `; `.
 ///
 /// A field with nothing to say is empty.
-pub const CSV_HEADER: &str = "device,device_instance,object,name,description,units,state_texts,\
-    number_of_states,commandable,relinquish_default,cov_increment,min_present_value,\
-    max_present_value,polarity,present_value,status_flags,problems";
+pub const CSV_HEADER: &str = "device,device_instance,object,name,description,device_type,\
+    profile_name,units,state_texts,number_of_states,commandable,relinquish_default,cov_increment,\
+    min_present_value,max_present_value,polarity,present_value,command_priority,status_flags,\
+    event_state,reliability,problems";
 
 impl Inventory {
     /// The inventory as JSON, indented, as `bacnet inventory --format
@@ -178,6 +182,8 @@ impl PointRecord {
             Some(object),
             self.name.clone().map(device_text),
             self.description.clone().map(device_text),
+            self.device_type.clone().map(device_text),
+            self.profile_name.clone().map(device_text),
             self.units.map(label::kebab),
             csv_state_texts(self).map(device_text),
             number,
@@ -188,7 +194,10 @@ impl PointRecord {
             text(&self.max_present_value),
             text(&self.polarity),
             text(&self.present_value),
+            text(&self.command_priority),
             text(&self.status_flags),
+            text(&self.event_state),
+            text(&self.reliability),
             (!problems.is_empty()).then(|| problems.join("; ")),
         ];
         for (at, field) in fields.iter().enumerate() {

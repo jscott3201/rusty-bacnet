@@ -13,6 +13,7 @@ use bacnet_ops::raw::{InventoryHalt, Reader, read_inventory};
 use bacnet_ops::{OpsError, Value};
 use bacnet_transport::port::TransportPort;
 
+use crate::args::Command;
 use crate::destination::Destination;
 use crate::output::{OutputFormat, screen};
 
@@ -52,10 +53,39 @@ pub struct InventoryArgs<'a> {
     pub values: bool,
     /// `--settings`.
     pub settings: bool,
+    /// `--details`.
+    pub details: bool,
     /// `--csv-exact`: the CSV without its formula guard.
     pub csv_exact: bool,
     /// How to print.
     pub layout: Layout,
+}
+
+impl<'a> InventoryArgs<'a> {
+    /// What `command`, the parsed `bacnet inventory`, asks for, printed
+    /// in `layout`.
+    pub(crate) fn of(command: &'a Command, layout: Layout) -> Self {
+        let Command::Inventory {
+            target,
+            types,
+            values,
+            settings,
+            details,
+            csv_exact,
+        } = command
+        else {
+            unreachable!("called for the inventory command alone")
+        };
+        Self {
+            target,
+            types,
+            values: *values,
+            settings: *settings,
+            details: *details,
+            csv_exact: *csv_exact,
+            layout,
+        }
+    }
 }
 
 /// Run `bacnet inventory`.
@@ -66,7 +96,8 @@ pub async fn inventory_cmd<T: TransportPort + 'static>(
     // The options are checked before anything is sent.
     let mut options = InventoryOptions::new()
         .with_values(args.values)
-        .with_settings(args.settings);
+        .with_settings(args.settings)
+        .with_details(args.details);
     if !args.types.is_empty() {
         let types = args
             .types
@@ -175,9 +206,9 @@ fn object(record: &PointRecord) -> String {
     )
 }
 
-/// The table: one row a record, with the values' and the settings' columns
-/// when they were read, and a problems column when any record has one.
-/// Device text is cleaned for the screen.
+/// The table: one row a record, with the values', the settings' and the
+/// details' columns when they were read, and a problems column when any
+/// record has one. Device text is cleaned for the screen.
 fn table(inventory: &Inventory, options: &InventoryOptions) -> comfy_table::Table {
     let problems = inventory
         .points
@@ -185,7 +216,7 @@ fn table(inventory: &Inventory, options: &InventoryOptions) -> comfy_table::Tabl
         .any(|point| !point.problems.is_empty());
     let mut header = vec!["Object", "Name", "Units"];
     if options.values {
-        header.extend(["Value", "Status"]);
+        header.extend(["Value", "Priority", "Status", "Event state", "Reliability"]);
     }
     header.push("Commandable");
     if options.settings {
@@ -198,6 +229,9 @@ fn table(inventory: &Inventory, options: &InventoryOptions) -> comfy_table::Tabl
         ]);
     }
     header.extend(["States", "Description"]);
+    if options.details {
+        header.extend(["Device type", "Profile"]);
+    }
     if problems {
         header.push("Problems");
     }
@@ -211,7 +245,13 @@ fn table(inventory: &Inventory, options: &InventoryOptions) -> comfy_table::Tabl
             point.units.map(kebab).unwrap_or_default(),
         ];
         if options.values {
-            row.extend([shown(&point.present_value), shown(&point.status_flags)]);
+            row.extend([
+                shown(&point.present_value),
+                shown(&point.command_priority),
+                shown(&point.status_flags),
+                shown(&point.event_state),
+                shown(&point.reliability),
+            ]);
         }
         row.push(if point.commandable { "yes" } else { "no" }.into());
         if options.settings {
@@ -224,6 +264,9 @@ fn table(inventory: &Inventory, options: &InventoryOptions) -> comfy_table::Tabl
             ]);
         }
         row.extend([states(point), text(&point.description)]);
+        if options.details {
+            row.extend([text(&point.device_type), text(&point.profile_name)]);
+        }
         if problems {
             let list: Vec<String> = point
                 .problems
