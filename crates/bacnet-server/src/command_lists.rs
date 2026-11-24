@@ -15,7 +15,7 @@
 //! - the bundled server runs it as a task beside the request that wrote it
 //!   (`server::command_runs`);
 //! - [`tick_schedules`](crate::schedule::tick_schedules) runs the runs its
-//!   writes start before it returns ([`run_unattached`]);
+//!   writes start before it returns ([`SharedRuns`]);
 //! - the synchronous WriteProperty and WritePropertyMultiple handlers have no
 //!   task to wait out a delay in, so they end the run at once as unsuccessful
 //!   ([`end_unmade`]).
@@ -72,7 +72,7 @@ mod unattached;
 pub(crate) use chain::admit;
 pub(crate) use remote_slots::RemoteSlots;
 pub(crate) use taken::TakenRuns;
-pub(crate) use unattached::run_unattached;
+pub(crate) use unattached::SharedRuns;
 
 /// What a runner needs from the component that owns its runs.
 pub(crate) trait RunHost: Sync {

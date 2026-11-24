@@ -56,6 +56,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::command_lists::{SharedRuns, TakenRuns};
 use crate::committed_cov::{BackgroundCommit, CommitTransition, CommittedCov};
 use crate::cov::CovSubscriptionTable;
 use bacnet_device_core::write::local;
@@ -99,20 +100,58 @@ pub(crate) fn schedule_instant(frame: ClockFrame) -> Option<(SpecificDate, Time)
 /// run too (#1178, #1151). A
 /// run that would start an object already above it is ended as failed rather
 /// than started. Dropping the future first ends each unfinished run as
-/// unsuccessful, so no Command is left in process and no Channel IN_PROGRESS.
+/// unsuccessful in the drop, so no Command is left in process and no
+/// Channel IN_PROGRESS, but for the case the Cancellation section names.
 ///
-/// It takes the database in its caller's task, as a guard the application
-/// takes on it does: a call left unpolled part way can hold the database,
-/// and with it whatever else uses it, a running server's requests included
-/// (#2772). Await it to the end, or drop it.
+/// # Cancellation
+///
+/// It never waits for the database in its caller's task (#2781). The pass
+/// takes the database as a local call does: with the database busy, a task
+/// on the runtime it is polled on waits for the guard, keeping the call's
+/// place in the queue, and makes the whole pass under it. The runs it
+/// starts go on in the caller's poll until one has to wait, for the
+/// database or a delay, and from then on in a task on the runtime too. So
+/// a call left unpolled holds up nothing else that uses the database, a
+/// running server's requests included. A call dropped part way is as
+/// [`write_local`](crate::server::BACnetServer::write_local)'s Cancellation
+/// section describes for a local call (#2772): dropped before that task
+/// holds the guard, it makes no pass; dropped after, it may still make the
+/// whole pass, never part of it. Its runs end in the drop all the same,
+/// even those a task was making, unless that task is mid-poll on another
+/// thread as the call is dropped, whatever thread drops it: then one write
+/// already under way may still land after the drop, the runs end as that
+/// poll returns, and a tick made at once may find that Command or Channel
+/// still busy. A task that ends without its caller, dropped with its
+/// runtime say, ends them too. Outside a runtime it waits in its caller's
+/// task.
 pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
-    let runs = {
-        let mut db_w = db.write().await;
-        let schedules = db_w.find_by_type(ObjectType::SCHEDULE);
-        let commit = pass(&mut db_w, schedules);
-        commit.take_command_runs(db, &mut db_w)
+    use crate::caller_waits::{HeldDatabase, for_caller, on_runtime};
+    let take = HeldDatabase::new(Arc::clone(db)).write_owned();
+    let make = |mut held: crate::caller_waits::HeldWrite| {
+        let (database, db_w) = held.split();
+        pass_all(database, db_w)
     };
-    crate::command_lists::run_unattached(db, runs).await;
+    let runs = match for_caller(on_runtime, take, make).await {
+        Some(runs) => runs,
+        // Its runtime dropped the task before it took the guard: no pass
+        // was made, so make it here.
+        None => pass_all(db, &mut *db.write().await),
+    };
+    if runs.is_empty() {
+        return;
+    }
+    // The call's own: dropped with it, this ends the runs in the drop.
+    let runs = SharedRuns::new(HeldDatabase::new(Arc::clone(db)), runs);
+    // `None`: its runtime dropped the task; `runs` ends what is left as it
+    // goes.
+    let _ = for_caller(on_runtime, runs.driver(), |()| ()).await;
+}
+
+/// Every Schedule's pass under `db_w`, the guard on `db`, and the Command
+/// and Channel runs its writes started.
+fn pass_all(db: &Arc<RwLock<ObjectDatabase>>, db_w: &mut ObjectDatabase) -> TakenRuns {
+    let schedules = db_w.find_by_type(ObjectType::SCHEDULE);
+    pass(db_w, schedules).take_command_runs(db, db_w)
 }
 
 /// Evaluate schedules for the live server, returning the COV fanout owed for

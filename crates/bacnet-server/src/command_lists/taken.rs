@@ -3,7 +3,7 @@
 //!
 //! A run is taken under the guard that committed the Present_Value write
 //! that queued it, but its owner (a task in the server's request set, or
-//! [`run_unattached`](super::run_unattached)'s queue) takes it up only once
+//! [`SharedRuns`](super::SharedRuns)' queue) takes it up only once
 //! the writer's COV, event and Schedule passes are done. A future cancelled
 //! in between, a `write_local` under a timeout for one, would drop the run
 //! with nothing to end it and leave its object busy. [`TakenRuns`] holds the
@@ -130,22 +130,23 @@ impl Drop for TakenRuns {
             debug_assert!(self.runs.is_empty(), "taken runs without a database");
             return;
         };
-        if self.runs.is_empty() {
-            return;
+        if !self.runs.is_empty() {
+            let left: Vec<_> = self
+                .runs
+                .drain(..)
+                .map(|run| {
+                    debug!(source = %run.source, "Ending a run let go of before it started");
+                    Unfinished::start(&run)
+                })
+                .collect();
+            when_free(&database, move |db| {
+                for left in left {
+                    left.end(db);
+                }
+            });
         }
-        let left: Vec<_> = self
-            .runs
-            .drain(..)
-            .map(|run| {
-                debug!(source = %run.source, "Ending a run let go of before it started");
-                Unfinished::start(&run)
-            })
-            .collect();
-        when_free(&database, move |db| {
-            for left in left {
-                left.end(db);
-            }
-        });
+        // A tick's task whose caller has gone may drop these last (#2781).
+        drop(crate::server::drop_database_off_runtime(database));
     }
 }
 

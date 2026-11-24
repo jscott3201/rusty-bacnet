@@ -288,7 +288,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// This holds for every `*_local` call, [`set_clock_zone`](Self::set_clock_zone),
     /// [`purge_audit_log`](Self::purge_audit_log),
     /// [`generate_pics`](Self::generate_pics) and
-    /// [`remove_peer_subscriptions`](Self::remove_peer_subscriptions). When
+    /// [`remove_peer_subscriptions`](Self::remove_peer_subscriptions), and
+    /// for the ticks an application makes without a server,
+    /// [`tick_schedules`](crate::schedule::tick_schedules) and
+    /// [`poll_trend_logs`](crate::trend_log::poll_trend_logs), whose task
+    /// runs on the runtime they are polled on (#2781). When
     /// what it needs is busy, the database, the COV table or a save, a task in
     /// the server's request task set waits for it, keeping the call's place
     /// in each queue, makes the call's change and hands back the result,
@@ -696,7 +700,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .request_tasks
             .for_caller(take, commit)
             .await
-            // `None`: no change; its runtime dropped the task before it took its locks.
+            // `None`: no change; its runtime dropped the task before it committed.
             .unwrap_or_else(|| Err(crate::server::broadcaster::stopped()))?;
         match finish {
             Some(finish) => finish.await,
@@ -731,6 +735,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// Borrow the EventNotification handles for a local mutation.
+    #[cfg(test)]
     pub(in crate::server) fn local_event_delivery(&self) -> EventDelivery<'_, T> {
         self.local_writer().event_delivery()
     }
