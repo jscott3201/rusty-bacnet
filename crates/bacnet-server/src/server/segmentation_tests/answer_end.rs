@@ -239,3 +239,38 @@ async fn a_send_closed_as_its_timeout_fires_sends_no_segment_again() {
     assert_eq!(sent_count(&sent), 1, "segment zero was not sent again");
     task.await.unwrap();
 }
+
+/// The final Segment-ACK also stops the answer from sending again (#2770):
+/// a resend of the last segment its timer chose just before it reads that
+/// acknowledgment is refused, so no old segment follows a new request under
+/// the reused invoke ID. An acknowledgment short of the last leaves it be.
+#[tokio::test]
+async fn the_final_ack_refuses_a_resend_of_the_last_segment() {
+    for current in [2u16, 1] {
+        let (network, _sent) = recording_network();
+        let ctx =
+            DispatchContext::for_test(RequestServices::for_test(network, ServerConfig::default()));
+        let peer = test_mac(43);
+        let (tx, _rx) = mpsc::channel(1);
+        let (control_tx, _control_rx) = watch::channel(None);
+        let handle = Arc::new(SegmentedSendHandle::new(tx, control_tx, TOTAL, None));
+        handle.current_sequence.store(current, Ordering::Release);
+        let last = usize::from(current) + 1 == TOTAL;
+        if last {
+            handle.last_sent();
+        }
+        let key = segmented_transaction_key(
+            peer.as_slice(),
+            None,
+            INVOKE,
+            TransportProvenance::unverified(),
+        );
+        ctx.services
+            .seg_ack_senders
+            .lock()
+            .insert(key, Arc::clone(&handle));
+        let ack = Apdu::SegmentAck(segment_ack(INVOKE, false, current as u8));
+        BACnetServer::<TestTransport>::dispatch(&ctx, peer.as_slice(), ack, received(&peer)).await;
+        assert_eq!(handle.sending(), !last, "ack of segment {current}");
+    }
+}

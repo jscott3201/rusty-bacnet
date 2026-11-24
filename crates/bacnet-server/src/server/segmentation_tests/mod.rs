@@ -315,6 +315,7 @@ mod get_event_information;
 mod refusal_warnings;
 mod request_byte_budget;
 mod request_byte_budget_failures;
+mod request_during_answer;
 mod request_payload_detachment;
 mod request_peer_quota;
 mod request_progress;
