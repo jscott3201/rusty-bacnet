@@ -157,3 +157,50 @@ fn node_tls_factory_does_not_preflight_local_dates_or_issuer_authorization() {
         ScNodeTlsConfig::from_der(vec![Material::new(None).ca], vec![m.leaf], m.key).unwrap();
     }
 }
+
+#[test]
+fn a_decoded_key_prints_no_key_bytes() {
+    let pair = KeyPair::generate().unwrap();
+    let der = pair.serialize_der();
+    let key = crate::sc_tls::material::single_key(pair.serialize_pem().as_bytes()).unwrap();
+    // The decoded key sits in a clearing wrapper whose Debug elides it.
+    let shown = format!("{key:?}");
+    assert!(shown.contains("elided"), "{shown}");
+    let decimal = format!("{:?}", &der[der.len() - 16..]);
+    assert!(!shown.contains(decimal.trim_matches(['[', ']'])), "{shown}");
+}
+
+/// A reader that hands out at most `chunk` bytes per call, as a pipe does.
+struct Trickle<'a> {
+    data: &'a [u8],
+    chunk: usize,
+}
+
+impl std::io::Read for Trickle<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.chunk.min(self.data.len()).min(out.len());
+        out[..n].copy_from_slice(&self.data[..n]);
+        self.data = &self.data[n..];
+        Ok(n)
+    }
+}
+
+#[test]
+fn a_bounded_read_with_no_length_hint_loads_and_still_refuses_an_oversized_input() {
+    use crate::sc_tls::material::read_limited;
+    let data: Vec<u8> = (0..5000u32).map(|i| i as u8).collect();
+    let trickle = |chunk| Trickle { data: &data, chunk };
+    for (hint, chunk) in [(0, 7), (0, 4096), (10, 1), (5000, 5000)] {
+        let got = read_limited(trickle(chunk), hint, 8192).unwrap();
+        assert_eq!(&got[..], &data[..], "hint {hint}, chunk {chunk}");
+    }
+    // At the limit it is kept whole; past it, the result is one byte over.
+    assert_eq!(read_limited(trickle(100), 0, 5000).unwrap().len(), 5000);
+    assert_eq!(read_limited(trickle(100), 0, 4999).unwrap().len(), 5000);
+    assert_eq!(read_limited(trickle(100), 0, 100).unwrap().len(), 101);
+    let empty = Trickle {
+        data: &[],
+        chunk: 1,
+    };
+    assert!(read_limited(empty, 0, 100).unwrap().is_empty());
+}

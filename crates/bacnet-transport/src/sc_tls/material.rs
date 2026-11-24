@@ -8,6 +8,25 @@
 //! only after the whole bundle passed. The chain and key are both decoded
 //! (an empty chain, no key or two keys are decoding faults) before either is
 //! checked as DER.
+//!
+//! The key and leaf are checked by rustls's own [`CertifiedKey::from_der`],
+//! and the configurations are built by rustls's own builders from the same
+//! chain and key; this module only maps rustls's verdict to
+//! [`ScTlsConfigError`].
+//!
+//! Private-key bytes (#2621): the key file's text and every decoded key are
+//! held in [`Zeroizing`] wrappers, so they are cleared on every exit,
+//! error paths included. rustls's key loader clears the copy of the DER it
+//! is handed. What this module cannot clear is listed on the constructors'
+//! rustdoc.
+//!
+//! On a rustls or aws-lc upgrade (last checked: rustls 0.23.46, aws-lc-sys
+//! 0.45.0), recheck that `CertifiedKey::from_der` still refuses only with
+//! the errors `identity_refused` (and the inspection's `classify_match`)
+//! sort; that the providers' `load_private_key` still wraps the DER it is
+//! handed in `Zeroizing`; that aws-lc's `OPENSSL_free` still clears memory
+//! before freeing it; and that the tests `key_verdicts_are_the_ones_rustls_reaches`
+//! and `every_key_type_the_pinned_provider_loads_names_its_public_key` pass.
 
 use std::{fs::File, io::Read, path::Path, sync::Arc};
 
@@ -16,7 +35,9 @@ use rustls::pki_types::pem::{PemObject, SectionKind};
 use rustls::pki_types::{
     CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer, PrivatePkcs8KeyDer, PrivateSec1KeyDer,
 };
+use rustls::sign::CertifiedKey;
 use rustls::{InconsistentKeys, RootCertStore};
+use zeroize::Zeroizing;
 
 use super::config_error::{ScCertificateForm, ScKeyForm, ScPemFault, ScTlsConfigError, ScTlsInput};
 
@@ -34,8 +55,9 @@ pub(crate) struct Material {
     pub(crate) roots: Arc<RootCertStore>,
     /// This end's chain, leaf first; nonempty.
     pub(crate) chain: Vec<CertificateDer<'static>>,
-    /// The leaf's private key.
-    pub(crate) key: PrivateKeyDer<'static>,
+    /// The leaf's private key, cleared when it drops. The builders take
+    /// copies of it ([`PrivateKeyDer::clone_key`]); rustls clears those.
+    pub(crate) key: Zeroizing<PrivateKeyDer<'static>>,
     /// The built-in aws-lc provider, fixed so that a caller's or
     /// process-wide key provider can't weaken the certificate and key
     /// consistency check.
@@ -49,6 +71,7 @@ impl Material {
         cert_chain: Vec<CertificateDer<'static>>,
         key: PrivateKeyDer<'static>,
     ) -> Result<Self, ScTlsConfigError> {
+        let key = Zeroizing::new(key);
         let mut roots = RootCertStore::empty();
         for (index, cert) in ca_certs.into_iter().enumerate() {
             trust(&mut roots, index, cert)?;
@@ -75,6 +98,7 @@ impl Material {
     ) -> Result<Self, ScTlsConfigError> {
         let roots = trust_pem(&read(ca_bundle, ScTlsInput::CaBundle)?)?;
         let chain = certificates(&read(cert_chain, ScTlsInput::CertificateChain)?)?;
+        // The key file's text is cleared when this statement ends.
         let key = single_key(&read(private_key, ScTlsInput::PrivateKey)?)?;
         Self::identity(roots, chain, key)
     }
@@ -83,7 +107,7 @@ impl Material {
     fn identity(
         roots: RootCertStore,
         chain: Vec<CertificateDer<'static>>,
-        key: PrivateKeyDer<'static>,
+        key: Zeroizing<PrivateKeyDer<'static>>,
     ) -> Result<Self, ScTlsConfigError> {
         if chain.is_empty() {
             return Err(ScTlsConfigError::NoCertificate {
@@ -100,25 +124,34 @@ impl Material {
             })?;
         }
         let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-        let signing = provider
-            .key_provider
-            .load_private_key(key.clone_key())
-            .map_err(|source| ScTlsConfigError::UnusableKey { source })?;
-        // As rustls itself decides: a key that can't name its public key is
-        // let through, a different public key is not.
-        match rustls::sign::CertifiedKey::new(chain.clone(), signing).keys_match() {
-            Ok(()) | Err(rustls::Error::InconsistentKeys(InconsistentKeys::Unknown)) => {}
-            Err(rustls::Error::InconsistentKeys(InconsistentKeys::KeyMismatch)) => {
-                return Err(ScTlsConfigError::KeyMismatch);
-            }
-            Err(source) => return Err(ScTlsConfigError::Tls { source }),
-        }
+        // The same check, by the same function, that the config builders
+        // (`with_client_auth_cert`, `with_single_cert`) make; run here so
+        // that its refusal comes out typed. The loaded key is dropped.
+        CertifiedKey::from_der(chain.clone(), key.clone_key(), &provider)
+            .map_err(identity_refused)?;
         Ok(Self {
             roots: Arc::new(roots),
             chain,
             key,
             provider,
         })
+    }
+}
+
+/// [`CertifiedKey::from_der`]'s refusal of the leaf and key as ours: a
+/// key that is not the leaf's is [`ScTlsConfigError::KeyMismatch`]; a
+/// verdict on the certificate, or on the pair other than a mismatch, is
+/// rustls's own ([`ScTlsConfigError::Tls`]; the chain was checked first, so
+/// none is expected); anything else is the key provider's refusal to load
+/// the key ([`ScTlsConfigError::UnusableKey`]).
+fn identity_refused(source: rustls::Error) -> ScTlsConfigError {
+    use rustls::Error as E;
+    match source {
+        E::InconsistentKeys(InconsistentKeys::KeyMismatch) => ScTlsConfigError::KeyMismatch,
+        E::InconsistentKeys(_) | E::InvalidCertificate(_) | E::NoCertificatesPresented => {
+            ScTlsConfigError::Tls { source }
+        }
+        source => ScTlsConfigError::UnusableKey { source },
     }
 }
 
@@ -140,19 +173,55 @@ pub(crate) fn verifier_refused(error: rustls::client::VerifierBuilderError) -> S
     }
 }
 
-/// The file at `path`, read up to [`MAX_PEM_FILE_BYTES`] and one byte more.
-fn read(path: &Path, input: ScTlsInput) -> Result<Vec<u8>, ScTlsConfigError> {
+/// Read `source` up to `limit` bytes and one byte more, into a buffer that
+/// is cleared when it drops, and never into one that is freed holding the
+/// text. The buffer starts at `hint + 1` bytes (the file's length, 0 when
+/// unknown, as for a FIFO or a growing file); when it fills it is replaced
+/// by a larger [`Zeroizing`] one the text is copied into, and the old one
+/// clears itself. A result longer than `limit` means the input was too long.
+pub(crate) fn read_limited(
+    mut source: impl Read,
+    hint: usize,
+    limit: usize,
+) -> std::io::Result<Zeroizing<Vec<u8>>> {
+    let max = limit.saturating_add(1);
+    let mut cap = hint.saturating_add(1).clamp(1, max);
+    let mut buf = Zeroizing::new(vec![0u8; cap]);
+    let mut len = 0;
+    loop {
+        if len == cap {
+            if cap == max {
+                break;
+            }
+            cap = cap.saturating_mul(2).clamp(1, max);
+            let mut grown = Zeroizing::new(vec![0u8; cap]);
+            grown[..len].copy_from_slice(&buf[..len]);
+            buf = grown;
+        }
+        match source.read(&mut buf[len..cap]) {
+            Ok(0) => break,
+            Ok(n) => len += n,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    buf.truncate(len);
+    Ok(buf)
+}
+
+/// The file at `path`, read up to [`MAX_PEM_FILE_BYTES`] and one byte more
+/// (see [`read_limited`]); the text is cleared when the result drops.
+fn read(path: &Path, input: ScTlsInput) -> Result<Zeroizing<Vec<u8>>, ScTlsConfigError> {
     let failed = |source| ScTlsConfigError::Read {
         input,
         path: path.to_path_buf(),
         source,
     };
-    let mut bytes = Vec::new();
-    File::open(path)
-        .map_err(failed)?
-        .take(MAX_PEM_FILE_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(failed)?;
+    let file = File::open(path).map_err(failed)?;
+    let hint = file
+        .metadata()
+        .map_or(0, |meta| meta.len().min(MAX_PEM_FILE_BYTES as u64) as usize);
+    let bytes = read_limited(file, hint, MAX_PEM_FILE_BYTES).map_err(failed)?;
     if bytes.len() > MAX_PEM_FILE_BYTES {
         return Err(ScTlsConfigError::TooLarge {
             input,
@@ -238,8 +307,13 @@ fn certificates(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>, ScTlsConfigE
 /// the offline inspection apply. Every section is decoded, so a second key
 /// or a malformed section anywhere is refused; certificates and parameters
 /// beside the key are skipped.
-pub(crate) fn single_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>, ScTlsConfigError> {
-    let mut first = None;
+///
+/// Every decoded key (the first, extra ones, and those an error discards)
+/// is cleared when it drops.
+pub(crate) fn single_key(
+    pem: &[u8],
+) -> Result<Zeroizing<PrivateKeyDer<'static>>, ScTlsConfigError> {
+    let mut first: Option<Zeroizing<PrivateKeyDer<'static>>> = None;
     let mut readable = 0usize;
     for section in <(SectionKind, Vec<u8>)>::pem_slice_iter(pem) {
         let (kind, der) = section.map_err(|error| {
@@ -263,14 +337,22 @@ pub(crate) fn single_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>, ScTlsConf
                 fault,
             }
         })?;
+        // Cleared at the end of this turn unless moved into a key below.
+        let mut der = Zeroizing::new(der);
         let key = match kind {
-            SectionKind::PrivateKey => PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(der)),
-            SectionKind::EcPrivateKey => PrivateKeyDer::Sec1(PrivateSec1KeyDer::from(der)),
-            SectionKind::RsaPrivateKey => PrivateKeyDer::Pkcs1(PrivatePkcs1KeyDer::from(der)),
+            SectionKind::PrivateKey => {
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(std::mem::take(&mut *der)))
+            }
+            SectionKind::EcPrivateKey => {
+                PrivateKeyDer::Sec1(PrivateSec1KeyDer::from(std::mem::take(&mut *der)))
+            }
+            SectionKind::RsaPrivateKey => {
+                PrivateKeyDer::Pkcs1(PrivatePkcs1KeyDer::from(std::mem::take(&mut *der)))
+            }
             _ => continue,
         };
         readable += 1;
-        first.get_or_insert(key);
+        first.get_or_insert(Zeroizing::new(key));
     }
     let mut unreadable = unreadable_keys(pem);
     let unreadable_first = unreadable.next();

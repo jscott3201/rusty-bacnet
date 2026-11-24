@@ -22,11 +22,11 @@ use rustls::{
 };
 use std::{
     fs::File,
-    io::Read,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 use x509_parser::{nom::Parser, prelude::*};
+use zeroize::Zeroizing;
 
 use super::{ScTlsConfigError, material, peer_info};
 #[path = "inspection_types.rs"]
@@ -95,7 +95,7 @@ pub fn inspect_sc_pem(
                 };
                 input(ScInputRole::PrivateKey, None, kind)
             })?;
-            compare_key(identity, key)
+            compare_key(identity, &key)
         }
     };
     Ok(ScPemInspection {
@@ -133,7 +133,7 @@ pub fn inspect_sc_pem_files(
         .transpose()?;
     let mut report = inspect_sc_pem(
         &identity,
-        trust.as_deref(),
+        trust.as_ref().map(|bytes| bytes.as_slice()),
         key.as_ref().map(|(b, _)| b.as_slice()),
         Some(now),
     )?;
@@ -163,17 +163,17 @@ fn read(
     path: &Path,
     role: ScInputRole,
     remaining: &mut usize,
-) -> Result<(Vec<u8>, Option<ScKeyFilePermissions>), ScInspectionError> {
+) -> Result<(Zeroizing<Vec<u8>>, Option<ScKeyFilePermissions>), ScInspectionError> {
     let io = |source| ScInspectionError::Io { role, source };
     let file = File::open(path).map_err(io)?;
     let metadata = file.metadata().map_err(io)?;
     if metadata.len() > *remaining as u64 {
         return Err(input(role, None, ScInputErrorKind::InputTooLarge));
     }
-    let mut bytes = Vec::new();
-    file.take(*remaining as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(io)?;
+    // Cleared on drop and never regrown in place (the key file's text,
+    // #2621); see `material::read_limited`.
+    let hint = usize::try_from(metadata.len()).unwrap_or(0);
+    let bytes = material::read_limited(file, hint, *remaining).map_err(io)?;
     if bytes.len() > *remaining {
         return Err(input(role, None, ScInputErrorKind::InputTooLarge));
     }
@@ -324,24 +324,32 @@ fn direct_issuer(
     };
     (verdict, None)
 }
+/// The key against the leaf, by rustls's own [`CertifiedKey::from_der`],
+/// the check the TLS configurations make, with the same pinned aws-lc
+/// provider. `from_der` lets a pair it can't compare through (a key that
+/// can't name its public key); every key type this provider loads names
+/// one (rustls 0.23.46; a unit test pins it), so success here is a match.
+/// The CLI's pre-dial lint refuses on Mismatch and Unusable.
 fn compare_key(
     certs: Vec<CertificateDer<'static>>,
-    key: PrivateKeyDer<'static>,
+    key: &PrivateKeyDer<'static>,
 ) -> ScKeyConsistency {
     let provider = rustls::crypto::aws_lc_rs::default_provider();
-    let Ok(key) = provider.key_provider.load_private_key(key) else {
-        return ScKeyConsistency::Unusable;
-    };
-    classify_match(CertifiedKey::new(certs, key).keys_match())
+    // The loader clears the copy it is handed; the caller clears its own.
+    classify_match(CertifiedKey::from_der(certs, key.clone_key(), &provider).map(drop))
 }
+/// `from_der`'s verdict as the report's: a leaf rustls can't parse, or a
+/// pair it can't compare, proves nothing either way; any other refusal is
+/// the key provider's refusal to load the key.
 fn classify_match(result: Result<(), rustls::Error>) -> ScKeyConsistency {
+    use rustls::{Error as E, InconsistentKeys};
     match result {
         Ok(()) => ScKeyConsistency::Match,
-        Err(rustls::Error::InconsistentKeys(rustls::InconsistentKeys::KeyMismatch)) => {
-            ScKeyConsistency::Mismatch
+        Err(E::InconsistentKeys(InconsistentKeys::KeyMismatch)) => ScKeyConsistency::Mismatch,
+        Err(E::InconsistentKeys(_) | E::InvalidCertificate(_) | E::NoCertificatesPresented) => {
+            ScKeyConsistency::Unknown
         }
-        // Unknown public-key representation and unusable leaf DER cannot prove a match.
-        Err(_) => ScKeyConsistency::Unknown,
+        Err(_) => ScKeyConsistency::Unusable,
     }
 }
 

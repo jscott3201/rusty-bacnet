@@ -32,6 +32,7 @@ tokio = { workspace = true, features = ["net", "rt", "sync", "macros", "time", "
 socket2 = { workspace = true, features = ["all"] }
 tokio-tungstenite = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
 aws-lc-rs = { version = "1.17", default-features = false, optional = true }
@@ -69,6 +70,7 @@ sc-tls = [
     "dep:futures-util",
     "dep:aws-lc-rs",
     "dep:x509-parser",
+    "dep:zeroize",
 ]
 serial = ["dep:tokio-serial"]
 serial-gpio = ["serial", "dep:gpiocdev"]

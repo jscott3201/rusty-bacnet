@@ -18,6 +18,7 @@ bacnet-client = { workspace = true, features = ["ipv6", "sc-tls"] }
 bacnet-server.workspace = true
 bacnet-endpoint = { workspace = true, features = ["sc-tls"] }
 bacnet-transport = { workspace = true, features = ["sc-tls", "ipv6", "serial"] }
+zeroize.workspace = true
 bacnet-network.workspace = true
 bacnet-npdu.workspace = true
 bacnet-ops = { workspace = true, features = ["sc-tls"] }
