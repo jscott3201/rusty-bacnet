@@ -2,5 +2,5 @@
 section: Fixed
 ---
 - A node with client and server roles publishes a ConfirmedEventNotification that arrives in
-  segments to its client's `event_notifications()` once per transmission, as it does one that
-  arrives whole: the server, which reassembles and answers it, hands the client the whole (#2743).
+  segments to its client's `event_notifications()` once per transmission, as one that arrives
+  whole: the server hands the client the whole request, its queued copies held to 4 MiB (#2743).

@@ -47,7 +47,7 @@ use bytes::{Bytes, BytesMut};
 
 use super::*;
 use crate::coordinator::LeaseHolder;
-use crate::seat::{Attached, CopyBudget, SeatSlot};
+use crate::seat::{Attached, CopyBudget, ReservedCopy, SeatSlot};
 
 /// ConfirmedCOVNotification, as a confirmed service choice octet.
 const CONFIRMED_COV_NOTIFICATION: u8 = 1;
@@ -456,13 +456,15 @@ impl AsRef<[u8]> for BudgetedCopy {
 ///
 /// Whether the client hears it and has room for it is decided under the
 /// seats' lock before anything is made, and a refusal is counted there. The
-/// copy is made outside the lock, which is taken again only to offer it: a
-/// seat that filled in between drops and counts it, as it does any copy.
+/// copy is made outside the lock and handed, without it, to the seat that
+/// decision was made for and no other: a client dropped and made again in
+/// between, on a new seat, gets nothing its own checks didn't admit. A seat
+/// that filled in between, or whose client is gone, drops and counts it.
 pub(crate) fn share_reassembled(seats: &SeatSlot, last: &ReceivedApdu, request: &ConfirmedRequest) {
     let service = Some(request.service_choice.to_raw());
     // A whole Confirmed-Request's header is 4 octets.
     let octets = 4 + request.service_request.len();
-    let budget = seats.with(|client, _| {
+    let reserved = seats.with(|client, _| {
         let client = client?;
         let share = confirmed_share(client.roles.server, false, service);
         if !matches!(share, SeatShare::Copy) {
@@ -470,7 +472,7 @@ pub(crate) fn share_reassembled(seats: &SeatSlot, last: &ReceivedApdu, request: 
         }
         seats.reserve_reassembled(client, octets)
     });
-    let Some(budget) = budget.flatten() else {
+    let Some(ReservedCopy { seat, budget }) = reserved.flatten() else {
         return;
     };
     let whole = ConfirmedRequest {
@@ -489,11 +491,7 @@ pub(crate) fn share_reassembled(seats: &SeatSlot, last: &ReceivedApdu, request: 
         octets: apdu,
         _budget: budget,
     });
-    seats.with(|client, _| {
-        if let Some(client) = client {
-            let _ = seats.offer(client, copy);
-        }
-    });
+    seats.offer_reassembled(&seat, copy);
 }
 
 /// The client seat's share of a valid APDU, from its first octets and the

@@ -99,9 +99,12 @@ that came in one APDU. A segmented ConfirmedEventNotification is the full
 server's to reassemble and answer; once it is whole the server hands it to the
 session's client, which publishes it to `event_notifications()` once per
 transmission and answers nothing, as with one that came in one APDU (#2743).
-The copies the client has not yet taken hold at most 4 MiB; one past that is
-dropped and counted with the client seat's drops, and the server's answer
-does not depend on it. A standalone client, or one on a session with no
+Such copies hold at most 4 MiB on the client's seat
+(`MAX_REASSEMBLED_COPY_OCTETS`): a copy's share comes back once the client's
+dispatch has decoded it and dropped its octets, and what the client publishes
+to its subscribers is decoded and holds none. A copy past the bound is dropped
+and counted with the client seat's drops, and the server's answer does not
+depend on it. A standalone client, or one on a session with no
 server role, reassembles every segmented confirmed request the same way,
 unless its `ClientConfig::segmentation` receives no segments: it executes a
 notification and rejects any other service as unrecognized, as it does an

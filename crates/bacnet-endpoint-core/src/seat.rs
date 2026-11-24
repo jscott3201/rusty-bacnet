@@ -115,8 +115,8 @@ use crate::coordinator::OutboundTransactionCoordinator;
 
 #[path = "seat_copies.rs"]
 mod copies;
-pub(crate) use copies::CopyBudget;
 pub use copies::{ClientCopies, MAX_REASSEMBLED_COPY_OCTETS};
+pub(crate) use copies::{CopyBudget, ReservedCopy};
 
 /// APDUs a client seat queues by default before ingress drops for it. A
 /// Who-Is can bring hundreds of I-Ams at once, and the seat's queue is the
@@ -827,6 +827,7 @@ impl SeatSlot {
     }
 
     /// [`Self::takes`], for an APDU of `pdu_type`.
+    #[inline]
     fn has_room(&self, attached: &Attached, pdu_type: Option<u8>) -> bool {
         let capacity = attached.apdus.max_capacity();
         let floor = match pdu_type {

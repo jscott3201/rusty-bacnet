@@ -249,3 +249,37 @@ async fn reassembled_copies_hold_a_bounded_number_of_octets() {
     while node.client.apdus.try_recv().is_ok() {}
     assert_eq!(seats.reassembled_octets(), 0);
 }
+
+/// Room found on one client seat goes with the copy to that seat only: a
+/// client made on a new seat in between gets nothing its own checks didn't
+/// admit, and the copy is dropped and counted.
+#[tokio::test]
+async fn a_copy_goes_only_to_the_seat_its_room_was_found_on() {
+    let Node {
+        endpoint,
+        link,
+        client,
+        mut server,
+        ..
+    } = node(true, 8).await;
+    let mut received = received_npdu(SEGMENTED_EVENT_NOTIFICATION);
+    received.reply_tx = Some(oneshot::channel().0);
+    link.sender.send(received).await.unwrap();
+    let last = receive(&mut server.apdus).await;
+    let seats = Arc::clone(endpoint.seats.as_ref().unwrap());
+    let reserved = seats
+        .with(|client, _| seats.reserve_reassembled(client?, 6))
+        .flatten()
+        .expect("room on the first seat");
+
+    drop(client);
+    let mut again = endpoint
+        .client_seat(Arc::clone(&server.coordinator), SeatRoles::new(true), 8)
+        .unwrap();
+    let crate::seat::ReservedCopy { seat, budget } = reserved;
+    drop(budget);
+    seats.offer_reassembled(&seat, last);
+    assert!(again.apdus.try_recv().is_err(), "nothing on the new seat");
+    let counters = endpoint.client_seat_counters();
+    assert_eq!((counters.apdus, counters.full_drops), (0, 1));
+}

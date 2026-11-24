@@ -4,12 +4,15 @@
 use super::*;
 
 /// The octets the client seat may hold at once in copies of requests the
-/// server reassembled: the reassembly budget
+/// server reassembled (#2743): 4 MiB, the reassembly budget
 /// ([`MAX_SAVED_BYTES`](crate::segmented_request::MAX_SAVED_BYTES)), which
-/// the server gives back as each request completes. A copy past it is
-/// dropped and counted with the seat's other drops; the server's answer
-/// doesn't depend on it. Copies of requests that come whole are not counted
-/// here: the seat's slots bound them, and one is never longer than an APDU.
+/// the server gives back as each request completes. A copy holds its share
+/// from the moment room is found for it until the client's dispatch has
+/// decoded it and let go of its octets; what the client publishes to its
+/// subscribers is decoded, and holds none. A copy past the bound is dropped
+/// and counted with the seat's other drops; the server's answer doesn't
+/// depend on it. Copies of requests that come whole are not counted here:
+/// the seat's slots bound them, and one is never longer than an APDU.
 pub const MAX_REASSEMBLED_COPY_OCTETS: usize = crate::segmented_request::MAX_SAVED_BYTES;
 
 /// The line from a node's server to its client for a request that comes in
@@ -72,6 +75,15 @@ impl Drop for CopyBudget {
     }
 }
 
+/// Room found on one client seat for a reassembled request's copy: that
+/// seat's queue, and the copy's share of [`MAX_REASSEMBLED_COPY_OCTETS`].
+pub(crate) struct ReservedCopy {
+    /// The queue of the seat the room was found on, and the only one the
+    /// copy may go to.
+    pub(crate) seat: mpsc::Sender<ReceivedApdu>,
+    pub(crate) budget: CopyBudget,
+}
+
 impl SeatSlot {
     /// Room on the client seat for a reassembled request's copy of
     /// `octets`: a slot in a confirmed request's tier, as a copy of one
@@ -83,7 +95,7 @@ impl SeatSlot {
         &self,
         client: &Attached,
         octets: usize,
-    ) -> Option<CopyBudget> {
+    ) -> Option<ReservedCopy> {
         if !self.has_room(client, Some(0)) {
             return None;
         }
@@ -96,10 +108,25 @@ impl SeatSlot {
             add(&self.counts[client.role as usize].full_drops);
             return None;
         }
-        Some(CopyBudget {
-            held: Arc::clone(held),
-            octets,
+        Some(ReservedCopy {
+            seat: client.apdus.clone(),
+            budget: CopyBudget {
+                held: Arc::clone(held),
+                octets,
+            },
         })
+    }
+
+    /// Hand `copy` to `seat`, the client seat its room was found on, and to
+    /// no other: a client made since on a new seat gets nothing its own
+    /// checks didn't admit. No lock is taken. A seat that filled in between,
+    /// or whose client is gone, drops it, and the drop is counted.
+    pub(crate) fn offer_reassembled(&self, seat: &mpsc::Sender<ReceivedApdu>, copy: ReceivedApdu) {
+        let counts = &self.counts[Role::Client as usize];
+        match seat.try_send(copy) {
+            Ok(()) => add(&counts.apdus),
+            Err(_) => add(&counts.full_drops),
+        }
     }
 
     /// The octets reassembled requests' copies hold on the client seat now.
