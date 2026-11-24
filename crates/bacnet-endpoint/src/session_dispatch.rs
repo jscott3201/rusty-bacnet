@@ -82,9 +82,9 @@ pub(super) async fn next_event(parts: &mut DispatchParts, next: &mut usize) -> D
 /// its seat and a seated server's to its own, so what a lease holds here is
 /// an acknowledgment for the source Audit's pool on a session with no
 /// server, or an answer whose role has gone.
-pub(super) async fn handle_terminal(parts: &mut DispatchParts, received: ReceivedApdu) {
+pub(super) fn handle_terminal(parts: &mut DispatchParts, received: ReceivedApdu) {
     let Ok(apdu) = bacnet_encoding::apdu::decode_apdu(received.apdu.clone()) else {
-        let mut counters = parts.shared.counters.lock().await;
+        let mut counters = parts.shared.counters();
         counters.unclaimed_terminal += 1;
         if let Some(reply_tx) = received.reply_tx {
             drop(reply_tx);
@@ -98,7 +98,7 @@ pub(super) async fn handle_terminal(parts: &mut DispatchParts, received: Receive
         apdu,
         Apdu::ConfirmedRequest(_) | Apdu::UnconfirmedRequest(_)
     ) {
-        let mut counters = parts.shared.counters.lock().await;
+        let mut counters = parts.shared.counters();
         counters.unclaimed_terminal += 1;
         if let Some(reply_tx) = received.reply_tx {
             drop(reply_tx);
@@ -118,7 +118,7 @@ pub(super) async fn handle_terminal(parts: &mut DispatchParts, received: Receive
     let admission = match outcome {
         Ok(AdmissionOutcome::Admitted(admission)) => admission,
         Ok(_) => {
-            let mut counters = parts.shared.counters.lock().await;
+            let mut counters = parts.shared.counters();
             counters.unclaimed_terminal += 1;
             if let Some(reply_tx) = received.reply_tx {
                 drop(reply_tx);
@@ -126,7 +126,7 @@ pub(super) async fn handle_terminal(parts: &mut DispatchParts, received: Receive
             return;
         }
         Err(CoordinatorError::StatePoisoned) => {
-            let mut counters = parts.shared.counters.lock().await;
+            let mut counters = parts.shared.counters();
             counters.unclaimed_terminal += 1;
             if let Some(reply_tx) = received.reply_tx {
                 drop(reply_tx);
@@ -148,7 +148,7 @@ pub(super) async fn handle_terminal(parts: &mut DispatchParts, received: Receive
         // so exhaustion → release → reuse still holds.
         None => {
             let _ = parts.coordinator.release(admission.token());
-            parts.shared.counters.lock().await.no_client_role += 1;
+            parts.shared.counters().no_client_role += 1;
         }
     }
     // An answer carries no reply sender; drop one if present.
@@ -157,12 +157,12 @@ pub(super) async fn handle_terminal(parts: &mut DispatchParts, received: Receive
     }
 }
 
-pub(super) async fn handle_ingress_policy(shared: &Arc<SessionShared>, outcome: PolicyOutcome) {
+pub(super) fn handle_ingress_policy(shared: &Arc<SessionShared>, outcome: PolicyOutcome) {
     // Policy-outcome ownership: the session counts every classifier outcome
     // (malformed/unsupported/group-source/route-closed) instead of dropping
     // it. What a full queue had no room for never reaches it: ingress counts
     // that by class (#2635).
-    let mut counters = shared.counters.lock().await;
+    let mut counters = shared.counters();
     counters.ingress_policy += 1;
     let _ = outcome.reason;
     // Policy outcomes own the full envelope including a possible one-use

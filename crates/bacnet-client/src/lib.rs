@@ -6,6 +6,7 @@ mod acks;
 pub mod client;
 pub mod discovery;
 pub mod log_reader;
+mod poll_gate;
 pub mod segmentation;
 mod sync_mutex;
 pub mod tags;

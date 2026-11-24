@@ -16,6 +16,8 @@ use bacnet_network::layer::{NetworkReport, RoutingTableEntry};
 use bacnet_npdu::{RejectMessageReason, RejectMessageToNetwork};
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::poll_gate::PollGate;
+
 /// Most entries a [`BACnetClient::routing_table`] call keeps by default.
 /// A network number is 16 bits, so no table lists more than 65,534
 /// networks; the default is far above any real table and bounds memory
@@ -209,9 +211,9 @@ pub(super) struct RoutingQueries {
     pub(super) ended: tokio::sync::watch::Receiver<()>,
     /// One routing-table query at a time. Network messages carry no invoke
     /// ID, so two queries to one router would each collect both answers.
-    /// The mutex guards no data: holding it across the call's awaits is its
-    /// whole purpose.
-    gate: tokio::sync::Mutex<()>,
+    /// The gate guards no data: holding it across the call's awaits is its
+    /// whole purpose. A call takes it only as it is polled (#2759).
+    gate: PollGate,
 }
 
 impl RoutingQueries {
@@ -221,7 +223,7 @@ impl RoutingQueries {
         Self {
             outstanding: std::sync::Mutex::new(None),
             ended,
-            gate: tokio::sync::Mutex::new(()),
+            gate: PollGate::default(),
         }
     }
 }
@@ -302,9 +304,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// Network messages carry no invoke ID, so the client runs one
     /// routing-table query at a time: a second call waits for the first,
-    /// and its clock starts when it reaches the gate. A call future left
-    /// unpolled can hold the gate: to cancel one, wrap it in a timeout and
-    /// drop it. With `wait.first_answer` equal to `wait.total`, a complete
+    /// and its clock starts when it reaches the gate. Calls waiting together
+    /// go in the order they began to wait; one whose future is not polled
+    /// when the gate comes free holds nothing and is passed over until it
+    /// is polled again (#2759). A call that has the gate holds it until it
+    /// returns or is dropped: to cancel one, wrap it in a timeout. With `wait.first_answer` equal to `wait.total`, a complete
     /// answer that arrives at the end can be marked
     /// [`RoutingTable::truncated`]. Every bound must fit the clock
     /// (`InvalidArgument` otherwise).

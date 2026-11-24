@@ -9950,7 +9950,11 @@ answer leaves (the APDU timeout times the attempts, #2651). A request waiting
 out the hold still waits it out, then goes sized to the new limit; a reason-4
 reject that lands in the hold is still discarded. A request sized before the
 change keeps its size, and a reject for it teaches the path nothing. Requests
-to one path still go one at a time, in the order they were made.
+to one path still go one at a time, in the order they were made. A request
+takes its turn only as it is polled (#2759): one whose caller has stopped
+polling it, parked in a `select!` arm or a `buffer_unordered` stream while
+the caller awaits something else, holds the path for nobody and is passed
+over until it is polled again.
 `clear_routed_path_limit` on a path the client holds nothing for reserves
 nothing, so it never fails for capacity.
 
@@ -11109,8 +11113,9 @@ that network. A router that refuses table queries from other networks drops a
 routed query silently, so it ends as `NoAnswer` too: a hosted router on the
 hardened control policy with no authorizer does, as does a `bacnet-router-core`
 host that refuses `ControlClass::InitQuery` (#2715).
-A client runs one query at a time. A `first_answer` greater than `total`
-returns `InvalidArgument`.
+A client runs one query at a time, and a call takes its turn only as it is
+polled, so one whose caller has stopped polling it holds up no other
+(#2759). A `first_answer` greater than `total` returns `InvalidArgument`.
 
 ### Device Management
 
@@ -14355,6 +14360,11 @@ request, with nothing sent or recorded. Sequence numbers follow admission
 while the database is free; a request admitted while it is busy takes its
 number when its task gets the guard. A request the Reporter doesn't select,
 or with no recipient, goes unaudited in the caller's task.
+`write_audit_recipient` and `report_device_reset_local` take the guard the
+same way (#2759): with the database busy, a task the session owns waits for
+it and does the work, and a caller that goes before that task has it leaves
+the recipient unchanged or the reset unrecorded. `policy_counters` never
+waits.
 
 - Each target is its own record (Clause 19.6.5): one per reference of a
   ReadPropertyMultiple, or per value its answer reports for ALL, REQUIRED or

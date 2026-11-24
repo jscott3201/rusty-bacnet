@@ -276,3 +276,49 @@ async fn endpoint_records_a_local_reset_through_the_reporters_filters() {
     assert!(session.report_device_reset_local().await.is_err());
     sink.stop().await.unwrap();
 }
+
+/// A local reset report polled once while the application held the
+/// database, and never again, holds no guard once the application lets go
+/// (#2759): the database is free at once, and the record goes out, the
+/// session's task having made it. Polled again, the call returns. A report
+/// whose caller went while it waited makes no record and takes no number.
+#[tokio::test(start_paused = true)]
+async fn a_reset_report_whose_caller_stopped_polling_holds_no_guard() {
+    use std::task::{Context, Waker};
+    let (sink, mut records) = network().await;
+    let mut db = database(false);
+    db.set_clock_reader(None);
+    let mut session = session(db, SessionRole::Both, &sink);
+    session.start().await.unwrap();
+    configure_reporter(
+        &session,
+        AuditLevel::AUDIT_ALL,
+        &[AuditOperation::DEVICE_RESET],
+    )
+    .await;
+    let database = Arc::clone(session.database.as_ref().unwrap());
+    let noop = &mut Context::from_waker(Waker::noop());
+    let guard = database.write().await;
+    let mut gone = Box::pin(session.report_device_reset_local());
+    assert!(gone.as_mut().poll(noop).is_pending());
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    drop(gone);
+    let mut parked = Box::pin(session.report_device_reset_local());
+    assert!(parked.as_mut().poll(noop).is_pending());
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    drop(guard);
+    drop(
+        timeout(WAIT, database.read())
+            .await
+            .expect("the database is free"),
+    );
+    let (record, _) = notification(&receive(&mut records).await, false);
+    assert_eq!(record.operation, AuditOperation::DEVICE_RESET);
+    assert_stamp(&record.target_timestamp, true, 0);
+    assert!(parked.as_mut().poll(noop).is_ready());
+    drop(parked);
+    tokio::time::sleep(WAIT).await;
+    assert!(records.try_recv().is_err(), "one record only");
+    session.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}

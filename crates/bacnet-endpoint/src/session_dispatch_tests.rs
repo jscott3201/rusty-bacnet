@@ -43,7 +43,7 @@ fn fixture() -> (
     let coordinator = Arc::new(OutboundTransactionCoordinator::new());
     let notifications = NotificationTransactions::with_coordinator(Arc::clone(&coordinator));
     let shared = Arc::new(SessionShared {
-        counters: Mutex::new(PolicyCounters {
+        counters: std::sync::Mutex::new(PolicyCounters {
             ingress_policy: 0,
             no_server_role: 0,
             no_client_role: 0,
@@ -102,15 +102,15 @@ async fn replenished_worker_completions_cannot_starve_valid_terminal_or_ingress(
             DispatchEvent::Worker(_) => seen[0] = true,
             DispatchEvent::Inbound(received) => {
                 seen[1] = true;
-                handle_inbound(&parts.shared, received).await;
+                handle_inbound(&parts.shared, received);
             }
             DispatchEvent::Terminal(received) => {
                 seen[2] = true;
-                handle_terminal(&mut parts, received).await;
+                handle_terminal(&mut parts, received);
             }
             DispatchEvent::Policy(outcome) => {
                 seen[3] = true;
-                handle_ingress_policy(&parts.shared, outcome).await;
+                handle_ingress_policy(&parts.shared, outcome);
             }
             DispatchEvent::Closed => panic!("open streams"),
         }
@@ -124,10 +124,11 @@ async fn replenished_worker_completions_cannot_starve_valid_terminal_or_ingress(
         "valid terminal must release its exact lease"
     );
     assert_eq!(parts.coordinator.active_count().unwrap(), 0);
-    let counters = parts.shared.counters.lock().await;
-    assert_eq!(counters.no_server_role, 1);
-    assert_eq!(counters.ingress_policy, 1);
-    drop(counters);
+    {
+        let counters = parts.shared.counters();
+        assert_eq!(counters.no_server_role, 1);
+        assert_eq!(counters.ingress_policy, 1);
+    }
     drop(operation);
     owner.close();
     while let Some(result) = owner.join_next().await {
@@ -198,10 +199,12 @@ async fn cancellation_precedes_all_ready_dispatch_streams() {
         dispatch_loop(parts, cancelled).await,
         SessionExit::Cancelled
     ));
-    let counters = shared.counters.lock().await;
-    assert_eq!(counters.no_server_role, 0);
-    assert_eq!(counters.ingress_policy, 0);
-    assert_eq!(counters.unclaimed_terminal, 0);
+    {
+        let counters = shared.counters();
+        assert_eq!(counters.no_server_role, 0);
+        assert_eq!(counters.ingress_policy, 0);
+        assert_eq!(counters.unclaimed_terminal, 0);
+    }
     owner.close();
     assert!(owner.join_next().await.is_some());
     assert!(owner.join_next().await.is_none());
@@ -247,8 +250,8 @@ async fn an_answer_with_no_role_to_take_it_releases_its_lease_and_is_counted() {
     let (mut parts, _inbound, _terminal, _policy) = fixture();
     let peer = || CanonicalPeer::direct(&[2]);
     let notice = ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION;
-    let no_client_role = async |parts: &DispatchParts| {
-        let counters = parts.shared.counters.lock().await;
+    let no_client_role = |parts: &DispatchParts| {
+        let counters = parts.shared.counters();
         (counters.no_client_role, counters.unclaimed_terminal)
     };
 
@@ -261,9 +264,9 @@ async fn an_answer_with_no_role_to_take_it_releases_its_lease_and_is_counted() {
             TerminalPolicy::EitherAck,
         ))
         .unwrap();
-    handle_terminal(&mut parts, envelope(lease.invoke_id())).await;
+    handle_terminal(&mut parts, envelope(lease.invoke_id()));
     assert_eq!(parts.coordinator.active_count().unwrap(), 0);
-    assert_eq!(no_client_role(&parts).await, (1, 0));
+    assert_eq!(no_client_role(&parts), (1, 0));
 
     // A notification's lease, with no pool.
     let owner = parts.notifications.take().unwrap();
@@ -271,12 +274,12 @@ async fn an_answer_with_no_role_to_take_it_releases_its_lease_and_is_counted() {
         .coordinator
         .reserve(LeaseMetadata::notification(peer(), notice))
         .unwrap();
-    handle_terminal(&mut parts, envelope(lease.invoke_id())).await;
+    handle_terminal(&mut parts, envelope(lease.invoke_id()));
     assert_eq!(parts.coordinator.active_count().unwrap(), 0);
-    assert_eq!(no_client_role(&parts).await, (2, 0));
+    assert_eq!(no_client_role(&parts), (2, 0));
 
     // With no lease at all the answer is unclaimed, and nothing else.
-    handle_terminal(&mut parts, envelope(7)).await;
-    assert_eq!(no_client_role(&parts).await, (2, 1));
+    handle_terminal(&mut parts, envelope(7));
+    assert_eq!(no_client_role(&parts), (2, 1));
     owner.close();
 }
