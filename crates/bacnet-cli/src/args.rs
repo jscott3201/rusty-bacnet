@@ -472,7 +472,10 @@ pub(crate) enum Command {
         /// default: every object, of any type.
         #[arg(long, value_name = "TYPES", value_delimiter = ',')]
         types: Vec<String>,
-        /// Also read each object's Present_Value and Status_Flags.
+        /// Also read each object's Present_Value, Status_Flags, Event_State
+        /// and Reliability, and the priority in control of a commandable
+        /// one: four more properties an object (five on an output), so a
+        /// request holds 3 to 5 objects.
         #[arg(long)]
         values: bool,
         /// Also read each object's COV_Increment, Min_Pres_Value,
@@ -480,10 +483,15 @@ pub(crate) enum Command {
         /// them.
         #[arg(long)]
         settings: bool,
+        /// Also read each object's Device_Type and Profile_Name, where it
+        /// has them: two more properties an object.
+        #[arg(long)]
+        details: bool,
         /// With --format csv: write device text exactly. Without it, a
-        /// name, description, state text or string value that starts with
-        /// =, +, -, @, a tab or a carriage return gets an apostrophe
-        /// before it, so a spreadsheet doesn't run it as a formula.
+        /// name, description, device type, profile name, state text or
+        /// string value that starts with =, +, -, @, a tab or a carriage
+        /// return gets an apostrophe before it, so a spreadsheet doesn't
+        /// run it as a formula.
         #[arg(long)]
         csv_exact: bool,
     },
