@@ -19,6 +19,8 @@ pub(crate) mod export;
 mod find;
 #[cfg(test)]
 mod future_size_tests;
+mod inventory;
+mod inventory_data;
 mod list;
 mod log_pages;
 mod log_records;
@@ -82,6 +84,7 @@ const SPECS: &[Spec] = &[
     decode::SPEC,
     watch::SPEC,
     export::SPEC,
+    inventory::SPEC,
 ];
 
 /// The write tools, listed only when the policy offers writes.
@@ -159,6 +162,7 @@ enum Request {
     Decode(decode::Args),
     Watch(watch::Args),
     Export(export::Args),
+    Inventory(inventory::Args),
 }
 
 fn parse<A: DeserializeOwned>(args: &Map<String, Value>) -> Result<A, ErrorData> {
@@ -188,6 +192,7 @@ fn request(name: &str, args: &Map<String, Value>) -> Result<Request, ErrorData> 
         decode::NAME => Request::Decode(parse(args)?),
         watch::NAME => Request::Watch(parse(args)?),
         export::NAME => Request::Export(parse(args)?),
+        inventory::NAME => Request::Inventory(parse(args)?),
         other => {
             return Err(ErrorData::invalid_params(
                 format!("unknown tool: {other}"),
@@ -242,6 +247,7 @@ pub(crate) async fn call<T: TransportPort + 'static>(
                 let out = &mut turtle;
                 boxed(move || export::run(ctx, call, a, args, out)).await
             }
+            Request::Inventory(a) => boxed(move || inventory::run(ctx, call, a, args)).await,
         }
     };
     // A cancelled call (`notifications/cancelled`, or the host going away)

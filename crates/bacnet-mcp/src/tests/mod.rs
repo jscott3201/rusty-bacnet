@@ -18,6 +18,7 @@ mod confirm;
 mod discovery;
 mod export;
 mod handoff;
+mod inventory;
 mod known;
 mod legacy;
 mod limits;

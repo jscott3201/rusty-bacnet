@@ -55,7 +55,9 @@ pub(crate) fn cancel_wait(points: usize) -> Duration {
 /// offered or not: the last sentence says which.
 const INSTRUCTIONS: &str = "Access to a BACnet building automation network. \
     Start with bacnet_discover (give a range of device instances), then \
-    bacnet_describe_device, bacnet_list_objects and bacnet_read; bacnet_find_object searches \
+    bacnet_describe_device, bacnet_list_objects and bacnet_read; bacnet_inventory lists a \
+    device's objects as point records (names, units, states; values on request), a page a \
+    call; bacnet_find_object searches \
     the discovered devices, bacnet_network_map shows networks and routers (and, with bbmd, checks the BBMD tables), \
     bacnet_read_trend reads and summarises trend logs, bacnet_read_log_records reads \
     event and audit log records, bacnet_alarms lists active alarms, \
