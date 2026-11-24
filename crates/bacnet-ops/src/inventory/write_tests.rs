@@ -95,6 +95,7 @@ fn sample() -> Inventory {
         row(P::DESCRIPTION, text("\tindented")),
         row(P::INACTIVE_TEXT, text("=off")),
         row(P::ACTIVE_TEXT, text("on")),
+        row(P::POLARITY, PropertyValue::Enumerated(1)),
     ];
     let string = vec![
         row(P::OBJECT_NAME, text("Note")),
@@ -210,6 +211,7 @@ fn the_json_holds_typed_fields() {
         "name",
         "number_of_states",
         "object",
+        "polarity",
         "present_value",
         "problems",
         "relinquish_default",
@@ -246,9 +248,14 @@ fn the_json_holds_typed_fields() {
     let bare = &json["points"][5];
     assert!(bare["name"].is_null() && bare["units"].is_null());
     assert_eq!(bare["problems"], serde_json::json!([]));
+    // A Binary Input's Polarity, named in both forms; none elsewhere.
+    let reverse =
+        serde_json::json!({"value": "reverse", "decoded": {"value": 1, "name": "reverse"}});
+    assert_eq!(json["points"][7]["polarity"], reverse);
+    assert!(zone["polarity"].is_null() && fan["polarity"].is_null());
 }
 
-/// The CSV's header is the documented one, every row has its sixteen
+/// The CSV's header is the documented one, every row has its seventeen
 /// fields, and a field holding a comma, a quote or a line break is quoted
 /// with its quotes doubled; a bar inside a state text is escaped.
 #[test]
@@ -256,33 +263,34 @@ fn the_csv_quotes_what_it_must() {
     let csv = sample().to_csv(&CsvOptions::new());
     let mut lines = csv.split('\n');
     assert_eq!(lines.next(), Some(CSV_HEADER));
-    assert_eq!(CSV_HEADER.split(',').count(), 16);
+    assert_eq!(CSV_HEADER.split(',').count(), 17);
     assert!(csv.ends_with('\n'));
     let rows = parse(&csv);
     assert_eq!(rows.len(), 1 + 10);
-    assert!(rows.iter().all(|row| row.len() == 16), "{rows:?}");
+    assert!(rows.iter().all(|row| row.len() == 17), "{rows:?}");
     let zone = &rows[1];
     assert_eq!(zone[..3], ["192.168.1.10:47808", "1234", "analog-input:1"]);
     assert_eq!(
         zone[3..6],
         ["Zone Temp", "Room 101, east", "degrees-fahrenheit"]
     );
-    assert_eq!((zone[8].as_str(), zone[13].as_str()), ("false", "72.5 °F"));
+    assert_eq!((zone[8].as_str(), zone[14].as_str()), ("false", "72.5 °F"));
     assert!(csv.contains(",\"Room 101, east\","), "a comma: {csv}");
     let fan = &rows[2];
     assert_eq!(fan[3], "Fan \"A\"");
     assert!(csv.contains(",\"Fan \"\"A\"\"\","), "quotes doubled: {csv}");
     assert_eq!(fan[4], "line one\nline two");
     assert_eq!(fan[6], "Off\\|Standby|On", "inactive, then active");
-    assert_eq!(fan[13], "active (On)");
+    assert_eq!(fan[14], "active (On)");
     let mode = &rows[3];
     assert_eq!(mode[6], "Off|Low, slow|High\\\\er");
     assert_eq!(mode[7], "3");
     let setpoint = &rows[4];
     assert_eq!(setpoint[3], "'=Setpoint", "guarded");
     assert_eq!(setpoint[11], "-40", "a number is left alone");
-    assert_eq!(setpoint[15], "units: PROPERTY:UNKNOWN_PROPERTY");
+    assert_eq!(setpoint[16], "units: PROPERTY:UNKNOWN_PROPERTY");
     assert_eq!(rows[6][3..8], ["", "", "", "", ""], "nothing read: empty");
+    assert_eq!((rows[8][13].as_str(), zone[13].as_str()), ("reverse", ""));
 
     // A carriage return is quoted too, kept as it is.
     let rows = vec![row(P::OBJECT_NAME, text("a\r\nb"))];
@@ -339,7 +347,7 @@ fn the_csv_guards_device_text_that_reads_as_a_formula() {
     assert_eq!(exact[formula][3..5], ["+SUM(A1)", "-2+3"]);
     for rows in [&guarded, &exact] {
         assert_eq!(rows[formula][11], "-40 °C", "Min_Pres_Value");
-        assert_eq!(rows[formula][13], "-12.5 °C", "Present_Value");
+        assert_eq!(rows[formula][14], "-12.5 °C", "Present_Value");
         assert_eq!(rows[formula][2], "analog-value:10");
     }
     assert_eq!(guarded[at_sign][3..5], ["'@cmd", "'\tindented"]);
@@ -351,7 +359,7 @@ fn the_csv_guards_device_text_that_reads_as_a_formula() {
     // A string value's text is written in quotes, so its cell starts with
     // one and reads as text either way.
     for rows in [&guarded, &exact] {
-        assert_eq!(rows[string][13], "\"=HYPERLINK(\"x\")\"", "a string value");
+        assert_eq!(rows[string][14], "\"=HYPERLINK(\"x\")\"", "a string value");
     }
     // Each guarded character, and an ordinary one beside them.
     for (lead, guard) in [

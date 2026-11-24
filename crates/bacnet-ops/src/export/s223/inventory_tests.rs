@@ -3,7 +3,7 @@
 //! inventory as a model and as Turtle. The round trip from a point list
 //! is in `round_trip_tests`, over the same lab link.
 
-use bacnet_types::enums::{BinaryPV, EngineeringUnits, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{BinaryPV, EngineeringUnits, ObjectType, Polarity, PropertyIdentifier};
 use bacnet_types::primitives::PropertyValue;
 
 use super::inventory::exported;
@@ -274,4 +274,36 @@ fn a_missing_required_property_skips_the_object() {
     };
     assert_eq!(skipped.property, None);
     assert_eq!(skipped.error, "trend-log objects aren't exported");
+}
+
+/// A Binary Input's or Output's Polarity is the one its record holds,
+/// NORMAL and REVERSE alike and any other number too, so a list keeps what
+/// the device has; one the device didn't give, or of another type, is
+/// `None`, and the object is still a point. A Binary Value's is `None`
+/// even when a hand-built record holds one: that type has no Polarity,
+/// and a builder would refuse it.
+#[test]
+fn a_binary_points_polarity_is_the_records() {
+    use PropertyIdentifier as P;
+    let name = || row(P::OBJECT_NAME, text("Contact"));
+    let polarity = |raw| row(P::POLARITY, PropertyValue::Enumerated(raw));
+    let of = |object, rows: &[RawRow]| match entry_of(object, rows) {
+        Ok(Point {
+            kind: PointKind::Binary(binary),
+            ..
+        }) => binary.polarity,
+        other => panic!("{other:?}"),
+    };
+    for object_type in [ObjectType::BINARY_INPUT, ObjectType::BINARY_OUTPUT] {
+        let object = oid(object_type, 1);
+        assert_eq!(of(object, &[name(), polarity(0)]), Some(Polarity::NORMAL));
+        assert_eq!(of(object, &[name(), polarity(1)]), Some(Polarity::REVERSE));
+        let other = Some(Polarity::from_raw(7));
+        assert_eq!(of(object, &[name(), polarity(7)]), other);
+        assert_eq!(of(object, &[name(), refused(P::POLARITY)]), None);
+        let unsigned = row(P::POLARITY, PropertyValue::Unsigned(1));
+        assert_eq!(of(object, &[name(), unsigned]), None);
+    }
+    let bv = oid(ObjectType::BINARY_VALUE, 1);
+    assert_eq!(of(bv, &[name(), polarity(1)]), None);
 }

@@ -8,15 +8,16 @@
 //! [`PointRecord`]s. A record made with
 //! [`inventory_options`](super::inventory_options) holds what the Turtle
 //! uses; one made with [`point_list_options`](super::point_list_options)
-//! holds the rest of a point list too, but for a binary point's Polarity,
-//! which no record holds yet (see the tracking issue for the export's
-//! Polarity).
+//! holds the rest of a point list too, a Binary Input's or Output's
+//! Polarity included.
 //!
 //! An object is skipped when its record lacks its Object_Name, the Units
 //! of an analog object or an Integer Value, or a multi-state object's
 //! Number_Of_States, the reason naming that property and what the device
 //! said of it. An optional setting the record lacks, or whose value isn't
-//! of the property's type, is `None`.
+//! of the property's type, is `None`; so is a Polarity the device didn't
+//! give, or gave as other than an Enumerated, which the record lists among
+//! its problems, and a Binary Value's, as that type has none.
 //!
 //! An input is [`Access::ReadOnly`] and an output
 //! [`Access::Commandable`]. A value is commandable when it has a
@@ -24,7 +25,7 @@
 //! otherwise, even when a peer may write it: a read can't tell a writable
 //! value from a read-only one, only a write could.
 
-use bacnet_types::enums::{BinaryPV, ObjectType, PropertyIdentifier as P};
+use bacnet_types::enums::{BinaryPV, ObjectType, Polarity, PropertyIdentifier as P};
 use bacnet_types::primitives::PropertyValue;
 
 use super::{
@@ -44,8 +45,8 @@ impl PointRecord {
     /// object's Number_Of_States ([`exported`] says which).
     ///
     /// The point's optional settings (COV_Increment, range, relinquish
-    /// default) are those the record holds, so `None` unless the inventory
-    /// read [`settings`](crate::inventory::InventoryOptions::settings).
+    /// default, Polarity) are those the record holds, so `None` unless the
+    /// inventory read [`settings`](crate::inventory::InventoryOptions::settings).
     pub fn to_point(&self) -> Option<Point> {
         exported(self).ok()
     }
@@ -174,8 +175,11 @@ fn point(record: &PointRecord, family: Family, role: Role) -> Result<Point, (P, 
             let mut binary = Binary::new(access(role, record, binary_pv));
             binary.active_text = record.state_texts.active.clone();
             binary.inactive_text = record.state_texts.inactive.clone();
-            // No record holds Polarity yet, so it stays `None` (see the
-            // tracking issue for the export's Polarity).
+            // A Binary Value has no Polarity, and a builder refuses one;
+            // a hand-built record could still carry it.
+            if role != Role::Value {
+                binary.polarity = setting(&record.polarity, polarity);
+            }
             PointKind::Binary(binary)
         }
         Family::MultiState => {
@@ -277,6 +281,15 @@ fn signed(data: &[u8]) -> Option<i32> {
 fn binary_pv(data: &[u8]) -> Option<BinaryPV> {
     match single(data)? {
         PropertyValue::Enumerated(raw) => Some(BinaryPV::from_raw(raw)),
+        _ => None,
+    }
+}
+
+/// A Polarity as the device sent it, NORMAL and REVERSE alike: a list
+/// keeps what the device has.
+fn polarity(data: &[u8]) -> Option<Polarity> {
+    match single(data)? {
+        PropertyValue::Enumerated(raw) => Some(Polarity::from_raw(raw)),
         _ => None,
     }
 }
