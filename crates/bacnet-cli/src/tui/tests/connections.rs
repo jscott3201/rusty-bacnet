@@ -57,21 +57,17 @@ async fn outcome(
 }
 
 /// [`connected`] on a port the test picked and freed, which another process
-/// may take before the session binds it (#1877). A failed attempt probes the
-/// port: when another socket holds it, the probe's bind error goes back to
-/// [`rerun_on_lost_port`], which reruns the test on a fresh port. A failure
-/// on a free port panics.
+/// may take before the session binds it (#1877). When the session's own bind
+/// found another socket on the port, the failed attempt comes back for
+/// [`rerun_on_lost_port`], which reruns the test on a fresh port; any other
+/// failure panics (`lost_port`, #2776).
 async fn connected_on(
     events: &mut mpsc::Receiver<WorkerEvent>,
     generation: u64,
-    port: u16,
 ) -> std::io::Result<String> {
-    let error = match outcome(events, generation).await {
-        Ok(local) => return Ok(local),
-        Err(error) => error,
-    };
-    std::net::UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))?;
-    panic!("connection failed on a free port: {error}")
+    outcome(events, generation)
+        .await
+        .map_err(|error| super::lost_port(&error))
 }
 
 pub(super) async fn disconnected(events: &mut mpsc::Receiver<WorkerEvent>, generation: u64) {
@@ -104,15 +100,12 @@ async fn coordinator_disconnects_reconnects_same_port_and_joins_on_quit() {
         let (commands, rx) = mpsc::channel(16);
         let task = coordinator::spawn(Some(plan), None, sink, rx, Default::default());
         let cycled = async {
-            let first = connected_on(&mut events, 1, port).await?;
+            let first = connected_on(&mut events, 1).await?;
             for generation in 1..=3 {
                 commands.send(Command::Disconnect).await.unwrap();
                 disconnected(&mut events, generation).await;
                 commands.send(Command::Reconnect).await.unwrap();
-                assert_eq!(
-                    connected_on(&mut events, generation + 1, port).await?,
-                    first
-                );
+                assert_eq!(connected_on(&mut events, generation + 1).await?, first);
             }
             std::io::Result::Ok(())
         }
@@ -194,7 +187,7 @@ fn foreign_plan(bbmd: &tokio::net::UdpSocket) -> (ConnectPlan, SocketAddr) {
 /// The session's first registration on `bbmd`, from `session`'s address
 /// alone. The session waits for that registration's answer before it
 /// connects, so a connect outcome first is a failed start: a port lost to
-/// another socket comes back as the probe's bind error, as in
+/// another socket comes back as the session's own bind error, as in
 /// [`connected_on`].
 async fn first_registration(
     bbmd: &tokio::net::UdpSocket,
@@ -204,7 +197,7 @@ async fn first_registration(
     let first = async {
         tokio::select! {
             datagram = super::sender::next_from(bbmd, session) => Ok(datagram),
-            started = connected_on(events, 1, session.port()) => {
+            started = connected_on(events, 1) => {
                 panic!("connected as {} before registering", started?)
             }
         }

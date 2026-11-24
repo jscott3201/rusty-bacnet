@@ -164,7 +164,7 @@ use super::app::picker::Picker;
 use super::app::{Action, App, AppConfig, update};
 use super::keymap::map_key;
 use super::log_layer::LogRing;
-use super::message::{Command, DeviceRow, WorkerEvent};
+use super::message::{Command, DeviceRow, Failure, WorkerEvent};
 use crate::core::interfaces::Ipv4Interface;
 
 /// One fixed start time per test process, so ages are exact offsets from it.
@@ -258,6 +258,28 @@ pub(super) fn act(app: &mut App, action: Action) -> Vec<Command> {
 /// Apply a worker event.
 pub(super) fn worker(app: &mut App, event: WorkerEvent) -> Vec<Command> {
     update(app, Action::Worker(event))
+}
+
+/// The failure a session reported in `event`, whether or not its
+/// generation wraps it.
+pub(super) fn connect_failure(event: &WorkerEvent) -> Option<&Failure> {
+    match event {
+        WorkerEvent::Session { event, .. } => connect_failure(event),
+        WorkerEvent::ConnectFailed { error } => Some(error),
+        _ => None,
+    }
+}
+
+/// A session's failed start on a port the test picked and freed: when the
+/// session's own bind found another socket on the port, its OS error, which
+/// [`port_retry::rerun_on_lost_port`] reruns the test for (#2216). Any other
+/// failure panics. Binding the port afterwards can't tell: a socket that held
+/// the port and then let it go leaves that bind free (#2776).
+pub(super) fn lost_port(failure: &Failure) -> std::io::Error {
+    match failure.os_code.map(std::io::Error::from_raw_os_error) {
+        Some(os) if port_retry::lost_to_another_socket(&os) => os,
+        _ => panic!("the session failed, and not on a port another socket held: {failure}"),
+    }
 }
 
 /// Press a key through the real keymap.

@@ -130,7 +130,7 @@ async fn listen(
 
 async fn failed(sink: &EventSink, error: std::io::Error) {
     sink.deliver(WorkerEvent::ConnectFailed {
-        error: crate::tui::message::Failure::text(format!("passive B/IP listener: {error}")),
+        error: crate::tui::message::Failure::io("passive B/IP listener", &error),
     })
     .await;
 }
