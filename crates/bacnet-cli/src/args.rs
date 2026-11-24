@@ -474,7 +474,8 @@ pub(crate) enum Command {
         types: Vec<String>,
         /// Also read each object's Present_Value, Status_Flags, Event_State
         /// and Reliability, and the priority in control of a commandable
-        /// one.
+        /// one: four more properties an object (five on an output), so a
+        /// request holds 3 to 5 objects.
         #[arg(long)]
         values: bool,
         /// Also read each object's COV_Increment, Min_Pres_Value,
@@ -483,7 +484,7 @@ pub(crate) enum Command {
         #[arg(long)]
         settings: bool,
         /// Also read each object's Device_Type and Profile_Name, where it
-        /// has them.
+        /// has them: two more properties an object.
         #[arg(long)]
         details: bool,
         /// With --format csv: write device text exactly. Without it, a

@@ -8,6 +8,7 @@ use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::PropertyValue;
 
 use super::record::record;
+use super::state_tests::REQUIRES_EVENT_STATE;
 use super::test_lab::{oid, refused, row, text};
 use super::*;
 use crate::device::DeviceAddress;
@@ -179,9 +180,9 @@ fn a_missing_polarity_is_a_problem_where_the_type_has_one() {
 }
 
 /// Relinquish_Default is a problem when an output lacks it, and absent
-/// without one when a value does; Present_Value and Status_Flags are
-/// problems when a type whose table requires them lacks them, and absent
-/// without one on a type that needn't have them.
+/// without one when a value does; Present_Value, Status_Flags and
+/// Event_State are problems when a type whose table requires them lacks
+/// them, and absent without one on a type that needn't have them.
 #[test]
 fn required_settings_and_values_are_problems_when_lacking() {
     let lacking = || {
@@ -190,7 +191,16 @@ fn required_settings_and_values_are_problems_when_lacking() {
             refused(P::RELINQUISH_DEFAULT),
             refused(P::PRESENT_VALUE),
             refused(P::STATUS_FLAGS),
+            refused(P::EVENT_STATE),
         ]
+    };
+    // `expected`, and Event_State after it where the type requires one.
+    let and_event_state = |expected: &[P], object_type| -> Vec<P> {
+        let mut expected = expected.to_vec();
+        if REQUIRES_EVENT_STATE.contains(&object_type) {
+            expected.push(P::EVENT_STATE);
+        }
+        expected
     };
     let problems = |object_type| -> Vec<P> {
         let read = of(object_type, lacking());
@@ -208,7 +218,7 @@ fn required_settings_and_values_are_problems_when_lacking() {
         ObjectType::LIGHTING_OUTPUT,
         ObjectType::BINARY_LIGHTING_OUTPUT,
     ] {
-        assert_eq!(problems(output), all, "{output}");
+        assert_eq!(problems(output), and_event_state(&all, output), "{output}");
     }
     // A value's Relinquish_Default comes with its Priority_Array; an
     // input has none.
@@ -232,7 +242,7 @@ fn required_settings_and_values_are_problems_when_lacking() {
         ObjectType::GLOBAL_GROUP,
         ObjectType::CREDENTIAL_DATA_INPUT,
     ] {
-        assert_eq!(problems(other), values, "{other}");
+        assert_eq!(problems(other), and_event_state(&values, other), "{other}");
     }
     // These have a Present_Value and no Status_Flags.
     for value_only in [
@@ -240,24 +250,22 @@ fn required_settings_and_values_are_problems_when_lacking() {
         ObjectType::COLOR,
         ObjectType::COLOR_TEMPERATURE,
     ] {
-        assert_eq!(problems(value_only), [P::PRESENT_VALUE], "{value_only}");
+        let expected = and_event_state(&[P::PRESENT_VALUE], value_only);
+        assert_eq!(problems(value_only), expected, "{value_only}");
     }
 
-    // A Channel passes commands on and keeps no Relinquish_Default; a
-    // trend log, a Device and a vendor's type needn't have any of them.
-    for none in [
-        ObjectType::TREND_LOG,
-        ObjectType::DEVICE,
-        ObjectType::from_raw(700),
-    ] {
+    // A trend log needs an Event_State and none of the others; a Device
+    // and a vendor's type needn't have any of them.
+    assert_eq!(problems(ObjectType::TREND_LOG), [P::EVENT_STATE]);
+    for none in [ObjectType::DEVICE, ObjectType::from_raw(700)] {
         assert!(problems(none).is_empty(), "{none}");
     }
 }
 
 /// Status_Flags read with values are the four flags by name, a bit
 /// string too short for all four reading the rest as clear (#2620). One
-/// that isn't a bit string is kept as it came and is a problem saying what
-/// came, with no flags.
+/// that isn't a bit string is a problem saying what came, and the field
+/// and the flags are empty.
 #[test]
 fn status_flags_are_typed_by_name() {
     use bacnet_types::bitstring::StatusFlags;
@@ -290,11 +298,7 @@ fn status_flags_are_typed_by_name() {
 
     let read = flags_of(PropertyValue::Unsigned(5));
     assert_eq!(read.flags(), None);
-    assert_eq!(
-        read.status_flags.as_ref().unwrap().as_u64(),
-        Some(5),
-        "kept"
-    );
+    assert!(read.status_flags.is_none(), "left out as its siblings are");
     assert_eq!(
         read.problem(P::STATUS_FLAGS).unwrap().to_string(),
         "not a bit string (got an Unsigned, 5)"

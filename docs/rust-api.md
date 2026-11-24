@@ -13401,7 +13401,8 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   `Value`s, so their text names the units and the state (`72.5 °F`,
   `2 (Low)`). `commandable` is what `Commandability::of` says of the type,
   settled by the Priority_Array where the type alone can't. A property the
-  object's type doesn't have, an optional one it lacks, or one the options
+  object's type doesn't have, an optional one it lacks (the device says
+  it is unknown; any other error is a problem), or one the options
   didn't ask for is `None`. One that should have read and didn't is listed
   in `problems` with the device's error, and never fails the inventory: an
   object the device refuses is a record whose properties are all problems.
@@ -13421,19 +13422,24 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   `PointRecord::flags()` gives the Status_Flags read with values as a
   `bacnet_types::bitstring::StatusFlags` (`IN_ALARM`, `FAULT`,
   `OVERRIDDEN`, `OUT_OF_SERVICE`); a Status_Flags that isn't a bit string
-  is kept in `status_flags` with a problem beside it, and `flags()` is
-  `None` (#2620). `event_state` and `reliability` are named Enumerateds
+  is a problem and leaves `status_flags` empty, as any value of the wrong
+  type does (#2620). `event_state` and `reliability` are named Enumerateds
   (`normal`, `no-fault-detected`); Event_State is required on the types
   whose property tables make it so unconditionally (the analog, binary and
-  multi-state objects, Loop, the logs, Access Door and others), the rest
-  of these properties optional on every type. `command_priority` is the
+  multi-state objects, Loop, the logs, Access Door and others).
+  Reliability and Current_Command_Priority are treated as optional on
+  every type, though some tables require them (Reliability on Access Door,
+  Schedule and Network Port among others, Current_Command_Priority on the
+  six types that always take commands): a device built to an earlier
+  revision may lack them. Device_Type and Profile_Name are optional.
+  `command_priority` is the
   priority in control, as a Current_Command_Priority gives it: an Unsigned
   from 1 to 16 named by what the project calls it (`8 (operator,
   manual)`, `10 (site defined)`), or NULL, written `relinquish default`.
-  An output, Access Door or lighting output reads its own property, which
-  an older device may lack (`None`, no problem); a value object's comes
-  from the Priority_Array already read, an array that isn't sixteen
-  values being a Priority_Array problem. `device_type` and `profile_name`
+  An output, Access Door or lighting output reads its own property
+  (`None`, no problem, where the device lacks it); a value object's comes
+  from the Priority_Array already read, by whether each slot is NULL, an
+  array that isn't sixteen values being a Priority_Array problem. `device_type` and `profile_name`
   are device text.
 - **The inventory.** `Inventory { address, device, cov, points, unread,
   stopped }`. `device` is the `DeviceSummary` (`describe_device`'s). `cov`
@@ -13442,9 +13448,10 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   watch has asked it, or, read with settings, from an analog object's or
   integer value's `cov_increment`: on those six types the property exists
   exactly when the object reports changes of its Present_Value (the
-  footnotes to their tables in Clause 12), so a value there says a
-  subscription is worth trying and `None` with no problem says it isn't
-  (#2620). `Inventory::point(object)` finds a record.
+  footnotes to their tables in Clause 12), so a value there is evidence
+  that a subscription is worth trying, not proof, as some devices give the
+  property regardless, and `None` with no problem says a conforming
+  device's object doesn't report them (#2620). `Inventory::point(object)` finds a record.
 - **What it costs.** By ReadPropertyMultiple: the summary, the Object_List,
   then one request for each batch, filled in Object_List order up to 16
   objects or 32 properties, whichever comes first: 16 objects of a type
@@ -13468,7 +13475,10 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   a time costs three, then a request an object). A single object whose
   answer is too large costs its refused request and a ReadProperty for
   each property. An answer in segments costs no more requests. A device
-  that refuses ReadPropertyMultiple costs that one
+  that fails a whole ReadPropertyMultiple with an error of its own (not a
+  refusal of the service) has that batch read by ReadProperty and the
+  next tried by ReadPropertyMultiple again: one wasted request a batch. A
+  device that refuses ReadPropertyMultiple costs that one
   refused request, then a ReadProperty for each property: 13 for the
   summary, one for the Object_List, and each object's own count (four
   more with values, five on an output; two more with details). No

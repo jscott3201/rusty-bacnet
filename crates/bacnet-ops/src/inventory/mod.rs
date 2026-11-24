@@ -50,7 +50,9 @@
 //!   a ReadProperty for each property.
 //! - A batch the device fails as a whole for another reason is read by
 //!   ReadProperty, a property a request, so one bad object can't put
-//!   errors on its neighbours.
+//!   errors on its neighbours. Such a failure isn't a refusal of the
+//!   service, so the next batch is tried by ReadPropertyMultiple again: a
+//!   device that fails every one costs one wasted request a batch.
 //! - A device that refuses ReadPropertyMultiple costs that one refused
 //!   request (remembered by the client, so only once), then a ReadProperty
 //!   for each property: 13 for the summary, one for the Object_List, and
@@ -243,9 +245,7 @@ impl Problem {
 /// the options didn't ask for it, or its read failed, a value of another
 /// datatype than the property's included; only the last is listed in
 /// [`problems`](Self::problems). A value a point list builder would refuse
-/// is kept as the device gave it and listed there too, and so are the
-/// values read with [`values`](InventoryOptions::values): a Status_Flags
-/// that isn't a bit string is kept beside its problem.
+/// is kept as the device gave it and listed there too.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct PointRecord {
@@ -264,7 +264,7 @@ pub struct PointRecord {
     pub description: Option<String>,
     /// Its Device_Type, read with [`details`](InventoryOptions::details):
     /// the device's text for what the object is connected to, such as the
-    /// kind of sensor behind an input; optional on every type. One that
+    /// kind of sensor behind an input; optional in the tables. One that
     /// isn't a character string is a problem instead.
     pub device_type: Option<String>,
     /// Its Profile_Name, read with details: the name of the profile the
@@ -303,11 +303,12 @@ pub struct PointRecord {
     ///
     /// It is also a sign, at no cost of its own, of whether a
     /// subscription to the object's Present_Value is worth trying: on
-    /// those six types the property exists exactly when the object
-    /// reports changes of its Present_Value (the footnotes to their
+    /// those six types the tables have the property exist exactly when the
+    /// object reports changes of its Present_Value (the footnotes to their
     /// property tables, from Table 12-2 on). So with settings read, a
-    /// value here says the object reports them, and `None` with no
-    /// [`problem`](Self::problem) for it says a conforming device's
+    /// value here is evidence that the object reports them, not proof:
+    /// some devices give the property whether or not they do. `None` with
+    /// no [`problem`](Self::problem) for it says a conforming device's
     /// object doesn't; [`Inventory::cov`] says whether the device offers
     /// SubscribeCOV at all. Other types have no such sign.
     #[serde(serialize_with = "write::value")]
@@ -335,8 +336,10 @@ pub struct PointRecord {
     /// 16, or NULL when no priority holds a command and Relinquish_Default
     /// applies, as the object's Current_Command_Priority says it. An
     /// output (or Access Door, or lighting output) gives it as that
-    /// property, which an older device may not have: `None` then, with no
-    /// problem. A value object's comes from the Priority_Array already
+    /// property. The 2020 tables require it there, but it is treated as
+    /// optional, since a device built to an earlier revision may not have
+    /// it: `None` then, with no problem. A value object's comes from the
+    /// Priority_Array already
     /// read, the first slot that holds a command, at no request of its
     /// own. Its text names the priority (`8 (operator, manual)`, `10 (site
     /// defined)`) or says `relinquish default`. JSON: `{"value": "8
@@ -346,8 +349,7 @@ pub struct PointRecord {
     pub command_priority: Option<Value>,
     /// Its Status_Flags, read with values, its text and JSON naming the
     /// flags set (`in-alarm | fault`); [`flags`](Self::flags) gives them
-    /// typed. Kept whatever the device sent: one that isn't a bit string
-    /// is a problem beside it too.
+    /// typed. One that isn't a bit string is a problem instead.
     #[serde(serialize_with = "write::value")]
     pub status_flags: Option<Value>,
     /// Its Event_State, read with values, named (`normal`, `offnormal`);
@@ -356,8 +358,10 @@ pub struct PointRecord {
     #[serde(serialize_with = "write::value")]
     pub event_state: Option<Value>,
     /// Its Reliability, read with values, named (`no-fault-detected`,
-    /// `open-loop`); optional on every type. One that isn't an Enumerated
-    /// is a problem instead.
+    /// `open-loop`). Treated as optional on every type, though some tables
+    /// require it (Access Door, Schedule, Network Port and others), since
+    /// a device built to an earlier revision may not have it. One that
+    /// isn't an Enumerated is a problem instead.
     #[serde(serialize_with = "write::value")]
     pub reliability: Option<Value>,
     /// The properties asked for that gave no usable value, in the order
@@ -368,8 +372,7 @@ pub struct PointRecord {
     /// 0208`), and each property of an object the device doesn't have or
     /// left out of its answer. A State_Text entry that isn't a string is
     /// one too (`state 2 is not a character string (got an Unsigned,
-    /// 5)`), the entry held as an empty text, and so is a Status_Flags
-    /// that isn't a bit string, held as it came.
+    /// 5)`), the entry held as an empty text.
     ///
     /// So is a value kept as the device gave it that a point list builder
     /// (`bacnet_objects::points::build_database`) would refuse, so the
@@ -433,7 +436,7 @@ impl PointRecord {
     /// hold reads as clear. `None` when the flags weren't read (no
     /// [`values`](InventoryOptions::values), or a type without them) or
     /// didn't come as a bit string, which is a
-    /// [`problem`](Self::problem) then.
+    /// [`problem`](Self::problem) then and leaves the field empty.
     ///
     /// ```
     /// use bacnet_ops::inventory::Inventory;

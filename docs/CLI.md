@@ -1687,9 +1687,9 @@ included.
 | Flag | Description |
 |------|-------------|
 | `--types <TYPES>` | Only these object types, comma-separated, by the target grammar's names (`ai`, `msv`, `trend-log` and so on) |
-| `--values` | Also read each object's Present_Value, Status_Flags, Event_State and Reliability, and the priority in control of one that takes commands |
+| `--values` | Also read each object's Present_Value, Status_Flags, Event_State and Reliability, and the priority in control of one that takes commands: four more properties an object (five on an output), so a request holds 3 to 5 objects instead of 6 to 16 |
 | `--settings` | Also read each object's COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default and Polarity, where its type has them |
-| `--details` | Also read each object's Device_Type and Profile_Name |
+| `--details` | Also read each object's Device_Type and Profile_Name: two more properties an object |
 | `--format table\|json\|csv`, `--json` | How to print; a table at a terminal and JSON through a pipe unless given |
 | `--csv-exact` | With `--format csv`: write device text exactly, without the formula guard |
 
@@ -1701,18 +1701,24 @@ included.
   With `--values`, each object's Event_State and Reliability, named
   (`normal`, `no-fault-detected`), and the priority in control of one
   that takes commands: an output's (or Access Door's, or a lighting
-  output's) own Current_Command_Priority, which an older device may not
-  have (left empty, no problem), or what a value object's Priority_Array
+  output's) own Current_Command_Priority, which the 2020 tables require
+  there but is treated as optional, since a device built to an earlier
+  revision may not have it (left empty, no problem), or what a value
+  object's Priority_Array
   shows, at no request of its own. It reads `8 (operator, manual)`, `10
   (site defined)`, or `relinquish default` when no priority holds a
   command. With `--details`, each object's Device_Type and Profile_Name,
   as the device wrote them. Event_State is required on the types whose
-  property tables make it so, such as the analog, binary and multi-state
-  objects; the others are optional everywhere.
+  property tables require it outright, such as the analog, binary and
+  multi-state objects. Reliability is treated as optional on every type,
+  though some tables require it (Access Door, Schedule, Network Port and
+  others), for the same reason; Device_Type and Profile_Name are optional.
   An output is commandable by its type; a value object, or an object of a
   type this release doesn't know, is commandable when it has a
   Priority_Array, which is read to find out. An
-  optional property an object lacks is left empty. A property that should
+  optional property an object lacks is left empty; only the device's
+  answer that the property is unknown counts as lacking it, and any other
+  error for it is listed as a problem. A property that should
   have read and didn't is listed with the device's error under the object's
   problems and never fails the command; an object the device refuses is a
   row whose properties are all problems. A value of another datatype than
@@ -1748,7 +1754,10 @@ included.
   costs one more, a read of the Device object by the wildcard instance. A device that can't send a batch's answer for its
   size is asked for that batch an object at a time, and for at most half
   as many objects a batch from then on, down to one: at most four such
-  refused batches. A device that
+  refused batches. A device that fails a whole ReadPropertyMultiple with
+  an error of its own, not a refusal of the service, has that batch read
+  by ReadProperty and the next one tried by ReadPropertyMultiple again:
+  one wasted request a batch. A device that
   refuses ReadPropertyMultiple costs one refused request, then a
   ReadProperty a property: 13 for the summary, one for the Object_List, and
   two to five an object (four more with `--values`, five on an output;

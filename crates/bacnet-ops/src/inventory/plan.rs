@@ -42,9 +42,14 @@ use crate::write::Commandability;
 /// (Present_Value alone for Group, Color and Color Temperature); and the
 /// Event_State of the types whose tables require it with no condition
 /// (`has_event_state`). Any other is optional: an object that lacks it (the
-/// device answers that the property is unknown) reads as `None` with no
-/// problem. Reliability, Device_Type, Profile_Name and
-/// Current_Command_Priority always are.
+/// device answers that the property is unknown; any other error is a
+/// problem) reads as `None` with no problem. Reliability and
+/// Current_Command_Priority are treated as optional on every type, though
+/// some tables require them (Reliability on Access Door, Schedule and
+/// Network Port among others, Current_Command_Priority on the six types
+/// that always take commands): a device built to an earlier revision of
+/// the standard may lack them. Device_Type and Profile_Name are optional
+/// wherever a table lists them.
 ///
 /// ```
 /// use bacnet_ops::inventory::{InventoryOptions, properties};
@@ -164,9 +169,11 @@ fn always_commanded(object_type: ObjectType) -> bool {
 ///   Status_Flags, in those of [`has_flags`]'s;
 /// - Event_State, in the tables of [`has_event_state`]'s types.
 ///
-/// Reliability, Device_Type, Profile_Name and Current_Command_Priority are
-/// optional on every type: Current_Command_Priority is a later addition
-/// to the standard, so an older device's output may have none (#2620).
+/// Reliability and Current_Command_Priority are treated as optional on
+/// every type, even where a table requires them: a device built to an
+/// earlier revision of the standard may not have them, and a record of
+/// one shouldn't be all problems for it (#2620). Device_Type and
+/// Profile_Name are optional in the tables.
 pub(super) fn required(object_type: ObjectType, property: P) -> bool {
     match property {
         P::OBJECT_NAME => true,

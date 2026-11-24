@@ -92,13 +92,14 @@ fn judged(datatype: Datatype, value: &V) -> Option<(bool, &'static str)> {
 /// as `shown` writes it, cleaned and cut as a name is, since a string or a
 /// state's name in it is device text. A number is written bare: the
 /// object's Units, which a read lends the text of every number, aren't
-/// what came for an Event_State (#2620).
+/// what came for an Event_State (#2620). A float far from one is written
+/// in scientific form, so a Double of 1e300 stays short.
 fn got(decoded: &V, shown: &Value) -> String {
     let number = match decoded {
         V::Unsigned(n) => Some(n.to_string()),
         V::Signed(n) => Some(n.to_string()),
-        V::Real(n) => Some(n.to_string()),
-        V::Double(n) => Some(n.to_string()),
+        V::Real(n) => Some(float(f64::from(*n), n.to_string(), format!("{n:e}"))),
+        V::Double(n) => Some(float(*n, n.to_string(), format!("{n:e}"))),
         _ => None,
     };
     let kind = match decoded {
@@ -123,6 +124,19 @@ fn got(decoded: &V, shown: &Value) -> String {
     format!("got {kind}, {text}")
 }
 
+/// A float's text for a problem: `plain`, its shortest decimal, unless the
+/// number is 1e15 or more, or under 1e-6 and not zero, when it is
+/// `scientific`.
+fn float(value: f64, plain: String, scientific: String) -> String {
+    let magnitude = value.abs();
+    let far = magnitude >= 1e15 || (magnitude > 0.0 && magnitude < 1e-6);
+    if value.is_finite() && far {
+        scientific
+    } else {
+        plain
+    }
+}
+
 /// One application value as read, with its octets.
 type Entry<'a> = (V, &'a [u8]);
 
@@ -131,7 +145,7 @@ type Undecoded = (usize, usize);
 
 /// Each application value in `data` with its octets, or where the first
 /// that doesn't decode starts.
-pub(super) fn values(data: &[u8]) -> Result<Vec<Entry<'_>>, Undecoded> {
+fn values(data: &[u8]) -> Result<Vec<Entry<'_>>, Undecoded> {
     let mut offset = 0;
     let mut out = Vec::new();
     while offset < data.len() {

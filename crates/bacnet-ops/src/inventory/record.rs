@@ -14,9 +14,9 @@ use crate::write::{Commandability, unknown_property};
 
 /// `object`'s record from `rows`, the properties its read asked for, each
 /// its value or its error. The first row of a property counts. A value of
-/// the wrong type is a problem and stays out of the record, but for a
-/// Status_Flags, kept beside its problem; a setting a point list builder
-/// would refuse is kept and is a problem too ([`refused`]). Read with
+/// the wrong type is a problem and stays out of the record; a setting a
+/// point list builder would refuse is kept and is a problem too
+/// ([`refused`]). Read with
 /// values (the rows hold a Present_Value), a value object with a
 /// Priority_Array gets its priority in control from that array.
 pub(crate) fn record(
@@ -76,13 +76,9 @@ pub(crate) fn record(
             P::MAX_PRES_VALUE => typed(object_type, property, value, &mut record.max_present_value),
             P::POLARITY => typed(object_type, property, value, &mut record.polarity),
             P::PRESENT_VALUE => keep(value, &mut record.present_value),
-            // Kept whatever it is, as before the flags were typed
-            // (`PointRecord::flags`); one that isn't a bit string is a
-            // problem beside it.
-            P::STATUS_FLAGS => {
-                let problem = mistyped(object_type, property, &value);
-                keep(value, &mut record.status_flags).or(problem)
-            }
+            // As its siblings: one that isn't a bit string is a problem
+            // and stays out, so `PointRecord::flags` sees only bit strings.
+            P::STATUS_FLAGS => typed(object_type, property, value, &mut record.status_flags),
             P::EVENT_STATE => typed(object_type, property, value, &mut record.event_state),
             P::RELIABILITY => typed(object_type, property, value, &mut record.reliability),
             P::CURRENT_COMMAND_PRIORITY => {

@@ -17,16 +17,17 @@ use bacnet_objects::value_types::IntegerValueObject;
 use bacnet_types::enums::{
     EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P,
 };
+use bacnet_types::error::RemoteError;
 use bacnet_types::primitives::PropertyValue as V;
 
 use super::record::record;
 use super::test_lab::{
-    Answer, Answering, Faults, LAB, count, lab_device, oid, refused, refusing_rpm, row,
+    Answer, Answering, Faults, LAB, count, lab_device, lab_logged, oid, refused, refusing_rpm, row,
     serve_logged, stop, text,
 };
 use super::*;
 use crate::device::DeviceAddress;
-use crate::format::RawRow;
+use crate::format::{PropertyError, RawRow};
 
 /// ReadProperty and ReadPropertyMultiple, as the send log names them.
 const RP: u8 = 12;
@@ -238,6 +239,23 @@ fn a_value_objects_priority_in_control_comes_from_its_array() {
         .as_ref()
         .map(|value| value.text.as_str());
     assert_eq!(held, Some("5 (critical equipment)"), "{read:?}");
+    // A CharacterString Value commanded at 3 with text this stack can't
+    // convert (JIS X 0208): only that the slot isn't NULL counts.
+    let mut array = vec![0x00; 2];
+    array.extend([0x73, 0x02, 0x30, 0x30]);
+    array.extend([0x00; 13]);
+    let read = of(
+        ObjectType::CHARACTERSTRING_VALUE,
+        vec![
+            (P::PRIORITY_ARRAY, Ok(array)),
+            row(P::PRESENT_VALUE, text("x")),
+        ],
+    );
+    let held = read
+        .command_priority
+        .as_ref()
+        .map(|value| value.text.as_str());
+    assert_eq!(held, Some("3 (site defined)"), "{read:?}");
 
     let broken = [
         (row(P::PRIORITY_ARRAY, V::Null), "one value, not 16"),
@@ -476,4 +494,174 @@ async fn a_device_without_them_or_with_odd_ones() {
         let ai = inventory.point(oid(ObjectType::ANALOG_INPUT, 1)).unwrap();
         assert!(ai.event_state.is_none() && ai.reliability.is_none());
     }
+}
+
+/// The types whose property tables in 135-2020 require Event_State with
+/// no condition, typed here apart from the code's list: Analog Input,
+/// Output and Value (Tables 12-2 to 12-4), Binary Input, Output and Value
+/// (12-6, 12-8, 12-10), Event Enrollment (12-14), Life Safety Point and
+/// Zone (12-18, 12-19), Loop (12-20), Multi-state Input, Output and Value
+/// (12-21 to 12-23), Pulse Converter (12-27), Trend Log (12-29), Access
+/// Door (12-30), Event Log (12-31), Load Control (12-32), Trend Log
+/// Multiple (12-35), Access Point and Zone (12-36, 12-37), Global Group
+/// (12-57), Alert Enrollment (12-61), Accumulator (12-79), Staging
+/// (12-80), Audit Reporter (12-82) and Audit Log (12-83).
+pub(super) const REQUIRES_EVENT_STATE: [ObjectType; 27] = [
+    ObjectType::ANALOG_INPUT,
+    ObjectType::ANALOG_OUTPUT,
+    ObjectType::ANALOG_VALUE,
+    ObjectType::BINARY_INPUT,
+    ObjectType::BINARY_OUTPUT,
+    ObjectType::BINARY_VALUE,
+    ObjectType::EVENT_ENROLLMENT,
+    ObjectType::LIFE_SAFETY_POINT,
+    ObjectType::LIFE_SAFETY_ZONE,
+    ObjectType::LOOP,
+    ObjectType::MULTI_STATE_INPUT,
+    ObjectType::MULTI_STATE_OUTPUT,
+    ObjectType::MULTI_STATE_VALUE,
+    ObjectType::PULSE_CONVERTER,
+    ObjectType::TREND_LOG,
+    ObjectType::ACCESS_DOOR,
+    ObjectType::EVENT_LOG,
+    ObjectType::LOAD_CONTROL,
+    ObjectType::TREND_LOG_MULTIPLE,
+    ObjectType::ACCESS_POINT,
+    ObjectType::ACCESS_ZONE,
+    ObjectType::GLOBAL_GROUP,
+    ObjectType::ALERT_ENROLLMENT,
+    ObjectType::ACCUMULATOR,
+    ObjectType::STAGING,
+    ObjectType::AUDIT_REPORTER,
+    ObjectType::AUDIT_LOG,
+];
+
+/// A missing Event_State (the device calls it unknown) is a problem on
+/// exactly the types whose tables require it, and on no other type the
+/// plan reads it of: where it comes only with intrinsic reporting
+/// (Schedule, Channel, the lighting outputs, Timer, Network Port, the
+/// Device, the integer and string values) or is optional, and on a
+/// vendor's type. Any other error for it is a problem on every type.
+#[test]
+fn a_missing_event_state_is_a_problem_where_the_tables_require_one() {
+    let values = InventoryOptions::new().with_values(true);
+    let types = (0..=ObjectType::COLOR_TEMPERATURE.to_raw())
+        .map(ObjectType::from_raw)
+        .chain([ObjectType::from_raw(700)]);
+    let mut required = 0;
+    for object_type in types {
+        assert!(properties(object_type, &values).contains(&P::EVENT_STATE));
+        let read = of(object_type, vec![refused(P::EVENT_STATE)]);
+        let problems: Vec<P> = read.problems.iter().map(|p| p.property).collect();
+        if REQUIRES_EVENT_STATE.contains(&object_type) {
+            required += 1;
+            assert_eq!(problems, [P::EVENT_STATE], "{object_type}");
+        } else {
+            assert!(problems.is_empty(), "{object_type}: {problems:?}");
+        }
+        let denied = RemoteError::Error {
+            class: ErrorClass::PROPERTY,
+            code: ErrorCode::READ_ACCESS_DENIED,
+        };
+        let denied = (P::EVENT_STATE, Err(PropertyError::Remote(denied)));
+        let read = of(object_type, vec![denied]);
+        assert!(read.problem(P::EVENT_STATE).is_some(), "{object_type}");
+    }
+    assert_eq!(required, REQUIRES_EVENT_STATE.len());
+    for conditional in [
+        ObjectType::SCHEDULE,
+        ObjectType::CHANNEL,
+        ObjectType::LIGHTING_OUTPUT,
+        ObjectType::TIMER,
+        ObjectType::NETWORK_PORT,
+        ObjectType::DEVICE,
+        ObjectType::INTEGER_VALUE,
+        ObjectType::CHARACTERSTRING_VALUE,
+    ] {
+        assert!(!REQUIRES_EVENT_STATE.contains(&conditional));
+    }
+}
+
+/// A float in a problem stays short however far it is from one: the
+/// shortest decimal near one, scientific form past 1e15 or under 1e-6.
+#[test]
+fn a_far_number_in_a_problem_is_written_short() {
+    let cases = [
+        (V::Double(1e300), "a Double, 1e300"),
+        (V::Real(3.0e38), "a Real, 3e38"),
+        (V::Real(1.5e-7), "a Real, 1.5e-7"),
+        (V::Real(123.25), "a Real, 123.25"),
+        (V::Double(0.0), "a Double, 0"),
+        (V::Signed(i32::MIN), "a Signed, -2147483648"),
+    ];
+    for (value, got) in cases {
+        let read = of(
+            ObjectType::ANALOG_OUTPUT,
+            vec![row(P::CURRENT_COMMAND_PRIORITY, value)],
+        );
+        let expected = format!("not an Unsigned or NULL (got {got})");
+        let said = said(&read, P::CURRENT_COMMAND_PRIORITY);
+        assert_eq!(said.as_deref(), Some(expected.as_str()));
+    }
+}
+
+/// With values, a device that fails every ReadPropertyMultiple with an
+/// error of its own gives the same records by ReadProperty, at the cost
+/// of one wasted RPM a batch: the summary's, then each of the four
+/// batches' (see `values_and_settings_are_read_when_asked`), and 13 + 1 +
+/// 102 ReadProperty requests (47 properties plain, 4 more an object for
+/// the 13, 5 on the 3 outputs: 47 + 52 + 3).
+#[tokio::test(start_paused = true)]
+async fn values_from_a_device_that_fails_rpm() {
+    let values = InventoryOptions::new().with_values(true);
+    let (client, server, _) = lab_logged(Faults::default()).await;
+    let normal = lab_device(&client).await.inventory(&values).await.unwrap();
+    stop(client, server).await;
+    let faults = Faults {
+        error_rpm: true,
+        ..Faults::default()
+    };
+    let (client, server, log) = lab_logged(faults).await;
+    let failing = lab_device(&client).await.inventory(&values).await.unwrap();
+    let sent = (count(&log, RPM), count(&log, RP));
+    stop(client, server).await;
+    assert_eq!(failing.points, normal.points);
+    assert!(failing.points.iter().all(|p| p.problems.is_empty()));
+    assert_eq!(sent, (1 + 4, 13 + 1 + 102));
+}
+
+/// With values, a device whose answers to a ReadPropertyMultiple of more
+/// than 60 octets don't fit: a request for an analog input's seven
+/// properties is 21 octets, so two fit and three don't. The first batch
+/// (the Device and three inputs) is refused and asked again an object at
+/// a time; the six inputs left go two a batch. Every record is whole, and
+/// none is read by ReadProperty.
+#[tokio::test(start_paused = true)]
+async fn values_from_a_device_with_small_answers() {
+    let celsius = EngineeringUnits::DEGREES_CELSIUS;
+    let inputs: Vec<Box<dyn BACnetObject>> = (1..=9)
+        .map(|n| {
+            let input = AnalogInputObject::new(n, format!("T{n}"), celsius).unwrap();
+            Box::new(input) as Box<dyn BACnetObject>
+        })
+        .collect();
+    let faults = Faults {
+        abort_longer: Some(60),
+        ..Faults::default()
+    };
+    let identity = DeviceIdentity::new(LAB, 42).unwrap();
+    let database = build_database_with_extra(&identity, inputs).unwrap();
+    let (client, server, log) = serve_logged(faults, identity, database).await;
+    let values = InventoryOptions::new().with_values(true);
+    let inventory = lab_device(&client).await.inventory(&values).await.unwrap();
+    let sent = (count(&log, RPM), count(&log, RP));
+    stop(client, server).await;
+    assert_eq!(inventory.points.len(), 10, "{:?}", inventory.stopped);
+    for point in &inventory.points {
+        assert!(point.problems.is_empty(), "{point:?}");
+        let input = point.object.object_type() == ObjectType::ANALOG_INPUT;
+        assert_eq!(point.event_state.is_some(), input, "{point:?}");
+    }
+    // The summary; the refused batch and its four objects; three batches.
+    assert_eq!(sent, (1 + (1 + 4) + 3, 1), "the Object_List alone by RP");
 }

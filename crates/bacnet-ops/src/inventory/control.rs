@@ -4,11 +4,12 @@
 //! written as the property would be, with the priority named.
 
 use bacnet_encoding::primitives::{encode_app_null, encode_app_unsigned};
+use bacnet_encoding::tags::{TagClass, app_tag, decode_tag, extract_context_value};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier as P};
 use bacnet_types::primitives::PropertyValue as V;
 use bytes::BytesMut;
 
-use super::settings::{mistyped, undecodable, values};
+use super::settings::{mistyped, undecodable};
 use crate::Priority;
 use crate::format::{Floats, PropertyError, StateTexts, Value, ValueFormat};
 
@@ -35,10 +36,13 @@ pub(super) fn read(
 
 /// The priority in control a value object's Priority_Array shows, as its
 /// Current_Command_Priority would say it: the first of the sixteen slots
-/// that holds a command, or NULL when none does. An array that doesn't
-/// decode, or doesn't hold sixteen values, is the error, saying so.
+/// that holds a command, or NULL when none does. Only whether a slot is
+/// NULL matters, so a slot is told by its tags alone, and a command this
+/// stack can't convert (a string in a character set it doesn't read)
+/// still counts. An array whose tags don't make sixteen values is the
+/// error, saying so.
 pub(super) fn from_array(object_type: ObjectType, array: &Value) -> Result<Value, PropertyError> {
-    let slots = values(&array.raw).map_err(|(index, at)| {
+    let slots = held(&array.raw).map_err(|(index, at)| {
         let why = undecodable(&array.raw, at);
         PropertyError::Other(format!("slot {} {why}", index + 1))
     })?;
@@ -52,7 +56,7 @@ pub(super) fn from_array(object_type: ObjectType, array: &Value) -> Result<Value
     }
     let level = slots
         .iter()
-        .position(|(slot, _)| *slot != V::Null)
+        .position(|&holds| holds)
         .map(|at| at as u64 + 1);
     let mut raw = BytesMut::new();
     match level {
@@ -87,4 +91,37 @@ fn text(level: Option<u64>) -> String {
         Some(priority) => format!("{level} ({})", priority.purpose()),
         None => level.to_string(),
     }
+}
+
+/// Whether each value in `data`, a Priority_Array's octets, holds a
+/// command (is anything but NULL), told by its tags: an application value
+/// is skipped by its length, a context-tagged one by its closing tag. The
+/// error is the place of the value whose tags are broken and where it
+/// starts.
+fn held(data: &[u8]) -> Result<Vec<bool>, (usize, usize)> {
+    let mut slots = Vec::with_capacity(Priority::COUNT);
+    let mut offset = 0;
+    while offset < data.len() {
+        let broken = (slots.len(), offset);
+        let (tag, start) = decode_tag(data, offset).map_err(|_| broken)?;
+        let next = if tag.is_opening {
+            let (_, after) = extract_context_value(data, start, tag.number).map_err(|_| broken)?;
+            after
+        } else if tag.is_closing {
+            return Err(broken);
+        } else if tag.class == TagClass::Application && tag.number == app_tag::BOOLEAN {
+            // Its value is in the tag.
+            start
+        } else {
+            let length = usize::try_from(tag.length).map_err(|_| broken)?;
+            start
+                .checked_add(length)
+                .filter(|&end| end <= data.len())
+                .ok_or(broken)?
+        };
+        let null = tag.class == TagClass::Application && tag.number == app_tag::NULL;
+        slots.push(!null);
+        offset = next;
+    }
+    Ok(slots)
 }
