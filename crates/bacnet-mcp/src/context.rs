@@ -53,6 +53,12 @@ pub(crate) struct Ctx<T: TransportPort + 'static> {
     /// Object names and descriptions read by `bacnet_find_object`, by the
     /// device's address, so its later pages don't read them again.
     pub(crate) names: Mutex<HashMap<DeviceAddress, CachedNames>>,
+    /// For each device a batch of point records outlasted a call's budget
+    /// on, the most properties a batch asks it for from then on: half the
+    /// properties of the batch let go, so the next attempt asks for fewer
+    /// objects, down to one (#2785, `tools::batches`). At most
+    /// [`LIST_CAP`] devices.
+    pub(crate) slow: Mutex<HashMap<DeviceAddress, usize>>,
     /// What Who-Is-Router-To-Network queries found, and when the last one
     /// went; at most one goes a minute for the principal.
     pub(crate) routers: Arc<Mutex<Routers>>,

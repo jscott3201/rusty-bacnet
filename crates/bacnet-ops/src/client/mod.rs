@@ -154,6 +154,17 @@ impl DeviceSummary {
 /// priorities its handles may write at
 /// ([`with_write_policy`](Self::with_write_policy)).
 ///
+/// What the client learns of a device it keeps by the device's address,
+/// for every handle and clone: that it refused ReadPropertyMultiple
+/// ([`refused_rpm`](Self::refused_rpm)), which it then reads by
+/// ReadProperty for the client's life; the instance a handle made from the
+/// address read; and the most properties one ReadPropertyMultiple of
+/// [`Device::point_records`] can ask it for, once it couldn't send a larger
+/// batch's answer ([`rpm_limit`](Self::rpm_limit)). The last two go when
+/// the discovery table loses its row at that address or a device there
+/// announces another instance, since another device may answer there now;
+/// each is kept for at most 4,096 addresses.
+///
 /// The transport type defaults to [`AnyTransport`], which the connect
 /// builders ([`bip`](Client::bip) and the others) make, so an application
 /// that connects with one never names it.
@@ -177,10 +188,12 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// Addresses whose device refused ReadPropertyMultiple, read by
     /// ReadProperty from then on.
     no_rpm: Mutex<HashSet<DeviceAddress>>,
-    /// The most objects a batch of point records asks for at each address
-    /// whose device couldn't send a larger batch's answer
-    /// ([`Device::point_records`]), never more than it was.
-    batches: Mutex<HashMap<DeviceAddress, usize>>,
+    /// The most properties one ReadPropertyMultiple of point records asks
+    /// for at each address whose device couldn't send a larger batch's
+    /// answer ([`Client::rpm_limit`]), with the instance that device had:
+    /// it only ever shrinks, and goes with the address's other learned
+    /// facts (`Client::sweep`); at most `device::follow::REMEMBERED`.
+    pub(crate) rpm_limits: Mutex<HashMap<DeviceAddress, (u32, usize)>>,
     /// Watch hubs made on this client, so each takes its own range of
     /// subscriber process identifiers (#2185).
     hubs: AtomicU32,
@@ -236,7 +249,7 @@ impl<T: TransportPort + 'static> Client<T> {
                 client,
                 limits,
                 no_rpm: Mutex::new(HashSet::new()),
-                batches: Mutex::new(HashMap::new()),
+                rpm_limits: Mutex::new(HashMap::new()),
                 hubs: AtomicU32::new(0),
                 hub: Mutex::new(crate::watch::OwnHub::new()),
                 cov: Mutex::new(HashMap::new()),
@@ -409,23 +422,51 @@ impl<T: TransportPort + 'static> Client<T> {
         lock(&self.shared.no_rpm).insert(address.clone());
     }
 
-    /// The most objects a batch of point records asks for at `device`:
-    /// [`batch::MAX_BATCH`] until its device couldn't send a batch's answer
-    /// for its size.
-    pub(crate) fn batch_most(&self, device: &DeviceAddress) -> usize {
-        lock(&self.shared.batches)
+    /// The most properties one ReadPropertyMultiple of
+    /// [`Device::point_records`] asks the device at `device` for, once it
+    /// couldn't send the answer to a larger batch of several objects (an
+    /// abort or reject for the answer's size, or a request too long for
+    /// the link or a router's path): half that batch's properties, so it
+    /// holds for any [`InventoryOptions`](crate::InventoryOptions), whose
+    /// objects ask for more or fewer each. `None` while no batch was
+    /// refused for its size, and 32 properties apply.
+    ///
+    /// It only shrinks: a device whose buffer was full once keeps the
+    /// smaller batches, which cost more requests but are never refused for
+    /// their size again. It goes, with the instance read for the address,
+    /// when the discovery table loses its row at that address or a device
+    /// there announces another instance, and then starts again from 32. A
+    /// timeout, a silent device or any other error leaves it as it was. An
+    /// [`inventory`](crate::Device::inventory) keeps its own count, which
+    /// starts at 16 objects for each inventory and never reads or sets
+    /// this.
+    pub fn rpm_limit(&self, device: &DeviceAddress) -> Option<usize> {
+        self.sweep();
+        lock(&self.shared.rpm_limits)
             .get(device)
-            .copied()
-            .unwrap_or(batch::MAX_BATCH)
+            .map(|&(_, properties)| properties)
     }
 
-    /// Remember that batches of point records at `device` hold at most
-    /// `most` objects, when that is fewer than before.
-    pub(crate) fn settle_batch(&self, device: &DeviceAddress, most: usize) {
-        if most < batch::MAX_BATCH {
-            let mut batches = lock(&self.shared.batches);
-            let known = batches.entry(device.clone()).or_insert(most);
-            *known = (*known).min(most);
+    /// Remember that the device at `device`, instance `instance`, takes
+    /// at most `properties` properties a ReadPropertyMultiple of point
+    /// records, when that is fewer than before.
+    pub(crate) fn settle_rpm_limit(
+        &self,
+        device: &DeviceAddress,
+        instance: u32,
+        properties: usize,
+    ) {
+        if properties >= batch::MAX_BATCH_PROPERTIES {
+            return;
+        }
+        self.sweep();
+        let mut limits = lock(&self.shared.rpm_limits);
+        match limits.get_mut(device) {
+            Some((known, limit)) if *known == instance => *limit = (*limit).min(properties),
+            _ => {
+                crate::device::keep_room(&mut limits, |_| true);
+                limits.insert(device.clone(), (instance, properties));
+            }
         }
     }
 }

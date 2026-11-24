@@ -13,8 +13,11 @@
 //! objects than are likely to fit, and an object that passes it anyway
 //! goes back to the next page with those after it, to be read again there;
 //! a point too large for any page goes out alone. It ends too at the
-//! call's budget, checked between batches, or at [`PAGE`]
-//! objects. The cursor points at the first object not on the page, and is
+//! call's budget, checked between batches, or at [`PAGE`] objects. A batch
+//! still being read well past the budget is let go, or fails a page's
+//! first, under the inventory's rule ([`super::batches`]), and the next
+//! attempt asks for fewer objects. The cursor points at the first object
+//! not on the page, and is
 //! bound to the list it was cut from ([`Position`]): a list that changed
 //! between pages is refused rather than paged wrong. Each page is a Turtle
 //! document of its own, prefixes and header again, and the points of
@@ -37,6 +40,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use super::batches::{Batch, next_batch};
 use super::list::{Listing, listing};
 use super::{MAX_TEXT, Spec, next, schema, start};
 use crate::context::{Call, Ctx, DeviceArg};
@@ -295,13 +299,19 @@ pub(super) async fn run<T: TransportPort + 'static>(
             resume = Some(at);
             break;
         }
-        let batch = &matching[at..at + page.room(cap).min(matching.len() - at)];
-        let batch = &batch[..device.handle.point_batch(batch, &options)];
-        let records = match device.handle.point_records(batch, &options).await {
-            Ok(records) => records,
-            Err(error) if read == 0 => return Err(ToolError::device(instance, &error)),
+        let rest = &matching[at..at + page.room(cap).min(matching.len() - at)];
+        let (batch, outcome) = next_batch(ctx, call, &device, rest, &options, read == 0).await?;
+        let records = match outcome {
+            Batch::Read(records) => records,
+            // A later batch let go well past the budget: read again on the
+            // next page.
+            Batch::LetGo => {
+                resume = Some(at);
+                break;
+            }
+            Batch::Failed(error) if read == 0 => return Err(ToolError::device(instance, &error)),
             // Refused before its request went (the route gone, say).
-            Err(error) => {
+            Batch::Failed(error) => {
                 stop(&mut page, &mut body, (instance, batch[0]), &error, call);
                 resume = Some(at);
                 break;

@@ -21,11 +21,14 @@
 //! to the next page with those after it, to be read again there. A record
 //! that passes it with the page's other fields goes out alone, flagged
 //! `oversized`, and the text block then leaves it out ([`oversized_text`]).
-//! A page's later batch still being read [`OBJECT_GRACE`] past the budget
-//! is let go and read again on the next page, so the records before it
-//! come back before the call's own timeout; a first batch still being read
-//! [`FIRST_GRACE`] past it fails the call, naming its first object and the
-//! ways past it ([`stuck`]). `ended` says which of these ended the page.
+//! A page's later batch still being read
+//! [`OBJECT_GRACE`](super::batches::OBJECT_GRACE) past the budget is let
+//! go and read again on the next page, so the records before it come back
+//! before the call's own timeout; a first batch still being read
+//! [`FIRST_GRACE`](super::batches::FIRST_GRACE) past it fails the call,
+//! naming it and the ways past it ([`stuck`](super::batches::stuck)).
+//! Either way the next attempt asks the device for fewer objects, down to
+//! one ([`super::batches`]). `ended` says which of these ended the page.
 //! The cursor holds
 //! the next object's place and a fingerprint of the matching objects (the
 //! export's [`Position`]), so a list changed between pages is refused
@@ -37,7 +40,6 @@
 //! tries that object again.
 
 use std::collections::{BTreeMap, HashSet};
-use std::time::Duration;
 
 use bacnet_ops::label::kebab;
 use bacnet_ops::parse::parse_object_type;
@@ -49,10 +51,11 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use super::batches::{Batch, next_batch};
 use super::export::{Position, fingerprint};
 use super::inventory_data::{point, problem_schema, problems_of, record_json};
 use super::list::listing;
-use super::{GRACE, MAX_TEXT, Spec, next, out_of_budget, render, schema, start};
+use super::{MAX_TEXT, Spec, next, render, schema, start};
 use crate::context::{Call, Ctx, Device, DeviceArg};
 use crate::errors::ToolError;
 use crate::value::object_text;
@@ -371,51 +374,6 @@ impl Page {
     }
 }
 
-/// How long past the call's budget a page's later batch may take: half
-/// the grace the call has, so the records read before it come back before
-/// the call's own timeout drops them.
-const OBJECT_GRACE: Duration = Duration::from_secs(GRACE.as_secs() / 2);
-
-/// How long past the budget a page's first batch may take: the call's
-/// grace, less a second, so it is this tool that names the object rather
-/// than the call's own timeout saying nothing of it.
-const FIRST_GRACE: Duration = GRACE.saturating_sub(Duration::from_secs(1));
-
-/// The error for a page's first batch, `batch`, still being read
-/// [`FIRST_GRACE`] past the budget: the call's own (a timeout once it has
-/// sent requests), naming the batch's first object, where a cursor would
-/// go on, and the ways past it that exist.
-fn stuck(call: &Call, budget: Duration, device: u32, batch: &[ObjectIdentifier]) -> ToolError {
-    let object = batch[0];
-    let error = match out_of_budget(call, budget) {
-        ToolError::Timeout { busy, .. } => {
-            call.timed_out();
-            let after = call.started.elapsed().as_millis();
-            ToolError::Timeout {
-                device: Some(device),
-                after_ms: u64::try_from(after).unwrap_or(u64::MAX),
-                busy,
-            }
-        }
-        refused => refused,
-    };
-    let kind = kebab(object.object_type());
-    let what = match batch.len() {
-        1 => "it alone".to_string(),
-        2 => "it and the object after it, read together,".to_string(),
-        n => format!("it and the {} objects after it, read together,", n - 1),
-    };
-    ToolError::At {
-        error: Box::new(error),
-        object: object_text(object.object_type(), object.instance_number()),
-        hint: format!(
-            "{what} outlasted the call's budget. Read it with bacnet_read, a property at a \
-             time; or leave its type, {kind}, out: give types the device's other types \
-             (bacnet_describe_device lists them) and start again without a cursor"
-        ),
-    }
-}
-
 /// Read a page of `matching` from `first`, a batch a call of
 /// [`point_records`](bacnet_ops::Device::point_records): as many objects
 /// as one ReadPropertyMultiple holds
@@ -439,39 +397,26 @@ async fn read_page<T: TransportPort + 'static>(
             page.end(at, why);
             break;
         }
-        let room = page.room(cap).min(matching.len() - at);
-        let batch = &matching[at..at + room];
-        let batch = &batch[..device.handle.point_batch(batch, options)];
-        let read = device.handle.point_records(batch, options);
-        // A later batch is let go once well past the budget, its requests
-        // wasted, and read again on the next page; the first one, which
-        // every page reads, gets the call's grace, and then fails the call
-        // naming its first object.
+        let rest = &matching[at..at + page.room(cap).min(matching.len() - at)];
         let opening = page.points.is_empty();
-        let grace = if opening { FIRST_GRACE } else { OBJECT_GRACE };
-        let read = tokio::time::timeout_at(call.deadline + grace, read)
-            .await
-            .ok();
-        let read = match read {
-            None if opening => {
-                let budget = ctx.policy.caps.budget;
-                return Err(stuck(call, budget, device.instance, batch));
-            }
-            None => {
-                call.timed_out();
+        let (_, batch) = next_batch(ctx, call, device, rest, options, opening).await?;
+        let read = match batch {
+            Batch::Read(read) => read,
+            // A later batch let go well past the budget: read again on the
+            // next page.
+            Batch::LetGo => {
                 page.end(at, Ended::Budget);
                 break;
             }
-            Some(Err(error)) if opening => {
+            Batch::Failed(error) if opening => {
                 return Err(ToolError::device(device.instance, &error));
             }
             // Refused before its request went (the route gone, say):
             // later batches would fail the same way.
-            Some(Err(error)) => {
+            Batch::Failed(error) => {
                 page.stop(at, device.instance, &error, call);
                 break;
             }
-            Some(Ok(read)) => read,
         };
         for record in &read.points {
             page.push(record_json(record, ctx.policy.caps.text));

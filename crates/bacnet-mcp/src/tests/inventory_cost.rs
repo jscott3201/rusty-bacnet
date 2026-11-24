@@ -175,3 +175,32 @@ async fn a_controller_without_rpm_costs_a_request_a_property() {
     assert_eq!(scan, 13 + 1 + properties - 1);
     lab.stop().await;
 }
+
+/// The docs quote the cost as measured above: the `bacnet_inventory` rows
+/// of the tools table and the website's guide give the batched count, and
+/// neither still says one request an object. They are read from the
+/// repository; a copy of the crate without them skips this.
+#[test]
+fn the_docs_rows_quote_the_measured_cost() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let row = |path: &str| -> Option<String> {
+        let text = std::fs::read_to_string(root.join(path)).ok()?;
+        let row = text
+            .lines()
+            .find(|line| line.starts_with("| `bacnet_inventory` |"))?;
+        Some(row.to_string())
+    };
+    let Some(table) = row("docs/mcp.md") else {
+        return;
+    };
+    assert!(
+        table.contains("about 28 requests for a 200-object controller (58 with values)"),
+        "{table}"
+    );
+    let guide = row("website/src/content/docs/guides/ai-agents.md").expect("the guide's row");
+    for row in [&table, &guide] {
+        let lower = row.to_lowercase();
+        assert!(!lower.contains("one request an object"), "{row}");
+        assert!(!lower.contains("about 200"), "{row}");
+    }
+}

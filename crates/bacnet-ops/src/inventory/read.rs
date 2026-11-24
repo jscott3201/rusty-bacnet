@@ -77,7 +77,8 @@ pub async fn read_inventory<T: TransportPort + 'static>(
         .collect();
     let mut inventory = Inventory::new(reader.device.clone(), device);
     inventory.cov = cov;
-    let read = match read_objects(reader, &wanted, options, Some(&own), MAX_BATCH).await {
+    let sizing = Sizing::scan();
+    let read = match read_objects(reader, &wanted, options, Some(&own), sizing).await {
         Ok(read) => read,
         // No route to the device any more, or the link failed the first
         // batch: as a device gone silent.
@@ -107,9 +108,9 @@ pub(super) struct Objects {
     /// The reader's stop flag went up: the objects after `points` weren't
     /// read.
     pub(super) cancelled: bool,
-    /// The most objects a batch held at the end: smaller than it began
-    /// once the device couldn't send a batch's answer for its size.
-    pub(super) most: usize,
+    /// The batches' size at the end: smaller than it began once the device
+    /// couldn't send a batch's answer for its size.
+    pub(super) sizing: Sizing,
 }
 
 impl Objects {
@@ -119,16 +120,70 @@ impl Objects {
             points: Vec::new(),
             stopped: Some(error),
             cancelled: false,
-            most: MAX_BATCH,
+            sizing: Sizing::scan(),
+        }
+    }
+}
+
+/// How [`read_objects`] fills its batches, and how it shrinks them after
+/// an answer the device couldn't send for its size: a batch the device
+/// couldn't send, of more than one object, is the only thing that shrinks
+/// them, never a timeout or an error of another kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Sizing {
+    /// The most objects a batch holds.
+    pub(super) objects: usize,
+    /// The most properties a batch asks for, all its objects together.
+    pub(super) properties: usize,
+    /// Whether a batch too large to send halves `properties` (from the
+    /// refused batch's count), so the limit carries over to other options;
+    /// otherwise it halves `objects`, as the inventory always has.
+    pub(super) by_properties: bool,
+}
+
+impl Sizing {
+    /// The inventory's: [`MAX_BATCH`] objects and [`MAX_BATCH_PROPERTIES`]
+    /// properties, the objects halved after a refusal.
+    pub(super) fn scan() -> Self {
+        Self {
+            objects: MAX_BATCH,
+            properties: MAX_BATCH_PROPERTIES,
+            by_properties: false,
+        }
+    }
+
+    /// Point records': [`MAX_BATCH`] objects and at most `properties`
+    /// properties, the properties halved after a refusal.
+    pub(super) fn pager(properties: usize) -> Self {
+        Self {
+            objects: MAX_BATCH,
+            properties: properties.clamp(1, MAX_BATCH_PROPERTIES),
+            by_properties: true,
+        }
+    }
+
+    /// The sizing after the batch of `count` objects and `properties`
+    /// properties came back too large to send.
+    fn shrunk(self, count: usize, properties: usize) -> Self {
+        if self.by_properties {
+            Self {
+                properties: (properties / 2).max(1),
+                ..self
+            }
+        } else {
+            Self {
+                objects: (count / 2).max(1),
+                ..self
+            }
         }
     }
 }
 
 /// The records of `objects`, in the order asked, read in batches of at
-/// most `most` objects (and [`MAX_BATCH_PROPERTIES`] properties), one
-/// batch a call of [`records`], so each batch's answers become records
-/// before the next is sent. A batch the device couldn't send for its size
-/// halves `most` for the batches after it, down to one. What `own` holds
+/// most `sizing`'s objects and properties, one batch a call of
+/// [`records`], so each batch's answers become records before the next is
+/// sent. A batch the device couldn't send for its size shrinks the
+/// batches after it ([`Sizing`]), down to one object. What `own` holds
 /// of the Device object is taken from it instead of asked for. The loop
 /// under [`read_inventory`] and [`Device::point_records`]: the same
 /// records, problems and halts for the same objects.
@@ -146,13 +201,13 @@ pub(super) async fn read_objects<T: TransportPort + 'static>(
     objects: &[ObjectIdentifier],
     options: &InventoryOptions,
     own: Option<&Own>,
-    mut most: usize,
+    sizing: Sizing,
 ) -> Result<Objects, Error> {
     let mut read = Objects {
         points: Vec::with_capacity(objects.len()),
         stopped: None,
         cancelled: false,
-        most,
+        sizing,
     };
     let mut next = 0;
     while next < objects.len() {
@@ -160,7 +215,7 @@ pub(super) async fn read_objects<T: TransportPort + 'static>(
             read.cancelled = true;
             break;
         }
-        let count = one_batch(&objects[next..], most, options, own);
+        let (count, properties) = one_batch(&objects[next..], read.sizing, options, own);
         let batch = match records(reader, &objects[next..next + count], options, own).await {
             Ok(batch) => batch,
             Err(Halt::Device(error)) if read.points.is_empty() => return Err(error),
@@ -183,8 +238,7 @@ pub(super) async fn read_objects<T: TransportPort + 'static>(
             break;
         }
         if batch.too_large {
-            most = (count / 2).max(1);
-            read.most = most;
+            read.sizing = read.sizing.shrunk(count, properties);
         }
     }
     Ok(read)
@@ -284,31 +338,29 @@ fn asked(
         .collect()
 }
 
-/// How many of `objects`, from the first, make one ReadPropertyMultiple:
-/// at most `most` objects and [`MAX_BATCH_PROPERTIES`] properties, and at
-/// least one object (none of none). The batch reader would split a longer
-/// run itself, so a call is exactly one request while the device answers
-/// it.
+/// How many of `objects`, from the first, make one ReadPropertyMultiple,
+/// and the properties they ask for: at most `sizing`'s objects and
+/// properties, and at least one object (none of none). The batch reader
+/// splits a run only past [`MAX_BATCH`] objects or [`MAX_BATCH_PROPERTIES`]
+/// properties, which `sizing` never exceeds, so a call is exactly one
+/// request while the device answers it.
 pub(super) fn one_batch(
     objects: &[ObjectIdentifier],
-    most: usize,
+    sizing: Sizing,
     options: &InventoryOptions,
     own: Option<&Own>,
-) -> usize {
-    if objects.is_empty() {
-        return 0;
-    }
+) -> (usize, usize) {
     let mut count = 0;
     let mut total = 0;
-    for &object in objects.iter().take(most.max(1)) {
+    for &object in objects.iter().take(sizing.objects.max(1)) {
         let more = asked(object, options, own).len();
-        if count > 0 && total + more > MAX_BATCH_PROPERTIES {
+        if count > 0 && total + more > sizing.properties {
             break;
         }
         total += more;
         count += 1;
     }
-    count.max(1)
+    (count, total)
 }
 
 /// The records of `objects`, read together ([`batch::read_until`]). What

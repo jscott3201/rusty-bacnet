@@ -12955,10 +12955,14 @@ pages), `alarms`, `alarm_summary` and `enrollment_summary`
 ([values and errors](#values-readings-and-opserror)), `inventory`,
 `point_records` and `point_batch` ([inventory](#inventory)), and its
 writes are `write`, `relinquish`, `priority_array` and `preview_write`
-([writes and priorities](#writes-and-priorities)). A device's gate, turns and
-memory of an RPM refusal key on its `DeviceAddress` (network and MAC), so
-two devices sharing an instance stay apart and one device named two ways
-waits at one gate. A following handle moves to the one other address on its
+([writes and priorities](#writes-and-priorities)). A device's gate, turns,
+memory of an RPM refusal (`Client::refused_rpm`, for the client's life) and
+memory of the largest ReadPropertyMultiple of point records it could answer
+(`Client::rpm_limit`, in properties; it only shrinks, and goes with the
+instance read for the address when the discovery table loses the row there
+or another device announces itself at it) key on its `DeviceAddress`
+(network and MAC), so two devices sharing an instance stay apart and one
+device named two ways waits at one gate. A following handle moves to the one other address on its
 network claiming the instance, and tells `Client::events`
 (`ClientEvent::Moved`): before a request when another device has announced
 itself at its address; after a request times out, or finds no route to a
@@ -13507,11 +13511,15 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   export do. Nothing else is read. Its errors follow `read_many`'s: `Err`
   only for what is decided before a request is sent or a local failure
   with nothing read; a silent device is `stopped`, with whatever records
-  came before. `Device::point_batch(&objects, &options)` says how many of
-  them, from the first, one request reads (one once the device has
-  refused ReadPropertyMultiple), for a caller that stops between calls. A
-  batch the device can't send for its size leaves the client remembering
-  a smaller one for that device (#2785).
+  came before. The objects may be `ObjectIdentifier`s or their text
+  (`"ai:1"`), as anywhere on a handle. `Device::point_batch(&objects,
+  &options)` says how many of them, from the first, one request reads
+  (one once the device has refused ReadPropertyMultiple), for a caller
+  that stops between calls. A batch of several objects the device can't
+  send for its size leaves the client remembering half its properties for
+  that device (`Client::rpm_limit`), a limit that holds under other
+  options; an inventory keeps its own count instead, starting at 16
+  objects each time, so its cost stays as documented (#2785).
 - **Without a `Client`.** `bacnet_ops::raw::read_inventory(&mut reader,
   &options)` is the layer under `Device::inventory`, for a caller that
   owns a low-level client and a `raw::Reader`. It fails with

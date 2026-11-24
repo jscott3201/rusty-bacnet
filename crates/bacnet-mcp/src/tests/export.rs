@@ -607,6 +607,53 @@ async fn a_device_silent_mid_page() {
     lab.stop().await;
 }
 
+/// A later batch still being read 7 s past the budget is let go, as the
+/// inventory lets one go: the page keeps the batch before it, ends with a
+/// cursor there, and the next call asks for half as many objects. Another
+/// caller takes the device's gate while the first batch is answered and
+/// keeps it.
+#[tokio::test(start_paused = true)]
+async fn a_later_batch_well_past_the_budget_is_let_go() {
+    let delay = Duration::from_millis(300);
+    let mut lab = export_lab(fast(Duration::from_secs(2)), delay, 30, false).await;
+    lab.agent.initialize().await;
+    lab.agent
+        .call("bacnet_list_objects", json!({ "device": LAB }))
+        .await;
+    let limits = std::sync::Arc::clone(&lab.limits);
+    // The name is read by 0.3 s and the first batch by 0.6 s; the holder
+    // queues for the gate at 0.45 s, takes it then, and keeps it.
+    let holder = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(450)).await;
+        let at = bacnet_ops::DeviceAddress::local(&super::LAB_MAC).unwrap();
+        let turn = limits.turn(&at).await;
+        tokio::time::sleep(Duration::from_secs(300)).await;
+        drop(turn);
+    });
+    let from = sent_frames(&lab);
+    let first = lab.agent.call(TOOL, json!({ "device": LAB })).await;
+    let body = ok(&first);
+    assert_eq!(body["read"], json!(10), "{body}");
+    assert_eq!(body["truncated"], json!(true));
+    assert_eq!(body["cost"]["timeouts"], json!(1));
+    let elapsed = body["cost"]["elapsed_ms"].as_u64().unwrap();
+    assert!((9_000..9_500).contains(&elapsed), "{elapsed}");
+    check_structure(texts(&first).1);
+    holder.abort();
+    let cursor = body["next_cursor"].clone();
+    let rest = lab
+        .agent
+        .call(TOOL, json!({ "device": LAB, "cursor": cursor }))
+        .await;
+    assert_eq!(ok(&rest)["start"], json!(10));
+    // Ten analog points a batch; the second, let go, never went (it
+    // waited for the gate); then half its 30 properties, five.
+    let batches = asked(&lab, from);
+    let sizes: Vec<usize> = batches.iter().take(2).map(Vec::len).collect();
+    assert_eq!(sizes, [10, 5]);
+    lab.stop().await;
+}
+
 /// The policy's object page, below the tool's own 50, caps a page.
 #[tokio::test(start_paused = true)]
 async fn the_policys_object_page_caps_a_page() {

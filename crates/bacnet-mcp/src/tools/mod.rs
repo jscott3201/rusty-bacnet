@@ -11,6 +11,7 @@
 //! is more than a rendering: its second text block is the Turtle.
 
 pub(crate) mod alarms;
+mod batches;
 mod bbmd;
 mod decode;
 pub(crate) mod describe;

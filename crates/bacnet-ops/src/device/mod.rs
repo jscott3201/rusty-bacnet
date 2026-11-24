@@ -98,7 +98,7 @@ use bacnet_transport::port::TransportPort;
 
 pub use self::address::DeviceAddress;
 use self::follow::Followed;
-pub(crate) use self::follow::Follows;
+pub(crate) use self::follow::{Follows, keep_room};
 pub use self::misses::MISS_MEMORY;
 pub(crate) use self::misses::StationMisses;
 pub(crate) use self::route::{path_to, router_for};

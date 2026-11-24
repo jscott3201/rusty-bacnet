@@ -116,6 +116,12 @@ impl IntoObject for ObjectIdentifier {
     }
 }
 
+impl IntoObject for &ObjectIdentifier {
+    fn into_object(self) -> Result<ObjectIdentifier, OpsError> {
+        Ok(*self)
+    }
+}
+
 impl IntoObject for &str {
     fn into_object(self) -> Result<ObjectIdentifier, OpsError> {
         object(self.trim(), self)

@@ -129,7 +129,8 @@ async fn the_records_are_the_inventorys() {
 
 /// The records come in the order asked, whatever it is, an object named
 /// twice read twice; a page from the middle of the list is that part of
-/// the inventory. Nothing asked, nothing sent.
+/// the inventory; objects may be named by their text. Nothing asked, or a
+/// name that names no object, and nothing is sent.
 #[tokio::test(start_paused = true)]
 async fn records_come_in_the_order_asked() {
     let (client, server, log) = lab_logged(Faults::default()).await;
@@ -149,10 +150,20 @@ async fn records_come_in_the_order_asked() {
     let read = device.point_records(page, &options).await.unwrap();
     assert_eq!(read.points, inventory.points[3..9]);
 
+    // Objects by their text, as anywhere on a handle.
+    let by_text = device.point_records(["msv:1", "ai:1"], &options).await;
+    let got: Vec<_> = by_text.unwrap().points.iter().map(|p| p.object).collect();
+    let (msv, ai) = (ObjectType::MULTI_STATE_VALUE, ObjectType::ANALOG_INPUT);
+    assert_eq!(got, [oid(msv, 1), oid(ai, 1)]);
+
     let before = services(&log).len();
-    let none = device.point_records(&[], &options).await.unwrap();
+    let none: [ObjectIdentifier; 0] = [];
+    let none = device.point_records(none, &options).await.unwrap();
     assert!(none.points.is_empty() && none.unread.is_empty() && none.stopped.is_none());
     assert_eq!(device.point_batch(&[], &options), 0);
+    // Text that names no object fails the call before anything is sent.
+    let parse = device.point_records(["ai:1", "nothing"], &options).await;
+    assert!(matches!(parse, Err(OpsError::Parse { .. })), "{parse:?}");
     assert_eq!(services(&log).len(), before, "nothing sent");
     drop(device);
     stop(client, server).await;
@@ -212,10 +223,10 @@ async fn problems_are_the_inventorys() {
 
 /// A device that can't send a batch's answer for its size: the batch is
 /// asked again an object at a time, and the client remembers half the
-/// batch for the device, so the next call starts there and the call after
-/// a second refusal at half again, as an inventory's batches shrink
-/// (ten, five, two: 11 + 6 + 13 requests for forty inputs). The records
-/// are whole.
+/// batch's properties for the device, so the next call starts there and
+/// the call after a second refusal at half again (30 properties refused,
+/// then 15, leaving 7: ten inputs, five, two, as an inventory's batches
+/// shrink; 11 + 6 + 13 requests for forty inputs). The records are whole.
 #[tokio::test(start_paused = true)]
 async fn a_batch_too_large_shrinks_the_next_calls() {
     // A request for one input's three properties is 13 octets: four
@@ -256,6 +267,7 @@ async fn a_batch_too_large_shrinks_the_next_calls() {
     assert_eq!(read.len(), 40);
     assert_eq!(read[39].name.as_deref(), Some("T40"));
     assert!(!client.refused_rpm(&lab_at()));
+    assert_eq!(client.rpm_limit(&lab_at()), Some(7));
     drop(device);
     stop(client, server).await;
 }

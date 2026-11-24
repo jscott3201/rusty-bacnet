@@ -18,6 +18,16 @@
 //! with the same fallbacks, into [`PointRecords`]; [`Device::point_batch`]
 //! says how many of them one request reads.
 //!
+//! The two shrink their batches after an answer the device couldn't send
+//! for its size in different units. An inventory reads every object in
+//! one call, so it learns as it goes: it halves the objects a batch holds,
+//! starting at 16 each time, and its cost below stays exactly what it is
+//! whatever the client learned before. Point records come a page a call,
+//! each call starting afresh, so what one call learns must outlast it: the
+//! client remembers half the refused batch's properties for the device
+//! ([`Client::rpm_limit`](crate::Client::rpm_limit)), a limit that holds
+//! when the next call asks for more or fewer properties an object.
+//!
 //! # What it costs
 //!
 //! By ReadPropertyMultiple: one request for the summary, one for the
@@ -128,7 +138,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use serde::Serialize;
 
 pub use self::plan::properties;
-use self::read::{InventoryHalt, Objects, one_batch, read_inventory, read_objects};
+use self::read::{InventoryHalt, Objects, Sizing, one_batch, read_inventory, read_objects};
 #[cfg(test)]
 pub(crate) use self::record::record as record_of;
 pub use self::write::{CSV_HEADER, CsvOptions};
@@ -136,6 +146,7 @@ use crate::client::{DeviceSummary, Halt, device_error};
 use crate::device::{Device, DeviceAddress, sent};
 use crate::error::OpsError;
 use crate::format::{PropertyError, StateTexts, Value};
+use crate::reading::IntoObject;
 use crate::watch::{CovSupport, Watched};
 
 /// What an inventory reads.
@@ -603,11 +614,13 @@ impl<T: TransportPort + 'static> Device<T> {
     /// docs](crate::inventory)): one ReadPropertyMultiple a batch, so N
     /// objects of p properties each take N divided by the smaller of 16
     /// and 32/p, rounded up (ten analog inputs a request, four with
-    /// values). Its fallbacks are the inventory's: a batch whose answer
-    /// the device can't send for its size is asked again an object at a
-    /// time, and the client remembers the smaller batch for the device, so
-    /// its later calls start there (an inventory keeps its own count); a
-    /// batch the device fails as a whole is read by ReadProperty; a device
+    /// values). Its fallbacks are the inventory's: a batch of several
+    /// objects whose answer the device can't send for its size is asked
+    /// again an object at a time, and the batches after it ask for half
+    /// its properties, a limit the client remembers for the device
+    /// ([`Client::rpm_limit`](crate::Client::rpm_limit)), so later calls,
+    /// under any options, start there; a batch the device fails as a whole
+    /// is read by ReadProperty; a device
     /// that refuses ReadPropertyMultiple costs that refused request once
     /// (the client remembers it) and then a ReadProperty a property. A
     /// handle made from an address whose instance isn't known yet costs one
@@ -624,27 +637,34 @@ impl<T: TransportPort + 'static> Device<T> {
     /// that follows its instance looks for it once then, as any read does,
     /// and reads again where it moved to.
     ///
+    /// The objects are named as anywhere else on a handle: an
+    /// [`ObjectIdentifier`] or its text (`"ai:1"`, `"analog-value,2"`).
+    ///
     /// # Errors
     ///
-    /// Whatever is decided before a request is sent, with nothing sent: a
-    /// device that can't be placed, an instance two addresses claim, or a
-    /// routed address with no route ([`OpsError::UnknownDevice`],
-    /// [`OpsError::Ambiguous`]). And a request the client or the link
-    /// failed itself before any record was read ([`OpsError::Client`]);
-    /// after that it ends with the records, the error in
-    /// [`PointRecords::stopped`].
-    pub async fn point_records(
+    /// Whatever is decided before a request is sent, with nothing sent: text
+    /// that names no object ([`OpsError::Parse`]), a device that can't be
+    /// placed, an instance two addresses claim, or a routed address with no
+    /// route ([`OpsError::UnknownDevice`], [`OpsError::Ambiguous`]). And a
+    /// request the client or the link failed itself before any record was
+    /// read ([`OpsError::Client`]); after that it ends with the records,
+    /// the error in [`PointRecords::stopped`].
+    pub async fn point_records<O: IntoObject>(
         &self,
-        objects: &[ObjectIdentifier],
+        objects: impl IntoIterator<Item = O>,
         options: &InventoryOptions,
     ) -> Result<PointRecords, OpsError> {
+        let objects = objects
+            .into_iter()
+            .map(IntoObject::into_object)
+            .collect::<Result<Vec<_>, _>>()?;
         if objects.is_empty() {
             return Ok(PointRecords::default());
         }
         let instance = self.resolve_instance().await?;
         let mut address = self.target().await?;
         let mut read = self
-            .records_at(&address, instance, objects, options)
+            .records_at(&address, instance, &objects, options)
             .await?;
         if read.points.is_empty()
             && let Some(error) = read.stopped.take()
@@ -652,7 +672,7 @@ impl<T: TransportPort + 'static> Device<T> {
             let stopped = Err::<(), _>(error);
             match self.retry(&address, &stopped).await? {
                 Some(to) => {
-                    read = self.records_at(&to, instance, objects, options).await?;
+                    read = self.records_at(&to, instance, &objects, options).await?;
                     address = to;
                 }
                 None => read.stopped = stopped.err(),
@@ -672,9 +692,10 @@ impl<T: TransportPort + 'static> Device<T> {
 
     /// How many of `objects`, from the first, [`point_records`](Self::point_records)
     /// reads in its first ReadPropertyMultiple under `options`: up to 16
-    /// objects or 32 properties ([`properties`] counts an object's), fewer
-    /// once the device couldn't send a batch's answer for its size, and at
-    /// least one; none of none. One object once the device has refused
+    /// objects or 32 properties ([`properties`] counts an object's), or the
+    /// fewer properties the device takes
+    /// ([`Client::rpm_limit`](crate::Client::rpm_limit)), and at least one
+    /// object; none of none. One object once the device has refused
     /// ReadPropertyMultiple: each property is then a ReadProperty of its
     /// own, so reading more at once saves nothing. A caller that pages
     /// with a deadline and gives each call that many loses at most one
@@ -684,11 +705,18 @@ impl<T: TransportPort + 'static> Device<T> {
         if objects.is_empty() || self.client().refused_rpm(&at) {
             return objects.len().min(1);
         }
-        one_batch(objects, self.client().batch_most(&at), options, None)
+        one_batch(objects, self.sizing(&at), options, None).0
+    }
+
+    /// How point records are batched at `at`: the device's limit, if it
+    /// has one.
+    fn sizing(&self, at: &DeviceAddress) -> Sizing {
+        let limit = self.client().rpm_limit(at);
+        Sizing::pager(limit.unwrap_or(usize::MAX))
     }
 
     /// `objects` read at `at`, remembering a refusal of RPM and a smaller
-    /// batch.
+    /// limit.
     async fn records_at(
         &self,
         at: &DeviceAddress,
@@ -698,11 +726,11 @@ impl<T: TransportPort + 'static> Device<T> {
     ) -> Result<Objects, OpsError> {
         let client = self.client();
         let mut reader = client.reader(at, Some(instance));
-        let most = client.batch_most(at);
-        let read = read_objects(&mut reader, objects, options, None, most).await;
+        let sizing = self.sizing(at);
+        let read = read_objects(&mut reader, objects, options, None, sizing).await;
         client.settle(&reader);
         let read = read.map_err(|error| OpsError::at(at, error))?;
-        client.settle_batch(at, read.most);
+        client.settle_rpm_limit(at, instance, read.sizing.properties);
         Ok(read)
     }
 }
@@ -733,6 +761,9 @@ pub(crate) mod test_lab;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod limit_tests;
 
 #[cfg(test)]
 mod points_tests;

@@ -258,6 +258,7 @@ impl<T: TransportPort + 'static> McpServer<T> {
                 list_locks: Mutex::new(HashMap::new()),
                 reads: Mutex::new(BTreeMap::new()),
                 names: Mutex::new(HashMap::new()),
+                slow: Mutex::new(HashMap::new()),
                 routers: shared.gates.routers,
                 bbmd_asked: shared.gates.bbmd_asked,
                 hub: shared.hub,

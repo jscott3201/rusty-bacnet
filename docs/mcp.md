@@ -64,7 +64,7 @@ name one by its address.
 | `bacnet_watch` | Points on the watch hub, and what changed since the last call (see [the tool-only fallback](#the-tool-only-fallback)). `idempotentHint: false`. Not listed in passive mode. |
 | `bacnet_decode` | Hex (separators and `0x` ignored, at most 6,144 octets, room for the largest BACnet/SC message the stack accepts) as `bip`, `bip6`, `mstp`, `sc`, `npdu`, `apdu` or `auto` (by the first octets; SC must be named). Returns a one-line `text`, the decoder's `summary` and the field `tree` (labels with `[start, end)` octet ranges, at most 600 fields). A label quoting a character string is an envelope with source `decoded frame`; other labels are cleaned, and a long one (an unknown tag's octets) is cut at 512 characters with `truncated: true`. No traffic: listed in passive mode too. |
 | `bacnet_export_223` | Experimental (#2436): one device's analog, binary and multi-state objects and integer values as a proposed Standard 223 point list in Turtle, the CLI's `bacnet export 223-experimental` through the client, paged with a cursor. Each page's Turtle is a second text block; the structured content summarises the page. See [Standard 223 export](#standard-223-export-experimental). |
-| `bacnet_inventory` | One device's objects as the inventory's point records (#2779), with the field names of `bacnet inventory --json`: `values`, `settings` and `details` as the CLI's flags, a `types` filter, paged with a cursor as the 223 export pages, each page under 24,000 bytes, `ended` saying why it ended. One request an object (about 200, 40 s at the default rate, for 200 objects). A property the device can't give is a problem on its record, never a failed call. See [Device inventory](#device-inventory). |
+| `bacnet_inventory` | One device's objects as the inventory's point records (#2779), with the field names of `bacnet inventory --json`: `values`, `settings` and `details` as the CLI's flags, a `types` filter, paged with a cursor as the 223 export pages, each page under 24,000 bytes, `ended` saying why it ended. Read in batches as the CLI reads them, about 28 requests for a 200-object controller (58 with values). A property the device can't give is a problem on its record, never a failed call. See [Device inventory](#device-inventory). |
 
 Prompts: `survey_site` (range, network) and `investigate_point` (device,
 object). Their arguments are checked against the target grammar. The survey
@@ -144,6 +144,12 @@ passive mode.
   error. One that stops while its Object_List is read element by element
   sets `stopped` too, beside `list.stopped`. A cancel drops the call, as
   for every tool: nothing more is sent.
+- **A batch slower than the budget** is handled as the inventory handles
+  one: a later batch still being read 7 s past the budget is let go and
+  read again on the next page (the page keeps what it read, with a
+  cursor); a page's first still being read 14 s past it fails the call,
+  naming the batch; and either way the next attempt asks the device for
+  fewer objects, down to one.
 - **The result.** The first text block is the usual rendering of the
   structured content, which ends by saying the next block is the Turtle;
   the second is the page's Turtle. The structured content has `device`,
@@ -213,9 +219,14 @@ settings and details. Read-only; not listed in passive mode.
   is lost with it, and costs one refused request again. A page's first
   batch gets 14 s past the budget; still being read then, it fails the
   call as `timeout` (or `refused` when nothing was sent) with `object`
-  naming its first object, `hint` saying how many objects the batch held
-  and the ways past it: `bacnet_read` on it, or `types` leaving its type
-  out. The cursor holds the next object's place and a fingerprint of
+  naming its first object and `hint` the ways past it: for a batch of
+  several, its range (`the 16 objects from it to trend-log:16`) and that
+  calling again reads fewer at a time; for one object, #2786's `bacnet_read`
+  on it; and `types` leaving its type out. Either way the server
+  remembers the device as slow at that size (for up to 64 devices, while
+  it runs): every later batch there asks for half the properties of the
+  one dropped, down to one object, so calling again makes progress, and a
+  slow device ends every page with at least one record. The cursor holds the next object's place and a fingerprint of
   the matching objects, bound as every cursor is to the call's other
   arguments, the principal and ten minutes; a list changed since the
   cursor's page is refused (`failed`) after the list read, with nothing
@@ -249,8 +260,10 @@ settings and details. Read-only; not listed in passive mode.
   for only part of a batch. A device that can't send a batch's answer for
   its size (one that doesn't segment, with a small buffer) has that batch
   asked again an object at a time, and the client remembers half the
-  batch for the device, so the next pages start there: at most four such
-  refused batches. A device that refuses ReadPropertyMultiple costs that
+  batch's properties for the device (`Client::rpm_limit`), so the next
+  pages start there, under any options: a few such refused batches at
+  most. The limit only shrinks, and goes when the discovery table loses
+  the device's row or another device announces itself at its address. A device that refuses ReadPropertyMultiple costs that
   refused request once (the client remembers it) and then one ReadProperty
   a property, as before: 2 to 5 an object with no option (an analog input
   3), up to 14 with all three (an analog input 12, an analog output 14);
@@ -1064,7 +1077,10 @@ stderr; when the TUI ends the session it exits cleanly.
   rejects it) at one ReadProperty a property for no option, values and all
   three; at the default policy, a page ended by the budget with a cursor
   at the first object not read; a later batch let go 7 s past the budget,
-  the batch before it kept; a stuck first batch named by its first object.
+  the batch before it kept, and one of several let go with the next call
+  asking for half; a stuck first batch named by its range, then by its
+  one object; a device too slow for a full first batch making progress
+  call by call until every object is read once.
   `tests/inventory_cost.rs` (#2785): a 200-object controller's requests
   through the tool, the CLI's scan and the 223 export, with and without
   ReadPropertyMultiple, the counts the descriptions quote.
@@ -1079,7 +1095,8 @@ stderr; when the TUI ends the session it exits cleanly.
   batches; the base IRI, types and write priority; bad
   options and other calls' cursors refused with nothing sent; a list
   grown or shrunk between pages refused after the list read; a spent
-  budget ending a page that the cursor resumes; a device silent mid-page;
+  budget ending a page that the cursor resumes; a later batch let go past
+  the budget and the next asking for half; a device silent mid-page;
   the policy's object page; an Object_List read element by element across
   calls; a cancel sending nothing more (through the handler, and over the
   pipe, where it goes unanswered). `tools/export_tests.rs`: a 500-object

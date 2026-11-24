@@ -1,6 +1,6 @@
 ---
 section: Added
 ---
-- `bacnet-ops`: `Device::point_records` reads the inventory's records of the objects a caller
-  names, in the inventory's batches and in the order named, and `Device::point_batch` says how
-  many one request reads, for front ends that page a device's objects (#2785).
+- `bacnet-ops`: `Device::point_records` reads the inventory's records of the objects named, in
+  its batches and order; `Device::point_batch` says how many one request reads, and
+  `Client::rpm_limit` the smaller request size a device was found to answer (#2785).
