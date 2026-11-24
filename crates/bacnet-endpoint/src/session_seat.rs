@@ -49,9 +49,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// most 4 by one station on the link or by the stations of another
     /// network together (#2652). Past them a request waits for a slot in
     /// its caller's task, one whose station or network holds its 4 behind
-    /// that one only, and its timeout starts once it is admitted. Its turn
-    /// at the destination (`min_request_interval_ms`) comes once it holds
-    /// the slot. A write sent with a priority is a command at that
+    /// that one only, and its timeout starts once it is admitted. It waits
+    /// out its turn at the destination (`min_request_interval_ms`) holding
+    /// nothing and takes the turn with its slot. A waiting request takes a
+    /// slot only as it is polled, so one its caller no longer polls holds
+    /// none. A write sent with a priority is a command at that
     /// priority, which the Audit_Priority_Filter applies to; one without a
     /// priority is not filtered by priority. An audited
     /// request goes to one station, direct or behind a router, and a raw

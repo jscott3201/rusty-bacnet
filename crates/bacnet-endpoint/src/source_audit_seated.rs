@@ -2,10 +2,10 @@
 //!
 //! The client hands the session every confirmed request of a service Table
 //! 19-5 maps to READ or WRITE (see `bacnet_client::client::SourceAuditor`).
-//! Here the request is admitted: a slot, from its lane's share of the 64
-//! ([`super::slots`], #2652), then its turn at the destination, then
-//! the database guard, the Reporter's filters, a recipient, one station, a
-//! timestamp. Then a task the session owns runs it, so a caller that goes
+//! Here the request is admitted: once its turn at the destination is due,
+//! a slot from its lane's share of the 64 ([`super::slots`], #2652) and
+//! the turn with it, then the database guard, the Reporter's filters, a
+//! recipient, one station, a timestamp. Then a task the session owns runs it, so a caller that goes
 //! away loses neither the request nor its records: the client retries with
 //! the same invoke ID and the records carry the real answer. A request the
 //! Reporter doesn't select, or that has no recipient, runs unaudited in the
@@ -75,27 +75,38 @@ impl SourceAudit {
     /// Admit and carry out a request of the session's client, as the
     /// module documentation describes.
     async fn audit_seated(self: &Arc<Self>, mut request: AuditedRequest) -> Result<Bytes, Error> {
-        // At most 64 operations are held at once, and at most a lane's
-        // share by one lane (#2652). Past them a request waits here for a
-        // slot, in its caller's task: nothing is spawned for it, its timeout
-        // starts once it is admitted, and a stop (which closes the slots) or
-        // its caller going away ends the wait with nothing sent and no slot
-        // held.
-        let slot = (self.slots)
-            .admit(slots::Lane::of(request.station()))
-            .await
-            .ok_or_else(|| Error::Encoding("endpoint shutdown".into()))?;
-        // A request that waited for its slot while the node's
-        // DeviceCommunicationControl took effect goes no further: refused
-        // before it takes a turn or a sequence number, as one made then is.
-        if request.initiation_restricted() {
-            return Err(Error::InitiationDisabled { sent: false });
-        }
-        // Its turn at the destination comes once it holds its slot, so the
-        // interval holds between requests as they are admitted (#2652). The
-        // wait holds the slot: a stop, or its caller going away, gives the
-        // slot back with nothing sent.
-        request.take_turn().await?;
+        let lane = slots::Lane::of(request.station());
+        let slot = loop {
+            // Its turn at the destination (`min_request_interval_ms`) is
+            // taken as it is admitted, so the interval holds between
+            // requests as they are admitted (#2652). It first waits for the
+            // turn to come due, holding nothing, so a request waiting out
+            // the interval keeps no other out of its lane.
+            request.turn_due().await?;
+            // At most 64 operations are held at once, and at most a lane's
+            // share by one lane. Past them a request waits here for a slot,
+            // in its caller's task: nothing is spawned for it, its timeout
+            // starts once it is admitted, and a stop (which closes the
+            // slots) or its caller going away ends the wait with nothing
+            // sent and no slot held.
+            let slot = (self.slots)
+                .admit(lane.clone())
+                .await
+                .ok_or_else(|| Error::Encoding("endpoint shutdown".into()))?;
+            // A request that waited for its slot while the node's
+            // DeviceCommunicationControl took effect goes no further:
+            // refused before it takes a turn or a sequence number, as one
+            // made then is.
+            if request.initiation_restricted() {
+                return Err(Error::InitiationDisabled { sent: false });
+            }
+            // Another request to the destination may have taken the turn
+            // while this one waited for its slot: the slot goes back, and
+            // it waits for the next turn.
+            if request.try_take_turn() {
+                break slot;
+            }
+        };
         let mut db = self.db.write().await;
         if self.slots.is_closed() {
             return Err(Error::Encoding("endpoint shutdown".into()));

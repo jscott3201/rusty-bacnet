@@ -1,46 +1,49 @@
 //! The source Audit's operation slots, shared out by lane (#2652).
 //!
 //! A session holds at most [`SLOTS`] audited operations at once, each from
-//! its admission to its end: its turn at the destination, its retries and,
-//! when routed, its wait for the router's path. A station on this link is a
-//! lane of its own, by its MAC. Every station on another network shares
-//! that network's lane, since the client sends one request at a time
-//! through a router to a network: the others wait there holding their
-//! slots. No lane holds more than [`LANE_SHARE`] slots. A request whose lane
-//! is at its share waits behind that lane only; one to another lane is
-//! admitted while a slot is free.
+//! its admission to its end: its retries and, when routed, its wait for the
+//! router's path. A station on this link is a lane of its own, by its MAC.
+//! Every station on another network shares that network's lane, since the
+//! client sends one request at a time through a router to a network: the
+//! others wait there holding their slots. No lane holds more than
+//! [`LANE_SHARE`] slots. A request whose lane is at its share waits behind
+//! that lane only; one to another lane is admitted while a slot is free.
 //!
 //! The numbers: one silent station or network holds 4 slots and leaves 60,
 //! eight leave 32, and it takes 16 to fill the pool. Even then a lane
-//! holding none goes ahead of every lane holding some (below), so a request
-//! to a live device waits for slots to come back, not for a silent
+//! holding none is woken ahead of every lane holding some (below), so a
+//! request to a live device waits for slots to come back, not for a silent
 //! device's queue. Four at once is ample for one device, which often
 //! handles one transaction at a time, and for one network, where a router
 //! passes one at a time.
 //!
-//! The waiters of one lane go first come, first served. A slot that comes
-//! back goes to a lane under its share with a waiter: the one holding the
-//! fewest slots, and of those, the one that has waited longest since it
-//! began to wait or last got a slot. So a lane holding none goes ahead of
-//! every lane holding some, and each lane waiting ahead of it gets at most
-//! one slot first: with k lanes ahead, its first waiter has a slot by the
-//! (k + 1)th slot to come back. Every held slot comes back within its
-//! operation's life: the APDU timeout times the retries plus one (24 s at
-//! the session defaults), its turn at the destination, and for a routed one
-//! its wait at the router behind the others of its lane. With the pool full
-//! and fewer than 64 lanes ahead, that is within one slot's life.
+//! A slot is taken only by a waiter as it is polled: one polled while a
+//! slot is free and its lane is under its share takes it, newcomer or not.
+//! So a waiter that is never polled again holds nothing and keeps no one
+//! else out, and within a lane the first waiter polled goes first, not the
+//! first to come. Who is woken follows an order. A slot that comes back
+//! wakes every waiter of the first lane under its share in that order, and
+//! moves that lane behind the others holding as many. The order is fewest
+//! slots held, then longest wait since the lane began to wait or was last
+//! woken. A slot that comes back while another is still free (the lane
+//! woken for that one has not taken it up) wakes every waiter of every lane
+//! under its share, and so does a waiter that leaves while a slot is free.
 //!
-//! A slot that comes back is granted, under the lock, to the next waiter,
-//! which is woken once the lock is let go: one wake per slot, and every
-//! waiter at once when the slots close. A grant made before the waiter has
-//! left its waker is found by its next poll. A waiter dropped before it
-//! takes its grant gives the slot back at once, so a dropped wait holds
-//! nothing; one never polled again but not dropped keeps its grant, as a
-//! semaphore's waiter does, which is at most its lane's share. The lock is
-//! a leaf: held only inside these methods, never across an await, and no
-//! other lock is taken under it, so it orders after the database's and is
-//! never held with the coordinator's or a client's transaction state. A
-//! lane's entry goes with its last slot and waiter.
+//! So a lane holding none is woken by the (k + 1)th slot to come back,
+//! where k counts the lanes that have waited longer since they were last
+//! woken, whatever they hold now: each of those is woken at most once
+//! first. Woken, it takes the slot unless a request polled before it did;
+//! a slot it leaves free reaches everyone with the next one. Every held
+//! slot comes back within its operation's life: the APDU timeout times the
+//! retries plus one (24 s at the session defaults), and for a routed one
+//! its wait at the router behind the others of its lane.
+//!
+//! Wakers are collected under the lock and woken once it is let go; closing
+//! wakes every waiter once. The lock is a leaf: held only inside these
+//! methods, never across an await, and no other lock is taken under it, so
+//! it orders after the database's and is never held with the
+//! coordinator's or a client's transaction state. A lane's entry goes with
+//! its last slot and waiter.
 //!
 //! A request goes to one station (`SourceAudit::one_station`), checked once
 //! it holds its slot: a broadcast or group address takes the lane its form
@@ -87,11 +90,11 @@ pub(crate) struct Slots {
 
 #[derive(Default)]
 struct State {
-    /// Slots held, those granted to a waiter that has yet to take one too.
+    /// Slots held.
     held: usize,
     lanes: HashMap<Lane, LaneState>,
     /// Each lane with a waiter, by the slots it holds and then its turn:
-    /// the first one under its share is served next.
+    /// the order lanes are woken in.
     order: BTreeMap<(usize, u64), Lane>,
     /// The next turn and the next waiter's number; both only grow.
     next_turn: u64,
@@ -102,102 +105,98 @@ struct State {
 #[derive(Default)]
 struct LaneState {
     held: usize,
-    /// Oldest first; their numbers rise front to back.
+    /// Each with the waker its last poll left; numbers rise front to back.
     waiters: VecDeque<Waiter>,
-    /// The waiters granted a slot that they have yet to take.
-    granted: Vec<u64>,
     /// Its turn in `order` while it has waiters: when it began to wait, or
-    /// last got a slot with more waiting.
+    /// was last woken.
     turn: u64,
 }
 
 struct Waiter {
     number: u64,
-    waker: Option<Waker>,
-}
-
-enum Arrival {
-    Admitted,
-    Queued(u64),
+    waker: Waker,
 }
 
 impl State {
-    /// Admit a request to `lane` at once, or queue it; `None` once closed.
-    fn arrive(&mut self, lane: &Lane) -> Option<Arrival> {
+    fn free(&self) -> usize {
+        SLOTS - self.held
+    }
+
+    /// Waiter `number` of `lane`, polled: it takes a slot (`true`) if one
+    /// is free and the lane is under its share, or waits with `cx`'s waker.
+    /// `false` once closed.
+    fn poll(&mut self, cx: &Context<'_>, lane: &Lane, number: u64) -> Poll<bool> {
         if self.closed {
-            return None;
+            self.remove(lane, number);
+            return Poll::Ready(false);
         }
         let free = self.held < SLOTS;
         let entry = self.lanes.entry(lane.clone()).or_default();
+        let at = entry.waiters.binary_search_by_key(&number, |w| w.number);
         if free && entry.held < LANE_SHARE {
-            // A lane with room and a waiter while a slot is free can't be:
-            // the slot went to its first waiter as it came back.
-            debug_assert!(entry.waiters.is_empty(), "a waiter was passed over");
+            let key = (entry.held, entry.turn);
+            if let Ok(at) = at {
+                entry.waiters.remove(at);
+            }
+            if at.is_ok() || !entry.waiters.is_empty() {
+                self.order.remove(&key);
+            }
             entry.held += 1;
             self.held += 1;
-            return Some(Arrival::Admitted);
-        }
-        let number = self.next_waiter;
-        self.next_waiter += 1;
-        if entry.waiters.is_empty() {
-            entry.turn = self.next_turn;
-            self.next_turn += 1;
-            self.order.insert((entry.held, entry.turn), lane.clone());
-        }
-        entry.waiters.push_back(Waiter {
-            number,
-            waker: None,
-        });
-        Some(Arrival::Queued(number))
-    }
-
-    /// Waiter `number` of `lane`: granted (`true`), closed (`false`), or
-    /// still waiting, keeping `cx`'s waker.
-    fn poll(&mut self, cx: &Context<'_>, lane: &Lane, number: u64) -> Poll<bool> {
-        if self.closed {
-            return Poll::Ready(false);
-        }
-        let Some(entry) = self.lanes.get_mut(lane) else {
-            return Poll::Ready(false);
-        };
-        if let Some(at) = entry.granted.iter().position(|&n| n == number) {
-            entry.granted.swap_remove(at);
+            if !entry.waiters.is_empty() {
+                self.order.insert((entry.held, entry.turn), lane.clone());
+            }
             return Poll::Ready(true);
         }
-        let Ok(at) = entry.waiters.binary_search_by_key(&number, |w| w.number) else {
-            return Poll::Ready(false);
-        };
-        let waker = &mut entry.waiters[at].waker;
-        if !waker.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
-            *waker = Some(cx.waker().clone());
+        match at {
+            Ok(at) => {
+                let waker = &mut entry.waiters[at].waker;
+                if !waker.will_wake(cx.waker()) {
+                    *waker = cx.waker().clone();
+                }
+            }
+            Err(_) => {
+                if entry.waiters.is_empty() {
+                    entry.turn = self.next_turn;
+                    self.next_turn += 1;
+                    self.order.insert((entry.held, entry.turn), lane.clone());
+                }
+                entry.waiters.push_back(Waiter {
+                    number,
+                    waker: cx.waker().clone(),
+                });
+            }
         }
         Poll::Pending
     }
 
-    /// Waiter `number` of `lane` gives up: its place, or the slot it was
-    /// granted, which goes on. What to wake.
-    fn leave(&mut self, lane: &Lane, number: u64) -> Option<Waker> {
-        let entry = self.lanes.get_mut(lane)?;
-        if let Some(at) = entry.granted.iter().position(|&n| n == number) {
-            entry.granted.swap_remove(at);
-            return self.release(lane);
-        }
-        let at = (entry.waiters)
-            .binary_search_by_key(&number, |w| w.number)
-            .ok()?;
+    /// Waiter `number` of `lane` leaves, if it waits.
+    fn remove(&mut self, lane: &Lane, number: u64) {
+        let Some(entry) = self.lanes.get_mut(lane) else {
+            return;
+        };
+        let Ok(at) = (entry.waiters).binary_search_by_key(&number, |w| w.number) else {
+            return;
+        };
         entry.waiters.remove(at);
-        // A lane whose head left was served no later than it would have
-        // been: with a slot free and room in the lane, the head would have
-        // had it already.
         if entry.waiters.is_empty() {
             self.order.remove(&(entry.held, entry.turn));
             self.forget_if_idle(lane);
         }
-        None
     }
 
-    /// A slot of `lane` comes back and goes on. What to wake.
-    fn release(&mut self, lane: &Lane) -> Option<Waker> {
+    /// Waiter `number` of `lane` gives up waiting. A slot left free for
+    /// it goes to everyone.
+    fn leave(&mut self, lane: &Lane, number: u64, wakers: &mut Vec<Waker>) {
+        self.remove(lane, number);
+        if self.free() > 0 {
+            self.wake(true, wakers);
+        }
+    }
+
+    /// A slot of `lane` comes back. What it wakes is in the module
+    /// documentation.
+    fn release(&mut self, lane: &Lane, wakers: &mut Vec<Waker>) {
         let entry = self.lanes.get_mut(lane).expect("a held slot's lane");
         if !entry.waiters.is_empty() {
             self.order.remove(&(entry.held, entry.turn));
@@ -207,38 +206,44 @@ impl State {
         entry.held -= 1;
         self.held -= 1;
         self.forget_if_idle(lane);
-        self.grant()
+        let everyone = self.free() > 1;
+        self.wake(everyone, wakers);
     }
 
-    /// Grant the slot that came back to the first waiter of the first lane
-    /// in order, if that lane is under its share. What to wake.
-    fn grant(&mut self) -> Option<Waker> {
-        debug_assert!(self.held < SLOTS, "a slot came back");
+    /// Wake every waiter of the first lane under its share in order, or of
+    /// every such lane, and move each behind those holding as many.
+    fn wake(&mut self, everyone: bool, wakers: &mut Vec<Waker>) {
         if self.closed {
-            return None;
+            return;
         }
-        let (&(held, turn), _) = self.order.first_key_value()?;
-        if held >= LANE_SHARE {
-            return None;
-        }
-        let lane = self.order.remove(&(held, turn)).expect("the first lane");
-        let entry = self.lanes.get_mut(&lane).expect("a waiting lane");
-        let waiter = entry.waiters.pop_front().expect("a waiting lane's waiter");
-        entry.held += 1;
-        entry.granted.push(waiter.number);
-        self.held += 1;
-        if !entry.waiters.is_empty() {
+        let woken: Vec<(usize, u64)> = (self.order.keys())
+            .take_while(|(held, _)| *held < LANE_SHARE)
+            .take(if everyone { usize::MAX } else { 1 })
+            .copied()
+            .collect();
+        for key in woken {
+            let lane = self.order.remove(&key).expect("a waiting lane");
+            let entry = self.lanes.get_mut(&lane).expect("a waiting lane");
+            wakers.extend(entry.waiters.iter().map(|w| w.waker.clone()));
             entry.turn = self.next_turn;
             self.next_turn += 1;
             self.order.insert((entry.held, entry.turn), lane);
         }
-        waiter.waker
     }
 
     fn forget_if_idle(&mut self, lane: &Lane) {
-        if (self.lanes.get(lane)).is_some_and(|entry| entry.held == 0 && entry.waiters.is_empty()) {
+        let idle =
+            (self.lanes.get(lane)).is_some_and(|entry| entry.held == 0 && entry.waiters.is_empty());
+        if idle {
             self.lanes.remove(lane);
         }
+    }
+}
+
+/// Wake `wakers`, the lock let go.
+fn wake_all(wakers: Vec<Waker>) {
+    for waker in wakers {
+        waker.wake();
     }
 }
 
@@ -253,51 +258,45 @@ impl Slots {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Wait for a slot in `lane`, as the module documentation describes: at
-    /// once while one is free, the lane is under its share and none of its
-    /// requests waits. `None` once the slots are closed. Dropping the wait
-    /// gives up its place, and a slot granted to it.
+    /// Wait for a slot in `lane`, as the module documentation describes.
+    /// `None` once the slots are closed. Dropping the wait gives up its
+    /// place; it holds nothing until it has its slot.
     pub(crate) async fn admit(self: &Arc<Self>, lane: Lane) -> Option<Slot> {
-        let arrival = self.lock().arrive(&lane)?;
-        let number = match arrival {
-            Arrival::Admitted => {
-                return Some(Slot {
-                    slots: Arc::clone(self),
-                    lane,
-                });
-            }
-            Arrival::Queued(number) => number,
-        };
         let mut place = Place {
             slots: self,
             lane: &lane,
-            number: Some(number),
+            number: None,
         };
-        let granted = poll_fn(|cx| self.lock().poll(cx, &lane, number)).await;
-        if granted {
-            place.number = None;
-        }
+        let admitted = poll_fn(|cx| {
+            let mut state = self.lock();
+            let number = *place.number.get_or_insert_with(|| {
+                state.next_waiter += 1;
+                state.next_waiter
+            });
+            state.poll(cx, &lane, number)
+        })
+        .await;
+        // Admitted or closed, it waits no more.
+        place.number = None;
         drop(place);
-        granted.then(|| Slot {
+        admitted.then(|| Slot {
             slots: Arc::clone(self),
             lane,
         })
     }
 
-    /// End every wait, and admit and grant nothing more. Slots already
-    /// held stay held until they drop.
+    /// End every wait, and admit nothing more. Slots already held stay held
+    /// until they drop.
     pub(crate) fn close(&self) {
         let wakers: Vec<Waker> = {
             let mut state = self.lock();
             state.closed = true;
-            (state.lanes.values_mut())
-                .flat_map(|entry| entry.waiters.iter_mut())
-                .filter_map(|waiter| waiter.waker.take())
+            (state.lanes.values())
+                .flat_map(|entry| entry.waiters.iter())
+                .map(|waiter| waiter.waker.clone())
                 .collect()
         };
-        for waker in wakers {
-            waker.wake();
-        }
+        wake_all(wakers);
     }
 
     pub(crate) fn is_closed(&self) -> bool {
@@ -307,7 +306,7 @@ impl Slots {
     /// How many slots are free.
     #[cfg(test)]
     pub(crate) fn available(&self) -> usize {
-        SLOTS - self.lock().held
+        self.lock().free()
     }
 
     /// How many lanes have a slot or a waiter.
@@ -325,10 +324,9 @@ pub(crate) struct Slot {
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        let waker = self.slots.lock().release(&self.lane);
-        if let Some(waker) = waker {
-            waker.wake();
-        }
+        let mut wakers = Vec::new();
+        self.slots.lock().release(&self.lane, &mut wakers);
+        wake_all(wakers);
     }
 }
 
@@ -336,17 +334,16 @@ impl Drop for Slot {
 struct Place<'a> {
     slots: &'a Slots,
     lane: &'a Lane,
-    /// `None` once it has its slot.
+    /// Its number once polled; `None` once it waits no more.
     number: Option<u64>,
 }
 
 impl Drop for Place<'_> {
     fn drop(&mut self) {
         if let Some(number) = self.number.take() {
-            let waker = self.slots.lock().leave(self.lane, number);
-            if let Some(waker) = waker {
-                waker.wake();
-            }
+            let mut wakers = Vec::new();
+            self.slots.lock().leave(self.lane, number, &mut wakers);
+            wake_all(wakers);
         }
     }
 }

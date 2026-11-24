@@ -17,9 +17,9 @@
 //! runner starts the request over from the top, so every request goes out
 //! through the one request path, segmented ones included. An audited
 //! client takes no turn at the destination in its request path: the node
-//! takes it once it has admitted the request (#2652), and the turn then
-//! travels with the request, so the runner's own pacer lets it straight
-//! through. A routed path the caller held is let go and taken again.
+//! takes it as it admits the request (#2652), and the turn then travels
+//! with the request, so the runner's own pacer lets it straight through. A
+//! routed path the caller held is let go and taken again.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -133,38 +133,57 @@ impl AuditedRequest {
         self.tsm.lock().initiation_restricted()
     }
 
-    /// Wait for the request's turn at its destination
-    /// (`min_request_interval_ms`) and take it. A node takes it once it has
-    /// admitted the request (#2652), so the interval holds between requests
-    /// as they are admitted, however long each waited. At once when the
-    /// client doesn't pace or the turn is taken; dropping the wait takes
-    /// nothing.
+    /// Wait until the request's turn at its destination
+    /// (`min_request_interval_ms`) is due, without taking it: a node waits
+    /// for that before it admits the request, holding nothing, and then
+    /// takes the turn with [`Self::try_take_turn`] (#2652). At once when the
+    /// client doesn't pace or the turn is taken.
     ///
     /// # Errors
     ///
     /// The error of a request cut off in flight, when the client's tasks end
     /// first: its stop, or its node's stop or drop (#2720).
-    pub async fn take_turn(&mut self) -> Result<(), Error> {
-        if let Some(turn) = &self.turn {
-            self.pace = turn.take().await.ok_or_else(request_cut_off)?;
-            self.turn = None;
+    pub async fn turn_due(&mut self) -> Result<(), Error> {
+        match &self.turn {
+            Some(turn) if !turn.due().await => Err(request_cut_off()),
+            _ => Ok(()),
         }
-        Ok(())
+    }
+
+    /// Take the request's turn at its destination if it is due now, as a
+    /// node does once it has admitted the request, so the interval holds
+    /// between requests as they are admitted, however long each waited.
+    /// `false` when another request to the destination took it since
+    /// [`Self::turn_due`]; always `true` once taken, or when the client
+    /// doesn't pace.
+    pub fn try_take_turn(&mut self) -> bool {
+        let Some(turn) = &self.turn else {
+            return true;
+        };
+        let Some(pace) = turn.try_take() else {
+            return false;
+        };
+        self.pace = pace;
+        self.turn = None;
+        true
     }
 
     /// Send the request, through the one request path every request takes,
     /// and wait for its end: first for its turn at the destination, if
-    /// [`Self::take_turn`] hasn't taken it. Dropping the future before the
-    /// end cancels the request as dropping a request does.
+    /// [`Self::try_take_turn`] hasn't taken it. Dropping the future before
+    /// the end cancels the request as dropping a request does.
     pub async fn execute(mut self) -> AuditedOutcome {
-        if let Err(error) = self.take_turn().await {
-            return AuditedOutcome {
-                result: Err(error),
-                invoke_id: None,
-                attempted: false,
-                records: Vec::new(),
-                target_device: None,
+        if let Some(turn) = self.turn.take() {
+            let Some(pace) = turn.take().await else {
+                return AuditedOutcome {
+                    result: Err(request_cut_off()),
+                    invoke_id: None,
+                    attempted: false,
+                    records: Vec::new(),
+                    target_device: None,
+                };
             };
+            self.pace = pace;
         }
         let Self {
             targets,
@@ -252,12 +271,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// Hand a request whose registration was diverted to the node's source
     /// Audit (#2617). `named` is the target as the caller named it, which
-    /// the runner starts from again. `pace` is what the caller holds of a
-    /// turn at the destination: none, since an audited client's turn is
-    /// taken once its node has admitted the request (#2652); the request
-    /// keeps it until it ends. A routed path the caller took is the caller's
-    /// to let go first, and the runner takes it again. The runner's frames
-    /// carry `attributes`, the caller's (#2723).
+    /// the runner starts from again. The caller has taken no turn at the
+    /// destination: the node takes it as it admits the request (#2652), and
+    /// the request keeps it until it ends. A routed path the caller took is
+    /// the caller's to let go first, and the runner takes it again. The
+    /// runner's frames carry `attributes`, the caller's (#2723).
     ///
     /// The future awaits the request's end, owns everything it needs, and
     /// is boxed and type-erased: the request path it runs ends here again.
@@ -275,7 +293,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         named: ConfirmedTarget<'_>,
         service_choice: ConfirmedServiceChoice,
         service_data: &[u8],
-        pace: PaceGuard,
         attributes: Attributes<'_>,
     ) -> Diverted {
         // A seat that has closed, by the node's stop or the client's own,
@@ -312,7 +329,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return Box::pin(async move {
                 let _pace = match &turn {
                     Some(turn) => turn.take().await.ok_or_else(request_cut_off)?,
-                    None => pace,
+                    None => PaceGuard::unpaced(),
                 };
                 run.await.0
             });
@@ -329,14 +346,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             decoded,
             run,
             tsm: Arc::clone(&self.tsm),
-            pace,
+            pace: PaceGuard::unpaced(),
             turn,
         })
     }
 
     /// [`Self::audited_request`] for a request diverted where it was about
-    /// to go segmented. Its turn and routed path are its caller's, reached
-    /// through `limits`, and the caller ends once this does.
+    /// to go segmented. Its routed path is its caller's, reached through
+    /// `limits`, and the caller ends once this does.
     #[cold]
     #[inline(never)]
     pub(super) fn audited_segmented(
@@ -347,13 +364,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         limits: &mut SegmentedRequestLimits<'_>,
     ) -> Diverted {
         drop(limits.routed_path_lease.take());
-        let (pace, named) = (limits.pace.take(), *limits.named);
         self.audited_request(
             auditor,
-            named,
+            *limits.named,
             service_choice,
             service_data,
-            pace,
             limits.attributes,
         )
     }

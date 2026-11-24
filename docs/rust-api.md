@@ -14255,14 +14255,16 @@ through a router to a network. Past either a request waits for a slot in its
 caller's task, with nothing spawned for it, and its timeout starts once it
 is admitted; a request to a lane at its share waits behind that lane only,
 so a burst to one slow or silent device leaves the other 60 slots to the
-rest. A slot that comes back goes to the waiting lane holding the fewest,
-then to the one that has waited longest since it last got one, and a lane's
-own requests go in the order they came. A stop or the caller going away
-ends the wait with nothing sent. A request takes its turn at its
-destination (`min_request_interval_ms`) once it holds its slot, so the
-interval holds between requests as they are admitted; a stop, or its caller
-going away during that wait, gives the slot back. A request the Reporter
-doesn't select, or with no recipient, goes unaudited in the caller's task.
+rest. A waiting request takes a slot only as it is polled, so one its
+caller stops polling holds nothing: within a lane the first polled goes
+first. A slot that comes back wakes the waiting lane holding the fewest,
+then the one that has waited longest since it was last woken. A stop or the
+caller going away ends the wait with nothing sent. A request waits out its
+turn at its destination (`min_request_interval_ms`) holding nothing, and
+takes the turn with its slot, so the interval holds between requests as
+they are admitted; one that finds the turn taken meanwhile gives the slot
+back and waits again. A request the Reporter doesn't select, or with no
+recipient, goes unaudited in the caller's task.
 
 - Each target is its own record (Clause 19.6.5): one per reference of a
   ReadPropertyMultiple, or per value its answer reports for ALL, REQUIRED or
@@ -14804,8 +14806,8 @@ a later retry failure retains evidence of earlier transmission attempts.
 Once an audited request transfers to session ownership, dropping its caller
 waiter does not cancel it: the session observes the response or deadline and
 records once. Ordinary requests retain caller-owned RAII cancellation. There
-are 64 whole-operation slots, at most 4 to one lane (#2652), acquired before
-the turn at the destination and the asynchronous policy reads, and a
+are 64 whole-operation slots, at most 4 to one lane (#2652), acquired with
+the turn at the destination and before the asynchronous policy reads, and a
 separate shared pool of 64 active audit notifications. Read results do
 not wait for audit delivery. Notifications have one absolute three-second
 send/ACK deadline, no retries and no ordinary-record backlog. Expired or canceled

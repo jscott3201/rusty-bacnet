@@ -85,7 +85,8 @@ async fn the_stations_of_another_network_share_its_lane() {
 
 /// Two reads of one station that both waited for its lane, long past the
 /// minimum request interval, go that interval apart once admitted, not
-/// together: each takes its turn once it holds its slot.
+/// together: each takes its turn with its slot, and the one that finds the
+/// turn taken gives its slot back while it waits for the next.
 #[tokio::test(start_paused = true)]
 async fn requests_admitted_together_go_the_interval_apart() {
     let recipient = BACnetRecipient::Device(oid(ObjectType::DEVICE, 999));
@@ -93,6 +94,7 @@ async fn requests_admitted_together_go_the_interval_apart() {
     endpoint.session.client_config.min_request_interval_ms = 1_000;
     endpoint.session.client_config.apdu_timeout_ms = 60_000;
     endpoint.start(false).await;
+    let source = Arc::clone(endpoint.session.source_audit.as_ref().unwrap());
     let reads: Vec<_> = (0..LANE_SHARE + 2)
         .map(|_| endpoint.read(direct_read()))
         .collect();
@@ -108,7 +110,14 @@ async fn requests_admitted_together_go_the_interval_apart() {
             .deliver_apdu(ack(request, 5), mac(PEER), None)
             .await;
     }
-    let late = requests_among(&mut endpoint, LANE_SHARE + 2).await;
+    let mut late = requests_among(&mut endpoint, LANE_SHARE + 1).await;
+    crate::session::eventually::eventually(
+        Duration::from_millis(100),
+        "only the one sent holds a slot",
+        async || source.available_operations() == SLOTS - 1,
+    )
+    .await;
+    late.extend(requests_among(&mut endpoint, 1).await);
     let [(first, one), (second, two)]: [_; 2] = late.try_into().expect("two requests");
     assert!(
         second - first >= Duration::from_secs(1),
@@ -124,5 +133,42 @@ async fn requests_admitted_together_go_the_interval_apart() {
     for read in reads {
         assert!(bounded(read).await.unwrap().is_ok());
     }
+    drop(source);
+    endpoint.stop().await;
+}
+
+/// A request waiting for its turn at its destination holds no slot: of
+/// reads queued for one station of another network, only the one sent
+/// holds one of the network's, and a read of another station there goes
+/// as soon as the router's path is free, while the others wait out the
+/// interval.
+#[tokio::test(start_paused = true)]
+async fn a_request_waiting_for_its_turn_keeps_no_one_out_of_its_lane() {
+    let recipient = BACnetRecipient::Device(oid(ObjectType::DEVICE, 999));
+    let mut endpoint = unstarted_source(SessionRole::ClientOnly, recipient, None);
+    endpoint.session.client_config.min_request_interval_ms = 1_000;
+    endpoint.session.client_config.apdu_timeout_ms = 60_000;
+    endpoint.start(false).await;
+    let source = Arc::clone(endpoint.session.source_audit.as_ref().unwrap());
+    let at = |last| Station::routed(&mac(ROUTER), REMOTE_NETWORK, &mac(last));
+    let queued: Vec<_> = (0..LANE_SHARE).map(|_| endpoint.read(at(30))).collect();
+    let (_, first) = endpoint.request().await;
+    // Its caller waits for the router's path, which the first holds.
+    let other = endpoint.read(at(31));
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(source.available_operations(), SLOTS - 1, "the first only");
+    let from = NpduAddress {
+        network: REMOTE_NETWORK,
+        mac_address: mac(30),
+    };
+    let answered = Instant::now();
+    endpoint
+        .deliver_apdu(ack(&first, 5), mac(ROUTER), Some(from))
+        .await;
+    let [(went, _)]: [_; 1] = (requests_among(&mut endpoint, 2).await)
+        .try_into()
+        .expect("the other station's read");
+    assert_eq!(went, answered, "it went once the path was free");
+    drop((source, queued, other));
     endpoint.stop().await;
 }

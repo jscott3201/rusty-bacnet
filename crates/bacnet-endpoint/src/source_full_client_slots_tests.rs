@@ -137,10 +137,12 @@ async fn past_the_64_slots_a_request_waits_for_one() {
 
 /// A request waiting for a slot when the session stops fails, sends
 /// nothing and records nothing, and neither do those it waited behind:
-/// past the 64, and past its lane's share.
+/// past its lane's share, where the peer is sent only the share, and past
+/// the 64, where another peer is sent nothing.
 #[tokio::test(start_paused = true)]
 async fn a_stop_ends_the_wait_for_a_slot() {
     let (peer, mut requests) = network().await;
+    let (other, mut others) = network().await;
     let (sink, mut records) = network().await;
     let mut session = session(database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_timeout_ms = 60_000;
@@ -151,7 +153,7 @@ async fn a_stop_ends_the_wait_for_a_slot() {
         .map(|n| {
             start_read(
                 &client,
-                &silent(n / LANE_SHARE),
+                &filling(&peer, n),
                 PropertyIdentifier::PRESENT_VALUE,
                 None,
             )
@@ -161,8 +163,11 @@ async fn a_stop_ends_the_wait_for_a_slot() {
         source.available_operations() == 0
     })
     .await;
-    // One past a lane's share, and one past the 64.
-    for mac in [&silent(0)[..], peer.local_mac()] {
+    for _ in 0..LANE_SHARE {
+        receive(&mut requests).await;
+    }
+    // One past the peer's share, and one past the 64.
+    for mac in [peer.local_mac(), other.local_mac()] {
         reads.push(start_read(
             &client,
             mac,
@@ -175,12 +180,14 @@ async fn a_stop_ends_the_wait_for_a_slot() {
     for read in reads {
         assert!(timeout(WAIT, read).await.unwrap().unwrap().is_err());
     }
-    assert!(requests.try_recv().is_err(), "the waiter sent nothing");
     tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(requests.try_recv().is_err(), "past the share, nothing sent");
+    assert!(others.try_recv().is_err(), "past the 64, nothing sent");
     assert!(records.try_recv().is_err());
     assert_eq!(session.coordinator.active_count().unwrap(), 0);
     drop(client);
     peer.stop().await.unwrap();
+    other.stop().await.unwrap();
     sink.stop().await.unwrap();
 }
 
