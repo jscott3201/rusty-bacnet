@@ -119,6 +119,37 @@ anything is sent, and stderr names the formats the command prints, as in
 `bacnet read: --format csv is not available; this command supports table and
 json`. `--format` is checked even when `--json` outranks it.
 
+<a id="json-streams"></a>**JSON documents and streams:** a command that prints
+once prints one JSON document. The two long-running commands, `subscribe` and
+`capture`, print [JSON Lines](https://jsonlines.org/) instead: one compact JSON
+object a line, from the first line to the last, each written and flushed when
+it happens, and nothing else on stdout (notes, progress and log lines go to
+stderr). Each object names its kind in `type`:
+
+| `type` | Line |
+|---|---|
+| `subscribed` | `subscribe`'s first line, once the subscription is in place: `status` (`ok`) and `message` |
+| `cov` | A notification `subscribe` received (see [COV Subscriptions](#cov-subscriptions)) |
+| `packet` | A packet `capture` read (see [Packet Capture](#packet-capture)) |
+| `error` | The last line of a stream that fails once it is running, with `message` as stderr prints it after `Error: `; the exit status is the usual 1 |
+
+An error before a stream starts (a subscription the device refuses, a capture
+device that won't open) leaves stdout empty, as with any command. A stream
+stopped by Ctrl+C, SIGTERM, `--count` or the end of a capture file ends with
+no closing line. So does one whose reader goes away (`| head -1`): the
+command stops quietly with status 0, as at Ctrl+C, and `subscribe` cancels a
+finite subscription first. It notices only when it next writes a line, so a
+subscription whose value doesn't change keeps running until a notification
+arrives, and the cancel can take as long as the request timeout and its
+retries (`--timeout`, 6 seconds by default, tried four times). Any other
+failed write to stdout, such as a full disk, is an error (status 1). A
+consumer can read the stream a line at a time:
+
+```bash
+bacnet --json subscribe 192.168.1.100 ai:1 \
+  | jq --unbuffered -r 'select(.type == "cov") | .values.PRESENT_VALUE'
+```
+
 **Device text:** strings a device supplies (values, object names, state
 texts, event messages) are cleaned in table and text output, as the terminal
 UI shows them: control characters (an escape sequence, a bell, a tab, a
@@ -2129,6 +2160,23 @@ its lifetime.
 
 Each notification's values are decoded for the monitored object, as `read`
 decodes them; JSON adds their typed forms under `decoded`, keyed by property.
+Its sender, the link peer it came from (the router, for a routed device),
+prints in the link's own form, as other commands print a peer: `source=` in
+the text and `source_mac` in JSON, `192.168.1.100:47808` on BACnet/IP, a
+`bip6:` VMAC on BACnet/IPv6, `mstp:5` on MS/TP and hex octets on BACnet/SC.
+A routed device's station is `routed_source` (`2:0x05`); each reads back as a
+target.
+
+With `--json` (or through a pipe) the watch is a stream of
+[JSON Lines](#json-streams): the `subscribed` line, then a `cov` line a
+notification, as each arrives. A renewal or cancel that fails ends it with an
+`error` line. A note that notifications were missed goes to stderr only. For
+example, the opening line and the device's first notification:
+
+```json
+{"message":"Subscribed to ANALOG_INPUT:1 (process_id=4242; lifetime 300s, renewed while watching, cancelled on exit). Watching... (Ctrl+C to stop)","status":"ok","type":"subscribed"}
+{"decoded":{"PRESENT_VALUE":72.5,"STATUS_FLAGS":{"bits":"0000","names":[]}},"delivery":"unconfirmed","device":"device:1234","object":"ANALOG_INPUT:1","routed_source":null,"source_mac":"192.168.1.100:47808","source_network":null,"time_remaining":300,"type":"cov","values":{"PRESENT_VALUE":"72.5","STATUS_FLAGS":"none"}}
+```
 
 **Alias:** `cov` = subscribe
 
@@ -2547,6 +2595,11 @@ bacnet capture --device eth0 --filter "host 10.0.0.1" --decode --save filtered.p
 
 Note: `--read` and `--device` are mutually exclusive; `--quiet` requires `--save`.
 
+A capture runs until Ctrl+C, SIGTERM or SIGHUP (on Unix), `--count`, the end
+of the file, or its reader going away; each ends it cleanly, with the summary
+(`Captured N packets`) on stderr and status 0. A live capture notices the
+signal within a second.
+
 **Output example (summary):**
 ```
 12:34:56.789  192.168.1.100:47808 -> 192.168.1.255:47808  ORIGINAL_BROADCAST_NPDU  WHO_IS
@@ -2561,6 +2614,14 @@ Note: `--read` and `--device` are mutually exclusive; `--quiet` requires `--save
   NPDU: version=1, no-routing
   APDU: Confirmed-Request, invoke-id=1, seg=no
   Service: READ_PROPERTY
+```
+
+**JSON output** is a stream of [JSON Lines](#json-streams), one `packet` line
+a packet (`detail` holds the decode lines with `--decode`); a read that fails
+part way, such as a file cut short, ends it with an `error` line:
+
+```json
+{"type":"packet","timestamp":"12:34:56.789","src":"192.168.1.100:47808","dst":"192.168.1.255:47808","bvlc":"ORIGINAL_BROADCAST_NPDU","service":"WHO_IS"}
 ```
 
 ### Transport Variants
