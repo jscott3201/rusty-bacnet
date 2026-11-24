@@ -179,10 +179,7 @@ impl PyFrame {
 
 /// A MAC in lowercase colon hex, as SC addresses are written.
 fn hex_address(mac: &[u8]) -> String {
-    mac.iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<Vec<_>>()
-        .join(":")
+    bacnet_ops::octets::hex_sep(mac, ":")
 }
 
 /// `link` as the `transport=` argument of `BACnetClient`, `BACnetServer`

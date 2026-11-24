@@ -466,11 +466,7 @@ impl BACnetServer {
                 }
                 _ => {
                     // SC, Ethernet, or other: hex-encode
-                    Ok(mac
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect::<Vec<_>>()
-                        .join(":"))
+                    Ok(bacnet_ops::octets::hex_sep(mac, ":"))
                 }
             }
         })
