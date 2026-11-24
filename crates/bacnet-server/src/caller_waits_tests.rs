@@ -240,3 +240,57 @@ async fn a_panic_in_the_task_is_raised_in_the_caller() {
     assert_eq!(message(&*panic), "make failed");
     assert_eq!(*lock.lock().await, 0, "the lock is free again");
 }
+
+/// A panic in `take`, once it runs in the task, is raised again in the
+/// caller too, and the lock it held is free again.
+#[tokio::test]
+async fn a_panic_in_take_is_raised_in_the_caller() {
+    let lock = Lock::default();
+    let held = lock.lock().await;
+    let take = {
+        let lock = Arc::clone(&lock);
+        async move {
+            let count = lock.lock_owned().await;
+            if *count == 0 {
+                panic!("take failed");
+            }
+            count
+        }
+    };
+    let mut call: Call = Box::pin(for_caller(spawn_host, take, |count| *count));
+    assert!(poll_once(&mut call).is_pending());
+    drop(held);
+    let panic = AssertUnwindSafe(call).catch_unwind().await.unwrap_err();
+    assert_eq!(message(&*panic), "take failed");
+    assert_eq!(*lock.lock().await, 0, "the lock is free again");
+}
+
+/// A host that takes the task and then drops it unrun, as a runtime that
+/// shuts down does, gets the call `None`, with `make` never run: the caller
+/// may then make the call itself.
+#[tokio::test]
+async fn a_task_dropped_by_its_host_answers_none() {
+    let lock = Lock::default();
+    let makes = Arc::new(AtomicUsize::new(0));
+    let held = lock.lock().await;
+    let mut call: Call = {
+        let makes = Arc::clone(&makes);
+        Box::pin(for_caller(
+            |task| {
+                drop(task);
+                Ok(())
+            },
+            Arc::clone(&lock).lock_owned(),
+            move |mut count| {
+                makes.fetch_add(1, Ordering::SeqCst);
+                *count += 1;
+                *count
+            },
+        ))
+    };
+    // The dropped task drops the answer's sender: the first poll knows.
+    assert_eq!(poll_once(&mut call), Poll::Ready(None));
+    drop(held);
+    assert_eq!(*lock.lock().await, 0);
+    assert_eq!(makes.load(Ordering::SeqCst), 0);
+}

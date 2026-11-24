@@ -129,7 +129,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// daylight-saving status or the new with the new. The change waits for
     /// the database's write guard too, so no request sees it part-way: a
     /// ReadPropertyMultiple of both properties answers with one pair. Don't
-    /// call it while holding a guard on [`database`](Self::database).
+    /// call it while holding a guard on [`database`](Self::database). The
+    /// guard is never waited for in the caller's task, and a call dropped
+    /// part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772): one dropped after its task took the guard may
+    /// still change the zone.
     ///
     /// Everything that judges local time reads this clock when it judges:
     /// the next Schedule pass, a Calendar's Present_Value, a Notification
@@ -185,6 +189,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.request_tasks
             .for_caller(take, change)
             .await
+            // `None`: no change; its runtime dropped the task before it took its locks.
             .unwrap_or_else(|| Err(broadcaster::stopped()))
     }
 }

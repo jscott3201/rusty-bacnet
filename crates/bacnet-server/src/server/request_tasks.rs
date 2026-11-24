@@ -248,8 +248,8 @@ impl RequestTasks {
     /// has closed the set, the call waits in its own task, as before.
     pub(super) async fn for_caller<G, R>(
         &self,
-        take: impl Future<Output = G> + Send + 'static,
-        make: impl FnOnce(G) -> R + Send + 'static,
+        take: impl Future<Output = G> + Send + Sync + 'static,
+        make: impl FnOnce(G) -> R + Send + Sync + 'static,
     ) -> Option<R>
     where
         G: Send + 'static,

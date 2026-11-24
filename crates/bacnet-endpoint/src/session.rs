@@ -950,13 +950,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         // The guard covers only this check, never the send below (#2199),
         // and is never waited for in the caller's task (#2772): with the
         // database busy, a task of the session's waits and checks.
-        let database = crate::held_database::HeldDatabase::new(Arc::clone(database));
+        let held = crate::held_database::HeldDatabase::new(Arc::clone(database));
         let device = identity.device_oid();
-        let check = async move {
-            let db = database.read().await;
+        let is_present = move |db: &ObjectDatabase| {
             db.get(&device)
                 .is_some_and(|object| object.object_identifier() == device)
         };
+        let check = async move { is_present(&*held.read().await) };
         let pool = match &self.server {
             Some(server) => Some(Arc::clone(server.notification_pool())),
             None => self.notifications.clone(),
@@ -974,9 +974,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             }
             Ok(())
         };
-        let present = bacnet_server::caller_waits::for_caller(host, check, |present| present)
-            .await
-            .ok_or_else(|| Error::Encoding("endpoint session is not running".into()))?;
+        let checked = bacnet_server::caller_waits::for_caller(host, check, |present| present).await;
+        let present = match checked {
+            Some(present) => present,
+            // Its runtime dropped the task before it checked: check here.
+            None => is_present(&*database.read().await),
+        };
         if !present {
             return Err(Error::Encoding("endpoint I-Am Device is absent".into()));
         }

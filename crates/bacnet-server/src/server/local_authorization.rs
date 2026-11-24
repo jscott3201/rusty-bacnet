@@ -47,8 +47,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// discard owned work. DCC, budgets, send failures and shutdown still apply;
     /// success is not remote acknowledgment or durable delivery. Independent
     /// transactions have no global notification-order guarantee. Neither
-    /// guard is waited for in the caller's task (#2772), as
-    /// [`read_local`](Self::read_local) describes.
+    /// guard is waited for in the caller's task, and a call dropped part way
+    /// is as [`write_local`](Self::write_local)'s Cancellation section describes
+    /// (#2772): one dropped after its task took both guards may still
+    /// record its events.
     pub async fn authorize_access_local(
         &self,
         request: AuthorizationRequest<'_>,
@@ -161,6 +163,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .request_tasks
             .for_caller(guards, attempt)
             .await
+            // `None`: no change; its runtime dropped the task before it took its locks.
             .unwrap_or_else(|| Err(crate::server::broadcaster::stopped()))?;
         if let Some(finish) = finish {
             finish.await?;

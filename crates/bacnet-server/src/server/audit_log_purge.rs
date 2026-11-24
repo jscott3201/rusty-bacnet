@@ -31,10 +31,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// - The stopped-server error once [`stop`](Self::stop) has run.
     ///
     /// On any error the log is left as it was. A purge whose future is
-    /// dropped before it commits changes nothing the log serves: the staged
-    /// purge is let go from a task of its own as soon as the database guard
-    /// is free, and storage is set back to the state the log serves (#2493).
-    /// One dropped after the commit has purged the log.
+    /// dropped before its task holds the database guard to commit changes
+    /// nothing the log serves: the staged purge is let go as soon as the
+    /// guard is free, and storage is set back to the state the log serves
+    /// (#2493). One dropped after that may still purge the log, and the drop
+    /// does not say which: a call dropped part way is as
+    /// [`write_local`](Self::write_local)'s Cancellation section describes (#2772).
     ///
     /// The future must be awaited inside a Tokio runtime, which the release
     /// task needs: outside one it fails with [`Error::Encoding`] before
@@ -82,6 +84,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.request_tasks
             .for_caller(take, purge)
             .await
+            // `None`: no change; its runtime dropped the task before it took its locks.
             .unwrap_or_else(|| Err(broadcaster::stopped()))
     }
 }

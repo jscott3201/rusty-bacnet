@@ -543,7 +543,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// local Device, under that Device's audit policy, as a peer's reset's
     /// does, and does nothing when no Reporter selects it. It returns once
     /// the record is admitted, not delivered, so call it before the restart
-    /// begins and give delivery time before the process exits.
+    /// begins and give delivery time before the process exits. The database
+    /// is never waited for in the caller's task, and a call dropped part way
+    /// is as [`write_local`](Self::write_local)'s Cancellation section describes
+    /// (#2772): one dropped after its task took the guard may still record.
     ///
     /// # Errors
     ///
@@ -560,6 +563,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.request_tasks
             .for_caller(Arc::clone(&self.db).write_owned(), report)
             .await
+            // `None`: no change; its runtime dropped the task before it took its locks.
             .ok_or_else(broadcaster::stopped)
     }
 }

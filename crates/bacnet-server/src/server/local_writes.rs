@@ -181,7 +181,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// fanout the change owes run as a task of their own in the server's
     /// request task set, which this future only waits for, so a caller
     /// dropped then skips none of it (#1520). `stop()` aborts that task with
-    /// the other request tasks.
+    /// the other request tasks. A call dropped part way is as
+    /// [`write_local`](Self::write_local)'s Cancellation section describes (#2772).
     pub async fn set_life_safety_operation_expected_local(
         &self,
         oid: &ObjectIdentifier,
@@ -246,6 +247,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .request_tasks
             .for_caller(guard, change)
             .await
+            // `None`: no change; its runtime dropped the task before it took its locks.
             .unwrap_or_else(|| Err(crate::server::broadcaster::stopped()))?;
         finish.await
     }
@@ -282,25 +284,35 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// # Cancellation
     ///
-    /// The write never waits in its caller's task (#2772): when the database
-    /// is busy, or a save runs, a task in the server's request task set
-    /// waits and commits, keeping the call's place in the queue for the
-    /// guard, and the future waits for that task. A caller that polls the
-    /// future once and then leaves it unpolled holds up no request.
+    /// A local call never waits for a lock in its caller's task (#2772).
+    /// This holds for every `*_local` call, [`set_clock_zone`](Self::set_clock_zone),
+    /// [`purge_audit_log`](Self::purge_audit_log),
+    /// [`generate_pics`](Self::generate_pics) and
+    /// [`remove_peer_subscriptions`](Self::remove_peer_subscriptions). When
+    /// what it needs is busy, the database, the COV table or a save, a task in
+    /// the server's request task set waits for it, keeping the call's place
+    /// in each queue, makes the call's change and hands back the result,
+    /// and the future waits for that task. A caller that polls the future
+    /// once and then leaves it unpolled holds up no request. A call dropped
+    /// before its task holds its locks makes no change: the task looks for
+    /// its caller with them held, and otherwise ends. A call dropped after
+    /// that may still make its change, as it is dropped or before it would
+    /// have polled the answer, and the drop does not say which: read back
+    /// what it changes to know.
     ///
-    /// Dropped before the write commits, the future makes no change: the
-    /// task that waits for it checks that its caller is still there with the
-    /// guard held, and otherwise ends. A
-    /// property the object saves before it serves (a Device's Description,
+    /// A property the object saves before it serves (a Device's Description,
     /// say) is staged first, with the guard dropped while the save runs.
-    /// Dropped then, or while waiting for the guard to commit, the future
-    /// lets go of the stage as soon as that task sees it go: at once if the
-    /// guard is free, and otherwise from a task of its own on the runtime it
-    /// ran on as soon as the guard is
-    /// free: the object keeps serving its old value and queues the save of
-    /// that value, so storage agrees with it, and the next write on the
-    /// object is not held up. Nothing waits for the stage's lifetime to run
-    /// out, as long as the caller's runtime keeps running. The writes a
+    /// Dropped then, or while waiting for the guard to commit, the write
+    /// lets go of the stage when its task next runs and sees the call gone,
+    /// not inside the drop, so a `try_read` or `try_write` on the
+    /// [`database`](Self::database) at once after the drop can find the
+    /// guard still queued for. The task lets go at once if the guard is
+    /// free, and otherwise from a task of its own on the runtime it ran on
+    /// as soon as the guard is free: the object keeps serving its old value
+    /// and queues the save of that value, so storage agrees with it, and
+    /// the next write on the object is not held up. Nothing waits for the
+    /// stage's lifetime to run out, as long as the runtime keeps running.
+    /// The writes a
     /// Command, Channel or Timer run makes hold their stage the same way, so
     /// a run task that panics or that `stop()` aborts mid-save lets go of it
     /// at once too. Once the write has committed, the work it owes (the
@@ -381,6 +393,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Tokio runtime, failing before anything is written outside one, and a
     /// caller dropped once the write has committed skips none of the work
     /// the write owes (#1367).
+    /// A call dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn set_present_value_local(
         &self,
         oid: &ObjectIdentifier,
@@ -413,6 +427,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Tokio runtime, failing before anything is written outside one, and a
     /// caller dropped once the write has committed skips none of the work
     /// the write owes (#1367).
+    /// A call dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn set_controlled_variable_value_local(
         &self,
         oid: &ObjectIdentifier,
@@ -460,6 +476,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Tokio runtime, failing before anything is written outside one, and a
     /// caller dropped once the write has committed skips none of the work
     /// the write owes (#1367).
+    /// A call dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn add_averaging_sample_local(
         &self,
         oid: &ObjectIdentifier,
@@ -508,6 +526,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Tokio runtime, failing before anything is written outside one, and a
     /// caller dropped once the write has committed skips none of the work
     /// the write owes (#1367).
+    /// A call dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn set_tracking_value_local(
         &self,
         oid: &ObjectIdentifier,
@@ -542,6 +562,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Tokio runtime, failing before anything is written outside one, and a
     /// caller dropped once the write has committed skips none of the work
     /// the write owes (#1367).
+    /// A call dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn add_pulses_local(&self, oid: &ObjectIdentifier, pulses: u64) -> Result<(), Error> {
         self.write_local_as(
             oid,
@@ -578,6 +600,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Tokio runtime, failing before anything is written outside one, and a
     /// caller dropped once the write has committed skips none of the work
     /// the write owes (#1367).
+    /// A call dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn set_reliability_local(
         &self,
         oid: &ObjectIdentifier,
@@ -612,6 +636,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Tokio runtime, failing before anything is written outside one, and a
     /// caller dropped once the write has committed skips none of the work
     /// the write owes (#1367).
+    /// A call dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn set_program_state_local(
         &self,
         oid: &ObjectIdentifier,
@@ -670,6 +696,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .request_tasks
             .for_caller(take, commit)
             .await
+            // `None`: no change; its runtime dropped the task before it took its locks.
             .unwrap_or_else(|| Err(crate::server::broadcaster::stopped()))?;
         match finish {
             Some(finish) => finish.await,

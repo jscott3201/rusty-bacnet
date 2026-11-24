@@ -259,6 +259,39 @@ async fn a_write_local_dropped_during_its_save_releases_the_stage_at_once() {
     next_write_is_not_delayed(&server, &storage).await;
 }
 
+/// A write dropped during its save and made again at once from the same
+/// task, with no yield between, finds the Device still holding the first
+/// write's stage: its task has not run yet (#2772). The second write waits
+/// on the Busy path until that task lets go, then lands.
+#[tokio::test(start_paused = true)]
+async fn a_write_retried_at_once_after_a_drop_waits_out_the_stage_and_lands() {
+    let storage = Arc::new(Storage::default());
+    let server = server(&storage).await;
+    let (started, go) = storage.hold_next();
+    let mut first = Box::pin(write_description(&server, "lobby"));
+    tokio::select! {
+        _ = &mut first => panic!("the held save finished"),
+        started = started => started.unwrap(),
+    }
+    drop(first);
+    let busy = super::super::durable_writes::busy_waits(server.database());
+    let mut second = Box::pin(write_description(&server, "porch"));
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(second.as_mut().poll(&mut cx).is_pending());
+    assert_eq!(
+        super::super::durable_writes::busy_waits(server.database()),
+        busy + 1,
+        "the second write found the first's stage"
+    );
+    drop(go);
+    tokio::time::timeout(HANG, second)
+        .await
+        .expect("the second write never landed")
+        .unwrap();
+    assert_eq!(served(&server).await, "porch");
+    storage.holds(Some("porch")).await;
+}
+
 #[tokio::test]
 async fn a_write_local_dropped_waiting_for_the_guard_releases_the_stage_at_once() {
     let storage = Arc::new(Storage::default());

@@ -622,3 +622,6 @@ async fn a_burst_of_parked_calls_is_bounded() {
     }
     node.server.stop().await.unwrap();
 }
+
+#[path = "caller_waits_edge_tests.rs"]
+mod edge;

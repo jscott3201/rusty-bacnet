@@ -18,11 +18,13 @@
 //! caller.
 //!
 //! The task ends once it has handed back its answer, or once its caller has
-//! gone. A caller that goes before `take` holds its locks leaves `make`
-//! unrun, and the task lets go of what `take` held. The check is made with
-//! those locks held, so a change `make` makes was made before the caller
-//! went or not at all. There is one task per call that found its way
-//! blocked, and none for a call that did not.
+//! gone. A caller that goes before the task holds its locks leaves `make`
+//! unrun: the task looks with the locks held, and lets go of what `take`
+//! held. A caller that goes after that may still have `make` run, while it
+//! goes or before it would have polled the answer, and its drop does not
+//! say which happened. There is one task per call that found its way
+//! blocked, and none for a call that did not. The task runs in the
+//! caller's tracing span.
 
 use std::any::Any;
 use std::future::{Future, poll_fn};
@@ -32,11 +34,12 @@ use std::task::{Context, Poll};
 
 use futures_util::FutureExt;
 use tokio::sync::oneshot;
+use tracing::Instrument;
 
 /// The task that waits for a call (see the [module](self) documentation),
 /// for the call's host to run on its runtime.
 #[doc(hidden)]
-pub struct CallerTask(Pin<Box<dyn Future<Output = ()> + Send>>);
+pub struct CallerTask(Pin<Box<dyn Future<Output = ()> + Send + Sync>>);
 
 impl Future for CallerTask {
     type Output = ();
@@ -56,12 +59,16 @@ type Answer<R> = Result<R, Box<dyn Any + Send>>;
 /// `host` runs the task that waits when `take` can't finish in the call's
 /// first poll; a host that hands the task back (no runtime, or a closed
 /// task set) leaves the call to wait in its own task, as before. `None`
-/// when the host took the task and dropped it before it answered.
+/// when the host took the task and dropped it before it answered, as a
+/// runtime that shuts down does: the task is dropped only where it waits,
+/// so `make` never ran, and the caller may do the call itself. `take` and
+/// `make` must be `Sync`, so the call's future stays `Sync`, as the
+/// server's local calls were before they waited here.
 #[doc(hidden)]
 pub async fn for_caller<G, R>(
     host: impl FnOnce(CallerTask) -> Result<(), CallerTask>,
-    take: impl Future<Output = G> + Send + 'static,
-    make: impl FnOnce(G) -> R + Send + 'static,
+    take: impl Future<Output = G> + Send + Sync + 'static,
+    make: impl FnOnce(G) -> R + Send + Sync + 'static,
 ) -> Option<R>
 where
     G: Send + 'static,
@@ -79,7 +86,7 @@ where
         return Some(make(taken));
     }
     let (mut reply, answer) = oneshot::channel::<Answer<R>>();
-    let task = CallerTask(Box::pin(async move {
+    let wait = async move {
         let taken = tokio::select! {
             biased;
             () = reply.closed() => return,
@@ -97,7 +104,8 @@ where
                 "A local call's work panicked after its caller went away"
             );
         }
-    }));
+    };
+    let task = CallerTask(Box::pin(wait.in_current_span()));
     if let Err(task) = host(task) {
         task.await;
     }

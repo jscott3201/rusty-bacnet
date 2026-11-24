@@ -54,6 +54,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Tokio runtime, failing before anything is written outside one, and a
     /// caller dropped once the write has committed skips none of the work
     /// the write owes (#1367).
+    /// A call dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn set_load_control_shed_levels_local(
         &self,
         oid: &ObjectIdentifier,

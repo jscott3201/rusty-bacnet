@@ -81,20 +81,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// The read never waits for a lock in its caller's task (#2772): with
     /// the database or a table it reads busy, a task of the server's waits
-    /// and reads, and the call returns what that task read. A caller that
+    /// and reads, and the call returns what that task read, so a caller that
     /// polls the call once and then leaves it unpolled holds up none of the
-    /// requests the server serves. The same holds for the other `*_local`
-    /// calls, [`set_clock_zone`](Self::set_clock_zone),
-    /// [`purge_audit_log`](Self::purge_audit_log),
-    /// [`generate_pics`](Self::generate_pics) and
-    /// [`remove_peer_subscriptions`](Self::remove_peer_subscriptions).
+    /// requests the server serves. [`write_local`](Self::write_local)'s Cancellation section
+    /// describes this for every local call, and what a dropped call does.
     pub async fn read_local(
         &self,
         oid: &ObjectIdentifier,
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        let read = LocalRead {
+        let read = self.local_read().read(*oid, property, array_index);
+        match self.request_tasks.for_caller(read, |value| value).await {
+            Some(value) => value,
+            // Its runtime dropped the task before it read: read here.
+            None => self.local_read().read(*oid, property, array_index).await,
+        }
+    }
+
+    /// The handles [`read_local`](Self::read_local) reads with.
+    fn local_read(&self) -> LocalRead {
+        LocalRead {
             db: Arc::clone(&self.db),
             config: Arc::clone(&self.config),
             execution: self.execution,
@@ -102,11 +109,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             device_bindings: Arc::clone(&self.device_bindings),
             stopped: self.dispatch_task.is_none(),
         }
-        .read(*oid, property, array_index);
-        self.request_tasks
-            .for_caller(read, |value| value)
-            .await
-            .unwrap_or_else(|| Err(broadcaster::stopped()))
     }
 
     /// Write one local property from its encoded value: the octets a network
@@ -125,7 +127,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// Like `write_local`, it must be awaited inside a Tokio runtime, failing
     /// before anything is written outside one, and a caller dropped once the
-    /// write has committed skips none of the work the write owes (#1367).
+    /// write has committed skips none of the work the write owes (#1367). A
+    /// call dropped part way is as
+    /// [`write_local`](Self::write_local)'s Cancellation section describes (#2772).
     pub async fn write_local_encoded(
         &self,
         oid: &ObjectIdentifier,
@@ -138,22 +142,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.active_network()?;
         let (target, encoded) = (*oid, value.to_vec());
         let decode = move |db: OwnedRwLockReadGuard<ObjectDatabase>| {
-            let object = db.get(&target).ok_or(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::UNKNOWN_OBJECT,
-            ))?;
-            bacnet_device_core::write::gate_and_decode_write(
-                object,
-                property,
-                array_index,
-                &encoded,
-            )
+            decode_local(&db, &target, property, array_index, &encoded)
         };
-        let value = self
+        let decoded = self
             .request_tasks
             .for_caller(Arc::clone(&self.db).read_owned(), decode)
-            .await
-            .unwrap_or_else(|| Err(broadcaster::stopped()))?;
+            .await;
+        let value = match decoded {
+            Some(value) => value,
+            // Its runtime dropped the task before it decoded: decode here.
+            None => decode_local(&*self.db.read().await, oid, property, array_index, value),
+        }?;
         self.write_local(oid, property, array_index, value, priority, source)
             .await
     }
@@ -182,20 +181,26 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// so the PICS can't contradict what the device reports.
     pub async fn generate_pics(&self, pics_config: &crate::pics::PicsConfig) -> crate::pics::Pics {
         let (config, execution) = (Arc::clone(&self.config), self.execution);
-        let pics_config = pics_config.clone();
+        let owned = pics_config.clone();
         let generate = move |db: OwnedRwLockReadGuard<ObjectDatabase>| {
-            crate::pics::PicsGenerator::new(&db, &config, &pics_config)
+            crate::pics::PicsGenerator::new(&db, &config, &owned)
                 .for_server(execution)
                 .generate()
         };
-        // Never waited for in the caller's task (#2772). The task answers
-        // unless the server's task set drops it, which only `stop()` or the
-        // server's drop does, and neither can run while this call borrows
-        // the server.
-        self.request_tasks
+        // Never waited for in the caller's task (#2772).
+        let generated = self
+            .request_tasks
             .for_caller(Arc::clone(&self.db).read_owned(), generate)
-            .await
-            .expect("the server's task set outlives a call that borrows the server")
+            .await;
+        match generated {
+            Some(pics) => pics,
+            // Its runtime dropped the task before it read: read here.
+            None => {
+                crate::pics::PicsGenerator::new(&*self.db.read().await, &self.config, pics_config)
+                    .for_server(self.execution)
+                    .generate()
+            }
+        }
     }
 }
 
@@ -235,23 +240,48 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Remove COV subscriptions using this current immediate MAC and routed source.
     /// Cleanup of an obsolete router leaves subscriptions renewed onto another route.
     /// Only removed entries release their contribution to the shared quota group.
-    /// The table is never waited for in the caller's task (#2772); see
-    /// [`read_local`](Self::read_local).
+    /// The table is never waited for in the caller's task, and a call
+    /// dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn remove_peer_subscriptions(
         &self,
         mac: &[u8],
         network: Option<&NpduAddress>,
     ) -> usize {
-        let (mac, network) = (mac.to_vec(), network.cloned());
+        let (owned_mac, owned_network) = (mac.to_vec(), network.cloned());
         let remove = move |mut table: OwnedRwLockWriteGuard<CovSubscriptionTable>| {
-            table.remove_peer_subscriptions(&mac, network.as_ref())
+            table.remove_peer_subscriptions(&owned_mac, owned_network.as_ref())
         };
-        // A task dropped unanswered removed nothing.
-        self.request_tasks
+        let removed = self
+            .request_tasks
             .for_caller(Arc::clone(&self.cov_table).write_owned(), remove)
-            .await
-            .unwrap_or(0)
+            .await;
+        match removed {
+            Some(removed) => removed,
+            // Its runtime dropped the task before it removed anything:
+            // remove here.
+            None => {
+                let mut table = self.cov_table.write().await;
+                table.remove_peer_subscriptions(mac, network)
+            }
+        }
     }
+}
+
+/// The value `encoded` is for `property` of `oid`, decoded as the
+/// WriteProperty handler decodes it.
+fn decode_local(
+    db: &ObjectDatabase,
+    oid: &ObjectIdentifier,
+    property: PropertyIdentifier,
+    array_index: Option<u32>,
+    encoded: &[u8],
+) -> Result<PropertyValue, Error> {
+    let object = db.get(oid).ok_or(Error::protocol(
+        ErrorClass::OBJECT,
+        ErrorCode::UNKNOWN_OBJECT,
+    ))?;
+    bacnet_device_core::write::gate_and_decode_write(object, property, array_index, encoded)
 }
 
 /// What [`BACnetServer::read_local`] reads with, owned, so a task of the
