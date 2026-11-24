@@ -3,7 +3,7 @@
 //! address types differ.
 use super::*;
 use crate::network_port::{
-    Bip6Bind, Bip6PortConfig, BipPortConfig, NetworkPortObject, PortAddress, PortBind,
+    Bip6Bind, Bip6PortConfig, BipPortConfig, NetworkPortObject, PortAddress, PortBind, Reserved,
 };
 use alloc::sync::Weak;
 use bacnet_types::bip_port::BipPortMode;
@@ -13,6 +13,8 @@ pub(super) struct NetworkPortRegistration {
     lease: Weak<()>,
     /// The configured address and UDP port the reservation checked.
     configured: PortAddress,
+    /// What a publication replaces, for a withdrawal (#2752).
+    reserved: Reserved,
     published: bool,
 }
 
@@ -122,13 +124,37 @@ impl ObjectDatabase {
         };
         let lease = Arc::new(());
         authority.reserve_internal(&lease)?;
+        let reserved = authority.reserved_internal();
         self.network_port = Some(NetworkPortRegistration {
             oid,
             lease: Arc::downgrade(&lease),
             configured,
+            reserved,
             published: false,
         });
         Ok(lease)
+    }
+
+    /// End a registration whose owner has gone without starting: a server
+    /// start that published its bind and was then refused (#2752). The port
+    /// goes back to the configured address, UDP port, MAC address and APDU
+    /// length it was reserved with, in NORMAL mode with nothing pending, so
+    /// the next start reserves it again, a configured UDP port 0 included.
+    /// Nothing changes while the owner holds the port's lease, or when it
+    /// never published.
+    #[doc(hidden)]
+    pub fn withdraw_network_port_internal(&mut self) {
+        let Some(registration) = self
+            .network_port
+            .take_if(|port| port.lease.strong_count() == 0)
+        else {
+            return;
+        };
+        if registration.published
+            && let Some(port) = self.builtin_network_port_mut(&registration.oid)
+        {
+            port.withdraw_internal(registration.reserved);
+        }
     }
 
     /// Reconcile one actual bind and its B/IP mode under the database write

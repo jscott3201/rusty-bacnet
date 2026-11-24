@@ -6,22 +6,17 @@
 //! Polarity leaves it unset and the rest of the list whole; and what that
 //! reading costs, by RPM and by ReadProperty.
 
-use std::borrow::Cow;
-
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device_identity::DeviceIdentity;
 use bacnet_objects::points::build_database;
-use bacnet_objects::property_metadata::PropertyMetadata;
-use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{
     BinaryPV, EngineeringUnits, ErrorClass, ErrorCode, ObjectType, Polarity,
 };
-use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
 use super::tests::oid;
 use super::*;
-use crate::inventory::test_lab::{Faults, LAB, lab_device, refusing_rpm, serve, stop};
+use crate::inventory::test_lab::{Answering, Faults, LAB, lab_device, refusing_rpm, serve, stop};
 
 fn identity() -> DeviceIdentity {
     DeviceIdentity::new(LAB, 42).unwrap()
@@ -282,65 +277,19 @@ async fn a_reverse_polarity_survives_the_round_trip() {
     assert_eq!(served.unwrap(), PropertyValue::Enumerated(1));
 }
 
-/// A Binary Input or Output that answers every read as the one it wraps
-/// does but Polarity's, which it calls an unknown property, and leaves
-/// Polarity out of its Property_List: an older or non-conforming device.
-struct WithoutPolarity(Box<dyn BACnetObject>);
-
-impl BACnetObject for WithoutPolarity {
-    fn object_identifier(&self) -> ObjectIdentifier {
-        self.0.object_identifier()
-    }
-
-    fn object_name(&self) -> &str {
-        self.0.object_name()
-    }
-
-    fn read_property(
-        &self,
-        property: PropertyIdentifier,
-        index: Option<u32>,
-    ) -> Result<PropertyValue, Error> {
-        if property == PropertyIdentifier::POLARITY {
-            return Err(Error::protocol(
-                ErrorClass::PROPERTY,
-                ErrorCode::UNKNOWN_PROPERTY,
-            ));
-        }
-        self.0.read_property(property, index)
-    }
-
-    fn write_property(
-        &mut self,
-        property: PropertyIdentifier,
-        index: Option<u32>,
-        value: PropertyValue,
-        priority: Option<u8>,
-    ) -> Result<(), Error> {
-        self.0.write_property(property, index, value, priority)
-    }
-
-    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        let rows = self.0.property_metadata();
-        let kept = rows
-            .iter()
-            .filter(|row| row.property_identifier != PropertyIdentifier::POLARITY)
-            .cloned()
-            .collect();
-        Cow::Owned(kept)
-    }
-}
-
-/// `list` built, its Binary Inputs and Outputs then put behind
-/// [`WithoutPolarity`] in their places.
+/// `list` built, its Binary Inputs and Outputs then put in their places
+/// behind an [`Answering`] that calls Polarity an unknown property and
+/// leaves it out of the Property_List: an older or non-conforming device.
 fn without_polarity(list: &PointList) -> ObjectDatabase {
     let mut served = build_database(list.clone(), &identity()).unwrap();
     let mut source = build_database(list.clone(), &identity()).unwrap();
+    let unknown = (ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY);
     for point in &list.points {
         let object_type = point.object.object_type();
         if [ObjectType::BINARY_INPUT, ObjectType::BINARY_OUTPUT].contains(&object_type) {
             let object = source.remove(&point.object).unwrap().unwrap();
-            served.add(Box::new(WithoutPolarity(object))).unwrap();
+            let answers = vec![(PropertyIdentifier::POLARITY, Err(unknown))];
+            served.add(Answering::wrap(object, answers)).unwrap();
         }
     }
     served

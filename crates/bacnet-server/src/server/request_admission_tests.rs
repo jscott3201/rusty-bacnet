@@ -525,6 +525,7 @@ async fn admission_invalid_direct_generic_bip_before_transport_start() {
             never_start(&started),
         )
         .await
+        .map_err(Error::from)
         .err()
         .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("max_confirmed_in_flight")));
@@ -533,6 +534,7 @@ async fn admission_invalid_direct_generic_bip_before_transport_start() {
             .request_admission_policy(policy)
             .build()
             .await
+            .map_err(Error::from)
             .err()
             .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("max_confirmed_in_flight")));
@@ -543,6 +545,7 @@ async fn admission_invalid_direct_generic_bip_before_transport_start() {
             .request_admission_policy(policy)
             .build()
             .await
+            .map_err(Error::from)
             .err()
             .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("max_confirmed_in_flight")));

@@ -92,6 +92,110 @@ fn registered_port_reservation_publication_and_final_release() {
         .unwrap();
     assert!(db.remove(&oid(2)).unwrap().is_some());
 }
+/// A start that published its bind and was then refused withdraws the
+/// registration once its owner has gone: the port reads its configured UDP
+/// port 0 again and the next start reserves it (#2752). A live owner, or
+/// one that never published, changes nothing.
+#[test]
+fn a_withdrawn_publication_reads_and_reserves_as_configured() {
+    let read = |db: &ObjectDatabase, property| {
+        db.get(&oid(1))
+            .unwrap()
+            .read_property(property, None)
+            .unwrap()
+    };
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(object(1))).unwrap();
+    let (_, owner) = db
+        .reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
+        .unwrap();
+    db.publish_bip_port_internal(oid(1), [127, 0, 0, 1], 1234, 1476, BipPortMode::Normal)
+        .unwrap();
+    db.withdraw_network_port_internal();
+    assert_eq!(
+        db.registered_port_internal(),
+        Some(oid(1)),
+        "a live owner keeps it"
+    );
+    drop(owner);
+    db.withdraw_network_port_internal();
+    for (property, expected) in [
+        (P::BACNET_IP_UDP_PORT, PropertyValue::Unsigned(0)),
+        (
+            P::MAC_ADDRESS,
+            PropertyValue::OctetString(vec![127, 0, 0, 1, 0, 0]),
+        ),
+        (P::APDU_LENGTH, PropertyValue::Unsigned(73)),
+        (P::NETWORK_NUMBER, PropertyValue::Unsigned(17)),
+    ] {
+        assert_eq!(read(&db, property), expected, "{property:?}");
+    }
+    let (_, owner) = db
+        .reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
+        .expect("the configured UDP port 0 matches again");
+    drop(owner);
+    // Reserved and never published: as the reservation left it.
+    db.withdraw_network_port_internal();
+    assert_eq!(read(&db, P::BACNET_IP_UDP_PORT), PropertyValue::Unsigned(0));
+    assert!(
+        db.reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
+            .is_ok()
+    );
+}
+
+/// A port published in BBMD or FOREIGN mode is withdrawn to NORMAL with its
+/// configured address and UDP port, and reserves again (#2752).
+#[test]
+fn a_withdrawn_bbmd_or_foreign_publication_reads_normal_and_reserves_again() {
+    use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
+    let bbmd = BACnetHostNPort {
+        host: BACnetHostAddress::Ip(core::net::IpAddr::V4(core::net::Ipv4Addr::new(10, 0, 0, 1))),
+        port: 0xBAC0,
+    };
+    struct Tables;
+    impl bacnet_types::bip_port::BbmdTables for Tables {
+        fn broadcast_distribution_table(&self) -> Vec<bacnet_types::constructed::BACnetBDTEntry> {
+            Vec::new()
+        }
+        fn accepts_foreign_device_registrations(&self) -> bool {
+            false
+        }
+        fn foreign_device_table(&self) -> Vec<bacnet_types::constructed::BACnetFDTEntry> {
+            Vec::new()
+        }
+    }
+    for mode in [
+        BipPortMode::Bbmd {
+            tables: Some(Arc::new(Tables)),
+        },
+        BipPortMode::fixed_foreign(bbmd, 300),
+    ] {
+        let mut db = ObjectDatabase::new();
+        db.add(Box::new(object(1))).unwrap();
+        let configured = db.configured_bip_port_internal(&oid(1));
+        let (_, owner) = db
+            .reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
+            .unwrap();
+        db.publish_bip_port_internal(oid(1), [127, 0, 0, 1], 1234, 1476, mode)
+            .unwrap();
+        let mode = |db: &ObjectDatabase| {
+            db.get(&oid(1))
+                .unwrap()
+                .read_property(P::BACNET_IP_MODE, None)
+                .unwrap()
+        };
+        assert_ne!(mode(&db), PropertyValue::Enumerated(0));
+        drop(owner);
+        db.withdraw_network_port_internal();
+        assert_eq!(mode(&db), PropertyValue::Enumerated(0), "NORMAL again");
+        assert_eq!(db.configured_bip_port_internal(&oid(1)), configured);
+        assert!(
+            db.reserve_bip_port_internal(oid(1), [127, 0, 0, 1], 0)
+                .is_ok()
+        );
+    }
+}
+
 #[test]
 fn mismatched_or_unavailable_port_is_not_reserved() {
     let mut db = ObjectDatabase::new();

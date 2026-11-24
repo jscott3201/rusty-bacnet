@@ -57,6 +57,7 @@ pub async fn make_bip_server() -> Result<BACnetServer<BipTransport>, Error> {
         .database(db)
         .build()
         .await
+        .map_err(Error::from)
 }
 
 /// Create a BIP client on an ephemeral port.
@@ -82,6 +83,7 @@ pub async fn make_bip6_server() -> Result<BACnetServer<Bip6Transport>, Error> {
         .database(db)
         .build()
         .await
+        .map_err(Error::from)
 }
 
 /// Create a BIP6 client on an ephemeral port.

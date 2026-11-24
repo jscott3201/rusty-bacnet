@@ -40,6 +40,19 @@ impl ObjectDatabase {
         self.devices().iter().chain(&self.order).copied()
     }
 
+    /// Take every object out, in [`object_list`](Self::object_list) order,
+    /// consuming the database. No object is retired: each leaves as it would
+    /// if the database were dropped, keeping what it runs and what it holds
+    /// in storage. For moving the objects of a database that never served,
+    /// such as one a refused server start hands back, into another (#2752).
+    pub fn into_objects(mut self) -> alloc::vec::Vec<alloc::boxed::Box<dyn BACnetObject>> {
+        let order: alloc::vec::Vec<ObjectIdentifier> = self.object_list().collect();
+        order
+            .into_iter()
+            .filter_map(|oid| self.objects.remove(&oid))
+            .collect()
+    }
+
     /// The Devices, which lead Object_List, in the order they were added:
     /// the type index's. Keeping them out of `order` lets a Device join
     /// without an insert ahead of the rest, which would link one more copy

@@ -511,6 +511,7 @@ async fn recovery_invalid_reserve_before_direct_generic_and_bip_start() {
             never_start(&started),
         )
         .await
+        .map_err(Error::from)
         .err()
         .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("confirmed_recovery_reserve")));
@@ -519,6 +520,7 @@ async fn recovery_invalid_reserve_before_direct_generic_and_bip_start() {
             .request_admission_policy(policy)
             .build()
             .await
+            .map_err(Error::from)
             .err()
             .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("confirmed_recovery_reserve")));

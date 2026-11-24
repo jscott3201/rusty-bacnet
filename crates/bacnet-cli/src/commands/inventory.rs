@@ -139,9 +139,10 @@ fn note(inventory: &Inventory) -> String {
         .iter()
         .filter(|point| !point.problems.is_empty())
         .count();
+    // A problem is a property that couldn't be read, or a setting kept as
+    // the device gave it that a point list couldn't be built with.
     format!(
-        "Read {} objects of device {device}{name} at {}; {troubled} with a property that couldn't \
-         be read.",
+        "Read {} objects of device {device}{name} at {}; {troubled} with a problem listed.",
         inventory.points.len(),
         inventory.address,
     )

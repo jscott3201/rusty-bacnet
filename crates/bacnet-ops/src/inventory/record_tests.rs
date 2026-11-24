@@ -171,7 +171,7 @@ fn a_missing_polarity_is_a_problem_where_the_type_has_one() {
         );
         assert!(read.polarity.is_none(), "{read:?}");
         let said = read.problem(P::POLARITY).map(ToString::to_string);
-        assert_eq!(said.as_deref(), Some("not an Enumerated"));
+        assert_eq!(said.as_deref(), Some("not an Enumerated (got a Real, 1)"));
     }
     // A Binary Value has no Polarity: one it calls unknown is no problem.
     let read = of(ObjectType::BINARY_VALUE, vec![refused(P::POLARITY)]);

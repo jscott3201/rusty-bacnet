@@ -35,6 +35,7 @@ async fn server(
         .database(make_large_db(DEVICE_INSTANCE, object_count))
         .build()
         .await
+        .map_err(Error::from)
 }
 
 /// One B/IP clients step on a fresh server with [`policy`]; the report

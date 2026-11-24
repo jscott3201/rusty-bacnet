@@ -217,7 +217,7 @@ async fn invalid_cov_policy_fails_start_before_transport() {
         .cov_policy(policy)
         .build()
         .await;
-    for error in [direct.err(), generic.err(), bip.err()] {
+    for error in [direct.err(), generic.err(), bip.err()].map(|error| error.map(Error::from)) {
         assert!(
             matches!(&error, Some(Error::Encoding(m)) if m.contains("max_notifications_per_event")),
             "{error:?}"

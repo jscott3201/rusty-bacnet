@@ -38,6 +38,7 @@ async fn dcc_disable_rate_validation_before_start() {
         };
         let error = BACnetServer::start(config, ObjectDatabase::new(), never_start(&started))
             .await
+            .map_err(Error::from)
             .err()
             .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("DCC disable rate")));
@@ -54,6 +55,7 @@ async fn dcc_disable_rate_validation_before_start() {
             .dcc_disable_rate_limit(Some(limit))
             .build()
             .await
+            .map_err(Error::from)
             .err()
             .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("DCC disable rate")));
@@ -92,6 +94,7 @@ async fn dcc_disable_rate_validation_before_sc_dial() {
             .dcc_disable_rate_limit(Some(limit))
             .build()
             .await
+            .map_err(Error::from)
             .err()
             .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("DCC disable rate")));
@@ -189,6 +192,7 @@ async fn dcc_source_restriction_rejected_before_start() {
         };
         let error = BACnetServer::start(config, ObjectDatabase::new(), never_start(&started))
             .await
+            .map_err(Error::from)
             .err()
             .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("source restriction")));
@@ -207,6 +211,7 @@ async fn dcc_source_restriction_rejected_before_start() {
             .dcc_source_restriction(restriction)
             .build()
             .await
+            .map_err(Error::from)
             .err()
             .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("source restriction")));
@@ -225,6 +230,7 @@ async fn dcc_source_restriction_rejected_before_sc_dial() {
             .dcc_source_restriction(Some(DccSourceRestriction::new(vec![]).unwrap()))
             .build()
             .await
+            .map_err(Error::from)
             .err()
             .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("source restriction")));
@@ -334,6 +340,7 @@ async fn dcc_require_password_rejected_before_start() {
         };
         let error = BACnetServer::start(config, ObjectDatabase::new(), never_start(&started))
             .await
+            .map_err(Error::from)
             .err()
             .unwrap();
         assert!(matches!(error, Error::Encoding(m) if m.contains("nonempty dcc_password")));
@@ -390,6 +397,7 @@ async fn configured_password_over_twenty_characters_rejected_before_start() {
         let started = Arc::new(AtomicBool::new(false));
         let error = BACnetServer::start(config, ObjectDatabase::new(), never_start(&started))
             .await
+            .map_err(Error::from)
             .err()
             .unwrap();
         assert!(
@@ -425,6 +433,7 @@ async fn configured_empty_password_rejected_before_start() {
             let started = Arc::new(AtomicBool::new(false));
             let error = BACnetServer::start(config, ObjectDatabase::new(), never_start(&started))
                 .await
+                .map_err(Error::from)
                 .err()
                 .unwrap();
             assert!(
@@ -455,7 +464,7 @@ async fn dcc_require_password_rejected_before_sc_dial() {
         if let Some(password) = password {
             builder = builder.dcc_password(password);
         }
-        let error = builder.build().await.err().unwrap();
+        let error = Error::from(builder.build().await.err().unwrap());
         assert!(matches!(error, Error::Encoding(m) if m.contains("nonempty dcc_password")));
     }
 }

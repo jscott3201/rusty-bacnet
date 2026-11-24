@@ -15,7 +15,6 @@ use bacnet_objects::accumulator::{AccumulatorObject, PulseConverterObject};
 use bacnet_objects::audit::{AuditLogObject, AuditReporterObject, FileAuditLogPersistence};
 use bacnet_objects::averaging::AveragingObject;
 use bacnet_objects::command::CommandObject;
-use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::elevator::{ElevatorGroupObject, EscalatorObject, LiftObject};
 use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};

@@ -21,15 +21,14 @@ Their None defaults preserve non-SC use and positional layout only.
 start() loads the explicit site CA and operational cert/key, each file read
 up to 1 MiB, before dialing or draining registrations. Local TLS
 configuration errors, a larger file included, raise RuntimeError;
-repair the files and retry on the same server. So does a start refused
-before it hands the registrations to the database (#2748): a
-`registered_network_port` that names no Network Port or differs from
-the transport's, an SC hub that refuses the dial, or a Device that cannot
-be prepared. Only an SC dial and a router lookup wait before that
-hand-off, so cancelling a B/IP, B/IPv6 or MS/TP start gives nothing
-back. A refusal inside the Rust server's own startup (a transport that
-will not bind, another refusal of the registered port) has consumed the
-registrations: build the server again.
+repair the files and retry on the same server. So does any other refused
+start: a `registered_network_port` that names no Network Port or
+differs from the transport's, an SC hub that refuses the dial, a Device
+that cannot be prepared (#2748), and a refusal inside the Rust server's
+own startup, such as a transport that will not bind (#2752). Only a
+cancel that lands once the registrations are in the Rust server's
+builder drops them: an SC dial and a router lookup wait before that
+hand-off, while a B/IP, B/IPv6 or MS/TP start hands them over at once.
 
 Every `add_*` builder checks its object at the call (#2711, #2748):
 instance 4194303 raises BacnetError; an identifier or name the Device or
@@ -177,7 +176,7 @@ notifications reach this server alone. Unconfirmed requests reach
 both. A start refused before the Rust server's own startup, such as
 a Device that cannot be prepared, leaves the share
 for the next start; one that server refuses after it took the share
-spends it. Its
+spends it, though the registrations come back (#2752). Its
 local broadcasts, such as its I-Am and an unconfirmed event
 notification to a local-broadcast recipient, go to each of the
 router's networks, isolated ports included (#2601); a recipient
@@ -1230,7 +1229,10 @@ one is pending or under way, and it answers `(progress, expected, actual)`: `"wa
 the expected and actual levels as `ShedLevel` mappings in the
 requested choice. `stop` (optional, needs `shed`) is called with
 no arguments once a request `shed` was asked about ends, removal
-of the object and a start that fails or is cancelled included. Make
+of the object included, and when a start that asked fails or is
+cancelled. A start that fails keeps the request for the next start
+(#2752); a cancelled one drops the objects, so only the file a
+`storage_path` names keeps it. Make
 it idempotent: it may come with no loads shed, and twice with no
 `shed` between. Without `shed` nothing is shed: a request runs
 SHED\_NON\_COMPLIANT from Start\_Time to its end.
@@ -2249,16 +2251,20 @@ def start(self) -> Awaitable[None]
 Start the server and begin accepting BACnet requests.
 
 Every registration was checked at its `add_*` call, so the database
-takes them all. A start refused before it hands them to the database
-(a `registered_network_port` that names no port or differs from the
-transport's, an SC hub that refuses the dial, a Device that cannot be
-prepared) keeps them, with the Audit recipient and the forwarding
-configuration, for the next call (#2748); one the Rust server's
-startup refuses after that (a transport that will not bind) has
-consumed them. Only an SC dial and a router lookup wait before the
-hand-off, so cancelling a B/IP, B/IPv6 or MS/TP start gives nothing
-back; what a cancelled SC start gives back returns when its future is
-dropped, so an immediate retry can raise "in progress" once. A running
+takes them all. A refused start keeps them, with the Audit recipient,
+the forwarders' save counters and the forwarding configuration, for
+the next call: a `registered_network_port` that names no port or
+differs from the transport's, an SC hub that refuses the dial, a
+Device that cannot be prepared (#2748), and a refusal from the Rust
+server's own start, such as a port already in use or start-up
+validation (#2752). That last kind spends a router's application
+port: start the router again before the next start. A
+cancel gives the registrations back only before they reach the Rust
+server: an SC dial and a router lookup wait before that, while a
+B/IP, B/IPv6 or MS/TP start hands them over at once, so cancelling it
+once it runs drops them. What a cancelled start gives back returns
+when its future is dropped, so an immediate retry can raise "in
+progress" once. A running
 server raises RuntimeError; so do `add_*`, `set_file_*`, Audit
 selection and a second `start()` while a start is in progress. An endpoint's server
 (`await endpoint.server()`) raises RuntimeError: it started with its

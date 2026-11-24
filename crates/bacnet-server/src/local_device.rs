@@ -2,22 +2,32 @@
 use bacnet_objects::{DeviceIdentity, database::ObjectDatabase};
 use bacnet_types::{error::Error, primitives::ObjectIdentifier};
 
+use crate::server::StartError;
+
 /// Only an absent database requests generation, its Device kept at the
 /// configured storage path, if any (#2730). An explicitly empty database
 /// stays empty; a supplied Device is checked without rebuilding its state,
-/// and a storage path beside it is refused.
+/// and a storage path beside it is refused. A refusal hands the database
+/// back, the stock one included once it is made (#2752).
 pub(crate) fn prepare_database(
     config: &mut crate::server::ServerConfig,
-    database: Option<ObjectDatabase>,
+    mut database: Option<ObjectDatabase>,
     local_receive_capacity: u16,
-) -> Result<ObjectDatabase, Error> {
-    config.device = config.device.resolve(local_receive_capacity)?;
+) -> Result<ObjectDatabase, StartError> {
+    let refused = StartError::taking(&mut database);
+    config.device = config
+        .device
+        .resolve(local_receive_capacity)
+        .map_err(refused)?;
     let database = match database {
         Some(database) => {
-            crate::server::device_storage::refuse_unused_path(
+            let unused = crate::server::device_storage::refuse_unused_path(
                 config,
                 "the database the builder was given",
-            )?;
+            );
+            if let Err(error) = unused {
+                return Err(StartError::new(error, Some(database)));
+            }
             database
         }
         None => {
@@ -25,11 +35,14 @@ pub(crate) fn prepare_database(
                 .device
                 .clone()
                 .with_services(bacnet_objects::device::EXECUTED_SERVICES);
-            crate::server::device_storage::stock_database(config, &identity)?
+            crate::server::device_storage::stock_database(config, &identity)
+                .map_err(|error| StartError::new(error, None))?
         }
     };
-    validate_startup(&database, &config.device)?;
-    Ok(database)
+    match validate_startup(&database, &config.device) {
+        Ok(()) => Ok(database),
+        Err(error) => Err(StartError::new(error, Some(database))),
+    }
 }
 
 /// Check the global selected Device once before I/O; do not change selection.
