@@ -158,6 +158,7 @@ impl BACnetServer {
             fault_values,
             masked_alarm_values,
         };
+        self.precheck_pending(ObjectType::ACCESS_DOOR, instance, name)?;
         let obj = crate::object_options::keep_reporting(
             || access_door(instance, name, settings.clone()),
             storage_path,
@@ -286,6 +287,7 @@ impl BACnetServer {
             exit_points: device_references(exit_points, "exit_points")?,
             alarm_values,
         };
+        self.precheck_pending(ObjectType::ACCESS_ZONE, instance, name)?;
         let obj = crate::object_options::keep_reporting(
             || access_zone(instance, name, settings.clone()),
             storage_path,

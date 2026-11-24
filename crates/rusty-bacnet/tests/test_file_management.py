@@ -185,10 +185,12 @@ class FileManagementRuntimeTests(unittest.TestCase):
         ):
             server.get_file_data(99)
 
-        server.add_file(8, "First duplicate")
+        server.add_file(8, "First")
         server.set_file_data(8, b"first")
-        server.add_file(8, "Effective duplicate")
-        self.assertEqual(server.get_file_data(8), b"")
+        # A repeated identifier is refused, so the first File stays (#2748).
+        with self.assertRaisesRegex(ValueError, "^duplicate object identifier"):
+            server.add_file(8, "Repeated")
+        self.assertEqual(server.get_file_data(8), b"first")
         server.set_file_data(8, b"effective")
         self.assertEqual(server.get_file_data(8), b"effective")
 
@@ -199,17 +201,16 @@ class FileManagementRuntimeTests(unittest.TestCase):
         self.assertEqual(server.get_file_data(6), b"")
 
         drained = make_server(transport="invalid-for-artifact-test")
-        drained.add_file(7, "Drained")
+        drained.add_file(7, "Kept after a refused start")
 
         async def start_and_fail() -> None:
             await drained.start()
 
         with self.assertRaisesRegex(RuntimeError, "^unknown transport"):
             asyncio.run(start_and_fail())
-        with self.assertRaisesRegex(
-            ValueError, "^no pending File object with instance 7$"
-        ):
-            drained.get_file_data(7)
+        # A start refused before the objects reach the database gives them
+        # back (#2748): the File is still pending, with its data.
+        self.assertEqual(drained.get_file_data(7), b"")
 
 
 if __name__ == "__main__":

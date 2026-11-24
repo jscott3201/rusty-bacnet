@@ -94,6 +94,7 @@ impl BACnetServer {
         recipients: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<()> {
         let recipients = crate::types::destinations(recipients)?;
+        self.precheck_pending(ObjectType::NOTIFICATION_CLASS, instance, name)?;
         let mut nc = match storage_path {
             Some(path) => {
                 let storage =
@@ -118,6 +119,7 @@ impl BACnetServer {
         storage_path: &str,
         buffer_size: u32,
     ) -> PyResult<()> {
+        self.precheck_pending(ObjectType::AUDIT_LOG, instance, name)?;
         let storage = Arc::new(FileAuditLogPersistence::new(storage_path).map_err(to_py_err)?);
         let al = AuditLogObject::new(instance, name, buffer_size, storage).map_err(to_py_err)?;
         self.push_pending(Box::new(al))
@@ -218,6 +220,16 @@ impl BACnetServer {
                 .unwrap_or_default();
             Some((values, references, priority))
         };
+        self.precheck_pending(ObjectType::TIMER, instance, name)?;
+        // The setter's checks, run on a scratch Timer first: the real one
+        // may clear its storage file, which a refusal must leave alone.
+        if let Some((values, references, priority)) = &set {
+            TimerObject::new(instance, name)
+                .and_then(|mut scratch| {
+                    scratch.set_state_change(values.clone(), references.clone(), *priority)
+                })
+                .map_err(to_py_err)?;
+        }
         let mut obj = match storage_path {
             Some(path) => {
                 timer_on_storage(instance, name, path, clear_written_config).map_err(to_py_err)?
@@ -293,6 +305,7 @@ impl BACnetServer {
         clear_written_shed_levels: bool,
     ) -> PyResult<()> {
         let shedder = crate::load_shedder::PyLoadShedder::parse(shed, stop)?;
+        self.precheck_pending(ObjectType::LOAD_CONTROL, instance, name)?;
         let mut obj = match storage_path {
             Some(path) => {
                 let storage = Arc::new(FileLoadControlPersistence::new(path).map_err(to_py_err)?);
@@ -414,6 +427,7 @@ impl BACnetServer {
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
+        self.precheck_pending(ObjectType::ALERT_ENROLLMENT, instance, name)?;
         let obj = crate::object_options::keep_reporting(
             || AlertEnrollmentObject::new(instance, name, initial_source.to_rust()),
             storage_path,
@@ -671,6 +685,7 @@ impl BACnetServer {
                 PyResult::Ok(reference.remove(0))
             })
             .transpose()?;
+        self.precheck_pending(ObjectType::EVENT_ENROLLMENT, instance, name)?;
         let obj = crate::object_options::keep_reporting(
             || {
                 let mut ee = EventEnrollmentObject::new(instance, name, event_type.to_rust())?;
@@ -764,6 +779,7 @@ impl BACnetServer {
         clear_written_reporting: bool,
         total_record_count: u32,
     ) -> PyResult<()> {
+        self.precheck_pending(ObjectType::EVENT_LOG, instance, name)?;
         let mut obj = match storage_path {
             Some(path) => {
                 let storage = bacnet_objects::log_persistence::FileLogPersistence::new(path)
