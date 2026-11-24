@@ -2,6 +2,7 @@
 //!
 //! This entire module is gated behind `#[cfg(feature = "pcap")]`.
 
+use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -69,6 +70,11 @@ trait CaptureSource {
         &self,
         path: &std::path::Path,
     ) -> Result<pcap::Savefile, Box<dyn std::error::Error>>;
+    /// How many packets the OS has dropped since the capture opened because
+    /// its buffer was full (they came faster than they were read): libpcap's
+    /// `ps_drop`, a 32-bit count that wraps. `None` for a file, which can't
+    /// drop any, or when libpcap can't say.
+    fn dropped(&mut self) -> Option<u32>;
 }
 
 fn map_pcap_error(e: pcap::Error) -> PcapError {
@@ -105,6 +111,12 @@ impl CaptureSource for LiveCapture {
     ) -> Result<pcap::Savefile, Box<dyn std::error::Error>> {
         Ok(self.0.savefile(path)?)
     }
+
+    fn dropped(&mut self) -> Option<u32> {
+        // Not `if_dropped`: the interface's own drops count all its
+        // traffic, where the OS has them at all.
+        self.0.stats().ok().map(|stat| stat.dropped)
+    }
 }
 
 struct OfflineCapture(pcap::Capture<pcap::Offline>);
@@ -132,6 +144,10 @@ impl CaptureSource for OfflineCapture {
         path: &std::path::Path,
     ) -> Result<pcap::Savefile, Box<dyn std::error::Error>> {
         Ok(self.0.savefile(path)?)
+    }
+
+    fn dropped(&mut self) -> Option<u32> {
+        None
     }
 }
 
@@ -343,7 +359,16 @@ pub fn run_capture(opts: CaptureOpts) -> Result<(), Box<dyn std::error::Error>> 
 
     // From here stdout is a stream (#2783): a failure ends it with an
     // error line, after the packets printed before it.
-    let packet_count = match packets(&mut *source, &mut savefile, datalink, &opts, &running) {
+    let mut stdout = std::io::stdout();
+    let read = packets(
+        &mut *source,
+        &mut savefile,
+        datalink,
+        &opts,
+        &running,
+        &mut stdout,
+    );
+    let packet_count = match read {
         Ok(count) => count,
         Err(error) => {
             if !opts.quiet {
@@ -367,15 +392,19 @@ pub fn run_capture(opts: CaptureOpts) -> Result<(), Box<dyn std::error::Error>> 
 
 /// Read packets until Ctrl-C (or SIGTERM or SIGHUP on Unix), `--count`, the
 /// end of the file or stdout's reader going, saving and printing each as it
-/// comes; how many were read.
+/// comes to `out` (stdout but for tests); how many were read. Packets the
+/// OS dropped are noted as [`drop_line`] says.
 fn packets(
     source: &mut dyn CaptureSource,
     savefile: &mut Option<pcap::Savefile>,
     datalink: pcap::Linktype,
     opts: &CaptureOpts,
     running: &AtomicBool,
+    out: &mut impl Write,
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let mut packet_count: u64 = 0;
+    // The OS's drop count when last asked.
+    let mut dropped = 0;
     loop {
         // Check running flag and count limit
         if !running.load(Ordering::Relaxed) {
@@ -390,7 +419,15 @@ fn packets(
         // Get next packet
         let pkt = match source.next_packet() {
             Ok(p) => p,
-            Err(PcapError::Timeout) => continue,
+            Err(PcapError::Timeout) => {
+                // A quiet second: what the OS dropped meanwhile.
+                if let Some(line) = drop_line(source, &mut dropped, opts)
+                    && output::print_line_to(out, &line)? == Printed::ReaderGone
+                {
+                    return Ok(packet_count);
+                }
+                continue;
+            }
             Err(PcapError::Eof) => return Ok(packet_count),
             Err(PcapError::Other(e)) => return Err(e.into()),
         };
@@ -406,13 +443,35 @@ fn packets(
             sf.write(&packet_ref);
         }
 
+        // What the OS dropped since the last look comes before the packet.
         // A reader that has gone ends the capture as Ctrl-C does.
-        if !opts.quiet
-            && output::print_line(&packet_text(&pkt, datalink, opts))? == Printed::ReaderGone
-        {
-            return Ok(packet_count);
+        let lines = [
+            drop_line(source, &mut dropped, opts),
+            (!opts.quiet).then(|| packet_text(&pkt, datalink, opts)),
+        ];
+        for line in lines.into_iter().flatten() {
+            if output::print_line_to(out, &line)? == Printed::ReaderGone {
+                return Ok(packet_count);
+            }
         }
     }
+}
+
+/// What the OS dropped since `seen`, its count when last asked, which this
+/// moves on (#2787): a note on stderr and, in JSON, the `missed` line for
+/// the stream (none with `--quiet`, which prints no stream); nothing when it
+/// dropped none, or for a file. The OS drops what arrives while its buffer
+/// is full, after the packets it holds, and the capture asks before it
+/// prints each packet, so the line comes at the gap or before it, by up to
+/// the packets the OS held then; never after it.
+fn drop_line(source: &mut dyn CaptureSource, seen: &mut u32, opts: &CaptureOpts) -> Option<String> {
+    let dropped = source.dropped()?;
+    let count = dropped.wrapping_sub(std::mem::replace(seen, dropped));
+    if count == 0 {
+        return None;
+    }
+    let note = format!("Missed {count} packets (the capture buffer overflowed)");
+    output::missed(&note, count.into(), opts.format).filter(|_| !opts.quiet)
 }
 
 /// A packet as printed: its summary line and, with `--decode`, the detail
@@ -635,6 +694,147 @@ mod tests {
         let p = payload.unwrap();
         assert_eq!(p.len(), 4);
         assert_eq!(p[0], 0x81);
+    }
+
+    /// A capture source that plays `steps`, each a packet (by its second)
+    /// or a timeout with the OS's drop count once it has come, then ends as
+    /// a file does.
+    struct Scripted(
+        std::collections::VecDeque<(Option<i64>, Option<u32>)>,
+        Option<u32>,
+    );
+
+    impl CaptureSource for Scripted {
+        fn next_packet(&mut self) -> Result<CapturedPacket, PcapError> {
+            let (second, dropped) = self.0.pop_front().ok_or(PcapError::Eof)?;
+            self.1 = dropped;
+            let second = second.ok_or(PcapError::Timeout)?;
+            let ts = libc::timeval {
+                tv_sec: second as _,
+                tv_usec: 0,
+            };
+            let header = pcap::PacketHeader {
+                ts,
+                caplen: 0,
+                len: 0,
+            };
+            Ok(CapturedPacket {
+                header,
+                data: Vec::new(),
+            })
+        }
+
+        fn set_filter(&mut self, _: &str) -> Result<(), Box<dyn std::error::Error>> {
+            Ok(())
+        }
+
+        fn datalink(&self) -> pcap::Linktype {
+            pcap::Linktype::ETHERNET
+        }
+
+        fn savefile(
+            &self,
+            _: &std::path::Path,
+        ) -> Result<pcap::Savefile, Box<dyn std::error::Error>> {
+            Err("no savefile".into())
+        }
+
+        fn dropped(&mut self) -> Option<u32> {
+            self.1
+        }
+    }
+
+    /// What `packets` prints in `format` (with `--quiet` when `quiet`)
+    /// for `steps`: each line's packet second, or `missed:N`.
+    fn printed(
+        steps: &[(Option<i64>, Option<u32>)],
+        format: OutputFormat,
+        quiet: bool,
+    ) -> (Vec<String>, u64) {
+        let opts = CaptureOpts {
+            read: None,
+            save: None,
+            quiet,
+            decode: false,
+            device: None,
+            interface_ip: Ipv4Addr::UNSPECIFIED,
+            port: 47808,
+            filter: None,
+            count: None,
+            snaplen: 65535,
+            format,
+        };
+        let mut source = Scripted(steps.iter().copied().collect(), None);
+        let mut stdout = Vec::new();
+        let running = AtomicBool::new(true);
+        let datalink = pcap::Linktype::ETHERNET;
+        let read = packets(
+            &mut source,
+            &mut None,
+            datalink,
+            &opts,
+            &running,
+            &mut stdout,
+        );
+        let text = String::from_utf8(stdout).unwrap();
+        let lines = text.lines().map(|line| match format {
+            OutputFormat::Json => {
+                let json: serde_json::Value = serde_json::from_str(line).unwrap();
+                match json["type"].as_str() {
+                    Some("packet") => json["timestamp"].as_str().unwrap().to_string(),
+                    Some("missed") => {
+                        assert_eq!(json.as_object().unwrap().len(), 2, "{line}");
+                        format!("missed:{}", json["count"])
+                    }
+                    _ => panic!("{line}"),
+                }
+            }
+            OutputFormat::Table => line.split(' ').next().unwrap().to_string(),
+        });
+        (lines.collect(), read.unwrap())
+    }
+
+    /// Packets the OS dropped are a `missed` line in JSON (#2787), before
+    /// the packet the capture reads next or at a quiet second's timeout,
+    /// counting what was dropped since the last look, across the count's
+    /// wrap too; every line one JSON value. A table's stdout and `--quiet`'s
+    /// are unchanged (the note is on stderr), as is a file's stream, which
+    /// can't drop.
+    #[test]
+    fn dropped_packets_are_marked_in_the_stream() {
+        let steps = [
+            (Some(1), Some(0)),
+            (Some(2), Some(3)),
+            (None, Some(5)),
+            (Some(3), Some(5)),
+            (Some(4), Some(u32::MAX)),
+            (Some(5), Some(1)),
+        ];
+        let at = |second: u32| format!("00:00:0{second}.000");
+        let (json, read) = printed(&steps, OutputFormat::Json, false);
+        let missed = |count: u32| format!("missed:{count}");
+        let expected = [
+            at(1),
+            missed(3),
+            at(2),
+            missed(2),
+            at(3),
+            missed(u32::MAX - 5),
+            at(4),
+            missed(2),
+            at(5),
+        ];
+        assert_eq!(json, expected);
+        assert_eq!(read, 5);
+
+        let packets_only = [at(1), at(2), at(3), at(4), at(5)];
+        let (table, _) = printed(&steps, OutputFormat::Table, false);
+        assert_eq!(table, packets_only);
+        let (quiet, read) = printed(&steps, OutputFormat::Json, true);
+        assert!(quiet.is_empty(), "{quiet:?}");
+        assert_eq!(read, 5);
+        let file: Vec<_> = steps.iter().map(|&(second, _)| (second, None)).collect();
+        assert_eq!(printed(&file, OutputFormat::Json, false).0, packets_only);
     }
 
     #[test]

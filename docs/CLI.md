@@ -131,7 +131,7 @@ stderr). Each object names its kind in `type`:
 | `subscribed` | `subscribe`'s first line, once the subscription is in place: `status` (`ok`) and `message` |
 | `cov` | A notification `subscribe` received (see [COV Subscriptions](#cov-subscriptions)) |
 | `packet` | A packet `capture` read (see [Packet Capture](#packet-capture)) |
-| `missed` | A gap: `count` notifications the stream lost because `subscribe` fell behind (below) |
+| `missed` | A gap: `count` notifications or packets the stream lost because the command fell behind (below) |
 | `error` | The last line of a stream that fails once it is running, with `message` as stderr prints it after `Error: `; the exit status is the usual 1 |
 
 A command that can't keep up, as when its reader is slow, loses what comes
@@ -141,7 +141,10 @@ stream, stderr notes it in every format, and the stream goes on. In
 notifications overflowed the client's buffer of 64, whatever object they
 were about (a notification lost on the network can't be counted). A
 consumer that needs a value current should read it again (`bacnet read`)
-rather than wait for its next change.
+rather than wait for its next change. In a live `capture`, `count` is how
+many packets the operating system dropped since the command last asked; the
+line comes at the gap or before it, by up to the packets the system still
+held, never after it. Reading a file loses nothing.
 
 An error before a stream starts (a subscription the device refuses, a capture
 device that won't open) leaves stdout empty, as with any command. A stream
@@ -2630,8 +2633,11 @@ signal within a second.
 ```
 
 **JSON output** is a stream of [JSON Lines](#json-streams), one `packet` line
-a packet (`detail` holds the decode lines with `--decode`); a read that fails
-part way, such as a file cut short, ends it with an `error` line:
+a packet (`detail` holds the decode lines with `--decode`). Packets the
+operating system dropped because the capture fell behind are noted on stderr
+and, in JSON, counted by a `missed` line ([gaps](#json-streams)). A read that
+fails part way, such as a file cut short, ends the stream with an `error`
+line:
 
 ```json
 {"type":"packet","timestamp":"12:34:56.789","src":"192.168.1.100:47808","dst":"192.168.1.255:47808","bvlc":"ORIGINAL_BROADCAST_NPDU","service":"WHO_IS"}
