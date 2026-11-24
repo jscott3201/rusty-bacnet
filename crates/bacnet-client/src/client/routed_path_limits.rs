@@ -275,10 +275,11 @@ impl RoutedPathLimits {
 
     /// Reserve the path's entry and take its gate. A router MAC outside
     /// [`routed_mac_fits`] is refused before any entry is reserved. The
-    /// gate goes to a request only as it is polled, so one whose caller has
-    /// stopped polling it holds the path for nobody, and the others go in
-    /// the order they first waited (#2759). The wait's handle on the gate
-    /// keeps the entry resident.
+    /// gate goes to a request only as it is polled (#2759), so one left
+    /// unpolled while it waits its turn holds the path for nobody; the
+    /// order is [`PollGate`]'s. A request that has the gate holds it until
+    /// its lease drops, polled or not. The wait's handle on the gate keeps
+    /// the entry resident.
     async fn lock_path(
         self: &Arc<Self>,
         router_mac: &[u8],

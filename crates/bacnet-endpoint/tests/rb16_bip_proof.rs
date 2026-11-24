@@ -395,7 +395,7 @@ async fn bip_one_socket_bidirectional_and_device_inspection() {
     // coordinator) stays usable; role handles expose no stop/transport.
     assert!(endpoint.is_running());
     assert_eq!(endpoint.session_role(), SessionRole::Both);
-    let _ = endpoint.policy_counters().await;
+    let _ = endpoint.policy_counters();
     assert_eq!(endpoint.active_leases(), 0);
 
     endpoint.stop().await.unwrap();

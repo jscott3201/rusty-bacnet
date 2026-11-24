@@ -9950,11 +9950,15 @@ answer leaves (the APDU timeout times the attempts, #2651). A request waiting
 out the hold still waits it out, then goes sized to the new limit; a reason-4
 reject that lands in the hold is still discarded. A request sized before the
 change keeps its size, and a reject for it teaches the path nothing. Requests
-to one path still go one at a time, in the order they were made. A request
-takes its turn only as it is polled (#2759): one whose caller has stopped
-polling it, parked in a `select!` arm or a `buffer_unordered` stream while
-the caller awaits something else, holds the path for nobody and is passed
-over until it is polled again.
+to one path still go one at a time. A request takes its turn only as it is
+polled (#2759): one left unpolled while it waits its turn, parked in a
+`select!` arm or a `buffer_unordered` stream while the caller awaits
+something else, holds the path for nobody and is passed over until it is
+polled again. Requests polled when woken go in the order they began to wait:
+strictly on a current-thread runtime, while on a multi-thread runtime one
+slow to be polled can be passed. A request that has its turn holds the path
+until it ends, polled or not, so drive such futures, or don't send to the
+same path from the body of a loop that drains them.
 `clear_routed_path_limit` on a path the client holds nothing for reserves
 nothing, so it never fails for capacity.
 
@@ -11113,9 +11117,13 @@ that network. A router that refuses table queries from other networks drops a
 routed query silently, so it ends as `NoAnswer` too: a hosted router on the
 hardened control policy with no authorizer does, as does a `bacnet-router-core`
 host that refuses `ControlClass::InitQuery` (#2715).
-A client runs one query at a time, and a call takes its turn only as it is
-polled, so one whose caller has stopped polling it holds up no other
-(#2759). A `first_answer` greater than `total` returns `InvalidArgument`.
+A client runs one query at a time. A call takes its turn only as it is
+polled, so one left unpolled while it waits its turn holds up no other
+(#2759); calls polled when woken go in the order they began to wait,
+strictly on a current-thread runtime, while on a multi-thread runtime one
+slow to be polled can be passed. A call that has its turn holds it until it
+returns, polled or not: drive it, or wrap it in a timeout. A `first_answer`
+greater than `total` returns `InvalidArgument`.
 
 ### Device Management
 
@@ -14363,8 +14371,8 @@ or with no recipient, goes unaudited in the caller's task.
 `write_audit_recipient` and `report_device_reset_local` take the guard the
 same way (#2759): with the database busy, a task the session owns waits for
 it and does the work, and a caller that goes before that task has it leaves
-the recipient unchanged or the reset unrecorded. `policy_counters` never
-waits.
+the recipient unchanged or the reset unrecorded. `policy_counters` is a
+plain method under a short synchronous lock, so a sample never waits.
 
 - Each target is its own record (Clause 19.6.5): one per reference of a
   ReadPropertyMultiple, or per value its answer reports for ALL, REQUIRED or

@@ -1,7 +1,7 @@
 ---
 section: Fixed
 ---
-- A call polled once and then left unpolled no longer holds what other
-  callers wait for: a client's routed path, routing-table query or network
-  number question, or an endpoint session's database or policy counters
-  (#2759).
+- A call left unpolled while it waits its turn no longer holds up others: a
+  client's routed path, routing-table query or network number question, and
+  an endpoint's database and counters. Routed requests keep their order when
+  polled; on a multi-thread runtime a slow one can be passed (#2759).

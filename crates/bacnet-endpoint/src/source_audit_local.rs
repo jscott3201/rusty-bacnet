@@ -19,6 +19,7 @@
 //! operation undone; a call borrows the session, so its caller has gone by
 //! then.
 use super::*;
+use tokio::sync::RwLockWriteGuard;
 
 impl SourceAudit {
     /// Run `op` under the database's write guard, never waiting for the
@@ -37,19 +38,31 @@ impl SourceAudit {
         let source = Arc::clone(self);
         // A rejected spawn drops the task, and with it the reply.
         owner.spawn(async move {
-            let mut db = tokio::select! {
-                biased;
-                db = source.db.write() => db,
-                () = reply.closed() => return,
-            };
-            if reply.is_closed() {
+            let Some(mut db) = source.write_for(&mut reply).await else {
                 return;
-            }
+            };
             let result = op(&source, &mut db);
             drop(db);
             let _ = reply.send(result);
         });
         drop(owner);
         answer.await.ok()
+    }
+
+    /// The database's write guard, for a task the session runs for a caller
+    /// that waits on `reply`, or `None` once that caller has gone, before
+    /// the guard came or as it came. Only such a task, which the session
+    /// polls, waits here: an audited request's (#2755) and a local
+    /// operation's (#2759).
+    pub(super) async fn write_for<T>(
+        &self,
+        reply: &mut oneshot::Sender<T>,
+    ) -> Option<RwLockWriteGuard<'_, ObjectDatabase>> {
+        let db = tokio::select! {
+            biased;
+            db = self.db.write() => db,
+            () = reply.closed() => return None,
+        };
+        (!reply.is_closed()).then_some(db)
     }
 }

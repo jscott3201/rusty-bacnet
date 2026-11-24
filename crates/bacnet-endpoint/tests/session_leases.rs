@@ -157,7 +157,7 @@ async fn lost_consumer_routes_to_policy_without_hanging() {
 
     // The dispatch task routes the request to policy without a server role.
     eventually(WAIT, "lost inbound was not policy-owned", async || {
-        client.policy_counters().await.no_server_role >= 1
+        client.policy_counters().no_server_role >= 1
     })
     .await;
 
@@ -239,7 +239,7 @@ async fn malformed_apdu_is_policy_owned() {
         .unwrap();
 
     eventually(WAIT, "malformed APDU was not policy-owned", async || {
-        client.policy_counters().await.ingress_policy >= 1
+        client.policy_counters().ingress_policy >= 1
     })
     .await;
 

@@ -799,9 +799,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Samples policy-outcome ownership counters.
     ///
     /// Every classifier/policy outcome is counted, never silently dropped,
-    /// and so is every APDU a full queue had no room for. It never waits: a
-    /// future of it polled once and then held holds nothing up (#2759).
-    pub async fn policy_counters(&self) -> PolicyCountersSnapshot {
+    /// and so is every APDU a full queue had no room for. A sample takes a
+    /// short synchronous lock the dispatch task also takes, never held
+    /// across an await, so it never waits on that task (#2759).
+    pub fn policy_counters(&self) -> PolicyCountersSnapshot {
         let drops = self
             .ingress
             .as_ref()

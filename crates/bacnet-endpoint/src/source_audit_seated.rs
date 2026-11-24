@@ -201,14 +201,9 @@ impl SourceAudit {
         owner: Weak<NotificationTransactions>,
     ) {
         let plan = {
-            let mut db = tokio::select! {
-                biased;
-                db = self.db.write() => db,
-                () = reply.closed() => return,
-            };
-            if reply.is_closed() {
+            let Some(mut db) = self.write_for(&mut reply).await else {
                 return;
-            }
+            };
             self.plan(&mut db, &request)
         };
         match plan {

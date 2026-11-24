@@ -1,8 +1,8 @@
 //! The session's local write of its Audit recipient waits for the database
 //! in a task the session owns when the database is busy, not in its
 //! caller's (#2759), as an audited request does (#2755); and sampling its
-//! policy counters never waits at all. Each caller here is polled once by
-//! hand and then held, unpolled.
+//! policy counters is synchronous. Each recipient write here is polled once
+//! by hand and then held, unpolled.
 use super::*;
 
 /// Poll `future` once, with a waker that wakes nothing: its caller then
@@ -90,21 +90,17 @@ async fn a_recipient_write_whose_caller_went_changes_nothing() {
     }
 }
 
-/// Sampling the policy counters never waits, so a caller that polls it
-/// once and holds it holds nothing: it is ready at once, and the session's
-/// dispatch goes on counting what it handles.
+/// Sampling the policy counters is synchronous, under the lock the
+/// dispatch task counts under, so a sample never waits on that task, and
+/// the dispatch goes on counting what it handles between samples.
 #[tokio::test(start_paused = true)]
-async fn policy_counters_never_wait() {
+async fn policy_counters_follow_the_dispatch_task() {
     let endpoint = source(SessionRole::ClientOnly, true).await;
-    let mut sample = Box::pin(endpoint.session.policy_counters());
-    let Poll::Ready(before) = poll_now(sample.as_mut()) else {
-        panic!("sampling the counters waited")
-    };
+    let before = endpoint.session.policy_counters();
     endpoint.served_read(7).await;
     eventually(WAIT, "the request no server takes is counted", async || {
-        endpoint.session.policy_counters().await.no_server_role == before.no_server_role + 1
+        endpoint.session.policy_counters().no_server_role == before.no_server_role + 1
     })
     .await;
-    drop(sample);
     endpoint.stop().await;
 }

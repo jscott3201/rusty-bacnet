@@ -16,10 +16,14 @@
 //! itself and returns pending, so an older waiter woken before it is polled
 //! first and goes first. On its next poll, if the gate is still free and
 //! nothing has let it go since, it takes it whatever waits ahead of it. So
-//! waiters that are polled when woken go one at a time, in the order they
-//! first waited, a newcomer included (it steps aside for the woken), while a
-//! waiter whose caller has stopped polling holds nothing and holds the
-//! others up by one turn of their executor each time the gate comes free.
+//! a waiter left unpolled holds nothing and holds the others up by one turn
+//! of their executor each time the gate comes free, while waiters polled
+//! when woken go one at a time in the order they first waited, a newcomer
+//! included (it steps aside for the woken). That order is strict when they
+//! are polled in the order they are woken: in one task, or on a
+//! current-thread runtime. On a multi-thread runtime one slow to be polled
+//! can be passed. A holder holds the gate until its guard drops, whether
+//! its own caller polls it or not: only the wait is taken on poll.
 //!
 //! A release wakes every waiter, so draining n waiters that all wait at
 //! once costs about n²/2 wakes and polls. The state's lock is a leaf, held

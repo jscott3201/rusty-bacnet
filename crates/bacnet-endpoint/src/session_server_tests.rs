@@ -347,7 +347,7 @@ async fn a_request_on_the_link_before_start_is_the_servers() {
         matches!(&answers[..], [Apdu::ComplexAck(ack)] if ack.invoke_id == 41),
         "{answers:?}"
     );
-    assert_eq!(session.policy_counters().await.no_server_role, 0);
+    assert_eq!(session.policy_counters().no_server_role, 0);
     assert_eq!(session.server_seat_counters().apdus, 1);
     session.stop().await.unwrap();
 }
@@ -502,7 +502,7 @@ async fn requests_classified_as_the_link_starts_are_the_servers() {
         "{:?}",
         answers(&sent)
     );
-    assert_eq!(session.policy_counters().await.no_server_role, 0);
+    assert_eq!(session.policy_counters().no_server_role, 0);
     assert_eq!(session.server_seat_counters().apdus, 8);
     session.stop().await.unwrap();
 }

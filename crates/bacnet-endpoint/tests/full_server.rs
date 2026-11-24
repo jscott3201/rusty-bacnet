@@ -272,7 +272,7 @@ async fn the_full_server_answers_for_the_node_beside_its_full_client() {
     assert_eq!(peer_value.object_identifier, ai1());
 
     // No request found the node without a server.
-    let counters = lab.session.policy_counters().await;
+    let counters = lab.session.policy_counters();
     assert_eq!(counters.no_server_role, 0);
     assert_eq!(counters.confirmed_full_drops, 0);
     let seat = lab.session.server_seat_counters();
@@ -450,7 +450,7 @@ async fn each_answer_goes_to_the_role_that_asked() {
     )));
     // The node's notifications and the client's requests drew on one pool,
     // so nothing was claimed by a role that didn't ask.
-    assert_eq!(lab.session.policy_counters().await.unclaimed_terminal, 0);
+    assert_eq!(lab.session.policy_counters().unclaimed_terminal, 0);
     assert!(sent_to(&lab.node_sent, &other).len() >= 6);
 
     stop(lab).await;

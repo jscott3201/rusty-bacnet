@@ -304,12 +304,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// Network messages carry no invoke ID, so the client runs one
     /// routing-table query at a time: a second call waits for the first,
-    /// and its clock starts when it reaches the gate. Calls waiting together
-    /// go in the order they began to wait; one whose future is not polled
-    /// when the gate comes free holds nothing and is passed over until it
-    /// is polled again (#2759). A call that has the gate holds it until it
-    /// returns or is dropped: to cancel one, wrap it in a timeout. With `wait.first_answer` equal to `wait.total`, a complete
-    /// answer that arrives at the end can be marked
+    /// and its clock starts when it reaches the gate. A call left unpolled
+    /// while it waits its turn holds nothing and is passed over until it is
+    /// polled again (#2759). Calls polled when woken go in the order they
+    /// began to wait: strictly on a current-thread runtime, while on a
+    /// multi-thread runtime one slow to be polled can be passed. A call that
+    /// has the gate holds it until it returns or is dropped, polled or not:
+    /// drive it, or wrap it in a timeout. With `wait.first_answer` equal to
+    /// `wait.total`, a complete answer that arrives at the end can be marked
     /// [`RoutingTable::truncated`]. Every bound must fit the clock
     /// (`InvalidArgument` otherwise).
     pub async fn routing_table(
