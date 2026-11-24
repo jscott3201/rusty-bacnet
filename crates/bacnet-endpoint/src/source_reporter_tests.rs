@@ -251,7 +251,7 @@ async fn rejected(
         None
     };
     for _ in 0..2 {
-        let result = session.start().await;
+        let result = session.start().await.map_err(Error::from);
         assert!(
             matches!(&result, Err(Error::Encoding(message)) if message.contains(expected)),
             "expected {expected}: {result:?}"

@@ -39,6 +39,7 @@
 use std::time::Duration;
 
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_server::server::StartError;
 use bacnet_transport::mstp::{MstpConfig, MstpExecutionMode, MstpTransport, SerialPort};
 use bacnet_types::MacAddr;
 use bacnet_types::error::Error;
@@ -382,7 +383,13 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     /// identity resolves against the transport's receive capacity before
     /// generating or validating its Device. An identity-free session keeps
     /// the [`SessionConfig`] 480 default.
-    pub fn build_session(self) -> Result<EndpointSession<MstpTransport<S>>, Error> {
+    ///
+    /// Refuses what [`validate_only`](Self::validate_only) refuses, session
+    /// settings [`EndpointSession::new`] refuses and source Audit bindings
+    /// the link can't take, before the database moves into the session: the
+    /// [`StartError`] hands back the one [`database`](Self::database) gave,
+    /// as given (#2766).
+    pub fn build_session(self) -> Result<EndpointSession<MstpTransport<S>>, StartError> {
         self.build_session_wrapped(std::convert::identity)
     }
 
@@ -392,23 +399,36 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     /// does. The transport's diagnostics are taken before `wrap`, so
     /// [`EndpointSession::mstp_diagnostics`] keeps working. `wrap` must pass
     /// every [`TransportPort`](bacnet_transport::port::TransportPort) call
-    /// through to the transport it is given.
+    /// through to the transport it is given. A refusal hands back the
+    /// database, as [`build_session`](Self::build_session)'s does.
     pub fn build_session_wrapped<U: bacnet_transport::port::TransportPort + 'static>(
         mut self,
         wrap: impl FnOnce(MstpTransport<S>) -> U,
-    ) -> Result<EndpointSession<U>, Error> {
-        self.validate_only()?;
+    ) -> Result<EndpointSession<U>, StartError> {
         let bindings = std::mem::take(&mut self.source_audit_bindings);
         let routed = std::mem::take(&mut self.source_audit_routed);
-        crate::session::check_link_bindings(&bindings, &routed, &[self.this_station])?;
+        let checked = self
+            .validate_only()
+            .and_then(|()| self.session.validate())
+            .and_then(|()| {
+                crate::session::check_link_bindings(&bindings, &routed, &[self.this_station])
+            });
+        if let Err(error) = checked {
+            return Err(StartError::new(error, self.database.take()));
+        }
         let role = self.role;
         let session = self.session.clone();
         let database = self.database.take();
         let device_storage_path = self.device_storage_path.take();
         let identity = self.identity.take();
-        let transport = self.build_transport()?;
-        let diagnostics = transport.diagnostics();
-        let mut endpoint = EndpointSession::new(wrap(transport), role, session)?;
+        let built = self.build_transport().and_then(|transport| {
+            let diagnostics = transport.diagnostics();
+            EndpointSession::new(wrap(transport), role, session).map(|end| (end, diagnostics))
+        });
+        let (mut endpoint, diagnostics) = match built {
+            Ok(built) => built,
+            Err(error) => return Err(StartError::new(error, database)),
+        };
         endpoint.mstp_diagnostics = Some(diagnostics);
         if let Some(db) = database {
             endpoint = endpoint.with_database(db);

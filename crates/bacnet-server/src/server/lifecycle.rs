@@ -491,6 +491,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             transport_cleanup_error: None,
             network_number_task,
             db,
+            database_handed_back: false,
             cov_table,
             cov_counters,
             seg_ack_senders,

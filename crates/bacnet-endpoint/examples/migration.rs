@@ -29,9 +29,10 @@ fn migrate_bip_client(
     port: u16,
     broadcast: Ipv4Addr,
 ) -> Result<EndpointSession<BipTransport>, bacnet_types::error::Error> {
-    BipEndpointBuilder::new(interface, port, broadcast)
+    // `?` turns a refused build into `Error`, its database let go of.
+    Ok(BipEndpointBuilder::new(interface, port, broadcast)
         .role(SessionRole::ClientOnly)
-        .build_session()
+        .build_session()?)
 }
 
 /// Old: `BACnetServer::bip_builder().database(db)...build().await`
@@ -45,11 +46,11 @@ fn migrate_bip_server(
     identity: DeviceIdentity,
 ) -> Result<EndpointSession<BipTransport>, bacnet_types::error::Error> {
     let db = build_database_with_extra(&identity, Vec::new())?;
-    BipEndpointBuilder::new(interface, port, broadcast)
+    Ok(BipEndpointBuilder::new(interface, port, broadcast)
         .role(SessionRole::ServerOnly)
         .database(db)
         .device(identity)
-        .build_session()
+        .build_session()?)
 }
 
 /// Old: `BACnetClient::sc_builder()...build().await` (after hub dial).
@@ -60,9 +61,9 @@ fn migrate_sc_loopback(
     uuid: [u8; 16],
     ws: LoopbackWebSocket,
 ) -> Result<EndpointSession<ScTransport<LoopbackWebSocket>>, bacnet_types::error::Error> {
-    ScEndpointBuilder::new(vmac, uuid)
+    Ok(ScEndpointBuilder::new(vmac, uuid)
         .role(SessionRole::ClientOnly)
-        .build_loopback_session(ws)
+        .build_loopback_session(ws)?)
 }
 
 /// Old: `generic_builder().transport(MstpTransport::new(serial, ...))`.
@@ -71,9 +72,9 @@ fn migrate_mstp<S: bacnet_transport::mstp::SerialPort>(
     serial: S,
     station: u8,
 ) -> Result<EndpointSession<MstpTransport<S>>, bacnet_types::error::Error> {
-    MstpEndpointBuilder::new(serial, station)
+    Ok(MstpEndpointBuilder::new(serial, station)
         .role(SessionRole::ClientOnly)
-        .build_session()
+        .build_session()?)
 }
 
 #[tokio::main]

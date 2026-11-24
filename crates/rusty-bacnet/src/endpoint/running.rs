@@ -148,7 +148,9 @@ impl super::lifecycle::Session for Running {
             if self.session.is_running() {
                 let _ = self.session.stop().await;
             }
-            return Err(to_py_err(error));
+            // Its database goes: the next start builds the objects again
+            // from their registrations (#2766).
+            return Err(to_py_err(error.into()));
         }
         Ok(())
     }

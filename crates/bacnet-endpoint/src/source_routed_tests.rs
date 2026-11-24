@@ -107,11 +107,13 @@ fn the_builders_check_routed_bindings() {
         let mstp = crate::mstp::MstpEndpointBuilder::new(line, 3)
             .source_audit_routed_device_binding(device, network, mac.clone())
             .build_session()
-            .map(drop);
+            .map(drop)
+            .map_err(Error::from);
         let bip = crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .source_audit_routed_device_binding(device, network, mac)
             .build_session_over(bus_port())
-            .map(drop);
+            .map(drop)
+            .map_err(Error::from);
         let expected = network == REMOTE;
         for (link, result) in [("SC", sc), ("MS/TP", mstp), ("B/IP", bip)] {
             assert_eq!(result.is_ok(), expected, "{link} {network}");
@@ -147,7 +149,7 @@ async fn a_session_refuses_a_routed_binding_to_the_global_network() {
                 MacAddr::from_slice(&STATION),
             )
             .with_source_audit_reporter(selected());
-    assert!(denied(session.start().await));
+    assert!(denied(session.start().await.map_err(Error::from)));
 }
 
 /// The session on network 1, a `BACnetRouter` between networks 1 and 2,

@@ -29,8 +29,10 @@
 //! without a goodbye and without waiting.
 //!
 //! The session keeps its object database through `stop()` and lets go of it
-//! when it drops. Every holder of the database (the session, its server,
-//! the source Audit runtime and the session's tasks) lets go through
+//! when it drops; a start refused once the link has started hands it back
+//! instead ([`start`](EndpointSession::start), #2766). Every holder of the
+//! database (the session, its server, the source Audit runtime and the
+//! session's tasks) lets go through
 //! [`drop_database_off_runtime`], so whichever goes last, in async code the
 //! objects and any durable saves they wait for drop on Tokio's blocking pool,
 //! not on a runtime worker (#1561).
@@ -91,7 +93,8 @@ mod frame_observation;
 mod registered_port;
 
 use bacnet_server::server::{
-    __endpoint_NotificationTransactions as NotificationTransactions, drop_database_off_runtime,
+    __endpoint_NotificationTransactions as NotificationTransactions, StartError,
+    drop_database_off_runtime,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -643,13 +646,38 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Profile initialization errors after ingress starts cancel and join ingress
     /// before returning, leaving the session terminal. Canceling that cleanup
     /// leaves a stopping session whose teardown can resume with [`stop`](Self::stop).
-    pub async fn start(&mut self) -> Result<(), Error> {
+    ///
+    /// A refusal is a [`StartError`], which `?` turns into [`Error`]. One
+    /// that ends the session, once the link has started (a link that won't
+    /// start, a registered Network Port it can't publish, a server build or
+    /// a source Audit installation the started link refuses), hands back
+    /// the database (#2766): the one [`with_database`](Self::with_database)
+    /// gave, or the stock one the start built from the identity. The
+    /// session's cleanup has let go of every other handle on it by then, a
+    /// server the start built included. It comes back with what a start
+    /// sets and the next start sets again:
+    ///
+    /// - the identity's Device bound as the local Device;
+    /// - a registered Network Port the start published put back as it was
+    ///   configured, so the next start reserves it again;
+    /// - once the start gave it to its server, what a refused server start
+    ///   leaves, as [`StartError`] lists it for a seat, and the outputs that
+    ///   start drove released: a Load Control's application is told to
+    ///   stop, and the object keeps its request;
+    /// - a source Audit Reporter the start installed taken out again.
+    ///
+    /// It is `None` where the session keeps its database: a refusal before
+    /// the link starts, which leaves the session ready to start again with
+    /// it, and a second start. A start cancelled after the link started
+    /// leaves it with the session too, which lets go of it off the runtime.
+    pub async fn start(&mut self) -> Result<(), StartError> {
+        let kept = |error| StartError::new(error, None);
         if self.lifecycle.load(Ordering::Acquire) != Lifecycle::Ready as u8 {
-            return Err(Error::Encoding(
+            return Err(kept(Error::Encoding(
                 "endpoint session cannot be started more than once".into(),
-            ));
+            )));
         }
-        let source_routes = self.prepare_start().await?;
+        let source_routes = self.prepare_start().await.map_err(kept)?;
         if self.lifecycle.compare_exchange(
             Lifecycle::Ready as u8,
             Lifecycle::Running as u8,
@@ -657,17 +685,38 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             Ordering::Acquire,
         ) != Ok(Lifecycle::Ready as u8)
         {
-            return Err(Error::Encoding(
+            return Err(kept(Error::Encoding(
                 "endpoint session cannot be started more than once".into(),
-            ));
+            )));
         }
         if let Err(error) = self.start_link(source_routes).await {
             // Keep cleanup ownership in self before awaiting. Cancellation leaves
             // Stopping plus intact joins; stop/Drop can still finish teardown.
             let _ = self.stop().await;
-            return Err(error);
+            return Err(StartError::new(error, self.hand_back_database()));
         }
         Ok(())
+    }
+
+    /// The database of a start the session's stop has just ended (#2766):
+    /// the stop let go of every other handle, so it comes out of its lock,
+    /// with what the start began released. A handle still shared, which no
+    /// path leaves, stays with the session, which lets go of it off the
+    /// runtime as it drops.
+    fn hand_back_database(&mut self) -> Option<ObjectDatabase> {
+        let db = self.database.take()?;
+        match Arc::try_unwrap(db) {
+            Ok(db) => {
+                let mut db = db.into_inner();
+                db.release_outputs();
+                db.withdraw_network_port_internal();
+                Some(db)
+            }
+            Err(shared) => {
+                self.database = Some(shared);
+                None
+            }
+        }
     }
 
     /// Stops dispatch, roles and ingress once; joins termination.
@@ -702,10 +751,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// destructors can lose it. Let go of every guard first where storage
     /// must be settled when this returns.
     ///
-    /// The stopped server lets go of its database handle from a task, a
-    /// runtime turn after this call returns, as a standalone server's drop
-    /// does: code that takes the database back once the session is gone
-    /// (`Arc::try_unwrap` of a clone it kept) lets that turn pass first.
+    /// The stopped server has let go of its database handle when this call
+    /// returns (#2766), but for settling handed to a task as above, which
+    /// holds one until it has run.
     ///
     /// A [`client`](Self::client) still alive doesn't hold the
     /// stop up (#2617): its tasks end, the link stops, and its requests

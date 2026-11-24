@@ -240,6 +240,20 @@ impl<T: TransportPort> Drop for BACnetServer<T> {
     /// keeps the objects alive; let go of it with
     /// [`drop_database_off_runtime`] (#1513).
     fn drop(&mut self) {
+        let tasks = self.seal_and_abort();
+        // A node that took the handle back left nothing to let go of.
+        if !self.database_handed_back {
+            self.let_database_go(tasks);
+        }
+    }
+}
+
+impl<T: TransportPort> BACnetServer<T> {
+    /// What a drop does first, and the node's
+    /// [`__endpoint_into_database`](BACnetServer::__endpoint_into_database)
+    /// too: seal the server and abort its tasks, which it returns to be
+    /// joined before the database goes.
+    fn seal_and_abort(&mut self) -> Vec<JoinHandle<()>> {
         if let Some(network) = self.network.as_ref().filter(|_| self.owns_link()) {
             network.seal_responses();
         }
@@ -280,11 +294,9 @@ impl<T: TransportPort> Drop for BACnetServer<T> {
         for task in &tasks {
             task.abort();
         }
-        self.let_database_go(tasks);
+        tasks
     }
-}
 
-impl<T: TransportPort> BACnetServer<T> {
     /// Let the object database go off the async runtime as the server is
     /// dropped (#1409).
     ///
@@ -317,32 +329,69 @@ impl<T: TransportPort> BACnetServer<T> {
             return;
         };
         let db = std::mem::take(&mut self.db);
-        let requests = Arc::clone(&self.request_tasks);
-        let notifications = Arc::clone(&self.notification_transactions);
-        let dcc_timer = Arc::clone(&self.dcc_timer);
+        let joined = join_released(
+            tasks,
+            Arc::clone(&self.request_tasks),
+            Arc::clone(&self.notification_transactions),
+            Arc::clone(&self.dcc_timer),
+        );
         runtime.spawn(async move {
-            for task in tasks {
-                let _ = task.await;
-            }
-            while let Some(result) = requests.join_next().await {
-                super::request_tasks::RequestTasks::observe(Some(result));
-            }
-            // No request is left to hold the slot. The guard goes before the
-            // join, as the timer may be queued for the slot itself.
-            let timer = dcc_timer.lock().await.take();
-            if let Some(timer) = timer {
-                timer.abort();
-                let _ = timer.await;
-            }
-            while let Some(result) = notifications.join_next().await {
-                NotificationTransactions::observe(Some(result));
-            }
-            // The lanes were sealed at the drop; their aborted tasks let go
-            // of their database handles as they are joined.
-            super::event_send::join_sealed(&notifications).await;
+            joined.await;
             drop(drop_database_off_runtime(db));
         });
     }
+}
+
+impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// The node's (#2766): a server on a node's seat that the node has
+    /// stopped hands back its handle on the database once what a drop
+    /// would join has let go of theirs, where a drop leaves that to a task.
+    /// The node's own handle is then the only one, so its refused start can
+    /// give the database to its caller. Cancelled before it returns, the
+    /// server drops as any server does.
+    #[doc(hidden)]
+    pub async fn __endpoint_into_database(mut self) -> Arc<RwLock<ObjectDatabase>> {
+        let tasks = self.seal_and_abort();
+        join_released(
+            tasks,
+            Arc::clone(&self.request_tasks),
+            Arc::clone(&self.notification_transactions),
+            Arc::clone(&self.dcc_timer),
+        )
+        .await;
+        self.database_handed_back = true;
+        Arc::clone(&self.db)
+    }
+}
+
+/// What a dropped server's handle on the database waits for: `tasks`,
+/// aborted, then its request, DCC timer, notification and event lane tasks,
+/// each of which may hold a handle of its own.
+async fn join_released(
+    tasks: Vec<JoinHandle<()>>,
+    requests: Arc<super::request_tasks::RequestTasks>,
+    notifications: Arc<NotificationTransactions>,
+    dcc_timer: Arc<Mutex<super::dcc_timer::TimerSlot>>,
+) {
+    for task in tasks {
+        let _ = task.await;
+    }
+    while let Some(result) = requests.join_next().await {
+        super::request_tasks::RequestTasks::observe(Some(result));
+    }
+    // No request is left to hold the slot. The guard goes before the join,
+    // as the timer may be queued for the slot itself.
+    let timer = dcc_timer.lock().await.take();
+    if let Some(timer) = timer {
+        timer.abort();
+        let _ = timer.await;
+    }
+    while let Some(result) = notifications.join_next().await {
+        NotificationTransactions::observe(Some(result));
+    }
+    // The lanes were sealed at the drop; their aborted tasks let go of their
+    // database handles as they are joined.
+    super::event_send::join_sealed(&notifications).await;
 }
 
 /// Let go of a handle on an object database without parking an async

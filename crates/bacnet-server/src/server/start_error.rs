@@ -35,6 +35,11 @@ use bacnet_types::error::Error;
 /// It is `None` when the builder had none and refused before it made the
 /// stock one.
 ///
+/// The endpoint crate's link builders and its session's start return it
+/// too (#2766): a builder hands back the database it was given, as given,
+/// and a session's start the one it took, once a refusal has ended the
+/// session; their documentation says when theirs is `None`.
+///
 /// Unless [`into_parts`](Self::into_parts) hands the database over, it is
 /// let go of off the async runtime
 /// ([`drop_database_off_runtime`](super::drop_database_off_runtime)), as
@@ -74,7 +79,11 @@ impl Drop for OffRuntime {
 }
 
 impl StartError {
-    pub(crate) fn new(error: Error, database: Option<ObjectDatabase>) -> Self {
+    /// A refusal for `error`, with the database the start took, if any.
+    /// The server's own builders and the endpoint crate's make these
+    /// (#2766).
+    #[doc(hidden)]
+    pub fn new(error: Error, database: Option<ObjectDatabase>) -> Self {
         Self(Box::new(Refused {
             error,
             database: OffRuntime(database),

@@ -88,11 +88,12 @@ impl ScEndpointConfig {
         if let Some(reconnect) = config.reconnect.clone() {
             builder = builder.reconnect(reconnect);
         }
+        // The next start builds the objects again (#2766).
         let session = Box::pin(
             builder.connect_hub_session_wrapped(hubs, crate::app_transport::AppTransport::from),
         )
         .await
-        .map_err(to_py_err)?;
+        .map_err(|refused| to_py_err(refused.into()))?;
         // Subscribed before the lifecycle starts the session, so the first
         // connection_events() call sees the first connected (#1908).
         if let Some(link) = session.sc_link() {

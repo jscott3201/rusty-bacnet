@@ -708,3 +708,8 @@ mod node_tests;
 #[cfg(test)]
 #[path = "server_seat_reserve_tests.rs"]
 mod reserve_tests;
+
+/// The node takes the server's handle on the database back (#2766).
+#[cfg(test)]
+#[path = "server_seat_release_tests.rs"]
+mod release_tests;

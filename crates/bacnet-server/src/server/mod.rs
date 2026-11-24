@@ -270,6 +270,9 @@ pub struct BACnetServer<T: TransportPort = AnyTransport> {
     network_number_task: Option<JoinHandle<()>>,
     /// Shared object database.
     db: Arc<RwLock<ObjectDatabase>>,
+    /// The node that stopped this server took its handle on the database
+    /// back (`__endpoint_into_database`, #2766): its drop lets go of none.
+    database_handed_back: bool,
     /// COV subscription table (also held by dispatch task; read by
     /// [`write_local`](Self::write_local) to fire post-write notifications).
     cov_table: Arc<RwLock<CovSubscriptionTable>>,

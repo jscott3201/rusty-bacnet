@@ -14157,6 +14157,44 @@ With standard frames the default identity resolves to 480 before Device generati
 The port declares its own echo, as for a transport built by hand
 (`with_echo(Echo::full())`; see [Echo](#echo)).
 
+A refused build or start hands the object database back (#2766). The
+builders' `build_session`, `build_session_wrapped`, `build_loopback_session`,
+`build_hub_session` and `connect_hub_session` return
+`bacnet_server::server::StartError`, as a server builder's `build()` does:
+`?` turns it into `bacnet_types::error::Error`, and `into_parts()` gives the
+error and the database `database(...)` gave, as given, for every refusal, a
+hub dial that fails included. `EndpointSession::start` returns it too. A
+refusal before the link starts leaves the session ready to start again with
+its database, so the error carries none. One after ends the session (a link
+that won't start, such as a port another program holds; a registered Network
+Port it can't publish; a server build or source Audit installation the
+started link refuses), and the error carries the database: the one the
+session was given, or the stock one it built from the identity. The start's
+cleanup lets go of every other handle on it first, the stopped server's
+included, puts a registered Network Port it published back as configured,
+and releases the outputs the server's start drove (a Load Control's
+application is told to stop, and the object keeps its request), so the same
+database can go into the next session:
+
+```rust
+if let Err(refused) = session.start().await {
+    match refused.into_parts() {
+        // The session ended: start another over the same objects.
+        (error, Some(db)) => {
+            tracing::warn!(%error, "port 47808 refused; trying 47809");
+            let mut session =
+                BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 47809, Ipv4Addr::BROADCAST)
+                    .database(db)
+                    .device(identity)
+                    .build_session()?;
+            session.start().await?;
+        }
+        // Refused before the link started: the session keeps its database.
+        (error, None) => return Err(error),
+    }
+}
+```
+
 ### Choosing standalone or shared client/server roles
 
 | Standalone construction | Shared endpoint composition |
@@ -14486,7 +14524,8 @@ session.stop().await?; // stops the server, then the link
   server while the server builds.
   A start that fails after the server is built stops it; one cancelled there
   leaves it holding its requests unanswered until `stop()` or drop. A server
-  build that fails or is cancelled drops the database it was given.
+  build that fails ends the session, and the start's `StartError` hands the
+  database back (#2766); one cancelled drops it.
 - Stopping: `stop()` stops the server first, which joins its work and settles
   its saves while the link is still up, then the session's other roles and
   the link. A cancelled stop keeps the server, and the next call stops it
@@ -14623,8 +14662,8 @@ session.stop().await?; // stops the server, then the link
   database through each of these refusals. One check needs the started link
   and comes after it: target Audit's recipient as the started link sees it,
   an Address naming this network by its number or a group address only the
-  bound link reveals. That refusal ends the session and drops the database
-  the server was given.
+  bound link reveals. That refusal ends the session, and the start's
+  `StartError` hands the database back (#2766).
 - Routed source Audit bindings learn their networks' routers at the
   session's ingress, from every request and every answer a lease of the
   session's holds that comes from such a network, whichever role takes it.
@@ -14663,7 +14702,9 @@ before `stop()` where storage must be settled when it returns.
 Canceling `stop()` retains its original dispatch or ingress outcome and the
 server it has not finished stopping. Call it again to finish. The session
 stays stopping until then, and returns the saved outcome. It keeps its
-object database through `stop()` and lets go of it when it drops.
+object database through `stop()` and lets go of it when it drops; a start
+refused once the link has started hands it back instead (see
+[Builders](#builders)).
 
 Every endpoint holder of the database lets go through
 `bacnet_server::server::drop_database_off_runtime` (#1561): the session, its
@@ -14671,11 +14712,10 @@ server (whose aborted tasks may hold it last), the source Audit runtime (which
 an audited request in flight may hold last) and the session's Number task. So
 whichever goes last, in async code a durable object's final saves run on
 Tokio's blocking pool, not on a runtime worker. The server `stop()` stops
-hands its handle to a task that lets go of it on the runtime's next turn, as
-a standalone server's drop does: code that takes the database back once the
-session is gone (`Arc::try_unwrap` of a clone it kept) lets that turn pass
-first. Storage may still change after a drop returns. Await `stop()`, with
-no guard held, for the joined save boundary.
+has let go of its handle when `stop()` returns (#2766), but for settling it
+handed to a task because a guard was held. Storage may still change after a
+drop returns. Await `stop()`, with no guard held, for the joined save
+boundary.
 
 ### The narrow server role is gone
 

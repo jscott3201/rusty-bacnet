@@ -511,7 +511,7 @@ async fn sc_hub_settings_are_checked_before_any_dial() {
         .err()
         .expect("a non-wss failover URL is refused");
     assert!(matches!(
-        ScConnectError::from_error(&error),
+        ScConnectError::from_error(error.error()),
         Some(ScConnectError::WebSocket {
             kind: ScWebSocketErrorKind::UnsupportedScheme,
             ..
@@ -541,6 +541,27 @@ async fn sc_hub_settings_are_checked_before_any_dial() {
             .expect("a bad session setting is refused");
         assert!(error.to_string().contains(wanted), "{error}");
     }
+}
+
+/// A dial no hub answers hands back the database the builder was given,
+/// as given (#2766): every object is still there for the next try.
+#[tokio::test]
+async fn sc_a_dial_that_fails_hands_the_database_back() {
+    let pki = Pki::new();
+    let vmac = [0x02, 0, 0, 0, 0, 0x37];
+    let db = identity(vmac).build_database().unwrap();
+    let objects: Vec<_> = db.object_list().collect();
+    // Port 1 refuses the connection.
+    let refused = ScEndpointBuilder::new(vmac, uuid(vmac))
+        .device(identity(vmac))
+        .database(db)
+        .connect_hub_session(ScHubDialer::new("wss://localhost:1", pki.node.clone()))
+        .await
+        .err()
+        .expect("nothing listens on port 1");
+    let (error, back) = refused.into_parts();
+    let back = back.unwrap_or_else(|| panic!("no database came back with: {error}"));
+    assert_eq!(back.object_list().collect::<Vec<_>>(), objects);
 }
 
 /// A listener that accepts TCP and never answers, so a hub dial to it stalls
