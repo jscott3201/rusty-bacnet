@@ -5,7 +5,8 @@ BACnet sites, read-only unless a profile offers writes, in the
 [Rusty BACnet](https://github.com/jscott3201/rusty-bacnet) workspace. An AI
 agent host (Claude Code, Codex and others) launches it as `bacnet mcp serve
 --stdio` (the `bacnet-cli` feature `mcp`) and calls its tools to discover
-devices, describe them, find, list and read their objects, read and
+devices, describe them, find, list and read their objects, take a
+device's inventory as point records, read and
 summarise trend logs, event logs and audit logs, list alarms, map
 networks, routers and BBMD tables, decode frames, follow points as they
 change, export a device's points as an experimental Standard 223 model in

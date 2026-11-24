@@ -32,7 +32,9 @@ async fn an_agent_surveys_the_lab_over_the_pipe() {
     let instructions = info["instructions"].as_str().unwrap();
     assert!(instructions.contains("cannot write"), "{instructions}");
     assert!(
-        instructions.contains("bacnet_read_log_records") && !instructions.contains("bacnet_revert"),
+        instructions.contains("bacnet_read_log_records")
+            && instructions.contains("bacnet_inventory")
+            && !instructions.contains("bacnet_revert"),
         "{instructions}"
     );
 
@@ -54,6 +56,7 @@ async fn an_agent_surveys_the_lab_over_the_pipe() {
             "bacnet_decode",
             "bacnet_watch",
             "bacnet_export_223",
+            "bacnet_inventory",
         ]
     );
     for tool in &tools {
@@ -336,7 +339,7 @@ async fn a_2026_07_28_client_needs_no_handshake() {
         .await;
     assert_eq!(
         tools["result"]["tools"].as_array().unwrap().len(),
-        12,
+        13,
         "{tools}"
     );
     let read = lab

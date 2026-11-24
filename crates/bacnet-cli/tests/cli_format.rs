@@ -6,8 +6,9 @@
 //! to their own tests: the alarm commands need an event budget
 //! (`cli_alarms`) and `ack-alarm` an alarm, the BBMD commands and
 //! `routing-table` a BBMD or a router, the file commands a File object,
-//! `subscribe` runs until stopped, and `sc-check`, `mstp-ports` and
-//! `capture` reach no device.
+//! `sc-check` and `mstp-ports` reach no device, and `subscribe` and
+//! `capture`, the two long-running commands, print JSON Lines rather than
+//! one document (`cli_streams`, `cli_capture`).
 #[allow(dead_code)]
 mod support;
 
@@ -89,14 +90,20 @@ async fn lab() -> (BACnetServer<BipTransport>, String) {
     (server, target)
 }
 
-/// `stdout` is in `format`: JSON parses, and a table or CSV doesn't.
+/// `stdout` is in `format`: JSON is one document (a command that prints
+/// once prints one JSON value; only a long-running one streams, #2783), and
+/// a table or CSV doesn't parse.
 fn assert_prints(format: &str, stdout: &[u8], what: &str) {
     let text = String::from_utf8_lossy(stdout);
     assert!(!text.trim().is_empty(), "{what}: nothing on stdout");
     let json = serde_json::from_slice::<Value>(stdout);
     match format {
         "json" => {
-            json.unwrap_or_else(|error| panic!("{what}: not JSON ({error}): {text}"));
+            let values: Vec<Value> = serde_json::Deserializer::from_slice(stdout)
+                .into_iter()
+                .collect::<Result<_, _>>()
+                .unwrap_or_else(|error| panic!("{what}: not JSON ({error}): {text}"));
+            assert_eq!(values.len(), 1, "{what}: not one JSON document: {text}");
         }
         "table" => assert!(json.is_err(), "{what}: JSON, not a table: {text}"),
         "csv" => {

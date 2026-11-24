@@ -52,7 +52,8 @@ if-addrs = { version = "0.15", optional = true }
 
 # Pcap optional deps
 pcap = { version = "2", optional = true }
-ctrlc = { version = "3", optional = true }
+# `termination`: `capture` stops on SIGTERM and SIGHUP as on Ctrl-C (#2783).
+ctrlc = { version = "3", optional = true, features = ["termination"] }
 libc = { version = "0.2", optional = true }
 owo-colors = "4.3.0"
 
