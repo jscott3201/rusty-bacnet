@@ -106,9 +106,9 @@ impl Passive {
             .expect("listener on a free port")
     }
     /// [`Self::start`] on a port the test chose before the listener binds it.
-    /// A failed start probes that port: when another socket holds it, the
-    /// probe's bind error goes back to `rerun_on_lost_port` (#2216). A failure
-    /// on a free port panics.
+    /// A failed start there goes back to `rerun_on_lost_port` when the
+    /// listener's own bind found another socket on the port, and panics
+    /// otherwise (`lost_port`, #2216, #2776).
     pub(super) async fn try_start(plan: ConnectPlan) -> std::io::Result<Self> {
         let port = plan.args.port;
         let (sink, mut events) = EventSink::channel(32);
@@ -117,10 +117,10 @@ impl Passive {
         let mut app = new_app(None);
         app.safety.passive = true;
         let event = events.recv().await.unwrap();
-        if let WorkerEvent::ConnectFailed { .. } = event
+        if let WorkerEvent::ConnectFailed { error } = &event
             && port != 0
         {
-            std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, port))?;
+            return Err(super::lost_port(error));
         }
         let WorkerEvent::PassiveListening { ref local, .. } = event else {
             panic!("{event:?}")

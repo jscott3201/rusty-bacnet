@@ -64,34 +64,25 @@ async fn passive_ui_event_receiver_close_releases_unscoped_listener() {
     assert!(std::net::UdpSocket::bind(address).is_ok());
     drop(net.commands);
 }
-/// Feed a session's three startup events to `app`. A failed start probes the
-/// port the test chose: when another socket holds it, the probe's bind error
-/// goes back to `rerun_on_lost_port` (#2216). A failure on a free port panics.
-async fn started(
-    app: &mut App,
-    events: &mut mpsc::Receiver<WorkerEvent>,
-    port: u16,
-) -> std::io::Result<()> {
+/// Feed a session's three startup events to `app`. A failed start on the
+/// port the test chose is judged by the listener's own bind error: a port
+/// another socket held goes back to `rerun_on_lost_port`, and any other
+/// failure panics (`lost_port`).
+async fn started(app: &mut App, events: &mut mpsc::Receiver<WorkerEvent>) -> std::io::Result<()> {
     for _ in 0..3 {
         let event = events.recv().await.unwrap();
-        let failed = match &event {
-            WorkerEvent::Session { event, .. } => {
-                matches!(**event, WorkerEvent::ConnectFailed { .. })
-            }
-            event => matches!(event, WorkerEvent::ConnectFailed { .. }),
-        };
-        worker(app, event);
-        if failed {
-            std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, port))?;
-            panic!("the passive listener failed on a free port");
+        if let Some(failure) = super::connect_failure(&event) {
+            return Err(super::lost_port(failure));
         }
+        worker(app, event);
     }
     Ok(())
 }
 /// The listener must come back on the same address, so the test picks the
 /// port and frees it before the first bind; the session also frees it on
 /// disconnect and the UI close. Another process can take it in any of those
-/// gaps, so a lost port reruns the test on a fresh one (#2216).
+/// gaps, so a lost port reruns the test on a fresh one (#2216): for the
+/// listener's binds, as its own bind error says (#2776).
 #[tokio::test]
 async fn passive_coordinator_disconnect_reconnect_and_ui_close_retire_generations() {
     super::port_retry::rerun_on_lost_port(retire_generations).await;
@@ -109,7 +100,7 @@ async fn retire_generations() -> std::io::Result<()> {
     let task = coordinator::spawn(Some(plan), None, sink, rx, options());
     let mut app = new_app(None);
     app.safety.passive = true;
-    started(&mut app, &mut events, address.port()).await?;
+    started(&mut app, &mut events).await?;
     assert_eq!(
         app.passive_listener.as_deref(),
         Some(address.to_string().as_str())
@@ -147,7 +138,7 @@ async fn retire_generations() -> std::io::Result<()> {
     // Disconnect completed socket cleanup.
     drop(std::net::UdpSocket::bind(address)?);
     commands.send(Command::Reconnect).await.unwrap();
-    started(&mut app, &mut events, address.port()).await?;
+    started(&mut app, &mut events).await?;
     assert_eq!(app.generation, generation + 1);
     assert_eq!(
         app.passive_listener.as_deref(),
@@ -174,6 +165,32 @@ async fn retire_generations() -> std::io::Result<()> {
     task.await.unwrap();
     // UI closure joins the listener.
     std::net::UdpSocket::bind(address).map(drop)
+}
+/// A socket held the port when the listener bound it and let it go before
+/// the test looked. The port was still lost, and the test reruns, as the
+/// listener's own bind error says; a bind of the port afterwards would find
+/// it free (#2776).
+#[tokio::test]
+async fn a_port_held_at_the_bind_and_freed_before_the_check_is_lost() {
+    let holder = bacnet_transport::bip::PassiveBip::bind(Ipv4Addr::UNSPECIFIED, 0)
+        .await
+        .unwrap();
+    let mut plan = super::network::plan(None);
+    plan.args.port = holder.local_addr().unwrap().port();
+    let (sink, mut events) = EventSink::channel(4);
+    let (_commands, rx) = mpsc::channel(2);
+    // The session reports its failed bind and ends before the holder lets go.
+    session::spawn(plan, sink, rx, options())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(holder);
+    let mut app = new_app(None);
+    app.safety.passive = true;
+    let lost = started(&mut app, &mut events)
+        .await
+        .expect_err("a lost port");
+    assert!(super::port_retry::lost_to_another_socket(&lost), "{lost}");
 }
 #[tokio::test]
 async fn passive_bind_failure_and_unsupported_modes_never_claim_readiness() {
