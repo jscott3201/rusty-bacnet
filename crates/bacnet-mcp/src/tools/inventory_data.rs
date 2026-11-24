@@ -334,6 +334,33 @@ mod tests {
         record
     }
 
+    /// The ReadProperty counts the tool's description quotes for a device
+    /// without ReadPropertyMultiple, one request a property: 2 to 5 an
+    /// object with no option, at most 14 with every one, over every type
+    /// the standard assigns.
+    #[test]
+    fn the_description_quotes_the_readproperty_counts() {
+        use bacnet_ops::InventoryOptions;
+        use bacnet_ops::inventory::properties;
+        let all = InventoryOptions::new()
+            .with_values(true)
+            .with_settings(true)
+            .with_details(true);
+        let counts = |options: &InventoryOptions| -> Vec<usize> {
+            (0..128)
+                .map(|raw| properties(ObjectType::from_raw(raw), options).len())
+                .collect()
+        };
+        let plain = counts(&InventoryOptions::new());
+        assert_eq!(plain.iter().min(), Some(&2));
+        assert_eq!(plain.iter().max(), Some(&5));
+        assert_eq!(counts(&all).iter().max(), Some(&14));
+        let quoted = "2 to 5 an object, up to 14 with every option";
+        let description = crate::tools::inventory::SPEC.description.replace("\n", " ");
+        let description: String = description.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(description.contains(quoted), "{description}");
+    }
+
     /// The tool's record has exactly the keys of the CLI's: a field the
     /// record gains fails here until it is shown on purpose.
     #[test]

@@ -23,7 +23,7 @@ use super::{LAB, Lab};
 use crate::Policy;
 use crate::policy::{Caps, Rates};
 
-const TOOL: &str = "bacnet_inventory";
+pub(super) const TOOL: &str = "bacnet_inventory";
 
 /// The bound a page's result keeps to, so its text rendering holds it.
 const BOUND: usize = 24_000;
@@ -33,7 +33,12 @@ const BOUND: usize = 24_000;
 /// binary output and a multi-state value with state texts; `indexed`, its
 /// Object_List read only element by element. With the Device object, 6 +
 /// `extra` objects.
-async fn inventory_lab(policy: Policy, delay: Duration, extra: u32, indexed: bool) -> Lab {
+pub(super) async fn inventory_lab(
+    policy: Policy,
+    delay: Duration,
+    extra: u32,
+    indexed: bool,
+) -> Lab {
     let lab = Lab::start_lab(policy, delay, extra, indexed).await;
     let text = |text: &str| PropertyValue::CharacterString(text.into());
     let mut msv = MultiStateValueObject::new(2, "Fan Mode", 3).unwrap();
@@ -74,7 +79,7 @@ fn fast(budget: Duration, text: usize) -> Policy {
 
 /// Every page from the first, following `next_cursor`: each one's result
 /// and the requests it cost on the wire.
-async fn all_pages(lab: &mut Lab, args: &Value) -> Vec<(Value, usize)> {
+pub(super) async fn all_pages(lab: &mut Lab, args: &Value) -> Vec<(Value, usize)> {
     let mut pages = Vec::new();
     let mut cursor: Option<String> = None;
     for _ in 0..200 {
@@ -95,7 +100,7 @@ async fn all_pages(lab: &mut Lab, args: &Value) -> Vec<(Value, usize)> {
 }
 
 /// The lab device's Object_List, each object as `type:instance`.
-async fn listed(lab: &Lab) -> Vec<String> {
+pub(super) async fn listed(lab: &Lab) -> Vec<String> {
     let db = lab.server.database().read().await;
     db.object_list()
         .map(|o| {
@@ -109,7 +114,7 @@ async fn listed(lab: &Lab) -> Vec<String> {
 }
 
 /// A record's object as `type:instance`.
-fn object(point: &Value) -> String {
+pub(super) fn object(point: &Value) -> String {
     format!(
         "{}:{}",
         point["object"]["type"].as_str().unwrap(),
@@ -118,12 +123,12 @@ fn object(point: &Value) -> String {
 }
 
 /// The records of a page.
-fn points(result: &Value) -> &Vec<Value> {
+pub(super) fn points(result: &Value) -> &Vec<Value> {
     ok(result)["points"].as_array().unwrap()
 }
 
 /// The record of `name` (`analog-input:1`) on a page.
-fn point<'a>(result: &'a Value, name: &str) -> &'a Value {
+pub(super) fn point<'a>(result: &'a Value, name: &str) -> &'a Value {
     points(result)
         .iter()
         .find(|point| object(point) == name)
@@ -173,6 +178,7 @@ async fn a_small_device_is_one_page() {
         (&json!(false), &Value::Null)
     );
     assert_eq!(body["next_object"], Value::Null);
+    assert_eq!(body["ended"], json!("complete"));
     assert_eq!(
         body["problems"],
         json!({ "count": 0, "objects": 0, "first": [] })
@@ -309,6 +315,9 @@ async fn pages_cover_every_object_once() {
             if more {
                 assert_eq!(body["next_object"], json!(wanted[seen.len()]));
             }
+            // Records of about 600 bytes: 24,000 bytes come before 50.
+            let ended = if more { "size" } else { "complete" };
+            assert_eq!(body["ended"], json!(ended), "page {n}");
             whole_text(result);
             sent += requests;
         }
@@ -473,6 +482,10 @@ async fn pages_stay_within_the_bound() {
             assert_eq!(body["read"], json!(1));
             assert_eq!(object(&points(result)[0]), "multi-state-value:9");
             assert!(size > BOUND);
+            // The text leaves the record out, and stays whole.
+            let text = whole_text(result);
+            assert!(text.contains("too large for this text"), "{text}");
+            assert!(text.len() < BOUND, "{}", text.len());
         } else {
             assert!(size <= BOUND, "{size}");
             whole_text(result);
@@ -511,6 +524,7 @@ async fn a_spent_budget_ends_the_page_and_says_what_is_left() {
         (&json!(true), &json!(20))
     );
     assert_eq!(first["next_object"], json!(listed[6]));
+    assert_eq!(first["ended"], json!("budget"));
     assert!(
         first["cost"]["elapsed_ms"].as_u64().unwrap() <= 2_100,
         "{first}"
@@ -541,6 +555,7 @@ async fn a_device_silent_mid_page() {
         "{body}"
     );
     assert_eq!(body["stopped"]["error"], json!("timeout"));
+    assert_eq!(body["ended"], json!("device"));
     assert_eq!(body["cost"]["timeouts"], json!(1));
     let cursor = body["next_cursor"].as_str().unwrap().to_string();
     *lab.mute.lock().unwrap() = None;
@@ -610,6 +625,7 @@ async fn an_indexed_object_list_is_read_across_calls() {
             (&json!(0), &Value::Null, &Value::Null)
         );
         assert_eq!(body["truncated"], json!(true));
+        assert_eq!(body["ended"], json!("list"));
         super::schema::check_output(&mut lab.agent, TOOL, body).await;
     }
     let seen: usize = pages[reading..]

@@ -268,6 +268,9 @@ pub(crate) async fn call<T: TransportPort + 'static>(
         Err(_) => Err(out_of_budget(&call, budget)),
     };
     let mut result = finish(ctx, name, &call, outcome);
+    if name == inventory::NAME {
+        inventory::oversized_text(&mut result);
+    }
     if let Some(turtle) = turtle.filter(|_| result.is_error == Some(false)) {
         if let Some(ContentBlock::Text(text)) = result.content.first_mut() {
             text.text.push('\n');

@@ -17,10 +17,15 @@
 //! [`MAX_TEXT`] bytes, so that the text rendering holds it whole: it stops
 //! before an object likely to pass that (judged by its largest record so
 //! far), and a record that passes it anyway goes back to the next page, to
-//! be read again there. A record larger than that alone goes out alone,
-//! flagged `oversized`. The cursor holds the next object's place and a
-//! fingerprint of the matching objects (the export's [`Position`]), so a
-//! list changed between pages is refused rather than paged wrong.
+//! be read again there. A record that passes it with the page's other
+//! fields goes out alone, flagged `oversized`, and the text block then
+//! leaves it out ([`oversized_text`]). A page's later object still being
+//! read [`OBJECT_GRACE`] past the budget is let go and read again on the
+//! next page, so the records before it come back before the call's own
+//! timeout. `ended` says which of these ended the page. The cursor holds
+//! the next object's place and a fingerprint of the matching objects (the
+//! export's [`Position`]), so a list changed between pages is refused
+//! rather than paged wrong.
 //!
 //! A property the device can't give is a problem on its record, never an
 //! error. A device that stops answering partway through a page leaves the
@@ -28,6 +33,7 @@
 //! tries that object again.
 
 use std::collections::{BTreeMap, HashSet};
+use std::time::Duration;
 
 use bacnet_ops::InventoryOptions;
 use bacnet_ops::label::kebab;
@@ -35,14 +41,15 @@ use bacnet_ops::parse::parse_object_type;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
+use rmcp::model::{CallToolResult, ContentBlock};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::export::{Position, fingerprint};
 use super::inventory_data::{point, problem_schema, problems_of, record_json};
 use super::list::listing;
-use super::{MAX_TEXT, Spec, next, schema, start};
-use crate::context::{Call, Ctx, DeviceArg};
+use super::{GRACE, MAX_TEXT, Spec, next, render, schema, start};
+use crate::context::{Call, Ctx, Device, DeviceArg};
 use crate::errors::ToolError;
 use crate::value::object_text;
 
@@ -58,14 +65,18 @@ pub(super) const SPEC: Spec = Spec {
                   properties an object, 5 on an output); settings: true adds COV_Increment, \
                   Min_Pres_Value, Max_Pres_Value, Relinquish_Default and Polarity where the \
                   type has them (up to 4 more); details: true adds Device_Type and Profile_Name \
-                  (2 more). Cost: the Object_List once (cached 5 minutes, shared with \
-                  bacnet_list_objects), then one ReadPropertyMultiple an object, whatever the \
-                  options, which only make it longer; a device that refuses \
-                  ReadPropertyMultiple costs one ReadProperty a property. types filters before \
-                  anything is read. Paged: up to 50 objects and 24,000 bytes a page, or what \
-                  the call's budget allows; call again with next_cursor. A property the device \
-                  can't give is a problem on its record and in the page's problems summary, \
-                  never a failed call. Read-only.",
+                  (2 more). Cost: one ReadPropertyMultiple an object, and the Object_List once \
+                  (cached 5 minutes): about N + 1 requests for N objects, up to 50 a page; a \
+                  200-object device is about 200 requests, about 40 s at the default 5 a \
+                  second. The options add no request there but make records larger, so fewer \
+                  fit a page. A device that refuses ReadPropertyMultiple costs one \
+                  ReadProperty a property: 2 to 5 an object, up to 14 with every option. For \
+                  a whole large device the CLI's `bacnet inventory` is cheaper: it batches, \
+                  about N/8 + 2 requests (N/4 + 2 with values). types filters before anything \
+                  is read. Paged: up to 50 objects and 24,000 bytes a page, or what the call's \
+                  budget allows; `ended` says why a page ended; call again with next_cursor. \
+                  A property the device can't give is a problem on its record and in the \
+                  page's problems summary, never a failed call. Read-only.",
     input,
     output,
     idempotent: true,
@@ -164,9 +175,20 @@ fn output() -> Value {
                 },
             },
         },
+        "ended": {
+            "enum": ["complete", "page-full", "size", "budget", "device", "list"],
+            "description": "Why the page ended: complete (no object left), page-full (50 \
+                            objects, or the policy's page) or size (24,000 bytes): call again \
+                            now; budget (the call's time ran out, the rates holding it back): \
+                            call again, or slow down; device (it stopped answering, see \
+                            stopped); list (the Object_List is still being read, element by \
+                            element)",
+        },
         "oversized": {
             "type": "boolean",
-            "description": "The page's one record alone is larger than 24,000 bytes",
+            "description": "The page holds one record, and with it the result passes 24,000 \
+                            bytes: the text block then leaves the record out, and only the \
+                            structured content holds it",
         },
         "stopped": {
             "type": "object",
@@ -229,7 +251,39 @@ fn matching(listed: &[ObjectIdentifier], options: &InventoryOptions) -> Vec<Obje
         .collect()
 }
 
-/// The records read for a page, in order, each with its JSON's size.
+/// Why a page ended, as its `ended` says.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Ended {
+    /// No matching object is left.
+    #[default]
+    Complete,
+    /// It holds the page's objects.
+    PageFull,
+    /// Another record would take it past [`MAX_TEXT`].
+    Size,
+    /// The call's budget is spent.
+    Budget,
+    /// The device stopped answering.
+    Device,
+    /// The Object_List is still being read, element by element.
+    List,
+}
+
+impl Ended {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::PageFull => "page-full",
+            Self::Size => "size",
+            Self::Budget => "budget",
+            Self::Device => "device",
+            Self::List => "list",
+        }
+    }
+}
+
+/// The records read for a page, in order, each with its JSON's size, and
+/// how the page ended.
 #[derive(Default)]
 struct Page {
     points: Vec<(Value, usize)>,
@@ -237,6 +291,11 @@ struct Page {
     size: usize,
     /// The largest record so far.
     largest: usize,
+    /// Where the next page goes on among the matching objects, if one does.
+    resume: Option<usize>,
+    ended: Ended,
+    /// The device's error, when it stopped answering.
+    stopped: Option<Value>,
 }
 
 impl Page {
@@ -247,18 +306,93 @@ impl Page {
         self.points.push((point, size));
     }
 
-    fn pop(&mut self) {
+    /// End the page before the matching object at `at`, for `why`.
+    fn end(&mut self, at: usize, why: Ended) {
+        self.resume = Some(at);
+        self.ended = why;
+    }
+
+    /// Hand the last record back to the next page, which starts with it;
+    /// the page's records begin at `first` among the matching objects.
+    fn hand_back(&mut self, first: usize) {
         if let Some((_, size)) = self.points.pop() {
             self.size -= size;
         }
+        self.end(first + self.points.len(), Ended::Size);
     }
 
-    /// Whether the page ends before its next object: it holds `cap`, or
-    /// another as large as its largest wouldn't fit under [`MAX_TEXT`].
-    fn full(&self, cap: usize) -> bool {
+    /// Why the page ends before its next object, if it does: it holds
+    /// `cap`, another as large as its largest wouldn't fit under
+    /// [`MAX_TEXT`], or the call's budget is spent. A page's first object
+    /// is always read.
+    fn full(&self, cap: usize, call: &Call) -> Option<Ended> {
         let read = self.points.len();
-        read > 0 && (read >= cap || self.size + self.largest + ROOM > MAX_TEXT)
+        if read == 0 {
+            None
+        } else if read >= cap {
+            Some(Ended::PageFull)
+        } else if self.size + self.largest + ROOM > MAX_TEXT {
+            Some(Ended::Size)
+        } else {
+            call.out_of_time().then_some(Ended::Budget)
+        }
     }
+}
+
+/// How long past the call's budget a page's later object may take: half
+/// the grace the call has, so the records read before it come back before
+/// the call's own timeout drops them.
+const OBJECT_GRACE: Duration = Duration::from_secs(GRACE.as_secs() / 2);
+
+/// Read a page of `matching` from `first`, one object a request.
+async fn read_page<T: TransportPort + 'static>(
+    ctx: &Ctx<T>,
+    call: &Call,
+    device: &Device<T>,
+    matching: &[ObjectIdentifier],
+    first: usize,
+    options: &InventoryOptions,
+) -> Result<Page, ToolError> {
+    let cap = ctx.policy.caps.objects.min(PAGE);
+    let mut page = Page::default();
+    for (at, &object) in matching.iter().enumerate().skip(first) {
+        if let Some(why) = page.full(cap, call) {
+            page.end(at, why);
+            break;
+        }
+        let read = device.handle.point_record(object, options);
+        // The first object is read whatever it takes, so every page reads
+        // one; a later one is let go once well past the budget, its
+        // requests wasted, and read again on the next page.
+        let read = if page.points.is_empty() {
+            Some(read.await)
+        } else {
+            tokio::time::timeout_at(call.deadline + OBJECT_GRACE, read)
+                .await
+                .ok()
+        };
+        match read {
+            None => {
+                page.end(at, Ended::Budget);
+                break;
+            }
+            Some(Ok(record)) => page.push(record_json(&record, ctx.policy.caps.text)),
+            Some(Err(error)) if page.points.is_empty() => {
+                return Err(ToolError::device(device.instance, &error));
+            }
+            Some(Err(error)) => {
+                // Later objects would fail the same way: stop here, say
+                // why, and let the cursor try this one again.
+                if error.timed_out() {
+                    call.timed_out();
+                }
+                page.stopped = Some(ToolError::device(device.instance, &error).json());
+                page.end(at, Ended::Device);
+                break;
+            }
+        }
+    }
+    Ok(page)
 }
 
 pub(super) async fn run<T: TransportPort + 'static>(
@@ -273,7 +407,6 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let first = position.index;
     let instance = device.instance;
     let listing = listing(ctx, call, &device).await?;
-    let cap = ctx.policy.caps.objects.min(PAGE);
     let mut body = json!({
         "device": instance,
         "address": device.address.to_string(),
@@ -281,7 +414,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         "start": first,
         "oversized": false,
         "list": listing.progress(),
-        "limits": ctx.limits(Some(cap)),
+        "limits": ctx.limits(Some(ctx.policy.caps.objects.min(PAGE))),
     });
     if !listing.complete() {
         // Not all read yet: no record on this page, and the same cursor,
@@ -289,8 +422,10 @@ pub(super) async fn run<T: TransportPort + 'static>(
         fill(&mut body, None, (first, None), Vec::new());
         body["truncated"] = json!(true);
         body["next_cursor"] = next(ctx, NAME, raw, position.into());
+        body["ended"] = json!(Ended::List.as_str());
         if let Some(why) = listing.stopped() {
             body["stopped"] = ToolError::Failed(format!("the Object_List read, {why}")).json();
+            body["ended"] = json!(Ended::Device.as_str());
         }
         return Ok(body);
     }
@@ -305,52 +440,54 @@ pub(super) async fn run<T: TransportPort + 'static>(
              without a cursor"
         )));
     }
-    let mut page = Page::default();
-    let mut resume = None;
-    for (at, &object) in matching.iter().enumerate().skip(first) {
-        let read = page.points.len();
-        if page.full(cap) || (read > 0 && call.out_of_time()) {
-            resume = Some(at);
-            break;
-        }
-        match device.handle.point_record(object, &options).await {
-            Ok(record) => page.push(record_json(&record, ctx.policy.caps.text)),
-            Err(error) if read == 0 => return Err(ToolError::device(instance, &error)),
-            Err(error) => {
-                // Later objects would fail the same way: stop here, say
-                // why, and let the cursor try this one again.
-                if error.timed_out() {
-                    call.timed_out();
-                }
-                body["stopped"] = ToolError::device(instance, &error).json();
-                resume = Some(at);
-                break;
-            }
-        }
-    }
+    let mut page = read_page(ctx, call, &device, &matching, first, &options).await?;
     body["listed"] = json!(listing.objects.len());
     body["by_type"] = by_type(&matching);
+    if let Some(stopped) = page.stopped.take() {
+        body["stopped"] = stopped;
+    }
     // A record that took the page past the bound goes back to the next one,
     // unless it is the page's only record.
     loop {
         let points: Vec<Value> = page.points.iter().map(|(point, _)| point.clone()).collect();
-        let cursor = resume.map(|index| {
+        let cursor = page.resume.map(|index| {
             let position = Position {
                 list: Some(list),
                 index,
             };
             next(ctx, NAME, raw, position.into())
         });
-        fill(&mut body, Some(&matching), (first, resume), points);
-        body["truncated"] = json!(resume.is_some());
+        fill(&mut body, Some(&matching), (first, page.resume), points);
+        body["truncated"] = json!(page.resume.is_some());
         body["next_cursor"] = json!(cursor);
+        body["ended"] = json!(page.ended.as_str());
         let size = body.to_string().len() + COST_ROOM;
         if size <= MAX_TEXT || page.points.len() <= 1 {
-            body["oversized"] = json!(size > MAX_TEXT);
+            body["oversized"] = json!(size > MAX_TEXT && page.points.len() == 1);
             return Ok(body);
         }
-        page.pop();
-        resume = Some(first + page.points.len());
+        page.hand_back(first);
+    }
+}
+
+/// The text block of an oversized page: the result without its one record,
+/// which the structured content alone holds, so the text stays whole JSON
+/// rather than being cut inside the record.
+pub(super) fn oversized_text(result: &mut CallToolResult) {
+    let Some(body) = &result.structured_content else {
+        return;
+    };
+    if result.is_error == Some(true) || body["oversized"] != json!(true) {
+        return;
+    }
+    let bytes = body["points"].to_string().len();
+    let mut short = body.clone();
+    short["points"] = json!(format!(
+        "one record of {bytes} bytes, too large for this text: it is whole in the structured \
+         content"
+    ));
+    if let Some(ContentBlock::Text(text)) = result.content.first_mut() {
+        text.text = render(NAME, &short, None);
     }
 }
 
