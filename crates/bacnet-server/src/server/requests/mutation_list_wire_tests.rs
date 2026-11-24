@@ -44,12 +44,18 @@ fn alarm_values(elements: &[u8]) -> Bytes {
     )
 }
 
-/// Replace the fixture's Multi-state Input with one that has a state for
-/// every value up to 2048 and holds `values` as its Alarm_Values, so a full
-/// list stays in range (#1429).
-pub(super) async fn fill_msi_alarm_values(fixture: &Fixture, values: std::ops::Range<u32>) {
-    let mut msi = bacnet_objects::multistate::MultiStateInputObject::new(1, "msi", 2048).unwrap();
-    msi.set_alarm_values(values.collect()).unwrap();
+/// Replace the fixture's Multi-state Input with one of the most states an
+/// object may have (1024, #2711) whose Alarm_Values holds `count` values:
+/// 100 to 1024 in turn, again from 100 once those run out, so every value
+/// is in range (#1429), 100 and 101 are present and 7 and 8 are not.
+/// MAX_ALARM_VALUES equals MAX_NUMBER_OF_STATES, so a list at that cap with
+/// a state still free to add holds repeated entries: the only way the cap
+/// tests reach it.
+pub(super) async fn fill_msi_alarm_values(fixture: &Fixture, count: usize) {
+    let states = bacnet_objects::multistate::MAX_NUMBER_OF_STATES;
+    let mut msi = bacnet_objects::multistate::MultiStateInputObject::new(1, "msi", states).unwrap();
+    msi.set_alarm_values((100..=states).cycle().take(count).collect())
+        .unwrap();
     let mut db = fixture.db.write().await;
     db.remove(&oid(ObjectType::MULTI_STATE_INPUT, 1)).unwrap();
     db.add(Box::new(msi)).unwrap();
@@ -170,7 +176,7 @@ async fn list_element_refusals_go_out_as_change_list_errors() {
 
     // The list is full: present elements take no space, so the first new one
     // (Unsigned 7, the third element) is the one that does not fit.
-    fill_msi_alarm_values(&fixture, 100..1124).await;
+    fill_msi_alarm_values(&fixture, 1024).await;
     assert_eq!(
         wire(
             &fixture,

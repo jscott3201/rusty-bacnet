@@ -479,6 +479,15 @@ impl PyPropertyValue {
         Ok(Self::tree(octets))
     }
 
+    /// A Network Port's BBMD_Broadcast_Distribution_Table built from rows
+    /// in the form a whole read of it gives (#2710), each encoded with the
+    /// stack's BDT entry codec: the `bdt` value a write sends. A row the
+    /// entry can't hold raises ValueError naming it (see `bdt_rows`).
+    #[staticmethod]
+    fn bdt(rows: &Bound<'_, PyAny>) -> PyResult<Self> {
+        super::bdt_rows::bdt(rows)
+    }
+
     /// One typed constructed element, tagged `tag`, from the octets a read
     /// gave it: what the pickles `__reduce__` makes call. Octets that aren't
     /// exactly one element of that production raise ValueError. `octets` is

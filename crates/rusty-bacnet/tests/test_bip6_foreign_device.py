@@ -207,12 +207,18 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
                 for prop, expected in (
                     (P.BACNET_IPV6_MODE, V.enumerated(1)),
                     (P.FD_SUBSCRIPTION_LIFETIME, V.unsigned(60)),
-                    (P.FD_BBMD_ADDRESS, V.tagged(self.bbmd.host_n_port())),
+                    # A host and port, read as a BDT row shows its BBMD (#2710).
+                    (P.FD_BBMD_ADDRESS,
+                     V._typed_element("host_n_port", self.bbmd.host_n_port())),
                 ):
                     with self.subTest(property=prop):
                         read = await asyncio.wait_for(
                             client.read_property(address, PORT, prop), 10)
                         self.assertEqual(read, expected)
+                read = await client.read_property(address, PORT, P.FD_BBMD_ADDRESS)
+                self.assertEqual((read.tag, read.value, read.octets),
+                                 ("host_n_port", f"[::1]:{self.bbmd.port}",
+                                  self.bbmd.host_n_port()))
         finally:
             await server.stop()
 

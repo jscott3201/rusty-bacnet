@@ -4,7 +4,7 @@ ValueError, before anything binds or dials; 4194302 is still accepted."""
 
 import unittest
 
-from rusty_bacnet import BACnetServer, BipEndpoint, MstpEndpoint, ScEndpoint
+from rusty_bacnet import BACnetServer, BacnetError, BipEndpoint, MstpEndpoint, ScEndpoint
 
 RESERVED = 4_194_303
 LAST = 4_194_302
@@ -51,7 +51,11 @@ class ReservedObjectInstanceTests(unittest.IsolatedAsyncioTestCase):
         server = BACnetServer(
             device_instance=1234, device_name="D", interface="127.0.0.1", port=0
         )
-        server.add_binary_value(RESERVED, "BV-reserved")
+        # A point builder refuses it at the call (#2711); another builder
+        # leaves it to the database at start.
+        with self.assertRaisesRegex(BacnetError, "4194303"):
+            server.add_binary_value(RESERVED, "BV-reserved")
+        server.add_file(RESERVED, "File-reserved")
         with self.assertRaisesRegex(ValueError, "^object refused: .*4194303"):
             await server.start()
 

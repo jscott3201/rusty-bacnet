@@ -4977,7 +4977,10 @@ Positive Integer and Large Analog Value, take Units (an Enumerated up to
 65535). The Multi-state Input, Output and Value take
 Number_Of_States (1 to `multistate::MAX_NUMBER_OF_STATES`, 1024),
 which resizes State_Text. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
-if a value the object holds would name a state past it. Of the configuration
+if a value the object holds would name a state past it. The application's
+own count meets the same cap: the multi-state constructors and
+`set_number_of_states` refuse one past it with `Error::OutOfRange` (#2711).
+Of the configuration
 objects (#2208), Calendar, Schedule, Notification Class, Trend Log and
 Structured View take Object_Name; Notification Class takes Priority (three
 Unsigned values up to 255) and Ack_Required; Trend Log takes Buffer_Size (up to

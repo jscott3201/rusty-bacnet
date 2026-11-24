@@ -16,6 +16,21 @@ use bytes::BytesMut;
 use super::lifecycle_tests::TestSerial;
 use super::*;
 use crate::mstp_py::{ECHO_GRACE_WITHOUT_ECHO_ERROR, ZERO_ECHO_GRACE_ERROR};
+use crate::point_registration::{Registration, RegistrationKind};
+
+/// Analog Input 1, named `name`, reading 0.0.
+fn analog_input(name: &str) -> PendingObject {
+    PendingObject::Point(Registration::new(
+        1,
+        name,
+        RegistrationKind::AnalogInput {
+            units: 62,
+            present_value: 0.0,
+        },
+        None,
+        Default::default(),
+    ))
+}
 
 const SESSION_MAC: u8 = 3;
 const PEER_MAC: u8 = 7;
@@ -328,16 +343,7 @@ fn an_extended_endpoint_answers_a_long_read_in_an_extended_frame() {
             Ok(TestSerial::Peer(serial))
         }
     }));
-    built
-        .push_pending(PendingObject::AnalogInput {
-            instance: 1,
-            name: name.clone(),
-            units: 62,
-            present_value: 0.0,
-            profile: None,
-            parameters: Default::default(),
-        })
-        .unwrap();
+    built.push_pending(analog_input(&name)).unwrap();
     let built = Python::attach(|py| Py::new(py, built).unwrap());
     let run = |script: &std::ffi::CStr| {
         Python::attach(|py| {
@@ -485,16 +491,7 @@ fn the_wrapper_builds_the_full_server_on_the_mstp_session() {
                 Ok(TestSerial::Peer(serial))
             }
         }));
-        built
-            .push_pending(PendingObject::AnalogInput {
-                instance: 1,
-                name: "AI 1".into(),
-                units: 62,
-                present_value: 0.0,
-                profile: None,
-                parameters: Default::default(),
-            })
-            .unwrap();
+        built.push_pending(analog_input("AI 1")).unwrap();
         let globals = Python::attach(|py| {
             let globals = PyDict::new(py);
             globals

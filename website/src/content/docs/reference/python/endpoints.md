@@ -218,7 +218,9 @@ def add_analog_input(
 Register an Analog Input before start.
 
 `present_value` (a finite number, default 0.0) sets Present\_Value
-directly.
+directly; NaN or an infinity raises BacnetProtocolError
+VALUE\_OUT\_OF\_RANGE. Every point builder checks its registration as
+`BACnetServer.add_analog_input` says, with the same code (#2711).
 
 Profile keywords as on `BACnetServer.add_analog_input`: each
 provisions its optional row, served only when given. The parameter
@@ -298,7 +300,8 @@ def add_multistate_input(
 Register a Multi-state Input before start.
 
 `present_value` sets Present\_Value directly. `None` keeps the
-object type's default.
+object type's default. The three multi-state builders take 1 to
+1024 states; another count raises BacnetError.
 
 ### BipEndpoint.add_multistate_output
 
@@ -754,7 +757,9 @@ def add_analog_input(
 Register an Analog Input before start.
 
 `present_value` (a finite number, default 0.0) sets Present\_Value
-directly.
+directly; NaN or an infinity raises BacnetProtocolError
+VALUE\_OUT\_OF\_RANGE. Every point builder checks its registration as
+`BACnetServer.add_analog_input` says, with the same code (#2711).
 
 Profile keywords as on `BACnetServer.add_analog_input`: each
 provisions its optional row, served only when given. The parameter
@@ -834,7 +839,8 @@ def add_multistate_input(
 Register a Multi-state Input before start.
 
 `present_value` sets Present\_Value directly. `None` keeps the
-object type's default.
+object type's default. The three multi-state builders take 1 to
+1024 states; another count raises BacnetError.
 
 ### ScEndpoint.add_multistate_output
 
@@ -1262,7 +1268,9 @@ def add_analog_input(
 Register an Analog Input before start.
 
 `present_value` (a finite number, default 0.0) sets Present\_Value
-directly.
+directly; NaN or an infinity raises BacnetProtocolError
+VALUE\_OUT\_OF\_RANGE. Every point builder checks its registration as
+`BACnetServer.add_analog_input` says, with the same code (#2711).
 
 Profile keywords as on `BACnetServer.add_analog_input`: each
 provisions its optional row, served only when given. The parameter
@@ -1342,7 +1350,8 @@ def add_multistate_input(
 Register a Multi-state Input before start.
 
 `present_value` sets Present\_Value directly. `None` keeps the
-object type's default.
+object type's default. The three multi-state builders take 1 to
+1024 states; another count raises BacnetError.
 
 ### MstpEndpoint.add_multistate_output
 
