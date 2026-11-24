@@ -337,7 +337,7 @@ async fn sc_one_node_bidirectional_with_provenance_and_admin() {
     assert!(status.listening);
     assert!(status.client_count >= 2, "hub sees endpoint + peer");
     assert!(endpoint.is_running());
-    let _ = endpoint.policy_counters().await;
+    let _ = endpoint.policy_counters();
     assert_eq!(endpoint.active_leases(), 0);
     assert!(endpoint.identity().is_some());
 

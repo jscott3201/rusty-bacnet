@@ -41,22 +41,37 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// delivery admission, not remote receipt. The session's sealed state is
     /// rechecked after acquiring the database; pre-start, stopping, stopped and
     /// sessions without a source owner reject the operation.
+    ///
+    /// The call never waits for the database in its caller's task (#2759):
+    /// with the database busy, a task the session owns waits for it and
+    /// makes the change, so a caller that polls this once and then holds it
+    /// holds up nothing. A caller that goes before that task has the
+    /// database leaves the value unchanged.
     pub async fn write_audit_recipient(
         &self,
         recipient: Option<bacnet_types::constructed::BACnetRecipient>,
     ) -> Result<(), Error> {
-        let unavailable = || Error::Encoding("endpoint source Audit owner is not running".into());
+        fn unavailable() -> Error {
+            Error::Encoding("endpoint source Audit owner is not running".into())
+        }
         if !self.is_running() {
             return Err(unavailable());
         }
-        let database = self.database.as_ref().ok_or_else(unavailable)?;
-        let mut db = database.write().await;
-        let runtime = self
-            .source_recipient
-            .as_ref()
-            .filter(|runtime| self.is_running() && runtime.owner.is_active())
-            .ok_or_else(unavailable)?;
-        runtime.write_local(&mut db, recipient)
+        let (Some(source), Some(runtime)) = (&self.source_audit, &self.source_recipient) else {
+            return Err(unavailable());
+        };
+        // The session can't stop while this call borrows it, so under the
+        // guard the owner is what may have gone.
+        let runtime = Arc::clone(runtime);
+        source
+            .under_write_guard(move |_, db| {
+                if !runtime.owner.is_active() {
+                    return Err(unavailable());
+                }
+                runtime.write_local(db, recipient)
+            })
+            .await
+            .unwrap_or_else(|| Err(unavailable()))
     }
 
     /// Reports a reset the application carries out for its own reasons, not
@@ -71,7 +86,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// filtered by its Audit_Level and Auditable_Operations as a peer's
     /// reset's is, and nothing is recorded without one. It returns once the
     /// record is admitted, not delivered, so call it before the restart
-    /// begins and give delivery time before the process exits.
+    /// begins and give delivery time before the process exits. It never
+    /// waits for the database in its caller's task, as
+    /// [`write_audit_recipient`](Self::write_audit_recipient) doesn't
+    /// (#2759).
     ///
     /// # Errors
     /// [`Error::Encoding`] when the session is not running.
@@ -79,16 +97,20 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         if !self.is_running() {
             return Err(Error::Encoding("endpoint session is not running".into()));
         }
-        let (Some(source), Some(database)) = (&self.source_audit, &self.database) else {
+        let Some(source) = &self.source_audit else {
             return Ok(());
         };
-        // Synchronous under the guard: no await while it is held.
-        let mut db = database.write().await;
-        source.device_operation(
-            &mut db,
-            bacnet_types::enums::AuditOperation::DEVICE_RESET,
-            None,
-        );
+        // Synchronous under the guard: no await while it is held. With the
+        // session's pool closed nothing is recorded, as after a stop.
+        source
+            .under_write_guard(|source, db| {
+                source.device_operation(
+                    db,
+                    bacnet_types::enums::AuditOperation::DEVICE_RESET,
+                    None,
+                );
+            })
+            .await;
         Ok(())
     }
 

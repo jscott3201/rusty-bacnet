@@ -145,7 +145,7 @@ async fn prompt_reply_impl(mode: MstpExecutionMode, frames: Frames) {
     expect_present_value(&reply, 9, 11.0);
     assert_eq!(h.session.active_leases(), 0);
     assert_eq!(
-        h.session.policy_counters().await,
+        h.session.policy_counters(),
         PolicyCountersSnapshot::default(),
         "clean prompt path owns no policy outcomes"
     );

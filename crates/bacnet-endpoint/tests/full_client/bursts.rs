@@ -155,7 +155,7 @@ async fn no_burst_of_any_kind_or_size_ends_the_session() {
             let what = format!("{kind:?} x {size} into {capacity}");
             assert!(lab.session.is_running(), "{what}");
             lab.session.broadcast_i_am().await.expect(&what);
-            let counters = lab.session.policy_counters().await;
+            let counters = lab.session.policy_counters();
             // Requests go to the server's seat, whose own queue counts what
             // it drops; the session's queues keep the rest.
             let server_drops = lab.session.server_seat_counters().full_drops;
@@ -243,7 +243,7 @@ async fn a_client_read_completes_through_a_flood_of_stray_answers() {
         drive,
     );
     assert_eq!(read.unwrap().object_identifier, ai1());
-    let counters = lab.session.policy_counters().await;
+    let counters = lab.session.policy_counters();
     assert!(counters.answer_full_drops > 0, "{counters:?}");
     stop(lab).await;
 }
@@ -282,7 +282,7 @@ async fn reads_in_flight_complete_during_a_thousand_frame_i_am_burst() {
     assert_eq!(peers.unwrap().object_identifier, ai1());
 
     // The server's seat dropped I-Ams; the session's own queues none.
-    let counters = lab.session.policy_counters().await;
+    let counters = lab.session.policy_counters();
     let seat = lab.session.server_seat_counters();
     assert!(seat.full_drops > 0, "{seat:?}");
     assert_eq!(full_drops(&counters), 0, "{counters:?}");

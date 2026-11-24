@@ -117,7 +117,7 @@ async fn a_client_request_and_a_server_notification_share_one_invoke_id_pool() {
         .len(),
         21
     );
-    assert_eq!(lab.session.policy_counters().await.unclaimed_terminal, 0);
+    assert_eq!(lab.session.policy_counters().unclaimed_terminal, 0);
 
     drop((client, other));
     stop(lab).await;
@@ -188,7 +188,7 @@ async fn a_peer_request_with_the_clients_outstanding_invoke_id_reaches_the_serve
     assert_eq!(value.property_identifier, PropertyIdentifier::PRESENT_VALUE);
     assert_eq!(held(), None);
     assert_eq!(lab.session.active_leases(), 0);
-    assert_eq!(lab.session.policy_counters().await.unclaimed_terminal, 0);
+    assert_eq!(lab.session.policy_counters().unclaimed_terminal, 0);
 
     drop(client);
     stop(lab).await;
@@ -460,7 +460,7 @@ async fn with_no_server_role_the_full_client_answers_as_a_standalone_client_does
     // Who-Is, so the session's own count of requests that found no server
     // role is what shows it was handed one.
     let before = (
-        lab.session.policy_counters().await.no_server_role,
+        lab.session.policy_counters().no_server_role,
         lab.session.client_seat_counters().apdus,
     );
     let who_is = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
@@ -474,7 +474,7 @@ async fn with_no_server_role_the_full_client_answers_as_a_standalone_client_does
         "the Who-Is at the session and at the seat",
         async || {
             let now = (
-                lab.session.policy_counters().await.no_server_role,
+                lab.session.policy_counters().no_server_role,
                 lab.session.client_seat_counters().apdus,
             );
             now == (before.0 + 1, before.1 + 1)

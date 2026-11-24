@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 use std::time::{Duration, Instant as StdInstant};
 
-use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use tokio::time::Instant as TokioInstant;
+
+use crate::poll_gate::{PollGate, PollGateGuard};
 
 use super::*;
 
@@ -97,7 +98,9 @@ struct AnsweredFrames {
 }
 
 struct RoutedPathEntry {
-    gate: Arc<AsyncMutex<()>>,
+    /// One request at a time on the path, taken only by a request as it is
+    /// polled ([`PollGate`], #2759).
+    gate: Arc<PollGate>,
     configured: Option<ConfiguredPathLimit>,
     learned: Option<LearnedPathLimit>,
     active: Option<ActiveRoutedSend>,
@@ -133,7 +136,7 @@ struct RoutedPathEntry {
 impl RoutedPathEntry {
     fn new(last_used: u64) -> Self {
         Self {
-            gate: Arc::new(AsyncMutex::new(())),
+            gate: Arc::new(PollGate::default()),
             configured: None,
             learned: None,
             active: None,
@@ -271,7 +274,12 @@ impl RoutedPathLimits {
     }
 
     /// Reserve the path's entry and take its gate. A router MAC outside
-    /// [`routed_mac_fits`] is refused before any entry is reserved.
+    /// [`routed_mac_fits`] is refused before any entry is reserved. The
+    /// gate goes to a request only as it is polled (#2759), so one left
+    /// unpolled while it waits its turn holds the path for nobody; the
+    /// order is [`PollGate`]'s. A request that has the gate holds it until
+    /// its lease drops, polled or not. The wait's handle on the gate keeps
+    /// the entry resident.
     async fn lock_path(
         self: &Arc<Self>,
         router_mac: &[u8],
@@ -288,7 +296,7 @@ impl RoutedPathLimits {
         })
     }
 
-    fn reserve_gate(&self, key: &RoutedPathKey) -> Result<Arc<AsyncMutex<()>>, Error> {
+    fn reserve_gate(&self, key: &RoutedPathKey) -> Result<Arc<PollGate>, Error> {
         let mut state = self.state();
         let last_used = bump_use(&mut state);
         if let Some(entry) = state.entries.get_mut(key) {
@@ -542,7 +550,7 @@ impl RoutedPathLimits {
 pub(super) struct RoutedPathLease {
     limits: Arc<RoutedPathLimits>,
     key: RoutedPathKey,
-    _gate: OwnedMutexGuard<()>,
+    _gate: PollGateGuard<Arc<PollGate>>,
 }
 
 impl RoutedPathLease {
@@ -803,3 +811,7 @@ mod rejects;
 #[cfg(test)]
 #[path = "routed_path_limits_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "routed_path_gate_tests.rs"]
+mod gate_tests;

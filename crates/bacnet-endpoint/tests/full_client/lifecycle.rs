@@ -200,7 +200,7 @@ async fn a_client_dropped_without_a_stop_frees_the_seat_at_once() {
             .unwrap();
     }
     assert_eq!(lab.session.active_leases(), 0);
-    assert_eq!(lab.session.policy_counters().await.unclaimed_terminal, 0);
+    assert_eq!(lab.session.policy_counters().unclaimed_terminal, 0);
 
     drop(client);
     stop(lab).await;

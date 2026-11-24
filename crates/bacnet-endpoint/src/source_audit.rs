@@ -37,6 +37,8 @@ use routers::{SourceRoute, SourceRouters};
 mod delivery;
 #[path = "source_audit_failures.rs"]
 mod failures;
+#[path = "source_audit_local.rs"]
+mod local;
 #[path = "source_audit_seated.rs"]
 mod seated;
 #[path = "source_audit_slots.rs"]

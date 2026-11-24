@@ -245,7 +245,7 @@ async fn session_identity_overrides_480_and_iam_broadcasts() {
 
     // The session's own counters and server are there while it runs.
     assert_eq!(a.active_leases(), 0);
-    let _ = a.policy_counters().await;
+    let _ = a.policy_counters();
     assert!(a.server().is_some());
 
     a.broadcast_i_am().await.unwrap();

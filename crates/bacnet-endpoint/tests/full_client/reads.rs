@@ -149,7 +149,7 @@ async fn the_full_client_reads_as_a_standalone_client_does() {
     assert_eq!(client.local_mac(), Wire::mac(NODE).as_slice());
     assert_eq!(lab.node_link.starts(), 1);
     // Every answer found its owner: the session counted none unclaimed.
-    assert_eq!(lab.session.policy_counters().await.unclaimed_terminal, 0);
+    assert_eq!(lab.session.policy_counters().unclaimed_terminal, 0);
     assert_eq!(lab.session.active_leases(), 0);
 
     drop(client);

@@ -535,7 +535,7 @@ impl PyMstpEndpoint {
                 let session = guard
                     .as_ref()
                     .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
-                let counters = session.policy_counters().await;
+                let counters = session.policy_counters();
                 let leases = session.active_leases();
                 let running = session.is_running();
                 (counters, leases, running, session.seat_counts())

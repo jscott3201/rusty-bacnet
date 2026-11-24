@@ -636,5 +636,38 @@ async fn a_lagging_collector_marks_the_table_truncated() {
     client.stop().await.unwrap();
 }
 
+/// A call polled once while another holds the one-query gate, and never
+/// again, holds the gate for nobody once that call ends (#2759): a third
+/// call, polled, runs. It waited behind the parked one for good while the
+/// gate was Tokio's fair mutex.
+#[tokio::test(start_paused = true)]
+async fn a_parked_call_holds_the_query_gate_for_nobody() {
+    use std::task::{Context, Waker};
+    let (mut client, inbound, mut outbound) = started().await;
+    let wait = RoutingTableWait::default();
+    let (go, gone) = tokio::sync::oneshot::channel();
+    let mut parked = Box::pin(client.routing_table(&ROUTER, wait));
+    let driver = async {
+        outbound.recv().await.expect("the first query");
+        let noop = &mut Context::from_waker(Waker::noop());
+        assert!(parked.as_mut().poll(noop).is_pending());
+        go.send(()).unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        ack(&inbound, &ROUTER, &[(2, 1)]).await;
+        let third = tokio::time::timeout(Duration::from_secs(60), outbound.recv());
+        third.await.expect("the third call's query").unwrap();
+        ack(&inbound, &ROUTER, &[(3, 1)]).await;
+    };
+    let third = async {
+        gone.await.unwrap();
+        client.routing_table(&ROUTER, wait).await
+    };
+    let (first, (), third) = tokio::join!(client.routing_table(&ROUTER, wait), driver, third);
+    assert_eq!(first.unwrap().entries, [entry(2, 1)]);
+    assert_eq!(third.unwrap().entries, [entry(3, 1)]);
+    drop(parked);
+    client.stop().await.unwrap();
+}
+
 #[path = "routing_table_routed_tests.rs"]
 mod routed;

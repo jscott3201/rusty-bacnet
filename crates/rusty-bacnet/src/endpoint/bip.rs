@@ -639,7 +639,7 @@ impl PyBipEndpoint {
                 let address = session
                     .bip_local_address()
                     .ok_or_else(|| PyRuntimeError::new_err("endpoint is not active"))?;
-                let counters = session.policy_counters().await;
+                let counters = session.policy_counters();
                 let leases = session.active_leases();
                 let running = session.is_running();
                 let seat = session.seat_counts();
