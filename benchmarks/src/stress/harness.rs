@@ -73,6 +73,7 @@ pub async fn make_bip_server_with_db(
         .database(db)
         .build()
         .await
+        .map_err(Error::from)
 }
 
 /// Build a BIP client on localhost with an ephemeral port.

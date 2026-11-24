@@ -102,18 +102,21 @@ mod tests {
                 TestTransport::never_start(),
             )
             .await
+            .map_err(Error::from)
             .err();
             let generic = BACnetServer::generic_builder()
                 .transport(TestTransport::never_start())
                 .read_range_budget(budget)
                 .build()
                 .await
+                .map_err(Error::from)
                 .err();
             let bip = BACnetServer::bip_builder()
                 .port(0)
                 .read_range_budget(budget)
                 .build()
                 .await
+                .map_err(Error::from)
                 .err();
             for error in [direct, generic, bip] {
                 assert!(matches!(error, Some(Error::Encoding(m)) if m.contains("read_range_max_")));
@@ -127,6 +130,7 @@ mod tests {
                     .read_range_budget(budget)
                     .build()
                     .await
+                    .map_err(Error::from)
                     .err();
                 assert!(matches!(error, Some(Error::Encoding(m)) if m.contains("read_range_max_")));
             }

@@ -318,6 +318,9 @@ impl Timed for Probe {
     fn start_output(&mut self) {
         self.called("Timed::start_output", ());
     }
+    fn release_output(&mut self) {
+        self.called("Timed::release_output", ());
+    }
     fn retire(&mut self, retirement: bacnet_objects::traits::Retirement) {
         self.called("Timed::retire", (retirement,));
     }

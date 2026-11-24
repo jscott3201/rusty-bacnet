@@ -716,11 +716,18 @@ impl crate::traits::Timed for LoadControlObject {
         self.settle(shed::Prompt::Look);
     }
 
+    /// The start that looked at the request didn't finish: the application
+    /// is told to stop, and the request stays, in the object and in
+    /// storage, for the next start's look (#2752).
+    fn release_output(&mut self) {
+        self.release_request();
+    }
+
     /// Leaving its database: a request under way ends as a cancelled one
     /// does, so the application is told to stop and the object reads
     /// SHED_INACTIVE (#2479). Removed, its storage saves the ended request;
-    /// released (replaced, or let go after a failed start), it leaves
-    /// storage as it was, for the object or start that comes next.
+    /// released (replaced by another object), it leaves storage as it was,
+    /// for the object that comes next.
     fn retire(&mut self, retirement: crate::traits::Retirement) {
         if retirement == crate::traits::Retirement::Removed {
             self.settle(shed::Prompt::Retire);

@@ -109,7 +109,9 @@ async fn start_with(
         ..Default::default()
     };
     let transport = TestTransport::builder().bip6_port(port).build();
-    BACnetServer::start(config, db, transport).await
+    BACnetServer::start(config, db, transport)
+        .await
+        .map_err(Error::from)
 }
 
 async fn start(mode: BipPortMode, handler: bool) -> BACnetServer<TestTransport> {
@@ -414,7 +416,11 @@ async fn registration_refuses_a_b_ipv6_link_that_does_not_match() {
         ))
         .build();
     assert_eq!(
-        refusal(BACnetServer::start(config, database(), transport).await),
+        refusal(
+            BACnetServer::start(config, database(), transport)
+                .await
+                .map_err(Error::from)
+        ),
         "registration requires an IPV4 port"
     );
 }

@@ -81,7 +81,9 @@ mod tests {
                 .read_property_multiple_budget(budget)
                 .build()
                 .await;
-            for error in [direct.err(), generic.err(), bip.err()] {
+            for error in
+                [direct.err(), generic.err(), bip.err()].map(|error| error.map(Error::from))
+            {
                 assert!(matches!(error, Some(Error::Encoding(m)) if m.contains("rpm_max_")));
             }
             assert!(

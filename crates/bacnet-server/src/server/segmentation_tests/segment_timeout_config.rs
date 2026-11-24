@@ -75,6 +75,7 @@ async fn segment_timeout_invalid_configuration_and_declaration_fail_before_io() 
             TestTransport::never_start(),
         )
         .await
+        .map_err(Error::from)
         .err()
         .expect("invalid contract must fail");
         assert!(matches!(error, Error::Encoding(_)), "{error:?}");
@@ -106,6 +107,7 @@ async fn segment_timeout_builder_validation_precedes_transport_start_or_sc_dial(
             )
             .build()
             .await
+            .map_err(Error::from)
             .err();
         let bip = BACnetServer::bip_builder()
             .port(0)
@@ -116,6 +118,7 @@ async fn segment_timeout_builder_validation_precedes_transport_start_or_sc_dial(
             )
             .build()
             .await
+            .map_err(Error::from)
             .err();
         for error in [generic, bip] {
             assert!(matches!(error, Some(Error::Encoding(m)) if m.contains("segment")));
@@ -133,6 +136,7 @@ async fn segment_timeout_builder_validation_precedes_transport_start_or_sc_dial(
                 )
                 .build()
                 .await
+                .map_err(Error::from)
                 .err();
             assert!(matches!(error, Some(Error::Encoding(m)) if m.contains("segment")));
         }

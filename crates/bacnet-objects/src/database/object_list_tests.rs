@@ -151,6 +151,31 @@ fn devices_lead_and_the_rest_keep_the_order_they_came_in() {
     assert_eq!(entries(&db), listed(&db));
 }
 
+/// `into_objects` hands every object out in Object_List order, the Devices
+/// first, and each goes into a new database as it was (#2752).
+#[test]
+fn the_objects_leave_in_object_list_order() {
+    let mut db = ObjectDatabase::new();
+    db.add(ai(3)).unwrap();
+    db.add(device(7)).unwrap();
+    db.add(bv(1)).unwrap();
+    db.add(ai(1)).unwrap();
+    let expected = listed(&db);
+    let objects = db.into_objects();
+    let identifiers: Vec<_> = objects.iter().map(|o| o.object_identifier()).collect();
+    assert_eq!(identifiers, expected);
+    let names: Vec<_> = objects
+        .iter()
+        .map(|o| o.object_name().to_string())
+        .collect();
+    assert_eq!(names, ["device-7", "AI-3", "BV-1", "AI-1"]);
+    let mut again = ObjectDatabase::new();
+    for object in objects {
+        again.add(object).unwrap();
+    }
+    assert_eq!(listed(&again), expected);
+}
+
 /// A removed object leaves the list; one added again goes last; one
 /// replaced under its identifier keeps its place. Each new identifier and
 /// each removal moves the revision by one; a replacement, a refused add and

@@ -221,11 +221,13 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
         self
     }
 
-    /// Build and start the server.
-    pub async fn build(mut self) -> Result<BACnetServer<T>, Error> {
-        let transport = self
-            .transport
-            .ok_or_else(|| Error::Encoding("transport not set on ServerBuilder".into()))?;
+    /// Build and start the server. A refusal hands back the database
+    /// ([`StartError`]).
+    pub async fn build(mut self) -> Result<BACnetServer<T>, StartError> {
+        let Some(transport) = self.transport else {
+            let error = Error::Encoding("transport not set on ServerBuilder".into());
+            return Err(StartError::new(error, self.db));
+        };
         let db = crate::local_device::prepare_database(
             &mut self.config,
             self.db,
@@ -342,6 +344,8 @@ impl<T: TransportPort> Clone for IAmBroadcaster<T> {
 
 mod bip_builder;
 pub use bip_builder::BipServerBuilder;
+mod start_error;
+pub use start_error::StartError;
 mod clock;
 mod command_runs;
 pub(crate) mod device_storage;
@@ -415,6 +419,8 @@ mod network_port_tests;
 #[cfg(test)]
 #[path = "../../../bacnet-endpoint/tests/support/port_retry.rs"]
 mod port_retry;
+#[cfg(test)]
+mod start_refusal_tests;
 pub use confirmed_answer::CovAckResult;
 mod remote_writes;
 pub(crate) use remote_writes::RemoteRequestError;

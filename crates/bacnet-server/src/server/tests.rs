@@ -661,11 +661,18 @@ fn max_neg_segment_ack_retries_constant() {
 /// and a sharing one's says the port can't be shared. Windows decides a
 /// sharing bind beside a socket that set no options by the two sockets'
 /// accounts (Microsoft's SO_REUSEADDR table), so only the claiming case runs
-/// there.
+/// there. Each refusal hands the builder's database back, which then starts
+/// a server on a free port (#2752).
 #[tokio::test]
 async fn bip_builder_hands_its_wildcard_sharing_choice_to_the_transport() {
     let holder = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
     let port = holder.local_addr().unwrap().port();
+    let value = ObjectIdentifier::new(ObjectType::BINARY_VALUE, 1).unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(
+        bacnet_objects::binary::BinaryValueObject::new(1, "BV-1").unwrap(),
+    ))
+    .unwrap();
     for (share, says) in [(false, "share_wildcard_port"), (true, "can't be shared")] {
         if share && cfg!(windows) {
             continue;
@@ -674,13 +681,34 @@ async fn bip_builder_hands_its_wildcard_sharing_choice_to_the_transport() {
             .interface(Ipv4Addr::LOCALHOST)
             .port(port)
             .share_wildcard_port(share)
+            .database(db)
             .build()
             .await;
-        let Err(Error::Transport(refused)) = built else {
+        let Err(refused) = built else {
             panic!("build must fail on a held port (share: {share})");
         };
+        let (error, database) = refused.into_parts();
+        let Error::Transport(refused) = error else {
+            panic!("a transport error, not {error}");
+        };
         assert!(refused.to_string().contains(says), "{refused}");
+        db = database.expect("the refused build hands its database back");
+        assert!(db.get(&value).is_some());
     }
+    let mut server = BACnetServer::<BipTransport>::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .broadcast_address(Ipv4Addr::new(127, 255, 255, 255))
+        .database(db)
+        .build()
+        .await
+        .unwrap();
+    let name = server
+        .read_local(&value, PropertyIdentifier::OBJECT_NAME, None)
+        .await
+        .unwrap();
+    assert_eq!(name, PropertyValue::CharacterString("BV-1".into()));
+    server.stop().await.unwrap();
 }
 
 /// The B/IP builder hands `share_port_by_address` to its transport, which
@@ -692,7 +720,8 @@ async fn bip_builder_shares_the_port_by_address_only_with_an_address() {
         .port(0xBAC0)
         .share_port_by_address(true)
         .build()
-        .await;
+        .await
+        .map_err(Error::from);
     let Err(Error::Transport(refused)) = built else {
         panic!("build must refuse");
     };

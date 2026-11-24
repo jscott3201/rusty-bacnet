@@ -62,6 +62,19 @@ impl StartedOutputs {
     pub(super) fn complete(mut self) {
         self.held = None;
     }
+
+    /// The start was refused before the server shared the database: release
+    /// what it began and give the database back (#2752), with a registered
+    /// Network Port it published put back as reserved once its owner has
+    /// gone.
+    pub(super) fn refuse(mut self) -> ObjectDatabase {
+        let Some(Held::Owned(mut db)) = self.held.take() else {
+            unreachable!("a start is refused before it shares the database");
+        };
+        db.release_outputs();
+        db.withdraw_network_port_internal();
+        *db
+    }
 }
 
 impl Drop for StartedOutputs {

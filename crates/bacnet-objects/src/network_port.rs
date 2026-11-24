@@ -38,6 +38,7 @@ pub(crate) use bip6_config::Bip6Bind;
 pub use bip6_config::Bip6PortConfig;
 use ip_config::IpConfig;
 pub(crate) use ip_config::{PortAddress, PortBind};
+pub(crate) use registration::Reserved;
 
 /// A declared application-port snapshot, optionally associated with an owned link.
 pub struct NetworkPortObject {
