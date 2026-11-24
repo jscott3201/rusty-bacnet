@@ -14266,15 +14266,18 @@ slot. A stop or the caller going away ends the wait with nothing sent. A
 request waits out its turn at its destination (`min_request_interval_ms`)
 holding nothing, and takes the turn with its slot, so the interval holds
 between requests as they are admitted; one whose turn another request took
-meanwhile takes no slot and waits again. Once admitted, a request goes with
-its slot to a task the session owns, which waits there for the node's
-database (#2755): Tokio's lock hands its guard to a queued waiter whether or
-not it is polled, so a caller parked in a `select!`, `join!` or
-`buffer_unordered` never holds the guard, or a slot, and holds up no request
-the node serves. A caller that goes before that task has the guard ends the
-request with nothing sent or recorded. A request the Reporter doesn't
-select, or with no recipient, then comes back to its caller and goes
-unaudited in the caller's task.
+meanwhile takes no slot and waits again. A caller never waits for the
+node's database (#2755): Tokio's lock hands its guard to a queued waiter
+whether or not it is polled, so a caller parked in a `select!`, `join!` or
+`buffer_unordered` could own it. An admitted request takes the guard in its
+caller's task only when it is free at once; otherwise the request goes with
+its slot to a task the session owns, which waits for the guard. So a parked
+caller holds neither the guard nor a slot, and holds up no request the node
+serves. A caller that goes before that task has the guard loses the
+request, with nothing sent or recorded. Sequence numbers follow admission
+while the database is free; a request admitted while it is busy takes its
+number when its task gets the guard. A request the Reporter doesn't select,
+or with no recipient, goes unaudited in the caller's task.
 
 - Each target is its own record (Clause 19.6.5): one per reference of a
   ReadPropertyMultiple, or per value its answer reports for ALL, REQUIRED or

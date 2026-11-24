@@ -4,21 +4,35 @@
 //! 19-5 maps to READ or WRITE (see `bacnet_client::client::SourceAuditor`).
 //! Here the request is admitted: once its turn at the destination is due,
 //! a slot from its lane's share of the 64 ([`super::slots`], #2652) and
-//! the turn with it. Then a task the session owns has it: the database
-//! guard, the Reporter's filters, a recipient, one station, a timestamp,
-//! and the request itself, so a caller that goes away loses neither the
-//! request nor its records: the client retries with the same invoke ID and
-//! the records carry the real answer. A request the Reporter doesn't
-//! select, or that has no recipient, goes back to its caller and runs
-//! unaudited in the caller's task.
+//! the turn with it. Then, under the database guard, the Reporter's
+//! filters, a recipient, one station and a timestamp
+//! ([`SourceAudit::plan`]); then a task the session owns carries out the
+//! request and records it, so a caller that goes away once its request is
+//! planned loses neither the request nor its records: the client retries
+//! with the same invoke ID and the records carry the real answer. A request
+//! the Reporter doesn't select, or that has no recipient, runs unaudited in
+//! its caller's task.
 //!
-//! The caller's task waits only where nothing is handed to a waiter that
+//! The guard is never waited for in the caller's task (#2755): Tokio's lock
+//! hands its guard to a queued waiter whether or not that waiter is polled
+//! again, so a caller parked in a `select!`, `join!` or `buffer_unordered`
+//! could own it. The caller takes it only with `try_write`, which queues
+//! for nothing, in the poll that admits the request: with the database
+//! free, the request is planned there, as it always was. With the database
+//! busy, the request and its slot go to the task, which waits for the guard
+//! and plans the request there; a caller that goes before that task holds
+//! the guard loses the request, with nothing sent or recorded. Otherwise
+//! the caller's task waits only where nothing is handed to a waiter that
 //! isn't polled: for the turn, for a slot (taken as it is polled) and for
-//! the task's answer. Tokio's lock hands its guard to a queued waiter
-//! whether or not that waiter is polled again, so the guard is waited for
-//! in the task, which always is (#2755): a caller parked in a `select!`,
-//! `join!` or `buffer_unordered` holds no guard, and from its admission no
-//! slot either.
+//! the task's answer. So a parked caller holds no guard, and from its
+//! request's admission no slot: the task holds it while the request runs,
+//! and one that runs unaudited has given it back.
+//!
+//! Sequence numbers follow admission while the database is free. A request
+//! admitted while it is busy takes its number when its task gets the guard,
+//! so one admitted after it, once the database is free, can take an
+//! earlier number. A panic in the task reaches its caller as the shutdown
+//! error.
 //!
 //! A write sent with a priority is a command at that priority, which the
 //! Reporter's Audit_Priority_Filter applies to and the record names; one
@@ -95,8 +109,8 @@ enum Handoff {
     Unaudited(Box<AuditedRequest>),
 }
 
-/// How an admitted request is recorded, as the database stood when its
-/// task held the guard.
+/// How an admitted request is recorded, as the database stood when it was
+/// planned under the guard.
 struct Plan {
     selection: Selection,
     notification: BACnetAuditNotification,
@@ -108,8 +122,8 @@ struct Plan {
 }
 
 impl SourceAudit {
-    /// Admit a request of the session's client and hand it to a task the
-    /// session owns, as the module documentation describes.
+    /// Admit a request of the session's client, plan it, and hand it to a
+    /// task the session owns, as the module documentation describes.
     async fn audit_seated(self: &Arc<Self>, mut request: AuditedRequest) -> Result<Bytes, Error> {
         let lane = slots::Lane::of(request.station());
         let slot = loop {
@@ -142,13 +156,29 @@ impl SourceAudit {
         if request.initiation_restricted() {
             return Err(Error::InitiationDisabled { sent: false });
         }
-        // The slot goes to the task in the poll that took it.
         let owner = self.notifications.upgrade().ok_or_else(shutdown)?;
         let (reply, answer) = oneshot::channel();
+        let (task, weak) = (Arc::clone(self), Arc::downgrade(&owner));
+        // The guard only if it is free now: `try_write` queues for nothing,
+        // so nothing is handed to this caller while it isn't polled. Planned
+        // here, the request goes to its task in this same poll, so a caller
+        // that goes afterwards leaves it running and recorded, as before.
+        let planned = self
+            .db
+            .try_write()
+            .map(|mut db| self.plan(&mut db, &request));
         // A rejected spawn drops the request, its slot and the reply; the
         // task never retains its owner. The stop that closes the owner
         // aborts the task, so an operation it cuts off is not recorded.
-        owner.spawn(Arc::clone(self).run_admitted(request, slot, reply, Arc::downgrade(&owner)));
+        match planned {
+            Ok(Ok(Some(plan))) => owner.spawn(task.carry_out(plan, request, slot, reply, weak)),
+            Ok(Ok(None)) => {
+                drop((slot, owner));
+                return request.execute().await.result;
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(_busy) => owner.spawn(task.run_admitted(request, slot, reply, weak)),
+        }
         drop(owner);
         match answer.await {
             Ok(Handoff::Answer(result)) => result,
@@ -157,11 +187,12 @@ impl SourceAudit {
         }
     }
 
-    /// An admitted request, in the task the session owns (#2755). It waits
-    /// for the database guard and holds it, polled, only for the synchronous
-    /// [`Self::plan`]; then it carries out the request and records it. A
-    /// caller that goes before the guard is held ends the request there,
-    /// with nothing sent, recorded or numbered and its slot back at once.
+    /// A request admitted while the database was busy, in the task the
+    /// session owns (#2755). It waits for the guard and holds it, polled,
+    /// only for the synchronous [`Self::plan`], then goes on as
+    /// [`Self::carry_out`]. A caller that goes before the guard is held ends
+    /// the request there, with nothing sent, recorded or numbered, and its
+    /// slot back at once.
     async fn run_admitted(
         self: Arc<Self>,
         request: AuditedRequest,
@@ -180,19 +211,29 @@ impl SourceAudit {
             }
             self.plan(&mut db, &request)
         };
-        let plan = match plan {
-            Ok(Some(plan)) => plan,
+        match plan {
+            Ok(Some(plan)) => self.carry_out(plan, request, slot, reply, owner).await,
             Ok(None) => {
                 drop(slot);
                 let _ = reply.send(Handoff::Unaudited(Box::new(request)));
-                return;
             }
             Err(error) => {
                 drop(slot);
                 let _ = reply.send(Handoff::Answer(Err(error)));
-                return;
             }
-        };
+        }
+    }
+
+    /// A planned request, in the task the session owns: it is carried out,
+    /// recorded as `plan` says, and answered, holding its slot to its end.
+    async fn carry_out(
+        self: Arc<Self>,
+        plan: Plan,
+        request: AuditedRequest,
+        slot: slots::Slot,
+        reply: oneshot::Sender<Handoff>,
+        owner: Weak<NotificationTransactions>,
+    ) {
         let outcome = request.execute().await;
         // A stop that began while the request ran cut it off.
         let recorded = outcome.attempted && !self.slots.is_closed();

@@ -122,6 +122,18 @@ impl Endpoint {
 /// parked read, polled again, returns its answer.
 #[tokio::test(start_paused = true)]
 async fn a_caller_that_stops_polling_holds_no_database_guard() {
+    a_parked_caller_holds_up_nothing().await;
+}
+
+/// [`a_caller_that_stops_polling_holds_no_database_guard`] with the
+/// session's tasks on other threads than the test's, on real time: it
+/// waits only for what must happen, each wait bounded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_caller_that_stops_polling_holds_no_database_guard_on_threads() {
+    a_parked_caller_holds_up_nothing().await;
+}
+
+async fn a_parked_caller_holds_up_nothing() {
     let mut endpoint = source(SessionRole::Both, false).await;
     let source = Arc::clone(endpoint.session.source_audit.as_ref().unwrap());
     let db = Arc::clone(endpoint.session.database.as_ref().unwrap());
@@ -146,7 +158,13 @@ async fn a_caller_that_stops_polling_holds_no_database_guard() {
     ids.sort_unstable();
     assert_eq!(endpoint.frames(2).await.recorded(), ids, "both recorded");
     assert!(bounded(parked).await.is_ok());
-    assert_eq!(source.available_operations(), SLOTS);
+    // The task gives the slot back once it has answered.
+    bounded(async {
+        while source.available_operations() != SLOTS {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
     drop(client);
     endpoint.stop().await;
 }
@@ -293,9 +311,11 @@ async fn a_stop_ends_a_read_whose_caller_stopped_polling() {
     assert!(endpoint.sent.try_recv().is_err(), "nothing was sent");
 }
 
-/// A read the Reporter doesn't select comes back to its caller and runs
-/// there, as an unaudited request does: dropping the caller once it is sent
-/// ends its transaction, with no answer and no record.
+/// A read the Reporter doesn't select runs in its caller's task, as an
+/// unaudited request does, whether its caller planned it (the database
+/// free) or its task did and handed it back (the database busy): dropping
+/// the caller once it is sent ends its transaction, with no answer and no
+/// record.
 #[tokio::test(start_paused = true)]
 async fn a_read_the_reporter_does_not_select_stays_its_callers() {
     let mut endpoint = source(SessionRole::ClientOnly, false).await;
@@ -315,17 +335,28 @@ async fn a_read_the_reporter_does_not_select_stays_its_callers() {
             None,
         )
         .unwrap();
-    let read = endpoint.read(direct_read());
-    let (route, _) = endpoint.request().await;
-    assert_eq!(route, local(PEER));
-    assert_eq!(endpoint.session.coordinator.active_count().unwrap(), 1);
-    read.abort();
-    let _ = read.await;
-    eventually(WAIT, "the transaction ended with its caller", async || {
-        endpoint.session.coordinator.active_count().unwrap() == 0
-    })
-    .await;
-    tokio::time::sleep(Duration::from_millis(30)).await;
-    assert!(endpoint.sent.try_recv().is_err(), "no record, no retry");
+    for busy in [false, true] {
+        let guard = busy.then(|| db.try_write().unwrap());
+        let read = endpoint.read(direct_read());
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        drop(guard);
+        let (route, _) = endpoint.request().await;
+        assert_eq!(route, local(PEER));
+        assert_eq!(endpoint.session.coordinator.active_count().unwrap(), 1);
+        read.abort();
+        let _ = read.await;
+        eventually(WAIT, "the transaction ended with its caller", async || {
+            endpoint.session.coordinator.active_count().unwrap() == 0
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(
+            endpoint.sent.try_recv().is_err(),
+            "busy {busy}: no record or retry"
+        );
+    }
     endpoint.stop().await;
 }
+
+#[path = "source_audit_plan_tests.rs"]
+mod plan;
