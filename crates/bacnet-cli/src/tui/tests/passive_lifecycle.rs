@@ -180,8 +180,10 @@ async fn a_port_held_at_the_bind_and_freed_before_the_check_is_lost() {
     let (sink, mut events) = EventSink::channel(4);
     let (_commands, rx) = mpsc::channel(2);
     // The session reports its failed bind and ends before the holder lets go.
-    session::spawn(plan, sink, rx, options())
+    let session = session::spawn(plan, sink, rx, options());
+    tokio::time::timeout(std::time::Duration::from_secs(5), session)
         .await
+        .expect("the held port refuses the listener's bind, which ends the session")
         .unwrap()
         .unwrap();
     drop(holder);
@@ -191,6 +193,29 @@ async fn a_port_held_at_the_bind_and_freed_before_the_check_is_lost() {
         .await
         .expect_err("a lost port");
     assert!(super::port_retry::lost_to_another_socket(&lost), "{lost}");
+}
+/// Only a port another socket held reruns a test: a failure with no OS error
+/// under it, with only an OS error's kind, or with an OS error of another
+/// kind fails it (#2776).
+#[test]
+fn a_failure_on_a_port_no_socket_held_fails_the_test() {
+    use crate::tui::message::Failure;
+    let kind_only = std::io::Error::from(std::io::ErrorKind::AddrInUse);
+    // ENOENT on Unix, ERROR_FILE_NOT_FOUND on Windows.
+    let other = std::io::Error::from_raw_os_error(2);
+    for failure in [
+        Failure::text("x"),
+        Failure::io("c", &kind_only),
+        Failure::io("c", &other),
+    ] {
+        let panic = std::panic::catch_unwind(|| super::lost_port(&failure))
+            .expect_err("no rerun for this failure");
+        let message = panic.downcast_ref::<String>().map_or("", String::as_str);
+        assert!(
+            message.contains("not on a port another socket held"),
+            "{message}"
+        );
+    }
 }
 #[tokio::test]
 async fn passive_bind_failure_and_unsupported_modes_never_claim_readiness() {
