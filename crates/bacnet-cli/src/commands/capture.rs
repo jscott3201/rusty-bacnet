@@ -2,6 +2,7 @@
 //!
 //! This entire module is gated behind `#[cfg(feature = "pcap")]`.
 
+use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,6 +12,10 @@ use serde::Serialize;
 
 use crate::decode;
 use crate::output::{self, OutputFormat, Printed};
+
+#[path = "capture_drops.rs"]
+mod drops;
+use drops::Drops;
 
 // ---------------------------------------------------------------------------
 // Options
@@ -69,6 +74,11 @@ trait CaptureSource {
         &self,
         path: &std::path::Path,
     ) -> Result<pcap::Savefile, Box<dyn std::error::Error>>;
+    /// How many packets the OS has dropped since the capture opened because
+    /// its buffer was full (they came faster than they were read): libpcap's
+    /// `ps_drop`, a 32-bit count that wraps. `None` for a file, which can't
+    /// drop any, or when libpcap can't say.
+    fn dropped(&mut self) -> Option<u32>;
 }
 
 fn map_pcap_error(e: pcap::Error) -> PcapError {
@@ -105,6 +115,12 @@ impl CaptureSource for LiveCapture {
     ) -> Result<pcap::Savefile, Box<dyn std::error::Error>> {
         Ok(self.0.savefile(path)?)
     }
+
+    fn dropped(&mut self) -> Option<u32> {
+        // Not `if_dropped`: the interface's own drops count all its
+        // traffic, where the OS has them at all.
+        self.0.stats().ok().map(|stat| stat.dropped)
+    }
 }
 
 struct OfflineCapture(pcap::Capture<pcap::Offline>);
@@ -132,6 +148,10 @@ impl CaptureSource for OfflineCapture {
         path: &std::path::Path,
     ) -> Result<pcap::Savefile, Box<dyn std::error::Error>> {
         Ok(self.0.savefile(path)?)
+    }
+
+    fn dropped(&mut self) -> Option<u32> {
+        None
     }
 }
 
@@ -343,7 +363,16 @@ pub fn run_capture(opts: CaptureOpts) -> Result<(), Box<dyn std::error::Error>> 
 
     // From here stdout is a stream (#2783): a failure ends it with an
     // error line, after the packets printed before it.
-    let packet_count = match packets(&mut *source, &mut savefile, datalink, &opts, &running) {
+    let mut stdout = std::io::stdout();
+    let read = packets(
+        &mut *source,
+        &mut savefile,
+        datalink,
+        &opts,
+        &running,
+        &mut stdout,
+    );
+    let packet_count = match read {
         Ok(count) => count,
         Err(error) => {
             if !opts.quiet {
@@ -367,15 +396,19 @@ pub fn run_capture(opts: CaptureOpts) -> Result<(), Box<dyn std::error::Error>> 
 
 /// Read packets until Ctrl-C (or SIGTERM or SIGHUP on Unix), `--count`, the
 /// end of the file or stdout's reader going, saving and printing each as it
-/// comes; how many were read.
+/// comes to `out` (stdout but for tests); how many were read. Packets the
+/// OS dropped are noted as [`Drops::line`] says. Called once `source`'s
+/// filter is set, which the drop count starts from.
 fn packets(
     source: &mut dyn CaptureSource,
     savefile: &mut Option<pcap::Savefile>,
     datalink: pcap::Linktype,
     opts: &CaptureOpts,
     running: &AtomicBool,
+    out: &mut impl Write,
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let mut packet_count: u64 = 0;
+    let mut drops = Drops::start(source, opts.quiet);
     loop {
         // Check running flag and count limit
         if !running.load(Ordering::Relaxed) {
@@ -390,7 +423,15 @@ fn packets(
         // Get next packet
         let pkt = match source.next_packet() {
             Ok(p) => p,
-            Err(PcapError::Timeout) => continue,
+            Err(PcapError::Timeout) => {
+                // A quiet second: what the OS dropped meanwhile.
+                if let Some(line) = drops.line(source, opts)
+                    && output::print_line_to(out, &line)? == Printed::ReaderGone
+                {
+                    return Ok(packet_count);
+                }
+                continue;
+            }
             Err(PcapError::Eof) => return Ok(packet_count),
             Err(PcapError::Other(e)) => return Err(e.into()),
         };
@@ -406,11 +447,16 @@ fn packets(
             sf.write(&packet_ref);
         }
 
+        // What the OS dropped since the last look comes before the packet.
         // A reader that has gone ends the capture as Ctrl-C does.
-        if !opts.quiet
-            && output::print_line(&packet_text(&pkt, datalink, opts))? == Printed::ReaderGone
-        {
-            return Ok(packet_count);
+        let lines = [
+            drops.line(source, opts),
+            (!opts.quiet).then(|| packet_text(&pkt, datalink, opts)),
+        ];
+        for line in lines.into_iter().flatten() {
+            if output::print_line_to(out, &line)? == Printed::ReaderGone {
+                return Ok(packet_count);
+            }
         }
     }
 }

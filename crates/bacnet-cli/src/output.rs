@@ -284,7 +284,16 @@ pub enum Printed {
 /// the command to stop on, cleaning up as it does at Ctrl+C (`println!`
 /// would panic); any other failed write (a full disk) is an error.
 pub fn print_line(text: &str) -> Result<Printed, Box<dyn std::error::Error>> {
-    written(write_line(&mut io::stdout().lock(), text))
+    print_line_to(&mut io::stdout().lock(), text)
+}
+
+/// [`print_line`] to `out`: stdout, or a buffer for a test of a stream's
+/// loop.
+pub(crate) fn print_line_to(
+    out: &mut impl Write,
+    text: &str,
+) -> Result<Printed, Box<dyn std::error::Error>> {
+    written(write_line(out, text))
 }
 
 /// [`print_line`]'s outcome from its write's. The reader having gone is
@@ -328,6 +337,16 @@ pub fn end_stream(error: &(dyn std::error::Error + 'static), format: OutputForma
 /// [`end_stream`]'s JSON line.
 fn error_line(message: &str) -> String {
     json_line(&serde_json::json!({ "type": "error", "message": message }))
+}
+
+/// A stream's gap (#2787): `count` items (notifications, packets) that never
+/// reached it, as a note on stderr in either format and, in JSON, the line
+/// `{"type": "missed", "count"}` for the stream where the gap is; `None`
+/// for a table, whose stdout stays as it was.
+pub(crate) fn missed(note: &str, count: u64, format: OutputFormat) -> Option<String> {
+    print_error(note);
+    (format == OutputFormat::Json)
+        .then(|| json_line(&serde_json::json!({ "type": "missed", "count": count })))
 }
 
 /// Print a waiting/progress message to stderr.

@@ -131,7 +131,21 @@ stderr). Each object names its kind in `type`:
 | `subscribed` | `subscribe`'s first line, once the subscription is in place: `status` (`ok`) and `message` |
 | `cov` | A notification `subscribe` received (see [COV Subscriptions](#cov-subscriptions)) |
 | `packet` | A packet `capture` read (see [Packet Capture](#packet-capture)) |
+| `missed` | A gap: `count` notifications or packets the stream lost because the command fell behind (below). For `subscribe` it counts every notification the client received and the command never read, for any object, device or process id, including ones `subscribe` would not have printed |
 | `error` | The last line of a stream that fails once it is running, with `message` as stderr prints it after `Error: `; the exit status is the usual 1 |
+
+A command that can't keep up, as when its reader is slow, loses what comes
+meanwhile; a `missed` line, `{"count":3,"type":"missed"}`, says so in the
+stream, stderr notes it in every format, and the stream goes on. In
+`subscribe` it comes exactly where the gap is: `count` is how many
+notifications overflowed the client's buffer of 64 (a notification lost on
+the network can't be counted). A consumer that needs a value current should
+read it again (`bacnet read`) rather than wait for its next change. A live
+`capture` counts the packets the operating system dropped, where libpcap
+reports drops (some platforms report none). Its line marks a count, not a
+boundary: it comes when the capture learns of the drops, so up to a
+buffer's worth of packets after it can still precede the gap, though none
+from after the gap comes before it. Reading a file loses nothing.
 
 An error before a stream starts (a subscription the device refuses, a capture
 device that won't open) leaves stdout empty, as with any command. A stream
@@ -2170,8 +2184,11 @@ target.
 With `--json` (or through a pipe) the watch is a stream of
 [JSON Lines](#json-streams): the `subscribed` line, then a `cov` line a
 notification, as each arrives. A renewal or cancel that fails ends it with an
-`error` line. A note that notifications were missed goes to stderr only. For
-example, the opening line and the device's first notification:
+`error` line. Notifications that overflow the watch's buffer while it falls
+behind are noted on stderr and, in JSON, marked by a `missed` line where
+they would have come, with their count ([gaps](#json-streams)); read the
+object again if you need its present value. For example, the opening line
+and the device's first notification:
 
 ```json
 {"message":"Subscribed to ANALOG_INPUT:1 (process_id=4242; lifetime 300s, renewed while watching, cancelled on exit). Watching... (Ctrl+C to stop)","status":"ok","type":"subscribed"}
@@ -2617,8 +2634,13 @@ signal within a second.
 ```
 
 **JSON output** is a stream of [JSON Lines](#json-streams), one `packet` line
-a packet (`detail` holds the decode lines with `--decode`); a read that fails
-part way, such as a file cut short, ends it with an `error` line:
+a packet (`detail` holds the decode lines with `--decode`). Packets the
+operating system dropped because the capture fell behind are noted on stderr
+and, in JSON, counted by a `missed` line ([gaps](#json-streams)); the
+capture asks for that count before each packet it prints, and with
+`--quiet` at most every 250 ms, for stderr's note alone. A read that
+fails part way, such as a file cut short, ends the stream with an `error`
+line:
 
 ```json
 {"type":"packet","timestamp":"12:34:56.789","src":"192.168.1.100:47808","dst":"192.168.1.255:47808","bvlc":"ORIGINAL_BROADCAST_NPDU","service":"WHO_IS"}
