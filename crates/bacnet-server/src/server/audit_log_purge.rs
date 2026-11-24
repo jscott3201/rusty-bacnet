@@ -45,28 +45,44 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     pub async fn purge_audit_log(&self, oid: &ObjectIdentifier) -> Result<(), Error> {
         super::local_writes::local_runtime()?;
         self.active_network()?;
-        let staged = durable_writes::stage_held(
-            &self.db,
-            self.request_tasks.stage_releases(),
-            durable_writes::DurableTarget::purge(*oid),
-        )
-        .await;
-        let mut db = self.db.write().await;
-        let result = match db.get_mut(oid) {
-            None => Err(protocol_error(
-                ErrorClass::OBJECT,
-                ErrorCode::UNKNOWN_OBJECT,
-            )),
-            Some(object) => match object.durable_writes() {
-                Some(writes) => writes.commit_purge(),
+        let oid = *oid;
+        let (db, releases) = (
+            Arc::clone(&self.db),
+            Arc::clone(self.request_tasks.stage_releases()),
+        );
+        let take = async move {
+            let staged = durable_writes::stage_held(
+                &db,
+                &releases,
+                durable_writes::DurableTarget::purge(oid),
+            )
+            .await;
+            // The guard first, so a caller gone by now lets the stage go at once.
+            (db.write_owned().await, staged)
+        };
+        let purge = move |(mut db, staged): super::local_writes::Held| {
+            let result = match db.get_mut(&oid) {
                 None => Err(protocol_error(
                     ErrorClass::OBJECT,
-                    ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+                    ErrorCode::UNKNOWN_OBJECT,
                 )),
-            },
+                Some(object) => match object.durable_writes() {
+                    Some(writes) => writes.commit_purge(),
+                    None => Err(protocol_error(
+                        ErrorClass::OBJECT,
+                        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+                    )),
+                },
+            };
+            staged.release(&mut db);
+            result
         };
-        staged.release(&mut db);
-        result
+        // Neither the stage nor the guard is waited for in the caller's
+        // task (#2772).
+        self.request_tasks
+            .for_caller(take, purge)
+            .await
+            .unwrap_or_else(|| Err(broadcaster::stopped()))
     }
 }
 

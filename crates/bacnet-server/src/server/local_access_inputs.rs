@@ -110,11 +110,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         input: AccessControlInput,
     ) -> Result<(), Error> {
-        self.write_local_as(
-            oid,
-            LocalWrite::ApplicationAccessInput(&input),
-            PropertyValue::Null,
-        )
-        .await
+        self.write_local_as(oid, LocalInput::AccessControl(input), PropertyValue::Null)
+            .await
     }
 }

@@ -1,6 +1,7 @@
 use super::durable_writes::StageReleases;
 use super::request_admission::{Admission, Class, Rejection};
 use super::{RequestAdmissionCounters, RequestAdmissionPolicy};
+use crate::caller_waits::{CallerTask, for_caller};
 use bacnet_device_core::write::Unfinished;
 use bacnet_types::primitives::ObjectIdentifier;
 use std::future::{Future, poll_fn};
@@ -237,6 +238,48 @@ impl RequestTasks {
                 handle,
             );
         }
+    }
+
+    /// Run an application's call as [`for_caller`] does, with this set as
+    /// the host of the task that waits for it (#2772): the server's
+    /// `*_local` reads and writes and the like never wait for a lock in
+    /// their caller's task, so a caller that stops polling holds up none of
+    /// the requests the server serves. Outside a runtime, or once `stop()`
+    /// has closed the set, the call waits in its own task, as before.
+    pub(super) async fn for_caller<G, R>(
+        &self,
+        take: impl Future<Output = G> + Send + 'static,
+        make: impl FnOnce(G) -> R + Send + 'static,
+    ) -> Option<R>
+    where
+        G: Send + 'static,
+        R: Send + 'static,
+    {
+        for_caller(|task| self.host(task), take, make).await
+    }
+
+    /// Run a call's waiting task in this set, or hand it back outside a
+    /// runtime or once the set is closed.
+    fn host(&self, task: CallerTask) -> Result<(), CallerTask> {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return Err(task);
+        }
+        let mut state = self.0.lock().unwrap();
+        if state.closed {
+            return Err(task);
+        }
+        let owner = state.audit_owner.as_ref().and_then(Weak::upgrade);
+        state.tasks.spawn(async move {
+            let _owner = owner;
+            task.await;
+        });
+        Ok(())
+    }
+
+    /// How many tasks the set holds, finished ones not yet joined included.
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.0.lock().unwrap().tasks.len()
     }
 
     pub(super) fn close(&self) {

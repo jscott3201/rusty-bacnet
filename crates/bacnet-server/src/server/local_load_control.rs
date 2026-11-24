@@ -1,10 +1,10 @@
 //! The application's routes to a running Load Control's configuration
 //! (#2497): Shed_Levels with their descriptions, Full_Duty_Baseline and
-//! State_Description. Each is a typed local input ([`LocalWrite`]) made
+//! State_Description. Each is a typed local input ([`LocalInput`]) made
 //! through bacnet-device-core's staged local write, so the post-write work
 //! is the other `*_local` routes': the event pass and the COV fanout.
 
-use super::local_writes::LocalWrite;
+use super::local_writes::LocalInput;
 use super::*;
 use bacnet_objects::load_control::LoadControlSetting;
 
@@ -121,11 +121,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         setting: LoadControlSetting,
     ) -> Result<(), Error> {
-        self.write_local_as(
-            oid,
-            LocalWrite::ApplicationLoadControl(&setting),
-            PropertyValue::Null,
-        )
-        .await
+        self.write_local_as(oid, LocalInput::LoadControl(setting), PropertyValue::Null)
+            .await
     }
 }

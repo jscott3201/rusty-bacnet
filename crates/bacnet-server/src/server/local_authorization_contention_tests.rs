@@ -15,6 +15,50 @@ fn pending<F: Future>(future: Pin<&mut F>) {
     );
 }
 
+/// An attempt polled once while the application holds the database, then
+/// never again, holds up nothing: it waits in a task of the server's, which
+/// evaluates and records once the database is free, so a writer queued
+/// behind it gets the database. Polled at last, it answers (#2772).
+#[tokio::test(start_paused = true)]
+async fn a_parked_local_authorization_holds_up_no_writer() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let mut h = Harness::start_with(ServerConfig::default(), |db| {
+        counted(db, Arc::clone(&reads))
+    })
+    .await;
+    h.set_clock(20);
+    settle().await;
+    let held = Arc::clone(&h.server.db).write_owned().await;
+    let mut route = Box::pin(h.server.authorize_access_local(request(false), 42));
+    pending(route.as_mut());
+    let writer = tokio::spawn({
+        let db = Arc::clone(&h.server.db);
+        async move { drop(db.write().await) }
+    });
+    settle().await;
+    drop(held);
+    tokio::time::timeout(std::time::Duration::from_secs(5), writer)
+        .await
+        .expect("the writer queued behind the attempt never got the database")
+        .unwrap();
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        1,
+        "evaluated once, in the task"
+    );
+    let result = route.await.unwrap();
+    assert_eq!(result.evaluation.outcome, AuthorizationOutcome::Granted);
+    h.server.stop().await.unwrap();
+}
+
+/// Let an attempt's task run: every ready task runs on each yield of a
+/// current-thread test runtime, and no time passes.
+async fn settle() {
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+}
+
 fn counted(db: &mut ObjectDatabase, reads: Arc<AtomicUsize>) {
     configured(db, AuthMode::DENY_ALL, false, false);
     let oid = identifier(ObjectType::ACCESS_POINT);
@@ -42,18 +86,26 @@ async fn local_authorization_cov_collision_releases_db_and_retries_fresh_until_q
     h.set_clock(20);
     let oid = identifier(ObjectType::ACCESS_POINT);
     let before = snapshot(&h).await;
+    // The passes the server runs as it starts go first: one that takes the
+    // database and then the COV table would hold the database while the
+    // test holds the table.
+    settle().await;
     let mut table = Arc::clone(&h.server.cov_table).write_owned().await;
     let mut route = Box::pin(h.server.authorize_access_local(request(false), 42));
+    // The first pair fails in the caller's poll; the attempt then waits in
+    // a task of the server's (#2772), which the runtime drives.
+    pending(route.as_mut());
     for _ in 0..3 {
-        pending(route.as_mut()); // Failed pair, now queued on COV readiness.
+        settle().await; // Failed pair, now queued on COV readiness.
         assert_eq!(reads.load(Ordering::SeqCst), 0);
         assert!(h.server.database().try_write().is_ok());
         assert_eq!(snapshot(&h).await, before);
         drop(table);
-        pending(route.as_mut()); // Readiness acquired/released, cooperative yield.
-        table = Arc::clone(&h.server.cov_table).try_write_owned().unwrap();
+        // Readiness acquired and released, then a cooperative yield: the
+        // table is the test's again before the next pair.
+        table = Arc::clone(&h.server.cov_table).write_owned().await;
     }
-    pending(route.as_mut());
+    settle().await;
     {
         let mut db = h.server.database().try_write().unwrap();
         db.get_mut(&oid)
@@ -127,8 +179,9 @@ async fn local_authorization_cov_collision_releases_db_and_retries_fresh_until_q
     );
     assert_eq!(reads.load(Ordering::SeqCst), 0);
     drop(table);
-    pending(route.as_mut()); // Complete readiness, then guard-free yield.
-    pending(route.as_mut()); // Commit/capture; owned post-commit task not yet polled.
+    // Complete readiness, a guard-free yield, then commit and capture under
+    // both guards.
+    settle().await;
     assert!(
         h.server
             .cov_table
@@ -198,6 +251,9 @@ async fn local_authorization_cancellation_waiting_for_either_guard_never_evaluat
         drop(route);
         drop(db_guard);
         drop(cov_guard);
+        // The attempt waits in a task of the server's (#2772), which lets go
+        // of what it was handed once it sees its caller gone.
+        settle().await;
         assert!(h.server.database().try_write().is_ok());
         assert!(h.server.cov_table.try_write().is_ok());
         assert_eq!(snapshot(&h).await, before);

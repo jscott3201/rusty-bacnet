@@ -809,8 +809,9 @@ pub(super) async fn stage_held(
 /// from a task once it is free, and storage is put back after `stop()`
 /// returns. No stage can drop after the wait: an application's local write
 /// borrows the server, which `stop()` holds exclusively, and fails before it
-/// stages once `stop()` has sealed the server; a run's write is a request
-/// task, joined before the wait.
+/// stages once `stop()` has sealed the server; one whose caller has gone
+/// may still wait in a request task (#2772), and a run's write is a request
+/// task: both are joined before the wait.
 /// The server's pass that expires a forgotten stage takes about 10 s, during
 /// which storage leads what the object serves and a later write on it
 /// waits. So the stage must not wait out its lifetime.

@@ -947,12 +947,36 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .database
             .as_ref()
             .ok_or_else(|| Error::Encoding("endpoint I-Am has no Device database".into()))?;
-        // The guard covers only this check, never the send below (#2199).
-        let present = database
-            .read()
+        // The guard covers only this check, never the send below (#2199),
+        // and is never waited for in the caller's task (#2772): with the
+        // database busy, a task of the session's waits and checks.
+        let database = crate::held_database::HeldDatabase::new(Arc::clone(database));
+        let device = identity.device_oid();
+        let check = async move {
+            let db = database.read().await;
+            db.get(&device)
+                .is_some_and(|object| object.object_identifier() == device)
+        };
+        let pool = match &self.server {
+            Some(server) => Some(Arc::clone(server.notification_pool())),
+            None => self.notifications.clone(),
+        };
+        // The session's pool, or the server's beside one, which the stop
+        // closes; without either, the runtime, as the task ends once its
+        // caller has its answer or has gone.
+        let host = move |task: bacnet_server::caller_waits::CallerTask| {
+            let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+                return Err(task);
+            };
+            match pool {
+                Some(pool) => pool.spawn(task),
+                None => drop(runtime.spawn(task)),
+            }
+            Ok(())
+        };
+        let present = bacnet_server::caller_waits::for_caller(host, check, |present| present)
             .await
-            .get(&identity.device_oid())
-            .is_some_and(|object| object.object_identifier() == identity.device_oid());
+            .ok_or_else(|| Error::Encoding("endpoint session is not running".into()))?;
         if !present {
             return Err(Error::Encoding("endpoint I-Am Device is absent".into()));
         }

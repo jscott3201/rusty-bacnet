@@ -3,6 +3,8 @@
 #![forbid(unsafe_code)]
 
 pub mod audit_notification;
+#[doc(hidden)]
+pub mod caller_waits;
 mod command_lists;
 mod committed_cov;
 pub mod cov;

@@ -1,4 +1,4 @@
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bacnet_objects::clock::{ClockFrame, ClockReader};
@@ -9,8 +9,11 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::primitives::{Date, Time};
 
+use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
+
 use super::{
-    BACnetServer, BipServerBuilder, ServerBuilder, ServerConfig, StartError, time_sync_policy,
+    BACnetServer, BipServerBuilder, ServerBuilder, ServerConfig, StartError, broadcaster,
+    time_sync_policy,
 };
 
 const HUNDREDTHS_PER_SECOND: i128 = 100;
@@ -149,47 +152,64 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// the server installed at start: a database whose clock reader the
     /// application replaced keeps reading that reader.
     pub async fn set_clock_zone(&self, zone: ClockConfig) -> Result<(), Error> {
-        let clock = self
-            .clock
-            .as_ref()
-            .ok_or_else(|| Error::Encoding("Device clock is disabled".into()))?;
+        let clock = Arc::clone(
+            self.clock
+                .as_ref()
+                .ok_or_else(|| Error::Encoding("Device clock is disabled".into()))?,
+        );
         let device = crate::local_device::initiating_device(&self.config.device);
-        let staged = self.stage_zone_reset(device).await;
-        let mut requests = self.db.write().await;
-        let mut authority = requests
-            .get_mut(&device)
-            .and_then(|device| device.device_authority_internal());
-        let result = clock.check(zone).and_then(|()| match authority.as_mut() {
-            Some(authority) => authority.reset_written_zone(),
-            None => Ok(()),
-        });
-        if let (Some(staged), Some(authority)) = (&staged, authority.as_mut()) {
-            authority.release_staged(staged);
-        }
-        result?;
-        clock.set_zone(zone)
-    }
-
-    /// Stage the drop of the zone halves the Device's storage keeps, and
-    /// wait for its save with the database guard dropped: the wait to
-    /// release it with, or `None` when there is nothing to drop.
-    async fn stage_zone_reset(&self, device: ObjectIdentifier) -> Option<SaveWait> {
-        loop {
-            let step = self
-                .db
-                .write()
-                .await
+        let db = Arc::clone(&self.db);
+        let take = async move {
+            let staged = stage_zone_reset(&db, device).await;
+            (db.write_owned().await, staged)
+        };
+        let change = move |(mut requests, staged): (
+            OwnedRwLockWriteGuard<ObjectDatabase>,
+            Option<SaveWait>,
+        )| {
+            let mut authority = requests
                 .get_mut(&device)
-                .and_then(|device| device.device_authority_internal())
-                .map(|mut device| device.stage_zone_reset())?;
-            match step {
-                StageStep::Staged(wait) => {
-                    wait.clone().await;
-                    return Some(wait);
-                }
-                StageStep::Busy(wait) => wait.await,
-                StageStep::Skip => return None,
+                .and_then(|device| device.device_authority_internal());
+            let result = clock.check(zone).and_then(|()| match authority.as_mut() {
+                Some(authority) => authority.reset_written_zone(),
+                None => Ok(()),
+            });
+            if let (Some(staged), Some(authority)) = (&staged, authority.as_mut()) {
+                authority.release_staged(staged);
             }
+            result?;
+            clock.set_zone(zone)
+        };
+        // Neither the stage nor the guard is waited for in the caller's
+        // task (#2772).
+        self.request_tasks
+            .for_caller(take, change)
+            .await
+            .unwrap_or_else(|| Err(broadcaster::stopped()))
+    }
+}
+
+/// Stage the drop of the zone halves the Device's storage keeps, and wait
+/// for its save with the database guard dropped: the wait to release it
+/// with, or `None` when there is nothing to drop.
+async fn stage_zone_reset(
+    db: &RwLock<ObjectDatabase>,
+    device: ObjectIdentifier,
+) -> Option<SaveWait> {
+    loop {
+        let step = db
+            .write()
+            .await
+            .get_mut(&device)
+            .and_then(|device| device.device_authority_internal())
+            .map(|mut device| device.stage_zone_reset())?;
+        match step {
+            StageStep::Staged(wait) => {
+                wait.clone().await;
+                return Some(wait);
+            }
+            StageStep::Busy(wait) => wait.await,
+            StageStep::Skip => return None,
         }
     }
 }

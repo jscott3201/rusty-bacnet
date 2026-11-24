@@ -549,15 +549,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// The stopped-server error once [`stop`](Self::stop) has run.
     pub async fn report_device_reset_local(&self) -> Result<(), Error> {
-        let network = self.active_network()?;
-        let mut db = self.db.write().await;
-        super::audit_reporter::WriteAudit::local(
-            &self.config,
-            network,
-            &self.notification_transactions,
-        )
-        .device_operation(&mut db, AuditOperation::DEVICE_RESET);
-        Ok(())
+        let network = Arc::clone(self.active_network()?);
+        let config = Arc::clone(&self.config);
+        let transactions = Arc::clone(&self.notification_transactions);
+        let report = move |mut db: tokio::sync::OwnedRwLockWriteGuard<ObjectDatabase>| {
+            super::audit_reporter::WriteAudit::local(&config, &network, &transactions)
+                .device_operation(&mut db, AuditOperation::DEVICE_RESET);
+        };
+        // Never waited for in the caller's task (#2772).
+        self.request_tasks
+            .for_caller(Arc::clone(&self.db).write_owned(), report)
+            .await
+            .ok_or_else(broadcaster::stopped)
     }
 }
 

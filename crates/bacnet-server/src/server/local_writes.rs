@@ -3,10 +3,13 @@ use super::*;
 use crate::command_lists::TakenRuns;
 use bacnet_device_core::write::local::LocalCommandSource;
 use bacnet_device_core::write::{Applied, WriteCommitObserver, WriteTarget};
+use bacnet_objects::access_control::AccessControlInput;
 use bacnet_objects::command::CommandRun;
+use bacnet_objects::load_control::LoadControlSetting;
 use bacnet_objects::traits::not_supported;
 use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::enums::Reliability;
+use tokio::sync::OwnedRwLockWriteGuard;
 
 #[path = "local_write_finish.rs"]
 mod finish;
@@ -114,6 +117,55 @@ pub(super) enum LocalWrite<'s> {
     },
 }
 
+/// What an application's local write writes: a [`LocalWrite`] that borrows
+/// nothing, or an input owned here, so a task of the server's can make the
+/// write when the database is busy (#2772).
+pub(super) enum LocalInput {
+    Write(LocalWrite<'static>),
+    AccessControl(AccessControlInput),
+    LoadControl(LoadControlSetting),
+}
+
+impl LocalInput {
+    fn write(&self) -> LocalWrite<'_> {
+        match self {
+            Self::Write(write) => *write,
+            Self::AccessControl(input) => LocalWrite::ApplicationAccessInput(input),
+            Self::LoadControl(setting) => LocalWrite::ApplicationLoadControl(setting),
+        }
+    }
+}
+
+impl From<LocalWrite<'static>> for LocalInput {
+    fn from(write: LocalWrite<'static>) -> Self {
+        Self::Write(write)
+    }
+}
+
+/// What a write saves before the object takes it: the targets of a durable
+/// property write, none for any other.
+fn durable_targets(
+    oid: ObjectIdentifier,
+    write: LocalWrite<'_>,
+    value: &PropertyValue,
+) -> Vec<super::durable_writes::DurableTarget> {
+    match write {
+        LocalWrite::Property {
+            property,
+            array_index,
+            ..
+        } => super::durable_writes::DurableTarget::local(oid, property, array_index, value),
+        _ => Vec::new(),
+    }
+}
+
+/// The commit's guard, with what the write staged before it. The guard goes
+/// first when this is dropped, so the stage lets go at once.
+pub(super) type Held = (
+    OwnedRwLockWriteGuard<ObjectDatabase>,
+    super::durable_writes::HeldStage,
+);
+
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Arm or rearm a Life Safety object from trusted local application logic.
     ///
@@ -137,53 +189,65 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) -> Result<(), Error> {
         let runtime = local_runtime()?;
         self.active_network()?;
-        // Owned, so the fanout can take it to a task of its own with no wait
-        // between the change and the hand-off.
-        let mut db = Arc::clone(&self.db).write_owned().await;
-        let mut commit = crate::committed_cov::BackgroundCommit::new();
-        commit.before_change(&db, *oid);
-        let object = db.get_mut(oid).ok_or(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::UNKNOWN_OBJECT,
-        ))?;
-        object
-            .life_safety()
-            .ok_or_else(not_supported)?
-            .set_life_safety_operation_expected(operation)?;
-        // Only a Life Safety Point or Zone reports the change. Another object
-        // whose setter takes the operation owes no COV, as before (#1520).
-        if bacnet_device_core::cov::life_safety::is_life_safety_object(*oid) {
-            commit.changed(*oid);
-        }
+        let oid = *oid;
         let fanout = super::cov_fanout::CovFanout::new(
             &self.local_cov_context(),
             &self.event_suppressions,
             &self.learned_routers,
             &self.device_bindings,
         );
-        self.finish_in_task(&runtime, async move {
-            // Under the change's guard: the transition it causes (#2535; the
-            // built-in Life Safety objects report none), the database, then
-            // the COV table. The fanout waits for its notifications, capped.
-            let mut settle = super::event_send::Settle::default();
-            let committed = {
-                let delivery = || fanout.event_delivery();
-                let mut transition = super::event_notifications::committing(delivery, &mut settle);
-                let (database, table) = (&fanout.db, &fanout.cov_table);
-                commit
-                    .finish(database, &mut db, table, &mut transition)
-                    .await
-            };
-            drop(db);
-            let delivery = fanout.event_delivery();
-            let (timeout_ms, transactions) = (
-                delivery.retry_timeout_ms,
-                delivery.notification_transactions,
-            );
-            super::event_send::settled(settle.into_wait(), timeout_ms, transactions).await;
-            fanout.fire(&committed).await;
-        })
-        .await
+        let tasks = Arc::clone(&self.request_tasks);
+        // Owned, so the fanout can take it to a task of its own with no wait
+        // between the change and the hand-off.
+        let guard = Arc::clone(&self.db).write_owned();
+        let change = move |mut db: OwnedRwLockWriteGuard<ObjectDatabase>| -> Result<_, Error> {
+            let mut commit = crate::committed_cov::BackgroundCommit::new();
+            commit.before_change(&db, oid);
+            let object = db.get_mut(&oid).ok_or(Error::protocol(
+                ErrorClass::OBJECT,
+                ErrorCode::UNKNOWN_OBJECT,
+            ))?;
+            object
+                .life_safety()
+                .ok_or_else(not_supported)?
+                .set_life_safety_operation_expected(operation)?;
+            // Only a Life Safety Point or Zone reports the change. Another
+            // object whose setter takes the operation owes no COV, as before
+            // (#1520).
+            if bacnet_device_core::cov::life_safety::is_life_safety_object(oid) {
+                commit.changed(oid);
+            }
+            Ok(tasks.finish_in_task(&runtime, async move {
+                // Under the change's guard: the transition it causes (#2535;
+                // the built-in Life Safety objects report none), the
+                // database, then the COV table. The fanout waits for its
+                // notifications, capped.
+                let mut settle = super::event_send::Settle::default();
+                let committed = {
+                    let delivery = || fanout.event_delivery();
+                    let mut transition =
+                        super::event_notifications::committing(delivery, &mut settle);
+                    let (database, table) = (&fanout.db, &fanout.cov_table);
+                    commit
+                        .finish(database, &mut db, table, &mut transition)
+                        .await
+                };
+                drop(db);
+                let delivery = fanout.event_delivery();
+                let (timeout_ms, transactions) = (
+                    delivery.retry_timeout_ms,
+                    delivery.notification_transactions,
+                );
+                super::event_send::settled(settle.into_wait(), timeout_ms, transactions).await;
+                fanout.fire(&committed).await;
+            }))
+        };
+        let finish = self
+            .request_tasks
+            .for_caller(guard, change)
+            .await
+            .unwrap_or_else(|| Err(crate::server::broadcaster::stopped()))?;
+        finish.await
     }
 
     /// Write a property on a local object and fire the same post-write COV
@@ -218,12 +282,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// # Cancellation
     ///
-    /// Dropped before the write commits, the future makes no change. A
+    /// The write never waits in its caller's task (#2772): when the database
+    /// is busy, or a save runs, a task in the server's request task set
+    /// waits and commits, keeping the call's place in the queue for the
+    /// guard, and the future waits for that task. A caller that polls the
+    /// future once and then leaves it unpolled holds up no request.
+    ///
+    /// Dropped before the write commits, the future makes no change: the
+    /// task that waits for it checks that its caller is still there with the
+    /// guard held, and otherwise ends. A
     /// property the object saves before it serves (a Device's Description,
     /// say) is staged first, with the guard dropped while the save runs.
     /// Dropped then, or while waiting for the guard to commit, the future
-    /// lets go of the stage at once if the guard is free, and otherwise from
-    /// a task of its own on the runtime it ran on as soon as the guard is
+    /// lets go of the stage as soon as that task sees it go: at once if the
+    /// guard is free, and otherwise from a task of its own on the runtime it
+    /// ran on as soon as the guard is
     /// free: the object keeps serving its old value and queues the save of
     /// that value, so storage agrees with it, and the next write on the
     /// object is not held up. Nothing waits for the stage's lifetime to run
@@ -555,27 +628,53 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// event pass, COV fanout, Schedule fanout, Staging plan and runs all go
     /// ahead. `stop()` aborts the task with the other request tasks. With
     /// no Tokio runtime to run that task on, nothing is written.
+    ///
+    /// The stage and the commit's guard are waited for in the caller's task
+    /// only while nothing is in the way; otherwise a task of the server's
+    /// waits for them and commits (#2772), so a caller that stops polling
+    /// holds up no request.
     async fn write_local_as(
         &self,
         oid: &ObjectIdentifier,
-        write: LocalWrite<'_>,
+        write: impl Into<LocalInput>,
         value: PropertyValue,
     ) -> Result<(), Error> {
         let runtime = local_runtime()?;
         self.active_network()?;
-        let Some(committed) = self.local_writer().commit(oid, write, value).await? else {
-            return Ok(());
-        };
+        let (oid, write) = (*oid, write.into());
+        let durable = durable_targets(oid, write.write(), &value);
         let runner = super::command_runs::CommandRunner::for_server(self);
-        // A closed set (the server is stopping) drops the task, and with it
-        // the guard and the runs, which then end unsuccessful (#1324).
-        self.finish_in_task(&runtime, async move {
-            let runs = runner.writer().finish(committed).await;
-            if !runs.is_empty() {
-                runner.start(runs);
-            }
-        })
-        .await
+        let tasks = Arc::clone(&self.request_tasks);
+        let take = async move {
+            let held = runner.writer().take(durable).await;
+            (held, runner)
+        };
+        let commit =
+            move |((db, staged), runner): (Held, super::command_runs::CommandRunner<T>)| {
+                let writer = runner.writer();
+                let Some(committed) =
+                    writer.commit_held(db, staged, &oid, write.write(), value, None)?
+                else {
+                    return Ok(None);
+                };
+                // A closed set (the server is stopping) drops the task, and with
+                // it the guard and the runs, which then end unsuccessful (#1324).
+                Ok(Some(tasks.finish_in_task(&runtime, async move {
+                    let runs = runner.writer().finish(committed).await;
+                    if !runs.is_empty() {
+                        runner.start(runs);
+                    }
+                })))
+            };
+        let finish = self
+            .request_tasks
+            .for_caller(take, commit)
+            .await
+            .unwrap_or_else(|| Err(crate::server::broadcaster::stopped()))?;
+        match finish {
+            Some(finish) => finish.await,
+            None => Ok(()),
+        }
     }
 
     /// Borrow the handles a local write uses, once the caller has checked
@@ -724,122 +823,130 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         value: PropertyValue,
         run: Option<&CommandRun>,
     ) -> Result<Option<Committed>, Error> {
-        let life_safety = bacnet_device_core::cov::life_safety::is_life_safety_object(*oid);
-        // A write the object saves first saves here, without the guard.
-        let durable = match write {
-            LocalWrite::Property {
-                property,
-                array_index,
-                ..
-            } => super::durable_writes::DurableTarget::local(*oid, property, array_index, &value),
-            _ => Vec::new(),
-        };
+        let (db, staged) = self.take(durable_targets(*oid, write, &value)).await;
+        self.commit_held(db, staged, oid, write, value, run)
+    }
+
+    /// The waits a write makes before it commits: what the object saves
+    /// first (`durable`), staged and saved without the guard, then the
+    /// commit's guard.
+    pub(super) async fn take(&self, durable: Vec<super::durable_writes::DurableTarget>) -> Held {
         // Held: a caller dropped at an await below releases the stage at
         // once, from a task of its own, instead of leaving it to expire
         // (#2493).
         let staged = super::durable_writes::stage_held(self.db, self.stage_releases, durable).await;
-        {
-            // Owned, so the rest of the write can take it to a task of its
-            // own with no wait between the commit and the hand-off (#1367).
-            let mut db = Arc::clone(self.db).write_owned().await;
-            if run.is_some_and(|run| !crate::command_lists::is_current(&db, run)) {
-                staged.release(&mut db);
-                return Err(crate::command_lists::stale_run());
-            }
-            let snapshots =
-                bacnet_device_core::cov::life_safety::LifeSafetyCovSnapshots::capture_oid(
-                    &db, *oid,
-                );
-            let group_skips_delays = if let LocalWrite::WriteGroup {
-                group,
-                number,
-                priority,
-                inhibit_delay,
-                requester,
-            } = write
-            {
-                let Some(object) = db.get(oid) else {
-                    // Nothing reached the object: what was staged goes back.
-                    staged.release(&mut db);
-                    return Err(Error::protocol(
-                        ErrorClass::OBJECT,
-                        ErrorCode::UNKNOWN_OBJECT,
-                    ));
-                };
-                // A WriteGroup was planned under an earlier guard; the Channel
-                // may have left the group or changed number since.
-                if !super::write_group::qualifies(object, group, number) {
-                    debug!(
-                        channel = %oid,
-                        group,
-                        number,
-                        "WriteGroup skips a Channel no longer in the group with that number"
-                    );
-                    return Ok(None);
-                }
-                let skips_delays =
-                    inhibit_delay && super::write_group::allows_delay_inhibit(object);
-                // Audited as the WriteProperty of the Channel's Present_Value
-                // it amounts to, from the device that sent the WriteGroup.
-                let mut audit = audit_reporter::WriteAudit::requested_by(
-                    self.config,
-                    self.network,
-                    self.notification_transactions,
-                    requester.clone(),
-                    None,
-                );
-                let encoded = audit_reporter::small_value(&value).unwrap_or_default();
-                audit.before(
-                    &db,
-                    WriteTarget {
-                        oid: *oid,
-                        property: PropertyIdentifier::PRESENT_VALUE,
-                        array_index: None,
-                        priority: Some(priority),
-                        value: &encoded,
-                    },
-                );
-                let result = db
-                    .get_mut(oid)
-                    .expect("existence checked above")
-                    .write_property(
-                        PropertyIdentifier::PRESENT_VALUE,
-                        None,
-                        value,
-                        Some(priority),
-                    );
-                staged.release(&mut db);
-                if let Err(error) = result {
-                    audit.failed(&mut db, &error);
-                    return Err(error);
-                }
-                audit.committed(&mut db);
-                skips_delays
-            } else {
-                // Everything else is bacnet-device-core's local write (#2446).
-                // A NULL the property left as it was succeeds unchanged
-                // (`bacnet_device_core::write::relinquish`), with no
-                // post-write work, since nothing changed.
-                match self.commit_local(&mut db, oid, write, value, staged)? {
-                    Applied::Written => false,
-                    Applied::Unchanged => return Ok(None),
-                }
-            };
-            let staging_plans =
-                BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid));
-            let mut command_runs = TakenRuns::take(self.db, &mut db, std::slice::from_ref(oid));
-            if group_skips_delays {
-                super::write_group::skip_delays(&mut command_runs, *oid);
-            }
-            let changes = snapshots.changes(&db, std::slice::from_ref(oid));
-            Ok(Some(Committed {
-                db,
-                oid: *oid,
-                life_safety,
-                changes,
-                staging_plans,
-                command_runs,
-            }))
+        // Owned, so the rest of the write can take it to a task of its own
+        // with no wait between the commit and the hand-off (#1367).
+        (Arc::clone(self.db).write_owned().await, staged)
+    }
+
+    /// [`Self::commit_checked`]'s commit, under `db`, the guard
+    /// [`Self::take`] waited for, once `staged` has saved. Nothing here
+    /// waits.
+    pub(super) fn commit_held(
+        &self,
+        mut db: OwnedRwLockWriteGuard<ObjectDatabase>,
+        staged: super::durable_writes::HeldStage,
+        oid: &ObjectIdentifier,
+        write: LocalWrite<'_>,
+        value: PropertyValue,
+        run: Option<&CommandRun>,
+    ) -> Result<Option<Committed>, Error> {
+        let life_safety = bacnet_device_core::cov::life_safety::is_life_safety_object(*oid);
+        if run.is_some_and(|run| !crate::command_lists::is_current(&db, run)) {
+            staged.release(&mut db);
+            return Err(crate::command_lists::stale_run());
         }
+        let snapshots =
+            bacnet_device_core::cov::life_safety::LifeSafetyCovSnapshots::capture_oid(&db, *oid);
+        let group_skips_delays = if let LocalWrite::WriteGroup {
+            group,
+            number,
+            priority,
+            inhibit_delay,
+            requester,
+        } = write
+        {
+            let Some(object) = db.get(oid) else {
+                // Nothing reached the object: what was staged goes back.
+                staged.release(&mut db);
+                return Err(Error::protocol(
+                    ErrorClass::OBJECT,
+                    ErrorCode::UNKNOWN_OBJECT,
+                ));
+            };
+            // A WriteGroup was planned under an earlier guard; the Channel
+            // may have left the group or changed number since.
+            if !super::write_group::qualifies(object, group, number) {
+                debug!(
+                    channel = %oid,
+                    group,
+                    number,
+                    "WriteGroup skips a Channel no longer in the group with that number"
+                );
+                return Ok(None);
+            }
+            let skips_delays = inhibit_delay && super::write_group::allows_delay_inhibit(object);
+            // Audited as the WriteProperty of the Channel's Present_Value
+            // it amounts to, from the device that sent the WriteGroup.
+            let mut audit = audit_reporter::WriteAudit::requested_by(
+                self.config,
+                self.network,
+                self.notification_transactions,
+                requester.clone(),
+                None,
+            );
+            let encoded = audit_reporter::small_value(&value).unwrap_or_default();
+            audit.before(
+                &db,
+                WriteTarget {
+                    oid: *oid,
+                    property: PropertyIdentifier::PRESENT_VALUE,
+                    array_index: None,
+                    priority: Some(priority),
+                    value: &encoded,
+                },
+            );
+            let result = db
+                .get_mut(oid)
+                .expect("existence checked above")
+                .write_property(
+                    PropertyIdentifier::PRESENT_VALUE,
+                    None,
+                    value,
+                    Some(priority),
+                );
+            staged.release(&mut db);
+            if let Err(error) = result {
+                audit.failed(&mut db, &error);
+                return Err(error);
+            }
+            audit.committed(&mut db);
+            skips_delays
+        } else {
+            // Everything else is bacnet-device-core's local write (#2446).
+            // A NULL the property left as it was succeeds unchanged
+            // (`bacnet_device_core::write::relinquish`), with no
+            // post-write work, since nothing changed.
+            match self.commit_local(&mut db, oid, write, value, staged)? {
+                Applied::Written => false,
+                Applied::Unchanged => return Ok(None),
+            }
+        };
+        let staging_plans =
+            BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid));
+        let mut command_runs = TakenRuns::take(self.db, &mut db, std::slice::from_ref(oid));
+        if group_skips_delays {
+            super::write_group::skip_delays(&mut command_runs, *oid);
+        }
+        let changes = snapshots.changes(&db, std::slice::from_ref(oid));
+        Ok(Some(Committed {
+            db,
+            oid: *oid,
+            life_safety,
+            changes,
+            staging_plans,
+            command_runs,
+        }))
     }
 }

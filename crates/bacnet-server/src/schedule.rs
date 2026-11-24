@@ -100,6 +100,11 @@ pub(crate) fn schedule_instant(frame: ClockFrame) -> Option<(SpecificDate, Time)
 /// run that would start an object already above it is ended as failed rather
 /// than started. Dropping the future first ends each unfinished run as
 /// unsuccessful, so no Command is left in process and no Channel IN_PROGRESS.
+///
+/// It takes the database in its caller's task, as a guard the application
+/// takes on it does: a call left unpolled part way can hold the database,
+/// and with it whatever else uses it, a running server's requests included
+/// (#2772). Await it to the end, or drop it.
 pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
     let runs = {
         let mut db_w = db.write().await;

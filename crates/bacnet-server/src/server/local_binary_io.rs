@@ -95,14 +95,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. The Python binding exposes
     /// this as `BACnetServer.physical_output_local`.
     pub async fn physical_output_local(&self, oid: &ObjectIdentifier) -> Result<bool, Error> {
-        let db = self.db.read().await;
-        if db.get(oid).is_none() {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::UNKNOWN_OBJECT,
-            ));
-        }
-        db.physical_output(oid)
-            .ok_or_else(bacnet_objects::traits::not_supported)
+        let oid = *oid;
+        let read = move |db: tokio::sync::OwnedRwLockReadGuard<ObjectDatabase>| {
+            if db.get(&oid).is_none() {
+                return Err(Error::protocol(
+                    ErrorClass::OBJECT,
+                    ErrorCode::UNKNOWN_OBJECT,
+                ));
+            }
+            db.physical_output(&oid)
+                .ok_or_else(bacnet_objects::traits::not_supported)
+        };
+        // Never waited for in the caller's task (#2772).
+        self.request_tasks
+            .for_caller(Arc::clone(&self.db).read_owned(), read)
+            .await
+            .unwrap_or_else(|| Err(crate::server::broadcaster::stopped()))
     }
 }

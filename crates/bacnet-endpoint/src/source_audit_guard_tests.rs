@@ -358,6 +358,39 @@ async fn a_read_the_reporter_does_not_select_stays_its_callers() {
     endpoint.stop().await;
 }
 
+/// An I-Am polled once while the application holds the node's database,
+/// then never again, holds up nothing once the guard comes free: its
+/// Device check runs in a task of the session's, so a writer queued behind
+/// it gets the database. Polled at last, the I-Am goes (#2772).
+#[tokio::test(start_paused = true)]
+async fn a_parked_i_am_holds_up_no_database_writer() {
+    let mut endpoint = source(SessionRole::Both, false).await;
+    let db = Arc::clone(endpoint.session.database.as_ref().unwrap());
+    let guard = db.write().await;
+    let mut parked = Box::pin(endpoint.session.broadcast_i_am());
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(parked.as_mut().poll(&mut cx).is_pending());
+    let writer = tokio::spawn({
+        let db = Arc::clone(&db);
+        async move { drop(db.write().await) }
+    });
+    tokio::task::yield_now().await;
+    drop(guard);
+    bounded(writer).await.unwrap();
+    assert!(bounded(parked).await.is_ok());
+    // The I-Am is among what the session sent; `next` fails the test if it
+    // never comes.
+    loop {
+        let npdu = decode_npdu(endpoint.next().await.npdu).unwrap();
+        if let Apdu::UnconfirmedRequest(request) = decode_apdu(npdu.payload).unwrap()
+            && request.service_choice == bacnet_types::enums::UnconfirmedServiceChoice::I_AM
+        {
+            break;
+        }
+    }
+    endpoint.stop().await;
+}
+
 #[path = "source_audit_plan_tests.rs"]
 mod plan;
 
