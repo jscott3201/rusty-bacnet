@@ -4,6 +4,7 @@
 //! and whose sends are logged. The Standard 223 export's tests read
 //! through it too.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -16,6 +17,7 @@ use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
 use bacnet_objects::present_value_access::PresentValueAccess;
+use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::trend::TrendLogObject;
 use bacnet_objects::value_types::IntegerValueObject;
@@ -24,7 +26,10 @@ use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::test_transport::{SendLog, SendMode, StartMode, TestTransport};
 use bacnet_types::MacAddr;
-use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{
+    EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
+};
+use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::Bytes;
 
@@ -475,4 +480,80 @@ pub(crate) fn refused(property: PropertyIdentifier) -> crate::format::RawRow {
         code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
     };
     (property, Err(crate::format::PropertyError::Remote(error)))
+}
+
+/// What [`Answering`] gives for one property: a value, or an error class
+/// and code.
+pub(crate) type Answer = Result<PropertyValue, (ErrorClass, ErrorCode)>;
+
+/// An object that answers every read as the one it wraps does but those of
+/// the properties `answers` names, which it answers as given there: a
+/// value of another type than the property's, one out of its range, or an
+/// error, as an older or non-conforming device might. A property answered
+/// with an error is left out of its Property_List too.
+pub(crate) struct Answering {
+    object: Box<dyn BACnetObject>,
+    answers: Vec<(PropertyIdentifier, Answer)>,
+}
+
+impl Answering {
+    /// `object` behind an [`Answering`] that gives `answers`, ready for a
+    /// database.
+    pub(crate) fn wrap(
+        object: Box<dyn BACnetObject>,
+        answers: Vec<(PropertyIdentifier, Answer)>,
+    ) -> Box<dyn BACnetObject> {
+        Box::new(Self { object, answers })
+    }
+}
+
+impl BACnetObject for Answering {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        self.object.object_identifier()
+    }
+
+    fn object_name(&self) -> &str {
+        self.object.object_name()
+    }
+
+    fn read_property(
+        &self,
+        property: PropertyIdentifier,
+        index: Option<u32>,
+    ) -> Result<PropertyValue, Error> {
+        match self
+            .answers
+            .iter()
+            .find(|(answered, _)| *answered == property)
+        {
+            Some((_, Ok(value))) => Ok(value.clone()),
+            Some((_, Err((class, code)))) => Err(Error::protocol(*class, *code)),
+            None => self.object.read_property(property, index),
+        }
+    }
+
+    fn write_property(
+        &mut self,
+        property: PropertyIdentifier,
+        index: Option<u32>,
+        value: PropertyValue,
+        priority: Option<u8>,
+    ) -> Result<(), Error> {
+        self.object.write_property(property, index, value, priority)
+    }
+
+    fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
+        let refused = |property| {
+            self.answers
+                .iter()
+                .any(|(answered, answer)| *answered == property && answer.is_err())
+        };
+        let rows = self.object.property_metadata();
+        let kept = rows
+            .iter()
+            .filter(|row| !refused(row.property_identifier))
+            .cloned()
+            .collect();
+        Cow::Owned(kept)
+    }
 }

@@ -36,8 +36,9 @@ fn flags() -> RawRow {
 
 /// An inventory with a record of each shape the writers meet: units and
 /// a value, state texts of both kinds, commas, quotes, line feeds and
-/// bars in device text, a problem, a bare record of an unknown type, and
-/// a reading that stopped.
+/// bars in device text, problems (a refused property, a setting of the
+/// wrong type left empty, one out of range kept), a bare record of an
+/// unknown type, and a reading that stopped.
 fn sample() -> Inventory {
     let device = oid(ObjectType::DEVICE, 1234);
     let summary = vec![
@@ -68,6 +69,8 @@ fn sample() -> Inventory {
         row(P::OBJECT_NAME, text("Mode")),
         row(P::NUMBER_OF_STATES, PropertyValue::Unsigned(3)),
         row(P::STATE_TEXT, PropertyValue::List(states)),
+        row(P::PRIORITY_ARRAY, PropertyValue::Null),
+        row(P::RELINQUISH_DEFAULT, PropertyValue::Unsigned(4)),
         row(P::PRESENT_VALUE, PropertyValue::Unsigned(2)),
     ];
     let setpoint = vec![
@@ -78,6 +81,7 @@ fn sample() -> Inventory {
         row(P::COV_INCREMENT, PropertyValue::Real(0.5)),
         row(P::MIN_PRES_VALUE, PropertyValue::Real(-40.0)),
         row(P::MAX_PRES_VALUE, PropertyValue::Real(120.0)),
+        row(P::RELINQUISH_DEFAULT, text("auto")),
     ];
     let vendor = vec![row(P::OBJECT_NAME, text("Caf\u{e9} \u{1F525}"))];
     // Device text a spreadsheet would run: a name and a description, a
@@ -241,9 +245,20 @@ fn the_json_holds_typed_fields() {
     let mode = &json["points"][2];
     assert_eq!(mode["state_texts"]["states"][1], "Low, slow");
     assert_eq!(mode["number_of_states"], 3);
+    // A relinquish default that names no state is kept and named.
+    assert_eq!(mode["relinquish_default"]["decoded"], 4);
+    let unnamed = serde_json::json!({
+        "property": "relinquish-default",
+        "error": "not one of the states 1 to 3",
+    });
+    assert_eq!(mode["problems"], serde_json::json!([unnamed]));
     let setpoint = &json["points"][3];
     let problem = serde_json::json!({"property": "units", "error": "PROPERTY:UNKNOWN_PROPERTY"});
-    assert_eq!(setpoint["problems"], serde_json::json!([problem]));
+    // A relinquish default of the wrong type is empty and named.
+    let error = "not a Real (got a character string, \"auto\")";
+    let mistyped = serde_json::json!({"property": "relinquish-default", "error": error});
+    assert_eq!(setpoint["problems"], serde_json::json!([problem, mistyped]));
+    assert!(setpoint["relinquish_default"].is_null());
     assert_eq!(setpoint["cov_increment"]["decoded"], 0.5);
     let bare = &json["points"][5];
     assert!(bare["name"].is_null() && bare["units"].is_null());
@@ -288,7 +303,12 @@ fn the_csv_quotes_what_it_must() {
     let setpoint = &rows[4];
     assert_eq!(setpoint[3], "'=Setpoint", "guarded");
     assert_eq!(setpoint[11], "-40", "a number is left alone");
-    assert_eq!(setpoint[16], "units: PROPERTY:UNKNOWN_PROPERTY");
+    assert_eq!(setpoint[9], "", "a relinquish default of the wrong type");
+    assert_eq!(
+        setpoint[16],
+        "units: PROPERTY:UNKNOWN_PROPERTY; relinquish-default: not a Real (got a character \
+         string, \"auto\")"
+    );
     assert_eq!(rows[6][3..8], ["", "", "", "", ""], "nothing read: empty");
     assert_eq!((rows[8][13].as_str(), zone[13].as_str()), ("reverse", ""));
 
