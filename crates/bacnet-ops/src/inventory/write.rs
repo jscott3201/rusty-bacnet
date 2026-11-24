@@ -60,14 +60,14 @@ use crate::label;
 /// - `number_of_states`;
 /// - `commandable`: `true` or `false`;
 /// - `relinquish_default`, `cov_increment`, `min_present_value`,
-///   `max_present_value`, `present_value`, `status_flags`: each value's
-///   text ([`Value::text`]);
+///   `max_present_value`, `polarity`, `present_value`, `status_flags`:
+///   each value's text ([`Value::text`]);
 /// - `problems`: each as `property: error`, joined with `; `.
 ///
 /// A field with nothing to say is empty.
 pub const CSV_HEADER: &str = "device,device_instance,object,name,description,units,state_texts,\
     number_of_states,commandable,relinquish_default,cov_increment,min_present_value,\
-    max_present_value,present_value,status_flags,problems";
+    max_present_value,polarity,present_value,status_flags,problems";
 
 impl Inventory {
     /// The inventory as JSON, indented, as `bacnet inventory --format
@@ -186,6 +186,7 @@ impl PointRecord {
             text(&self.cov_increment),
             text(&self.min_present_value),
             text(&self.max_present_value),
+            text(&self.polarity),
             text(&self.present_value),
             text(&self.status_flags),
             (!problems.is_empty()).then(|| problems.join("; ")),

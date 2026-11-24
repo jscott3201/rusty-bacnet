@@ -49,6 +49,7 @@
       "cov_increment": null,
       "min_present_value": null,
       "max_present_value": null,
+      "polarity": null,
       "present_value": {
         "value": "72.5 °F",
         "decoded": 72.5
@@ -92,6 +93,7 @@
       "cov_increment": null,
       "min_present_value": null,
       "max_present_value": null,
+      "polarity": null,
       "present_value": {
         "value": "active (On)",
         "decoded": {
@@ -128,6 +130,7 @@
       "cov_increment": null,
       "min_present_value": null,
       "max_present_value": null,
+      "polarity": null,
       "present_value": {
         "value": "2 (Low, slow)",
         "decoded": 2
@@ -166,6 +169,7 @@
         "value": "120",
         "decoded": 120.0
       },
+      "polarity": null,
       "present_value": null,
       "status_flags": null,
       "problems": [
@@ -197,6 +201,7 @@
       "cov_increment": null,
       "min_present_value": null,
       "max_present_value": null,
+      "polarity": null,
       "present_value": null,
       "status_flags": null,
       "problems": []
@@ -223,6 +228,7 @@
       "cov_increment": null,
       "min_present_value": null,
       "max_present_value": null,
+      "polarity": null,
       "present_value": null,
       "status_flags": null,
       "problems": []
@@ -256,6 +262,7 @@
         "decoded": -40.0
       },
       "max_present_value": null,
+      "polarity": null,
       "present_value": {
         "value": "-12.5 °C",
         "decoded": -12.5
@@ -285,6 +292,13 @@
       "cov_increment": null,
       "min_present_value": null,
       "max_present_value": null,
+      "polarity": {
+        "value": "reverse",
+        "decoded": {
+          "value": 1,
+          "name": "reverse"
+        }
+      },
       "present_value": null,
       "status_flags": null,
       "problems": []
@@ -311,6 +325,7 @@
       "cov_increment": null,
       "min_present_value": null,
       "max_present_value": null,
+      "polarity": null,
       "present_value": {
         "value": "\"=HYPERLINK(\"x\")\"",
         "decoded": "=HYPERLINK(\"x\")"
@@ -340,6 +355,7 @@
       "cov_increment": null,
       "min_present_value": null,
       "max_present_value": null,
+      "polarity": null,
       "present_value": null,
       "status_flags": null,
       "problems": []

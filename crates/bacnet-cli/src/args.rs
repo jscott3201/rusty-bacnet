@@ -476,7 +476,8 @@ pub(crate) enum Command {
         #[arg(long)]
         values: bool,
         /// Also read each object's COV_Increment, Min_Pres_Value,
-        /// Max_Pres_Value and Relinquish_Default, where it has them.
+        /// Max_Pres_Value, Relinquish_Default and Polarity, where it has
+        /// them.
         #[arg(long)]
         settings: bool,
         /// With --format csv: write device text exactly. Without it, a
