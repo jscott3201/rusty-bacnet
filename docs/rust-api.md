@@ -6537,8 +6537,11 @@ server, a full server (#2617), has it too.
 
 Binary Input and Binary Output hold a Polarity and a physical side (#2580).
 `set_polarity(Polarity)` takes NORMAL or REVERSE (VALUE_OUT_OF_RANGE for
-anything else); Polarity stays read-only on the network. On a running server
-the routes are:
+anything else); Polarity stays read-only on the network. A point list gives
+it as `bacnet_types::points::Binary::with_polarity` (#2595), which
+`points::build_database` sets on an Input or Output and refuses on a Binary
+Value, a type with no Polarity, as `Refusal::PropertyNotInType`. On a
+running server the routes are:
 
 | Route | Object | What it does |
 | --- | --- | --- |
