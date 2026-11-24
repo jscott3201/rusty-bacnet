@@ -43,7 +43,7 @@ fn exact_time_boundaries_and_extreme_seconds_do_not_overflow() {
 }
 
 #[test]
-fn unknown_consistency_is_never_promoted_to_match() {
+fn a_pair_rustls_cannot_compare_is_unknown_and_a_refused_load_unusable() {
     #[derive(Debug)]
     struct OpaqueKey;
     impl rustls::sign::SigningKey for OpaqueKey {
@@ -57,18 +57,44 @@ fn unknown_consistency_is_never_promoted_to_match() {
             rustls::SignatureAlgorithm::ED25519
         }
     }
-    // Exercise Rustls's real unavailable-SPKI branch, not constructor success.
+    // Rustls's real unavailable-SPKI verdict, as an error.
     let key = CertifiedKey::new(
         vec![CertificateDer::from(vec![0])],
         std::sync::Arc::new(OpaqueKey),
     );
     assert_eq!(classify_match(key.keys_match()), ScKeyConsistency::Unknown);
+    for unknown in [
+        rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding),
+        rustls::Error::NoCertificatesPresented,
+    ] {
+        assert_eq!(classify_match(Err(unknown)), ScKeyConsistency::Unknown);
+    }
     assert_eq!(
-        classify_match(Err(rustls::Error::InvalidCertificate(
-            rustls::CertificateError::BadEncoding
-        ))),
-        ScKeyConsistency::Unknown
+        classify_match(Err(rustls::Error::General("no key".into()))),
+        ScKeyConsistency::Unusable
     );
+}
+
+/// `from_der` takes a key that can't name its public key as a match, so
+/// `compare_key` reports success as Match only because every key type the
+/// pinned provider loads names one. A provider upgrade that drops one of
+/// these fails here. (ML-DSA keys, which rcgen can't make here, name theirs
+/// too in rustls 0.23.46.)
+#[test]
+fn every_key_type_the_pinned_provider_loads_names_its_public_key() {
+    let provider = rustls::crypto::aws_lc_rs::default_provider();
+    for alg in [
+        &rcgen::PKCS_RSA_SHA256,
+        &rcgen::PKCS_ECDSA_P256_SHA256,
+        &rcgen::PKCS_ECDSA_P384_SHA384,
+        &rcgen::PKCS_ECDSA_P521_SHA512,
+        &rcgen::PKCS_ED25519,
+    ] {
+        let pair = rcgen::KeyPair::generate_for(alg).unwrap();
+        let der = rustls::pki_types::PrivatePkcs8KeyDer::from(pair.serialize_der());
+        let key = provider.key_provider.load_private_key(der.into()).unwrap();
+        assert!(key.public_key().is_some(), "{alg:?}");
+    }
 }
 
 fn ca(name: &str) -> (rcgen::CertificateParams, rcgen::KeyPair) {

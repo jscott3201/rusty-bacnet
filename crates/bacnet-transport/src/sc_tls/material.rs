@@ -19,6 +19,14 @@
 //! error paths included. rustls's key loader clears the copy of the DER it
 //! is handed. What this module cannot clear is listed on the constructors'
 //! rustdoc.
+//!
+//! On a rustls or aws-lc upgrade (last checked: rustls 0.23.46, aws-lc-sys
+//! 0.45.0), recheck that `CertifiedKey::from_der` still refuses only with
+//! the errors `identity_refused` (and the inspection's `classify_match`)
+//! sort; that the providers' `load_private_key` still wraps the DER it is
+//! handed in `Zeroizing`; that aws-lc's `OPENSSL_free` still clears memory
+//! before freeing it; and that the tests `key_verdicts_are_the_ones_rustls_reaches`
+//! and `every_key_type_the_pinned_provider_loads_names_its_public_key` pass.
 
 use std::{fs::File, io::Read, path::Path, sync::Arc};
 

@@ -324,32 +324,32 @@ fn direct_issuer(
     };
     (verdict, None)
 }
-/// The key against the leaf, by the two public steps of rustls's
-/// `CertifiedKey::from_der` (checked against rustls 0.23.46): the key
-/// provider's loader, then `CertifiedKey::keys_match`. `from_der`, which
-/// the TLS configurations call, accepts a key that can't name its public
-/// key as if it matched; this advisory report keeps that apart as
-/// [`ScKeyConsistency::Unknown`], so it can't call `from_der` itself. A
-/// test pins the other verdicts to `from_der`'s.
+/// The key against the leaf, by rustls's own [`CertifiedKey::from_der`],
+/// the check the TLS configurations make, with the same pinned aws-lc
+/// provider. `from_der` lets a pair it can't compare through (a key that
+/// can't name its public key); every key type this provider loads names
+/// one (rustls 0.23.46; a unit test pins it), so success here is a match.
+/// The CLI's pre-dial lint refuses on Mismatch and Unusable.
 fn compare_key(
     certs: Vec<CertificateDer<'static>>,
     key: &PrivateKeyDer<'static>,
 ) -> ScKeyConsistency {
     let provider = rustls::crypto::aws_lc_rs::default_provider();
     // The loader clears the copy it is handed; the caller clears its own.
-    let Ok(key) = provider.key_provider.load_private_key(key.clone_key()) else {
-        return ScKeyConsistency::Unusable;
-    };
-    classify_match(CertifiedKey::new(certs, key).keys_match())
+    classify_match(CertifiedKey::from_der(certs, key.clone_key(), &provider).map(drop))
 }
+/// `from_der`'s verdict as the report's: a leaf rustls can't parse, or a
+/// pair it can't compare, proves nothing either way; any other refusal is
+/// the key provider's refusal to load the key.
 fn classify_match(result: Result<(), rustls::Error>) -> ScKeyConsistency {
+    use rustls::{Error as E, InconsistentKeys};
     match result {
         Ok(()) => ScKeyConsistency::Match,
-        Err(rustls::Error::InconsistentKeys(rustls::InconsistentKeys::KeyMismatch)) => {
-            ScKeyConsistency::Mismatch
+        Err(E::InconsistentKeys(InconsistentKeys::KeyMismatch)) => ScKeyConsistency::Mismatch,
+        Err(E::InconsistentKeys(_) | E::InvalidCertificate(_) | E::NoCertificatesPresented) => {
+            ScKeyConsistency::Unknown
         }
-        // Unknown public-key representation and unusable leaf DER cannot prove a match.
-        Err(_) => ScKeyConsistency::Unknown,
+        Err(_) => ScKeyConsistency::Unusable,
     }
 }
 

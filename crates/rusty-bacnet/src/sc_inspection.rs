@@ -211,9 +211,10 @@ fn time(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<i64>> {
         })
         .transpose()
 }
-/// The private-key snapshot: when it is our copy of a `bytearray`'s
-/// contents it is cleared on drop (#2621). A `bytes` input is borrowed, owned
-/// by the interpreter, and not ours to clear.
+/// A PEM input's snapshot: when it is our copy of a `bytearray`'s contents
+/// it is cleared on drop (#2621). Every input gets one, since any may hold
+/// a key (an identity file with the key appended, say). A `bytes` input is
+/// borrowed, owned by the interpreter, and not ours to clear.
 struct Wiped<'a>(Cow<'a, [u8]>);
 impl Drop for Wiped<'_> {
     fn drop(&mut self) {
@@ -330,17 +331,21 @@ fn inspect_sc_pem(
 ) -> PyResult<PyScPemInspection> {
     let now = time(inspected_at_unix)?;
     let mut remaining = MAX_INPUT_BYTES;
-    let mut snapshot = |value, role| PemInput::pin(value)?.snapshot(&mut remaining, role);
+    let mut snapshot = |value, role| {
+        PemInput::pin(value)?
+            .snapshot(&mut remaining, role)
+            .map(Wiped)
+    };
     let identity = snapshot(identity_pem, ScInputRole::Identity)?;
     let trust = peer_trust_pem
         .map(|value| snapshot(value, ScInputRole::PeerTrust))
         .transpose()?;
     let key = private_key_pem
-        .map(|value| snapshot(value, ScInputRole::PrivateKey).map(Wiped))
+        .map(|value| snapshot(value, ScInputRole::PrivateKey))
         .transpose()?;
     inspection::inspect_sc_pem(
-        &identity,
-        trust.as_deref(),
+        &identity.0,
+        trust.as_ref().map(|trust| &*trust.0),
         key.as_ref().map(|key| &*key.0),
         now,
     )

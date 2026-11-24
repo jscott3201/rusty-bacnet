@@ -217,43 +217,62 @@ fn a_key_file_that_does_not_match_the_certificate_is_refused() {
 
 /// A key read from a FIFO, whose length is unknown until it ends, loads for
 /// both configurations and the offline inspection (#2621: the reader grows
-/// its buffer by copying into a new clearing one).
+/// its buffer by copying into a new clearing one). Each read runs on its own
+/// thread under a deadline, so a writer that can't open the FIFO fails the
+/// test instead of leaving the read blocked in its open.
 #[cfg(unix)]
 #[test]
 fn a_key_from_a_fifo_loads() {
     use bacnet_transport::sc_tls::inspection::{ScKeyConsistency, inspect_sc_pem_files};
     use std::io::Write;
+    fn in_time<T: Send + 'static>(read: impl FnOnce() -> T + Send + 'static) -> T {
+        let (done, result) = std::sync::mpsc::channel();
+        // A receiver that gave up is gone; the send result doesn't matter.
+        std::thread::spawn(move || {
+            let _ = done.send(read());
+        });
+        result
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the FIFO read ended within 10 s")
+    }
     let site = Site::new();
     let leaf = site.leaf();
     let dir = Dir::new("fifo");
     let ca = dir.write("ca.pem", &site.root);
     let chain = dir.write("node.pem", &leaf.chain);
     let fifo = dir.0.join("node.key");
-    let made = std::process::Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .unwrap();
-    assert!(made.success(), "mkfifo failed");
+    match std::process::Command::new("mkfifo").arg(&fifo).status() {
+        Ok(status) => assert!(status.success(), "mkfifo failed: {status}"),
+        Err(error) => {
+            eprintln!("skipped: no mkfifo command ({error})");
+            return;
+        }
+    }
     let key = leaf.key.serialize_pem();
     // One writer per read: each opens the FIFO, writes the key in pieces
     // and closes it, which ends the reader's input.
     let feed = || {
         let (fifo, key) = (fifo.clone(), key.clone());
-        std::thread::spawn(move || {
-            let mut writer = std::fs::OpenOptions::new().write(true).open(fifo).unwrap();
+        std::thread::spawn(move || -> std::io::Result<()> {
+            let mut writer = std::fs::OpenOptions::new().write(true).open(fifo)?;
             for piece in key.as_bytes().chunks(64) {
-                writer.write_all(piece).unwrap();
+                writer.write_all(piece)?;
             }
+            Ok(())
         })
     };
+    let paths = || (ca.clone(), chain.clone(), fifo.clone());
     let writer = feed();
-    ScNodeTlsConfig::from_pem_files(&ca, &chain, &fifo).unwrap();
-    writer.join().unwrap();
+    let (c, n, k) = paths();
+    in_time(move || ScNodeTlsConfig::from_pem_files(c, n, k).map(drop)).unwrap();
+    writer.join().unwrap().unwrap();
     let writer = feed();
-    ScHubTlsConfig::from_pem_files(&ca, &chain, &fifo).unwrap();
-    writer.join().unwrap();
+    let (c, n, k) = paths();
+    in_time(move || ScHubTlsConfig::from_pem_files(c, n, k).map(drop)).unwrap();
+    writer.join().unwrap().unwrap();
     let writer = feed();
-    let report = inspect_sc_pem_files(&chain, None, Some(&fifo), Some(0)).unwrap();
-    writer.join().unwrap();
+    let (_, n, k) = paths();
+    let report = in_time(move || inspect_sc_pem_files(&n, None, Some(&k), Some(0))).unwrap();
+    writer.join().unwrap().unwrap();
     assert_eq!(report.key_consistency, ScKeyConsistency::Match);
 }

@@ -517,8 +517,8 @@ fn no_error_or_configuration_shows_key_material() {
 /// key and a key the provider can't load, `CertifiedKey::from_der` and the
 /// rustls builders the configurations are built with reach one verdict; both
 /// configurations, from PEM and from DER, reach that verdict mapped to our
-/// errors, and the offline inspection reports it. A rustls upgrade that
-/// changes the verdict for any of these fails here.
+/// errors, and the offline inspection reports that verdict. A rustls
+/// upgrade that changes the verdict for any of these fails here.
 #[test]
 fn key_verdicts_are_the_ones_rustls_reaches() {
     use bacnet_transport::sc_hub::ScHubTlsConfig;
@@ -611,6 +611,7 @@ fn key_verdicts_are_the_ones_rustls_reaches() {
             Some(0),
         )
         .unwrap();
-        assert_eq!(report.key_consistency, expected, "{name}: the inspection");
+        // The offline check (the CLI's pre-dial lint) calls `from_der` too.
+        assert_eq!(report.key_consistency, verdict, "{name}: the inspection");
     }
 }
