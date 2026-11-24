@@ -63,6 +63,7 @@ pub(crate) fn record(
             P::COV_INCREMENT => keep(value, &mut record.cov_increment),
             P::MIN_PRES_VALUE => keep(value, &mut record.min_present_value),
             P::MAX_PRES_VALUE => keep(value, &mut record.max_present_value),
+            P::POLARITY => keep(value, &mut record.polarity),
             P::PRESENT_VALUE => keep(value, &mut record.present_value),
             P::STATUS_FLAGS => keep(value, &mut record.status_flags),
             // State_Text is read from the rows above.

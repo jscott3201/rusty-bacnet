@@ -188,7 +188,13 @@ fn table(inventory: &Inventory, options: &InventoryOptions) -> comfy_table::Tabl
     }
     header.push("Commandable");
     if options.settings {
-        header.extend(["Relinquish default", "COV increment", "Min", "Max"]);
+        header.extend([
+            "Relinquish default",
+            "COV increment",
+            "Min",
+            "Max",
+            "Polarity",
+        ]);
     }
     header.extend(["States", "Description"]);
     if problems {
@@ -213,6 +219,7 @@ fn table(inventory: &Inventory, options: &InventoryOptions) -> comfy_table::Tabl
                 shown(&point.cov_increment),
                 shown(&point.min_present_value),
                 shown(&point.max_present_value),
+                shown(&point.polarity),
             ]);
         }
         row.extend([states(point), text(&point.description)]);

@@ -15,6 +15,7 @@ use crate::write::Commandability;
 /// | Analog Input, Output and Value; Integer, Positive Integer and Large Analog Value | Units | COV_Increment, Min_Pres_Value, Max_Pres_Value |
 /// | Accumulator, Pulse Converter | Units | |
 /// | Binary Input, Output and Value | Active_Text, Inactive_Text | |
+/// | Binary Input and Output | | Polarity |
 /// | Multi-state Input, Output and Value | Number_Of_States, State_Text | |
 /// | a type whose Present_Value may be commandable ([`Commandability::Optional`]): the value types, and any type this release doesn't know | Priority_Array | Relinquish_Default |
 /// | a type whose Present_Value always is ([`Commandability::Always`]), except Channel | | Relinquish_Default |
@@ -27,11 +28,12 @@ use crate::write::Commandability;
 /// Some of these every object of the type has, and one the device can't
 /// give is a [`problem`](super::PointRecord::problems) whatever its error:
 /// Object_Name; the Units of the types listed with it; a multi-state
-/// object's Number_Of_States; the Relinquish_Default of a type whose
-/// Present_Value is always commandable; and the Present_Value and
-/// Status_Flags of the types whose tables require them: the analog,
-/// binary and multi-state inputs, outputs and values, the twelve value
-/// types from CharacterString Value to Date Pattern Value, Access Door,
+/// object's Number_Of_States; a Binary Input's or Output's Polarity; the
+/// Relinquish_Default of a type whose Present_Value is always commandable;
+/// and the Present_Value and Status_Flags of the types whose tables
+/// require them: the analog, binary and multi-state inputs, outputs and
+/// values, the twelve value types from CharacterString Value to Date
+/// Pattern Value, Access Door,
 /// both lighting outputs, Accumulator, Pulse Converter, Loop, the life
 /// safety types, Channel, Schedule, Load Control, Timer, Staging, Global
 /// Group and Credential Data Input (Present_Value alone for Group, Color
@@ -61,6 +63,14 @@ use crate::write::Commandability;
 ///     ]
 /// );
 /// assert_eq!(properties(ObjectType::TREND_LOG, &plain).len(), 2);
+/// // Settings: a Binary Output's Polarity and relinquish default; a
+/// // Binary Value has no Polarity to ask for.
+/// let settings = plain.with_settings(true);
+/// assert_eq!(
+///     properties(ObjectType::BINARY_OUTPUT, &settings)[4..],
+///     [P::POLARITY, P::RELINQUISH_DEFAULT]
+/// );
+/// assert!(!properties(ObjectType::BINARY_VALUE, &settings).contains(&P::POLARITY));
 /// ```
 pub fn properties(object_type: ObjectType, options: &InventoryOptions) -> Vec<P> {
     let mut list = vec![P::OBJECT_NAME, P::DESCRIPTION];
@@ -82,6 +92,9 @@ pub fn properties(object_type: ObjectType, options: &InventoryOptions) -> Vec<P>
         if has_range(object_type) {
             list.extend([P::COV_INCREMENT, P::MIN_PRES_VALUE, P::MAX_PRES_VALUE]);
         }
+        if has_polarity(object_type) {
+            list.push(P::POLARITY);
+        }
         if crate::write::keeps_priorities(object_type) {
             list.push(P::RELINQUISH_DEFAULT);
         }
@@ -101,6 +114,8 @@ pub fn properties(object_type: ObjectType, options: &InventoryOptions) -> Vec<P>
 /// - Object_Name, in every table;
 /// - Units, in the tables of [`has_units`]'s types;
 /// - Number_Of_States, in the multi-state tables (Clauses 12.18 to 12.20);
+/// - Polarity, in the Binary Input and Binary Output tables (Tables 12-6
+///   and 12-8);
 /// - Relinquish_Default, in the tables of the types whose Present_Value is
 ///   always commandable and kept in a Priority_Array: Analog, Binary and
 ///   Multi-state Output (Clauses 12.3, 12.7, 12.19), Access Door (Table
@@ -114,6 +129,7 @@ pub(super) fn required(object_type: ObjectType, property: P) -> bool {
         P::OBJECT_NAME => true,
         P::UNITS => has_units(object_type),
         P::NUMBER_OF_STATES => is_multistate(object_type),
+        P::POLARITY => has_polarity(object_type),
         P::RELINQUISH_DEFAULT => {
             Commandability::of(object_type, P::PRESENT_VALUE) == Commandability::Always
                 && crate::write::keeps_priorities(object_type)
@@ -183,6 +199,12 @@ fn has_flags(object_type: ObjectType) -> bool {
             O::STAGING,
         ]
         .contains(&object_type)
+}
+
+/// The types with a Polarity: a Binary Input and a Binary Output. A
+/// Binary Value has none (Clause 12.8), so it is never asked.
+fn has_polarity(object_type: ObjectType) -> bool {
+    [ObjectType::BINARY_INPUT, ObjectType::BINARY_OUTPUT].contains(&object_type)
 }
 
 /// The types whose objects all have Units.

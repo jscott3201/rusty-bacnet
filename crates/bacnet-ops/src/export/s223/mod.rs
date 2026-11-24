@@ -27,11 +27,9 @@
 //! `bacnet_objects::points::build_database` builds a database from. Read
 //! with [`point_list_options`], [`Model::point_list`] gives the device as
 //! such a list, within the limits its docs name: a field a list leaves out
-//! reads back as the object's default, a binary point's Polarity isn't
-//! read (see the tracking issue for the export's Polarity), and a list
-//! read from another device need not build. The other way,
-//! `Model::from(list)` takes a [`PointList`] to Turtle without touching
-//! the wire.
+//! reads back as the object's default, and a list read from another device
+//! need not build. The other way, `Model::from(list)` takes a
+//! [`PointList`] to Turtle without touching the wire.
 //!
 //! The draft can change, and so can this export: its name says
 //! experimental in every front end. The output's header comment names the
@@ -106,11 +104,10 @@ pub fn inventory_options(types: Option<Vec<ObjectType>>) -> Result<InventoryOpti
 }
 
 /// The options of an inventory that reads every field a [`PointList`]
-/// holds but a binary point's Polarity, which the export doesn't read yet
-/// (see the tracking issue for the export's Polarity): every one of the
-/// [`EXPORTED_TYPES`] with its settings (COV_Increment, Min_Pres_Value,
-/// Max_Pres_Value, Relinquish_Default), and the Device object, whose record
-/// gives the list's Device its Description.
+/// holds: every one of the [`EXPORTED_TYPES`] with its settings
+/// (COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default, a
+/// Binary Input's or Output's Polarity), and the Device object, whose
+/// record gives the list's Device its Description.
 pub fn point_list_options() -> InventoryOptions {
     let types = EXPORTED_TYPES.into_iter().chain([ObjectType::DEVICE]);
     InventoryOptions::new()
@@ -154,22 +151,23 @@ impl Model {
     /// point are left out.
     ///
     /// Read with [`point_list_options`] from a device built from a list,
-    /// it equals that list only when the list set every field but a binary
-    /// point's Polarity, and even then a value given [`Access::Writable`]
-    /// reads back [`Access::ReadOnly`]: a read can't tell the two apart. A
-    /// field the list left out reads back as the object's default instead:
-    /// an empty Description (the Device's too), COV_Increment 0, "Active"
-    /// and "Inactive", "State 1" to "State N", the object's own relinquish
-    /// default, and the identity's name for the Device. Polarity isn't read,
-    /// so a binary point's comes back `None`, and a list built from it
-    /// gives its Binary Inputs and Outputs NORMAL whatever the device has
-    /// (see the tracking issue for the export's Polarity).
+    /// it equals that list only when the list set every field, and even
+    /// then a value given [`Access::Writable`] reads back
+    /// [`Access::ReadOnly`]: a read can't tell the two apart. A field the
+    /// list left out reads back as the object's default instead: an empty
+    /// Description (the Device's too), COV_Increment 0, "Active" and
+    /// "Inactive", "State 1" to "State N", the object's own relinquish
+    /// default, NORMAL for a Binary Input's or Output's Polarity, and the
+    /// identity's name for the Device. Built again, such a list makes the
+    /// same objects. A Polarity the device didn't give stays `None`, which
+    /// a builder makes NORMAL; the record names the problem.
     ///
     /// A list read from another device need not build: it can hold what
     /// `bacnet_objects::points::build_database` refuses, such as State_Text
     /// with other than one label per state, a Real that isn't finite,
-    /// Min_Pres_Value above Max_Pres_Value, or a multi-state relinquish
-    /// default that names no state. The builder stops at the first refusal.
+    /// Min_Pres_Value above Max_Pres_Value, a multi-state relinquish
+    /// default that names no state, or a Polarity other than NORMAL and
+    /// REVERSE. The builder stops at the first refusal.
     pub fn point_list(&self) -> PointList {
         PointList::new(self.device.clone(), self.points().cloned().collect())
     }

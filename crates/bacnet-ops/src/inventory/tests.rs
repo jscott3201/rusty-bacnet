@@ -170,8 +170,8 @@ async fn types_narrow_what_is_read() {
 /// With values each object's Present_Value and Status_Flags come in the
 /// same requests, two more properties an object, so the thirteen objects
 /// take three batches instead of two; the texts name units and states.
-/// Without, neither is asked for. Settings add the range and the
-/// relinquish default.
+/// Without, neither is asked for. Settings add the range, the relinquish
+/// default and a Binary Input's and Output's Polarity.
 #[tokio::test(start_paused = true)]
 async fn values_and_settings_are_read_when_asked() {
     let (client, server, log) = lab_logged(Faults::default()).await;
@@ -218,12 +218,35 @@ async fn values_and_settings_are_read_when_asked() {
 
     let settings = InventoryOptions::new().with_settings(true);
     let inventory = device.inventory(&settings).await.unwrap();
+    // The summary, then three batches, as many as without Polarity: the
+    // Binary Input's and Output's ride in the second, which they fill to
+    // the 32 properties a batch holds (the Binary Input to the
+    // Multi-state Value).
+    assert_eq!(count(&log, RPM), 7 + 1 + 3, "{inventory:?}");
     let av = inventory.point(oid(ObjectType::ANALOG_VALUE, 1)).unwrap();
     assert_eq!(av.relinquish_default.as_ref().unwrap().as_f64(), Some(0.0));
     assert_eq!(av.cov_increment.as_ref().unwrap().as_f64(), Some(0.0));
     assert!(av.present_value.is_none());
     let ai = inventory.point(oid(ObjectType::ANALOG_INPUT, 1)).unwrap();
     assert!(ai.relinquish_default.is_none(), "an input has none");
+    // A Binary Input's and Output's Polarity, named; a Binary Value has
+    // none to read, and no problem for it.
+    for object_type in [ObjectType::BINARY_INPUT, ObjectType::BINARY_OUTPUT] {
+        let polarity = inventory
+            .point(oid(object_type, 1))
+            .unwrap()
+            .polarity
+            .as_ref();
+        assert_eq!(polarity.unwrap().text, "normal", "{object_type}");
+    }
+    let bv = inventory.point(oid(ObjectType::BINARY_VALUE, 1)).unwrap();
+    assert!(bv.polarity.is_none() && bv.problems.is_empty(), "{bv:?}");
+    assert!(
+        inventory
+            .points
+            .iter()
+            .all(|point| point.problems.is_empty())
+    );
     drop(device);
     stop(client, server).await;
 }

@@ -7,7 +7,7 @@
 //! an object, of every type unless [`InventoryOptions::types`] names some.
 //! A record holds the object's name, description, units, state texts and
 //! whether it takes commands; with [`InventoryOptions::settings`] its
-//! COV_Increment, range and Relinquish_Default too; with
+//! COV_Increment, range, Relinquish_Default and Polarity too; with
 //! [`InventoryOptions::values`] its Present_Value and Status_Flags. Which
 //! properties that is for each object type is one list, [`properties`].
 //!
@@ -140,8 +140,8 @@ pub struct InventoryOptions {
     /// batch. Off by default.
     pub values: bool,
     /// Also read each object's settings, where its type has them:
-    /// COV_Increment, Min_Pres_Value, Max_Pres_Value and
-    /// Relinquish_Default ([`properties`]). Off by default.
+    /// COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default
+    /// and Polarity ([`properties`]). Off by default.
     pub settings: bool,
 }
 
@@ -257,6 +257,10 @@ pub struct PointRecord {
     /// Its Max_Pres_Value, read with settings.
     #[serde(serialize_with = "write::value")]
     pub max_present_value: Option<Value>,
+    /// A Binary Input's or Output's Polarity, read with settings. JSON:
+    /// `{"value": "reverse", "decoded": {"value": 1, "name": "reverse"}}`.
+    #[serde(serialize_with = "write::value")]
+    pub polarity: Option<Value>,
     /// Its Present_Value, read with [`values`](InventoryOptions::values);
     /// its text names the units and the state, as
     /// [`Device::read_many`] writes it. JSON: `{"value": "72.5 °F",
@@ -293,6 +297,7 @@ impl PointRecord {
             cov_increment: None,
             min_present_value: None,
             max_present_value: None,
+            polarity: None,
             present_value: None,
             status_flags: None,
             problems: Vec::new(),
