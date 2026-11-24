@@ -11,7 +11,7 @@
 //! a re-evaluated Schedule's targets and any Staging plan. `write_local` runs
 //! `finish` as a
 //! task of its own in the server's request task set
-//! ([`BACnetServer::finish_in_task`]), so a caller that drops its future (a
+//! ([`RequestTasks::finish_in_task`]), so a caller that drops its future (a
 //! timeout, a `select!`, a cancelled Python task) no longer skips any of it.
 //! `set_life_safety_operation_expected_local` hands its capture and fanout
 //! to such a task the same way (#1520).
@@ -21,6 +21,7 @@ use super::*;
 use crate::command_lists::TakenRuns;
 use crate::server::event_notifications::{commit_written_transition, committing};
 use crate::server::event_send::{Settle, settled as settled_lanes};
+use crate::server::request_tasks::RequestTasks;
 use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
 use bacnet_objects::staging::StagingWritePlan;
 use futures_util::FutureExt;
@@ -36,23 +37,23 @@ pub(in crate::server) fn local_runtime() -> Result<tokio::runtime::Handle, Error
         .map_err(|_| Error::Encoding("Local mutation requires a Tokio runtime".into()))
 }
 
-impl<T: TransportPort + 'static> BACnetServer<T> {
+impl RequestTasks {
     /// Spawn `work`, what a committed local change owes, as a task of its own
-    /// in the request task set, at once, and return a future that waits for
-    /// it (#1367). The caller makes the change under a guard that `work`
-    /// owns and spawns this with no wait in between, so dropping the returned
-    /// future skips none of the work. `stop()` aborts the task with the other
-    /// request tasks, and a closed set drops it unrun; either way the change
-    /// was made, so the future is `Ok(())` then too. A panic in `work` is
-    /// raised again in the caller, as it would be were the work done in
-    /// place; with the caller gone, it is logged and goes no further.
+    /// in this set, at once, and return a future that waits for it (#1367).
+    /// The caller makes the change under a guard that `work` owns and spawns
+    /// this with no wait in between, so dropping the returned future skips
+    /// none of the work. `stop()` aborts the task with the other request
+    /// tasks, and a closed set drops it unrun; either way the change was
+    /// made, so the future is `Ok(())` then too. A panic in `work` is raised
+    /// again in the caller, as it would be were the work done in place; with
+    /// the caller gone, it is logged and goes no further.
     pub(in crate::server) fn finish_in_task<F: Future<Output = ()> + Send + 'static>(
         &self,
         runtime: &tokio::runtime::Handle,
         work: F,
-    ) -> impl Future<Output = Result<(), Error>> + use<T, F> {
+    ) -> impl Future<Output = Result<(), Error>> + Send + use<F> {
         let (done, finished) = oneshot::channel();
-        self.request_tasks.spawn_on(
+        self.spawn_on(
             async move {
                 let work = std::panic::AssertUnwindSafe(work);
                 if let Err(Err(panic)) = done.send(work.catch_unwind().await) {

@@ -3,7 +3,9 @@
 //! (#2493): storage goes back to what the Device serves, and the next write
 //! on it is not held up for the stage's lifetime. A drop that finds the
 //! guard taken leaves the release to a task, and `stop()` waits for it, for
-//! a bounded time, before it settles the objects (#2495).
+//! a bounded time, before it settles the objects (#2495). The save and the
+//! wait run in a task of the server's, not the caller's (#2772), so the
+//! release comes as that task sees its caller go.
 //!
 //! The Device keeps its Description in storage (#2364). The first save the
 //! storage sees is held until the test lets it go; the rest run at once.
@@ -157,7 +159,7 @@ async fn drop_waiting_for_the_guard(
 ) -> tokio::sync::OwnedRwLockReadGuard<ObjectDatabase> {
     let releases = server.request_tasks.stage_releases();
     let (started, go) = storage.hold_next();
-    let mut call = std::pin::pin!(write_description(server, "lobby"));
+    let mut call = Box::pin(write_description(server, "lobby"));
     tokio::select! {
         _ = &mut call => panic!("the held save finished"),
         started = started => started.unwrap(),
@@ -179,6 +181,11 @@ async fn drop_waiting_for_the_guard(
         "the write is not waiting for the guard"
     );
     assert_eq!(storage.latest(), Some(Some("lobby".to_owned())));
+    // The write waits in a task of the server's (#2772), which lets go of
+    // the stage once it sees the call go: from a release task, as the guard
+    // is taken.
+    drop(call);
+    let_the_release_run().await;
     guard
 }
 
@@ -239,8 +246,10 @@ async fn a_write_local_dropped_during_its_save_releases_the_stage_at_once() {
         started = started => started.unwrap(),
     }
 
-    // The guard was free, so the stage went as the call dropped, while the
-    // save is still held: no yield was needed.
+    // The save runs in the write's own task, which sees its caller go and
+    // lets go of the stage with the guard free, while the save is still
+    // held (#2772).
+    let_the_release_run().await;
     assert!(!staged(&server).await, "the dropped write left its stage");
     assert_eq!(served(&server).await, before, "the Device serves old text");
 
@@ -248,6 +257,39 @@ async fn a_write_local_dropped_during_its_save_releases_the_stage_at_once() {
     drop(go);
     storage.holds(kept(&before)).await;
     next_write_is_not_delayed(&server, &storage).await;
+}
+
+/// A write dropped during its save and made again at once from the same
+/// task, with no yield between, finds the Device still holding the first
+/// write's stage: its task has not run yet (#2772). The second write waits
+/// on the Busy path until that task lets go, then lands.
+#[tokio::test(start_paused = true)]
+async fn a_write_retried_at_once_after_a_drop_waits_out_the_stage_and_lands() {
+    let storage = Arc::new(Storage::default());
+    let server = server(&storage).await;
+    let (started, go) = storage.hold_next();
+    let mut first = Box::pin(write_description(&server, "lobby"));
+    tokio::select! {
+        _ = &mut first => panic!("the held save finished"),
+        started = started => started.unwrap(),
+    }
+    drop(first);
+    let busy = super::super::durable_writes::busy_waits(server.database());
+    let mut second = Box::pin(write_description(&server, "porch"));
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(second.as_mut().poll(&mut cx).is_pending());
+    assert_eq!(
+        super::super::durable_writes::busy_waits(server.database()),
+        busy + 1,
+        "the second write found the first's stage"
+    );
+    drop(go);
+    tokio::time::timeout(HANG, second)
+        .await
+        .expect("the second write never landed")
+        .unwrap();
+    assert_eq!(served(&server).await, "porch");
+    storage.holds(Some("porch")).await;
 }
 
 #[tokio::test]
@@ -278,9 +320,11 @@ async fn a_write_task_aborted_during_its_save_has_released_when_the_abort_is_joi
     started.await.unwrap();
     writing.abort();
     assert!(writing.await.unwrap_err().is_cancelled());
-    // No yield since the join: the stage went as the task dropped, with the
-    // guard free, so `stop()` joining an aborted run task has nothing of its
-    // write left to settle.
+    // The save runs in the write's own task in the server's request set
+    // (#2772), which lets go of the stage, with the guard free, once it sees
+    // its caller go; `stop()` joins that task as it joins an aborted run's,
+    // so nothing of the write is left to settle.
+    let_the_release_run().await;
     assert!(!staged(&server).await, "the aborted task left its stage");
     drop(go);
     storage.holds(kept(&before)).await;
@@ -377,6 +421,9 @@ async fn stop_waits_for_the_save_of_a_write_dropped_during_it_under_a_guard() {
         Arc::clone(server.database()).read_owned().await
         // Dropped here, its save held, with the guard taken.
     };
+    // The save runs in the write's own task (#2772), which lets go of the
+    // stage once it sees the call go.
+    let_the_release_run().await;
     assert_eq!(
         releases.outstanding(),
         1,

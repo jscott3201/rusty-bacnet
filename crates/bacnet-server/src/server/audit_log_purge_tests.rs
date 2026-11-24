@@ -216,6 +216,27 @@ async fn queried(db: &Arc<RwLock<ObjectDatabase>>) -> Vec<u64> {
         .collect()
 }
 
+/// Return once the log holds nothing staged: a dropped purge's task lets
+/// go of its stage when it next runs and sees its caller gone (#2772).
+async fn stage_released(db: &Arc<RwLock<ObjectDatabase>>) {
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let staged = db
+                .write()
+                .await
+                .get_mut(&audit_log())
+                .and_then(|log| log.durable_writes())
+                .is_some_and(|writes| writes.has_staged_write());
+            if !staged {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("a dropped purge's task never let go of its stage");
+}
+
 async fn started(started: mpsc::Receiver<()>) -> mpsc::Receiver<()> {
     tokio::task::spawn_blocking(move || {
         started.recv_timeout(WAIT).expect("a commit started");
@@ -450,6 +471,10 @@ async fn a_purge_dropped_during_its_commit_leaves_the_log_served_and_storage_put
         _ = server.purge_audit_log(&log) => panic!("the held commit finished"),
         _started = started(started_rx) => {}
     }
+    // The purge waits in a task of the server's, which lets go of what it
+    // staged once it next runs and sees its caller gone (#2772): on this
+    // runtime that can come after the test's next step, so wait for it.
+    stage_released(&db).await;
     // The log never served the purge, and what the purge staged is gone: the
     // log queued a commit of what it serves behind the held one.
     assert_eq!(held(&db).await, [1]);
@@ -483,6 +508,41 @@ async fn a_purge_dropped_during_its_commit_leaves_the_log_served_and_storage_put
         busy,
         "the next purge found the log busy with a forgotten stage"
     );
+    assert_eq!(held(&db).await, [2]);
+    stop(server).await;
+}
+
+/// The interleaving the test above waits out, made on purpose: a purge
+/// dropped during its commit and made again at once, with no yield
+/// between, finds the first purge's stage still held, as that purge's task
+/// has not run yet (#2772). The second purge waits on the busy path until
+/// that task lets go, then lands.
+#[tokio::test]
+async fn a_purge_made_again_at_once_after_a_drop_waits_out_the_stage() {
+    let storage = Arc::new(HeldStorage::default());
+    let server = server(&storage).await;
+    let db = Arc::clone(server.database());
+    assert!(matches!(notify(&db, 1).await, Apdu::SimpleAck(_)));
+    let busy = super::super::durable_writes::busy_waits(&db);
+    let log = audit_log();
+    let (started_rx, go) = storage.hold();
+    tokio::select! {
+        _ = server.purge_audit_log(&log) => panic!("the held commit finished"),
+        _started = started(started_rx) => {}
+    }
+    let mut again = Box::pin(server.purge_audit_log(&log));
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(again.as_mut().poll(&mut cx).is_pending());
+    assert_eq!(
+        super::super::durable_writes::busy_waits(&db),
+        busy + 1,
+        "the second purge found the first's stage"
+    );
+    drop(go);
+    tokio::time::timeout(WAIT, again)
+        .await
+        .expect("the second purge never landed")
+        .unwrap();
     assert_eq!(held(&db).await, [2]);
     stop(server).await;
 }

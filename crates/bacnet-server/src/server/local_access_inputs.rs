@@ -39,6 +39,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Tokio runtime, failing before anything is written outside one, and a
     /// caller dropped once the event has committed skips none of the work
     /// it owes (#1367).
+    /// A call dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn report_access_event_local(
         &self,
         oid: &ObjectIdentifier,
@@ -67,6 +69,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// `BACnetServer.report_credential_read_local`.
     ///
     /// The Tokio-runtime rule of [`write_local`](Self::write_local) applies.
+    /// A call dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn report_credential_read_local(
         &self,
         oid: &ObjectIdentifier,
@@ -95,6 +99,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// binding exposes this as `BACnetServer.report_door_state_local`.
     ///
     /// The Tokio-runtime rule of [`write_local`](Self::write_local) applies.
+    /// A call dropped part way is as [`write_local`](Self::write_local)'s Cancellation section
+    /// describes (#2772).
     pub async fn report_door_state_local(
         &self,
         oid: &ObjectIdentifier,
@@ -110,11 +116,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         input: AccessControlInput,
     ) -> Result<(), Error> {
-        self.write_local_as(
-            oid,
-            LocalWrite::ApplicationAccessInput(&input),
-            PropertyValue::Null,
-        )
-        .await
+        self.write_local_as(oid, LocalInput::AccessControl(input), PropertyValue::Null)
+            .await
     }
 }
