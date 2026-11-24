@@ -4,12 +4,35 @@
 //! 19-5 maps to READ or WRITE (see `bacnet_client::client::SourceAuditor`).
 //! Here the request is admitted: once its turn at the destination is due,
 //! a slot from its lane's share of the 64 ([`super::slots`], #2652) and
-//! the turn with it, then the database guard, the Reporter's filters, a
-//! recipient, one station, a timestamp. Then a task the session owns runs it, so a caller that goes
-//! away loses neither the request nor its records: the client retries with
-//! the same invoke ID and the records carry the real answer. A request the
-//! Reporter doesn't select, or that has no recipient, runs unaudited in the
-//! caller's task.
+//! the turn with it. Then, under the database guard, the Reporter's
+//! filters, a recipient, one station and a timestamp
+//! ([`SourceAudit::plan`]); then a task the session owns carries out the
+//! request and records it, so a caller that goes away once its request is
+//! planned loses neither the request nor its records: the client retries
+//! with the same invoke ID and the records carry the real answer. A request
+//! the Reporter doesn't select, or that has no recipient, runs unaudited in
+//! its caller's task.
+//!
+//! The guard is never waited for in the caller's task (#2755): Tokio's lock
+//! hands its guard to a queued waiter whether or not that waiter is polled
+//! again, so a caller parked in a `select!`, `join!` or `buffer_unordered`
+//! could own it. The caller takes it only with `try_write`, which queues
+//! for nothing, in the poll that admits the request: with the database
+//! free, the request is planned there, as it always was. With the database
+//! busy, the request and its slot go to the task, which waits for the guard
+//! and plans the request there; a caller that goes before that task holds
+//! the guard loses the request, with nothing sent or recorded. Otherwise
+//! the caller's task waits only where nothing is handed to a waiter that
+//! isn't polled: for the turn, for a slot (taken as it is polled) and for
+//! the task's answer. So a parked caller holds no guard, and from its
+//! request's admission no slot: the task holds it while the request runs,
+//! and one that runs unaudited has given it back.
+//!
+//! Sequence numbers follow admission while the database is free. A request
+//! admitted while it is busy takes its number when its task gets the guard,
+//! so one admitted after it, once the database is free, can take an
+//! earlier number. A panic in the task reaches its caller as the shutdown
+//! error.
 //!
 //! A write sent with a priority is a command at that priority, which the
 //! Reporter's Audit_Priority_Filter applies to and the record names; one
@@ -19,6 +42,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use bacnet_client::client::{AuditTarget, AuditedRequest, SourceAuditor};
+use bacnet_objects::audit::AuditDeliveryToken;
 use bacnet_types::bitstring::BACnetPriorityFilter;
 use bytes::Bytes;
 
@@ -37,11 +61,16 @@ impl SourceAuditor for SeatAuditor {
         Box::pin(async move {
             source
                 .upgrade()
-                .ok_or_else(|| Error::Encoding("endpoint shutdown".into()))?
+                .ok_or_else(shutdown)?
                 .audit_seated(request)
                 .await
         })
     }
+}
+
+/// What a request cut off by the session's stop or drop fails with.
+fn shutdown() -> Error {
+    Error::Encoding("endpoint shutdown".into())
 }
 
 /// What the Reporter selects, as it stood when a request was admitted.
@@ -71,9 +100,30 @@ impl Selection {
     }
 }
 
+/// What the session's task hands back to an admitted request's caller.
+enum Handoff {
+    /// The request's end, or its refusal.
+    Answer(Result<Bytes, Error>),
+    /// A request the Reporter doesn't select, or with no recipient: its
+    /// caller runs it, unaudited. Boxed, as it is the larger by far.
+    Unaudited(Box<AuditedRequest>),
+}
+
+/// How an admitted request is recorded, as the database stood when it was
+/// planned under the guard.
+struct Plan {
+    selection: Selection,
+    notification: BACnetAuditNotification,
+    status: Arc<AuditReporterStatus>,
+    confirmed: bool,
+    route: SourceRoute,
+    completion: AuditDeliveryToken,
+    failure: Option<AuditFailureTicket<SourceRoute>>,
+}
+
 impl SourceAudit {
-    /// Admit and carry out a request of the session's client, as the
-    /// module documentation describes.
+    /// Admit a request of the session's client, plan it, and hand it to a
+    /// task the session owns, as the module documentation describes.
     async fn audit_seated(self: &Arc<Self>, mut request: AuditedRequest) -> Result<Bytes, Error> {
         let lane = slots::Lane::of(request.station());
         let slot = loop {
@@ -97,9 +147,7 @@ impl SourceAudit {
             {
                 slots::Admission::Admitted(slot) => break slot,
                 slots::Admission::NotReady => {}
-                slots::Admission::Closed => {
-                    return Err(Error::Encoding("endpoint shutdown".into()));
-                }
+                slots::Admission::Closed => return Err(shutdown()),
             }
         };
         // A request that waited for its slot while the node's
@@ -108,13 +156,133 @@ impl SourceAudit {
         if request.initiation_restricted() {
             return Err(Error::InitiationDisabled { sent: false });
         }
-        let mut db = self.db.write().await;
+        let owner = self.notifications.upgrade().ok_or_else(shutdown)?;
+        let (reply, answer) = oneshot::channel();
+        let (task, weak) = (Arc::clone(self), Arc::downgrade(&owner));
+        // The guard only if it is free now: `try_write` queues for nothing,
+        // so nothing is handed to this caller while it isn't polled. Planned
+        // here, the request goes to its task in this same poll, so a caller
+        // that goes afterwards leaves it running and recorded, as before.
+        let planned = self
+            .db
+            .try_write()
+            .map(|mut db| self.plan(&mut db, &request));
+        // A rejected spawn drops the request, its slot and the reply; the
+        // task never retains its owner. The stop that closes the owner
+        // aborts the task, so an operation it cuts off is not recorded.
+        match planned {
+            Ok(Ok(Some(plan))) => owner.spawn(task.carry_out(plan, request, slot, reply, weak)),
+            Ok(Ok(None)) => {
+                drop((slot, owner));
+                return request.execute().await.result;
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(_busy) => owner.spawn(task.run_admitted(request, slot, reply, weak)),
+        }
+        drop(owner);
+        match answer.await {
+            Ok(Handoff::Answer(result)) => result,
+            Ok(Handoff::Unaudited(request)) => (*request).execute().await.result,
+            Err(_) => Err(shutdown()),
+        }
+    }
+
+    /// A request admitted while the database was busy, in the task the
+    /// session owns (#2755). It waits for the guard and holds it, polled,
+    /// only for the synchronous [`Self::plan`], then goes on as
+    /// [`Self::carry_out`]. A caller that goes before the guard is held ends
+    /// the request there, with nothing sent, recorded or numbered, and its
+    /// slot back at once.
+    async fn run_admitted(
+        self: Arc<Self>,
+        request: AuditedRequest,
+        slot: slots::Slot,
+        mut reply: oneshot::Sender<Handoff>,
+        owner: Weak<NotificationTransactions>,
+    ) {
+        let plan = {
+            let mut db = tokio::select! {
+                biased;
+                db = self.db.write() => db,
+                () = reply.closed() => return,
+            };
+            if reply.is_closed() {
+                return;
+            }
+            self.plan(&mut db, &request)
+        };
+        match plan {
+            Ok(Some(plan)) => self.carry_out(plan, request, slot, reply, owner).await,
+            Ok(None) => {
+                drop(slot);
+                let _ = reply.send(Handoff::Unaudited(Box::new(request)));
+            }
+            Err(error) => {
+                drop(slot);
+                let _ = reply.send(Handoff::Answer(Err(error)));
+            }
+        }
+    }
+
+    /// A planned request, in the task the session owns: it is carried out,
+    /// recorded as `plan` says, and answered, holding its slot to its end.
+    async fn carry_out(
+        self: Arc<Self>,
+        plan: Plan,
+        request: AuditedRequest,
+        slot: slots::Slot,
+        reply: oneshot::Sender<Handoff>,
+        owner: Weak<NotificationTransactions>,
+    ) {
+        let outcome = request.execute().await;
+        // A stop that began while the request ran cut it off.
+        let recorded = outcome.attempted && !self.slots.is_closed();
+        if let Some(owner) = owner.upgrade().filter(|_| recorded) {
+            for (target, result) in &outcome.records {
+                if !plan.selection.selects(target) {
+                    continue;
+                }
+                let mut record = plan.notification.clone();
+                record.invoke_id = outcome.invoke_id;
+                record.target_object = Some(target.object);
+                record.target_property = target.property.clone();
+                record.target_priority = target.priority;
+                record.target_value = target.value.clone().filter(|value| value.len() <= 32);
+                record.result = *result;
+                if let Some(device) = outcome.target_device {
+                    record.target_device = BACnetRecipient::Device(device);
+                }
+                delivery::admit(
+                    &self,
+                    &owner,
+                    plan.confirmed,
+                    plan.route.clone(),
+                    record,
+                    delivery::Completion::new(Arc::clone(&plan.status), plan.completion),
+                    plan.failure.clone(),
+                );
+            }
+        }
+        let _ = reply.send(Handoff::Answer(outcome.result));
+        drop(slot);
+    }
+
+    /// Under the database guard, with nothing awaited: the Reporter's
+    /// settings and whether they select the request, its recipient and
+    /// station, and its timestamp, which takes a sequence number when the
+    /// clock has no valid time (why the guard is a write guard). `None` for
+    /// a request that goes unaudited.
+    fn plan(
+        &self,
+        db: &mut ObjectDatabase,
+        request: &AuditedRequest,
+    ) -> Result<Option<Plan>, Error> {
         // A stop is seen here: `close` seals the owner before the slots.
         let runtime = self
             .runtime
             .upgrade()
             .filter(|runtime| runtime.owner.is_active())
-            .ok_or_else(|| Error::Encoding("endpoint shutdown".into()))?;
+            .ok_or_else(shutdown)?;
         let reporter = db
             .get(&self.selected)
             .and_then(|object| object.audit_reporter())
@@ -163,22 +331,16 @@ impl SourceAudit {
             .iter()
             .any(|target| selection.selects(target))
         {
-            drop(db);
-            drop(runtime);
-            drop(slot);
-            return request.execute().await.result;
+            return Ok(None);
         }
         let status = reporter.status_internal();
         let confirmed = reporter.confirmed_internal();
         let route = runtime
-            .recipient_route(&db)
+            .recipient_route(db)
             .filter(|route| route.serves(confirmed));
         status.set_configured(route.is_some());
         let Some(route) = route else {
-            drop(db);
-            drop(runtime);
-            drop(slot);
-            return request.execute().await.result;
+            return Ok(None);
         };
         let station = request.station().clone();
         self.one_station(&runtime, station.network_number, &station.mac_address)?;
@@ -237,54 +399,14 @@ impl SourceAudit {
             result: None,
         };
         status.set_configured(true);
-        drop(db);
-        drop(runtime);
-        let owner = self
-            .notifications
-            .upgrade()
-            .ok_or_else(|| Error::Encoding("endpoint shutdown".into()))?;
-        let weak_owner = Arc::downgrade(&owner);
-        let source = Arc::clone(self);
-        let (reply, response) = oneshot::channel();
-        // A rejected spawn drops the request, its slot and the reply; the
-        // worker never retains its owner. The stop that closes the owner
-        // aborts the worker, so an operation it cuts off is not recorded.
-        owner.spawn(async move {
-            let _slot = slot;
-            let outcome = request.execute().await;
-            // A stop that began while the request ran cut it off.
-            let recorded = outcome.attempted && !source.slots.is_closed();
-            if let Some(owner) = weak_owner.upgrade().filter(|_| recorded) {
-                for (target, result) in &outcome.records {
-                    if !selection.selects(target) {
-                        continue;
-                    }
-                    let mut record = notification.clone();
-                    record.invoke_id = outcome.invoke_id;
-                    record.target_object = Some(target.object);
-                    record.target_property = target.property.clone();
-                    record.target_priority = target.priority;
-                    record.target_value = target.value.clone().filter(|value| value.len() <= 32);
-                    record.result = *result;
-                    if let Some(device) = outcome.target_device {
-                        record.target_device = BACnetRecipient::Device(device);
-                    }
-                    delivery::admit(
-                        &source,
-                        &owner,
-                        confirmed,
-                        route.clone(),
-                        record,
-                        delivery::Completion::new(Arc::clone(&status), completion),
-                        failure.clone(),
-                    );
-                }
-            }
-            let _ = reply.send(outcome.result);
-        });
-        drop(owner);
-        response
-            .await
-            .map_err(|_| Error::Encoding("endpoint shutdown".into()))?
+        Ok(Some(Plan {
+            selection,
+            notification,
+            status,
+            confirmed,
+            route,
+            completion,
+            failure,
+        }))
     }
 }
