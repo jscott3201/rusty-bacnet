@@ -126,9 +126,11 @@ impl BipEndpointConfig {
         if let Some(source) = &config.source_audit {
             builder = source.bind(builder);
         }
+        // A refusal's database goes: the next start builds the objects
+        // again from their registrations (#2766).
         let mut session = builder
             .build_session_wrapped(crate::app_transport::AppTransport::from)
-            .map_err(to_py_err)?;
+            .map_err(|refused| to_py_err(refused.into()))?;
         if let Some(source) = &config.source_audit {
             session = source.select(session);
         }

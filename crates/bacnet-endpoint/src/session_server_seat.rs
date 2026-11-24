@@ -91,8 +91,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// One check needs the started link, and comes after it: target Audit's
     /// recipient as the started link sees it, an Address that names this
     /// network by its number or a group address only the bound link
-    /// reveals. Its refusal ends the session and drops the database the
-    /// server was given.
+    /// reveals. Its refusal ends the session, and the start's
+    /// [`StartError`] hands back the database (#2766).
     ///
     /// **Source Audit beside the server.** The session's source Audit
     /// sends its records through the server's pool of notifications, which
@@ -107,7 +107,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// request goes unanswered while the server builds. A start that fails after the server is built
     /// stops it; one cancelled there leaves it holding what waits,
     /// unanswered, until [`stop`](Self::stop) or drop. A server build that
-    /// fails or is cancelled drops the database it was given.
+    /// fails ends the session, whose start hands the database back; one
+    /// cancelled drops it.
     ///
     /// **Who answers what.** The server answers every confirmed request but
     /// a ConfirmedCOVNotification, which is the client's; a
@@ -390,10 +391,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 }
             }));
         }
-        // A refused build hands the database back (#2752). The session only
-        // holds it, so that its stop or drop lets go of it off the runtime
-        // as on every other way out: the refused start leaves the session
-        // terminal, and nothing gives the database to the caller.
+        // A refused build hands the database back (#2752), and the session
+        // holds it again: the refused start's cleanup gives it to the
+        // caller (#2766).
         let server = match seated.build().await {
             Ok(server) => server,
             Err(refused) => {
@@ -412,12 +412,20 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// while the link is still up. Kept through a cancelled stop, whose
     /// next call stops it again; its error is the stop's. A server still
     /// held by an unfinished start stops without taking what it holds.
+    /// Stopped, it gives its handle on the database back once its tasks
+    /// have let go of theirs, rather than from a task of its drop, so a
+    /// refused start's cleanup leaves the session the only handle (#2766).
     pub(super) async fn stop_server(&mut self) {
         if let Some(server) = self.server.as_mut() {
             if let Err(error) = server.stop().await {
                 self.server_stop_error.get_or_insert(error);
             }
-            self.server = None;
+            if let Some(server) = self.server.take() {
+                // The session keeps its own handle: this one just goes.
+                drop(drop_database_off_runtime(
+                    server.__endpoint_into_database().await,
+                ));
+            }
         }
         self.server_gate = None;
     }

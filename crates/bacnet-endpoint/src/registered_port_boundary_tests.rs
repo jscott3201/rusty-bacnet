@@ -66,25 +66,24 @@ async fn registered_port_invalid_selection_profile_and_identity_fail_before_publ
             ),
         };
         let mut endpoint = builder.build_session().unwrap();
-        let error = endpoint.start().await.unwrap_err().to_string();
-        if mode == 1 {
+        let (error, handed_back) = endpoint.start().await.unwrap_err().into_parts();
+        assert!(endpoint.bip_local_address().is_none());
+        // A link that won't start ends the session, whose start hands the
+        // database back (#2766); the other refusals come before the link
+        // starts, and the session keeps it.
+        let mut db = if mode == 1 {
+            let error = error.to_string();
             assert!(
                 error.contains("foreign-device mode needs TTL > 0"),
                 "{error}"
             );
-        }
-        assert!(endpoint.bip_local_address().is_none());
-        assert!(
-            endpoint
-                .database
-                .as_ref()
-                .unwrap()
-                .write()
-                .await
-                .remove(&port())
-                .unwrap()
-                .is_some()
-        );
+            handed_back.expect("the database comes back")
+        } else {
+            assert!(handed_back.is_none(), "{error}");
+            let held = endpoint.database.take().unwrap();
+            Arc::try_unwrap(held).ok().unwrap().into_inner()
+        };
+        assert!(db.remove(&port()).unwrap().is_some());
     }
     let id = identity();
     let (transport, _peer) = bacnet_transport::loopback::LoopbackTransport::pair(vec![1], vec![2]);

@@ -71,8 +71,7 @@ impl StartedOutputs {
         let Some(Held::Owned(mut db)) = self.held.take() else {
             unreachable!("a start is refused before it shares the database");
         };
-        db.release_outputs();
-        db.withdraw_network_port_internal();
+        db.undo_refused_start_internal();
         *db
     }
 }
