@@ -3,6 +3,7 @@
 use std::{fmt, path::Path, sync::Arc};
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::sign::SingleCertAndKey;
 use tokio_rustls::TlsAcceptor;
 
 use crate::sc_tls::ScTlsConfigError;
@@ -109,7 +110,8 @@ impl ScHubTlsConfig {
     /// certificate usable, and the key must load and belong to the leaf;
     /// [`ScTlsConfigError`] names the input that fails and why. No
     /// ambient/system trust is loaded. [`Self::from_pem`] and
-    /// [`Self::from_pem_files`] take PEM.
+    /// [`Self::from_pem_files`] take PEM. The `key` is cleared when this
+    /// returns, on every path.
     pub fn from_der(
         ca_certs: Vec<CertificateDer<'static>>,
         cert_chain: Vec<CertificateDer<'static>>,
@@ -123,6 +125,8 @@ impl ScHubTlsConfig {
     /// key, decoded as [`ScNodeTlsConfig::from_pem`] decodes them, then
     /// checked as [`Self::from_der`] checks. Keys and `X509 CRL` sections in
     /// the CA bundle or chain are skipped, so no revocation list applies.
+    /// The decoded key is cleared on return, but `private_key` is your
+    /// buffer: clear it yourself.
     ///
     /// [`ScNodeTlsConfig::from_pem`]: crate::sc_tls::ScNodeTlsConfig::from_pem
     pub fn from_pem(
@@ -137,6 +141,15 @@ impl ScHubTlsConfig {
     /// does. The CA bundle is read and checked before the identity files
     /// are read; each file is read once, here, up to
     /// [`MAX_PEM_FILE_BYTES`](crate::sc_tls::MAX_PEM_FILE_BYTES).
+    ///
+    /// # Key memory
+    ///
+    /// As [`ScNodeTlsConfig::from_pem_files`]: the key file's text and
+    /// every decoded key are cleared on return, and the configuration keeps
+    /// no key bytes. The decoder's transient buffers and rustls's one
+    /// loading copy are not cleared.
+    ///
+    /// [`ScNodeTlsConfig::from_pem_files`]: crate::sc_tls::ScNodeTlsConfig::from_pem_files
     pub fn from_pem_files(
         ca_bundle: impl AsRef<Path>,
         cert_chain: impl AsRef<Path>,
@@ -152,8 +165,7 @@ impl ScHubTlsConfig {
     fn build(material: Material) -> Result<Self, ScTlsConfigError> {
         let Material {
             roots,
-            chain,
-            key,
+            identity,
             provider,
         } = material;
         let verifier =
@@ -164,8 +176,7 @@ impl ScHubTlsConfig {
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(refused)?
             .with_client_cert_verifier(verifier)
-            .with_single_cert(chain, key)
-            .map_err(refused)?;
+            .with_cert_resolver(Arc::new(SingleCertAndKey::from(identity)));
         Ok(Self {
             inner: Arc::new(config),
             certificate_bindings: None,

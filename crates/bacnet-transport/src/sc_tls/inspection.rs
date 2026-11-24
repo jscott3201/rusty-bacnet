@@ -27,6 +27,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use x509_parser::{nom::Parser, prelude::*};
+use zeroize::Zeroizing;
 
 use super::{ScTlsConfigError, material, peer_info};
 #[path = "inspection_types.rs"]
@@ -95,7 +96,7 @@ pub fn inspect_sc_pem(
                 };
                 input(ScInputRole::PrivateKey, None, kind)
             })?;
-            compare_key(identity, key)
+            compare_key(identity, &key)
         }
     };
     Ok(ScPemInspection {
@@ -133,7 +134,7 @@ pub fn inspect_sc_pem_files(
         .transpose()?;
     let mut report = inspect_sc_pem(
         &identity,
-        trust.as_deref(),
+        trust.as_ref().map(|bytes| bytes.as_slice()),
         key.as_ref().map(|(b, _)| b.as_slice()),
         Some(now),
     )?;
@@ -163,14 +164,17 @@ fn read(
     path: &Path,
     role: ScInputRole,
     remaining: &mut usize,
-) -> Result<(Vec<u8>, Option<ScKeyFilePermissions>), ScInspectionError> {
+) -> Result<(Zeroizing<Vec<u8>>, Option<ScKeyFilePermissions>), ScInspectionError> {
     let io = |source| ScInspectionError::Io { role, source };
     let file = File::open(path).map_err(io)?;
     let metadata = file.metadata().map_err(io)?;
     if metadata.len() > *remaining as u64 {
         return Err(input(role, None, ScInputErrorKind::InputTooLarge));
     }
-    let mut bytes = Vec::new();
+    // Cleared on drop (the key file's text, #2621), and sized from the
+    // file's length so a regular file is read without the buffer growing.
+    let hint = usize::try_from(metadata.len()).unwrap_or(0);
+    let mut bytes = Zeroizing::new(Vec::with_capacity(hint.saturating_add(1)));
     file.take(*remaining as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(io)?;
@@ -326,10 +330,11 @@ fn direct_issuer(
 }
 fn compare_key(
     certs: Vec<CertificateDer<'static>>,
-    key: PrivateKeyDer<'static>,
+    key: &PrivateKeyDer<'static>,
 ) -> ScKeyConsistency {
     let provider = rustls::crypto::aws_lc_rs::default_provider();
-    let Ok(key) = provider.key_provider.load_private_key(key) else {
+    // The loader drops its copy without clearing; the caller's is cleared.
+    let Ok(key) = provider.key_provider.load_private_key(key.clone_key()) else {
         return ScKeyConsistency::Unusable;
     };
     classify_match(CertifiedKey::new(certs, key).keys_match())

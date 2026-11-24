@@ -1771,6 +1771,14 @@ let transport = ScTransport::new(ws, vmac)
     .with_heartbeat_timeout_ms(60_000);
 ```
 
+Private-key memory: the `ScNodeTlsConfig` and `ScHubTlsConfig` constructors
+clear the key file's text and every decoded key when they finish, error paths
+included, and the configuration keeps no key bytes (only the signing key rustls
+and aws-lc-rs loaded). They cannot clear the PEM decoder's transient buffers, the
+copy rustls makes while loading the key, or buffers you hold: the bytes given to
+`from_pem`, or the `PrivateKeyDer` given to `from_der`, which the call takes by
+value and clears but whose earlier copies are yours to clear (`zeroize`).
+
 Production BACnet/SC transports validate heartbeat settings at `start()`: the interval must be
 `3_000..=300_000` ms, and the disconnect timeout must be greater than the interval.
 

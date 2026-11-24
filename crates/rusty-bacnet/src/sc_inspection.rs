@@ -14,6 +14,7 @@ use pyo3::{
     types::{PyBool, PyByteArray, PyBytes, PyInt, PyString, PyTuple},
 };
 use std::{borrow::Cow, path::PathBuf};
+use zeroize::Zeroize;
 
 #[pyclass(name = "ScPemInspection", module = "rusty_bacnet", frozen)]
 struct PyScPemInspection(ScPemInspection);
@@ -210,6 +211,17 @@ fn time(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<i64>> {
         })
         .transpose()
 }
+/// The private-key snapshot: when it is our copy of a `bytearray`'s
+/// contents it is cleared on drop (#2621). A `bytes` input is borrowed, owned
+/// by the interpreter, and not ours to clear.
+struct Wiped<'a>(Cow<'a, [u8]>);
+impl Drop for Wiped<'_> {
+    fn drop(&mut self) {
+        if let Cow::Owned(copy) = &mut self.0 {
+            copy.zeroize();
+        }
+    }
+}
 enum PemInput<'a, 'py> {
     Bytes(&'a [u8]),
     Mutable {
@@ -324,11 +336,16 @@ fn inspect_sc_pem(
         .map(|value| snapshot(value, ScInputRole::PeerTrust))
         .transpose()?;
     let key = private_key_pem
-        .map(|value| snapshot(value, ScInputRole::PrivateKey))
+        .map(|value| snapshot(value, ScInputRole::PrivateKey).map(Wiped))
         .transpose()?;
-    inspection::inspect_sc_pem(&identity, trust.as_deref(), key.as_deref(), now)
-        .map(PyScPemInspection)
-        .map_err(error)
+    inspection::inspect_sc_pem(
+        &identity,
+        trust.as_deref(),
+        key.as_ref().map(|key| &*key.0),
+        now,
+    )
+    .map(PyScPemInspection)
+    .map_err(error)
 }
 
 /// Read explicitly selected files once, returning an advisory immutable report.

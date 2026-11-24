@@ -157,3 +157,15 @@ fn node_tls_factory_does_not_preflight_local_dates_or_issuer_authorization() {
         ScNodeTlsConfig::from_der(vec![Material::new(None).ca], vec![m.leaf], m.key).unwrap();
     }
 }
+
+#[test]
+fn a_decoded_key_prints_no_key_bytes() {
+    let pair = KeyPair::generate().unwrap();
+    let der = pair.serialize_der();
+    let key = crate::sc_tls::material::single_key(pair.serialize_pem().as_bytes()).unwrap();
+    // The decoded key sits in a clearing wrapper whose Debug elides it.
+    let shown = format!("{key:?}");
+    assert!(shown.contains("elided"), "{shown}");
+    let decimal = format!("{:?}", &der[der.len() - 16..]);
+    assert!(!shown.contains(decimal.trim_matches(['[', ']'])), "{shown}");
+}
