@@ -33,6 +33,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // separate budget). Retransmitted already-executed LSO replays
         // byte-identically; pending in-flight duplicates discard.
         if req.service_choice == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION {
+            // As in dispatch: during a segmented answer under its requester
+            // and invoke ID, it is not executed (#2770).
+            if confirmed_request_tracker.supersede_answer(
+                source_mac,
+                source_network.as_ref(),
+                &bacnet_transport::port::TransportProvenance::unverified(),
+                req.invoke_id,
+            ) {
+                return;
+            }
             let lso_pending = match confirmed_request_tracker.lso.begin(
                 source_mac,
                 source_network.as_ref(),
@@ -80,7 +90,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             bacnet_transport::port::TransportProvenance::unverified(),
             req.clone(),
         ) {
-            ConfirmedRequestAdmission::Duplicate => return,
+            ConfirmedRequestAdmission::Duplicate | ConfirmedRequestAdmission::AbortsAnswer => {
+                return;
+            }
             ConfirmedRequestAdmission::New(pending) => pending,
         };
 

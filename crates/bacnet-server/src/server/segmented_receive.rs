@@ -82,7 +82,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
         // A segment of a request already whole and still executing is
-        // acknowledged again (Clause 5.4.5.3, #2751).
+        // acknowledged again (Clause 5.4.5.3, #2751); while its answer goes
+        // out in segments, a segment zero opens a transfer (#2770).
         if !receivers.is_open(
             source_mac,
             received.source_network.as_ref(),
@@ -95,6 +96,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 &received.provenance,
                 &route,
                 invoke_id,
+                request.sequence_number.unwrap_or(0) == 0,
             )
         {
             debug!(
