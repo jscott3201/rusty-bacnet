@@ -40,7 +40,8 @@ async fn source_write_whole_operation_capacity_bounds_prelease_waiters_and_stop(
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert!(!waiter.is_finished());
     tasks.push(waiter);
-    // Seal while admitted caller futures wait on the DB: no task/lease/egress yet.
+    // Seal while the admitted ones wait for the DB in the session's tasks
+    // (#2755): no lease or egress yet.
     let coordinator = Arc::clone(&session.coordinator);
     let stop = session.stop();
     tokio::pin!(stop);

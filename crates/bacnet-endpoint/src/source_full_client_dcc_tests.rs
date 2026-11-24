@@ -196,6 +196,10 @@ async fn a_slot_waiter_does_not_go_out_once_initiation_is_disabled() {
             .unwrap(),
         Err(Error::InitiationDisabled { sent: false })
     ));
+    // Held while the waiter is admitted: it is refused before it would
+    // wait for the database (#2755).
+    let db = Arc::clone(session.database.as_ref().unwrap());
+    let guard = db.write().await;
     let request = sent.pop().unwrap();
     let (invoke, rp) = read_request(&request);
     send(&peer, &request.source_mac, ack(invoke, &rp)).await;
@@ -214,6 +218,7 @@ async fn a_slot_waiter_does_not_go_out_once_initiation_is_disabled() {
             read.abort();
         }
     }
+    drop(guard);
     let waiter = match waiter {
         Some(sent) => sent,
         None => {
