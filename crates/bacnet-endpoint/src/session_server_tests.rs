@@ -664,3 +664,130 @@ async fn a_server_build_the_started_link_refuses_leaves_the_session_its_database
         objects
     );
 }
+
+/// Binary Input `instance`.
+fn bi(instance: u32) -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::BINARY_INPUT, instance).unwrap()
+}
+
+/// The encoded Present_Value that the next COV notification `heard`
+/// brings about BI-2 carries.
+async fn notified_present_value(
+    heard: &mut tokio::sync::broadcast::Receiver<bacnet_client::client::COVEvent>,
+) -> Vec<u8> {
+    let event = tokio::time::timeout(WAIT, heard.recv())
+        .await
+        .expect("a COV notification")
+        .unwrap();
+    let received = event
+        .into_object()
+        .expect("a COV notification of one object");
+    assert_eq!(received.notification.monitored_object_identifier, bi(2));
+    received
+        .notification
+        .list_of_values
+        .iter()
+        .find(|value| value.property_identifier == PropertyIdentifier::PRESENT_VALUE)
+        .expect("Present_Value reported")
+        .value
+        .clone()
+}
+
+/// A Binary Input's physical side and its Polarity (#2594) are set through
+/// the session's server, as its other local inputs are, and a peer's COV
+/// subscription hears each change of Present_Value: an OFF input under
+/// REVERSE is ACTIVE, and a Polarity change in service derives
+/// Present_Value from it again. Out of service Present_Value is the
+/// simulated one whatever the input or Polarity does, and the return to
+/// service derives it from both (Clauses 12.6.4 and 12.6.10). Another
+/// object, or an instance the node doesn't have, is refused.
+#[tokio::test(start_paused = true)]
+async fn a_binary_inputs_physical_side_and_polarity_reach_subscribers() {
+    use bacnet_device_core::write::local::LocalCommandSource;
+    use bacnet_objects::binary::BinaryInputObject;
+    use bacnet_types::enums::Polarity;
+    let (inactive, active) = (vec![0x91, 0], vec![0x91, 1]);
+    let wire = Wire::new();
+    let identity = crate::DeviceIdentity::new(NODE_DEVICE, 42).unwrap();
+    let mut contact = BinaryInputObject::new(2, "BI-2").unwrap();
+    contact.set_polarity(Polarity::REVERSE).unwrap();
+    let units = EngineeringUnits::DEGREES_CELSIUS;
+    let extra: Vec<Box<dyn BACnetObject>> = vec![
+        Box::new(contact),
+        Box::new(AnalogInputObject::new(1, "AI-1", units).unwrap()),
+    ];
+    let database = crate::build_database_with_extra(&identity, extra).unwrap();
+    let port = wire.port(NODE).build();
+    let mut session = EndpointSession::new(port, SessionRole::Both, SessionConfig::default())
+        .unwrap()
+        .device(identity)
+        .with_database(database);
+    session.start().await.unwrap();
+    let peer = peer(&wire).await;
+    let mut heard = peer.cov_notifications();
+    peer.subscribe_cov(&Wire::mac(NODE), 3, bi(2), false, Some(600))
+        .await
+        .unwrap();
+    assert_eq!(notified_present_value(&mut heard).await, inactive);
+    let server = session.server().unwrap();
+
+    server
+        .set_physical_input_local(&bi(2), false)
+        .await
+        .unwrap();
+    assert_eq!(notified_present_value(&mut heard).await, active);
+    let normal = Polarity::NORMAL;
+    server.set_polarity_local(&bi(2), normal).await.unwrap();
+    assert_eq!(notified_present_value(&mut heard).await, inactive);
+
+    let write = async |property, value| {
+        let source = LocalCommandSource::ServerDevice;
+        server
+            .write_local(&bi(2), property, None, value, None, source)
+            .await
+            .unwrap();
+    };
+    let present_value = async || {
+        server
+            .read_local(&bi(2), PropertyIdentifier::PRESENT_VALUE, None)
+            .await
+            .unwrap()
+    };
+    let out_of_service = PropertyIdentifier::OUT_OF_SERVICE;
+    write(out_of_service, PropertyValue::Boolean(true)).await;
+    assert_eq!(notified_present_value(&mut heard).await, inactive);
+    let simulated = PropertyValue::Enumerated(1);
+    write(PropertyIdentifier::PRESENT_VALUE, simulated.clone()).await;
+    assert_eq!(notified_present_value(&mut heard).await, active);
+    server.set_physical_input_local(&bi(2), true).await.unwrap();
+    let reverse = Polarity::REVERSE;
+    server.set_polarity_local(&bi(2), reverse).await.unwrap();
+    assert_eq!(present_value().await, simulated);
+    // Back in service: ON under REVERSE.
+    write(out_of_service, PropertyValue::Boolean(false)).await;
+    assert_eq!(notified_present_value(&mut heard).await, inactive);
+
+    let refused = |result: Result<(), Error>| match result {
+        Err(error) => error.remote(),
+        Ok(()) => panic!("taken"),
+    };
+    let object_error = |code| {
+        Some(RemoteError::Error {
+            class: ErrorClass::OBJECT,
+            code,
+        })
+    };
+    let unsupported = object_error(ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED);
+    let unknown = object_error(ErrorCode::UNKNOWN_OBJECT);
+    for (oid, expected) in [(ai1(), unsupported), (bi(9), unknown)] {
+        let input = server.set_physical_input_local(&oid, true).await;
+        assert_eq!(refused(input), expected, "{oid}");
+        let polarity = server.set_polarity_local(&oid, normal).await;
+        assert_eq!(refused(polarity), expected, "{oid}");
+    }
+    assert_eq!(present_value().await, PropertyValue::Enumerated(0));
+
+    let mut peer = peer;
+    peer.stop().await.unwrap();
+    session.stop().await.unwrap();
+}

@@ -4,7 +4,7 @@
 //! refusals are in `refusal_tests`, the new setters in `setter_tests`.
 use super::*;
 use crate::property_metadata::PropertyWriteCapability;
-use bacnet_types::enums::{BinaryPV, EngineeringUnits};
+use bacnet_types::enums::{BinaryPV, EngineeringUnits, Polarity};
 use core::net::Ipv4Addr;
 
 mod refusal_tests;
@@ -66,14 +66,15 @@ fn full_list() -> PointList {
         Point::new(
             oid(ObjectType::BINARY_INPUT, 1),
             "bi",
-            binary(Access::ReadOnly),
+            binary(Access::ReadOnly).with_polarity(Polarity::REVERSE),
         ),
         Point::new(
             oid(ObjectType::BINARY_OUTPUT, 1),
             "bo",
             binary(Access::Commandable {
                 relinquish_default: Some(BinaryPV::ACTIVE),
-            }),
+            })
+            .with_polarity(Polarity::REVERSE),
         ),
         Point::new(
             oid(ObjectType::BINARY_VALUE, 1),
@@ -189,6 +190,10 @@ pub(super) fn read_back(database: &ObjectDatabase, object: ObjectIdentifier) -> 
             let mut binary = Binary::new(served_access(served, default));
             binary.active_text = text(P::ACTIVE_TEXT);
             binary.inactive_text = text(P::INACTIVE_TEXT);
+            binary.polarity = match read(P::POLARITY) {
+                Some(PropertyValue::Enumerated(raw)) => Some(Polarity::from_raw(raw)),
+                _ => None,
+            };
             PointKind::Binary(binary)
         }
         Family::MultiState => {
@@ -330,6 +335,11 @@ fn an_absent_field_reads_back_as_the_objects_default() {
                 Binary::new(unset_default()),
             ),
             Point::new(
+                oid(ObjectType::BINARY_INPUT, 7),
+                "bi",
+                Binary::new(Access::ReadOnly),
+            ),
+            Point::new(
                 oid(ObjectType::MULTI_STATE_OUTPUT, 7),
                 "mso",
                 MultiState::new(2, unset_default()),
@@ -355,6 +365,10 @@ fn an_absent_field_reads_back_as_the_objects_default() {
     });
     binary.active_text = Some("Active".into());
     binary.inactive_text = Some("Inactive".into());
+    // A Binary Input without a Polarity has NORMAL.
+    let mut input = Binary::new(Access::ReadOnly).with_polarity(Polarity::NORMAL);
+    input.active_text = Some("Active".into());
+    input.inactive_text = Some("Inactive".into());
     let multi_state = MultiState::new(
         2,
         Access::Commandable {
@@ -380,6 +394,11 @@ fn an_absent_field_reads_back_as_the_objects_default() {
             oid(ObjectType::BINARY_VALUE, 7),
             "bv",
             PointKind::Binary(binary),
+        ),
+        (
+            oid(ObjectType::BINARY_INPUT, 7),
+            "bi",
+            PointKind::Binary(input),
         ),
         (
             oid(ObjectType::MULTI_STATE_OUTPUT, 7),
@@ -533,6 +552,51 @@ fn the_host_sets_runtime_state_before_serving() {
         input.read_property(P::OUT_OF_SERVICE, None).unwrap(),
         PropertyValue::Boolean(true)
     );
+}
+
+/// The list's Polarity is in force from the build (#2595): a reversed
+/// Input reads an OFF input as ACTIVE, and a reversed Output drives its
+/// relinquished ACTIVE as OFF; without one both are NORMAL.
+#[test]
+fn a_built_input_and_output_apply_the_lists_polarity() {
+    use crate::traits::LocalInputValue::PhysicalInput;
+    let input = |instance| oid(ObjectType::BINARY_INPUT, instance);
+    let output = |instance| oid(ObjectType::BINARY_OUTPUT, instance);
+    let active = Access::Commandable {
+        relinquish_default: Some(BinaryPV::ACTIVE),
+    };
+    let reverse = Polarity::REVERSE;
+    let points = vec![
+        Point::new(
+            input(1),
+            "contact",
+            Binary::new(Access::ReadOnly).with_polarity(reverse),
+        ),
+        Point::new(input(2), "plain", Binary::new(Access::ReadOnly)),
+        Point::new(
+            output(1),
+            "relay",
+            Binary::new(active).with_polarity(reverse),
+        ),
+        Point::new(output(2), "fan", Binary::new(active)),
+    ];
+    let mut database =
+        build_database(PointList::new(DeviceInfo::new(1001), points), &identity()).unwrap();
+    for (instance, on, expected) in [(1, false, 1), (1, true, 0), (2, true, 1), (2, false, 0)] {
+        let object = database.get_mut(&input(instance)).unwrap();
+        object
+            .local_input()
+            .expect("a Binary Input takes its physical input")
+            .apply_local_input(PhysicalInput(on))
+            .unwrap();
+        assert_eq!(
+            object.read_property(P::PRESENT_VALUE, None).unwrap(),
+            PropertyValue::Enumerated(expected),
+            "BI-{instance} reading {on}"
+        );
+    }
+    assert_eq!(database.physical_output(&output(1)), Some(false));
+    assert_eq!(database.physical_output(&output(2)), Some(true));
 }
 
 /// The application commands a built Output at a priority with a local

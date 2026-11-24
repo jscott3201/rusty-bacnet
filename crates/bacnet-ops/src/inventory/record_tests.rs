@@ -146,6 +146,38 @@ fn texts_are_exact_and_values_are_named() {
     assert_eq!(value.text, "active (On )", "cleaned for display");
 }
 
+/// Polarity is a problem when a Binary Input or Output lacks it, whatever
+/// the error, or gives a value that isn't an Enumerated, and the field
+/// stays empty.
+#[test]
+fn a_missing_polarity_is_a_problem_where_the_type_has_one() {
+    for object_type in [ObjectType::BINARY_INPUT, ObjectType::BINARY_OUTPUT] {
+        let read = of(object_type, vec![refused(P::POLARITY)]);
+        assert_eq!(read.problems.len(), 1, "{read:?}");
+        assert_eq!(read.problems[0].property, P::POLARITY);
+        assert!(read.polarity.is_none());
+        let read = of(object_type, vec![denied(P::POLARITY)]);
+        assert_eq!(read.problems[0].property, P::POLARITY);
+        let read = of(
+            object_type,
+            vec![row(P::POLARITY, PropertyValue::Enumerated(1))],
+        );
+        assert!(read.problems.is_empty(), "{read:?}");
+        let polarity = read.polarity.unwrap();
+        assert_eq!(polarity.text, "reverse");
+        let read = of(
+            object_type,
+            vec![row(P::POLARITY, PropertyValue::Real(1.0))],
+        );
+        assert!(read.polarity.is_none(), "{read:?}");
+        let said = read.problem(P::POLARITY).map(ToString::to_string);
+        assert_eq!(said.as_deref(), Some("not an Enumerated"));
+    }
+    // A Binary Value has no Polarity: one it calls unknown is no problem.
+    let read = of(ObjectType::BINARY_VALUE, vec![refused(P::POLARITY)]);
+    assert!(read.problems.is_empty() && read.polarity.is_none());
+}
+
 /// Relinquish_Default is a problem when an output lacks it, and absent
 /// without one when a value does; Present_Value and Status_Flags are
 /// problems when a type whose table requires them lacks them, and absent

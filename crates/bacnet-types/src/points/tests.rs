@@ -1,7 +1,7 @@
 //! The point-list constructors (#2445): `new` leaves every optional
 //! property out, and each `with_*` sets exactly its own.
 use super::*;
-use crate::enums::ObjectType;
+use crate::enums::{ObjectType, Polarity};
 
 fn analog_input() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap()
@@ -19,7 +19,10 @@ fn new_leaves_every_optional_property_out() {
         (None, None, None)
     );
     let binary = Binary::new(Access::Writable);
-    assert_eq!((binary.active_text, binary.inactive_text), (None, None));
+    assert_eq!(
+        (binary.active_text, binary.inactive_text, binary.polarity),
+        (None, None, None)
+    );
     let multi_state = MultiState::new(3, Access::ReadOnly);
     assert!(multi_state.state_texts.is_empty());
     let integer = Integer::new(EngineeringUnits::NO_UNITS, Access::Writable);
@@ -61,9 +64,17 @@ fn each_with_sets_its_own_field() {
 
     let binary = Binary::new(Access::ReadOnly)
         .with_active_text("On")
-        .with_inactive_text("Off");
+        .with_inactive_text("Off")
+        .with_polarity(Polarity::REVERSE);
     assert_eq!(binary.active_text.as_deref(), Some("On"));
     assert_eq!(binary.inactive_text.as_deref(), Some("Off"));
+    assert_eq!(binary.polarity, Some(Polarity::REVERSE));
+    // `with_polarity` is const, so a `const` Binary can carry one.
+    const CONTACT: Binary = Binary::new(Access::ReadOnly).with_polarity(Polarity::REVERSE);
+    assert_eq!(
+        (CONTACT.polarity, CONTACT.active_text),
+        (Some(Polarity::REVERSE), None)
+    );
 
     let texts: Vec<String> = vec!["Off".into(), "Low".into(), "High".into()];
     let multi_state = MultiState::new(3, Access::Writable).with_state_texts(texts.clone());

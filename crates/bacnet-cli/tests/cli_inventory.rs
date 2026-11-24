@@ -111,7 +111,8 @@ async fn the_json_is_the_whole_inventory() {
 
 /// `--values` adds each object's Present_Value and Status_Flags in the
 /// same requests, the text naming units; `--types` narrows the objects
-/// read; `--settings` adds the relinquish default.
+/// read; `--settings` adds the relinquish default and a binary input's or
+/// output's Polarity.
 #[tokio::test]
 async fn values_types_and_settings() {
     let (mut server, device) = server().await;
@@ -135,6 +136,37 @@ async fn values_types_and_settings() {
     let json: Value = serde_json::from_str(&stdout(&inventory(&args).await)).unwrap();
     assert_eq!(json["points"][0]["relinquish_default"]["decoded"], 0.0);
     assert!(json["points"][0]["present_value"].is_null());
+
+    // A binary input's and output's Polarity by name; a binary value has
+    // none, and that is no problem. The table gives it a column.
+    let args = [
+        target.as_str(),
+        "--types",
+        "bi,bo,bv",
+        "--settings",
+        "--json",
+    ];
+    let json: Value = serde_json::from_str(&stdout(&inventory(&args).await)).unwrap();
+    let points = json["points"].as_array().unwrap();
+    assert_eq!(points.len(), 3);
+    for point in &points[..2] {
+        assert_eq!(point["polarity"]["value"], "normal", "{point}");
+        assert_eq!(point["polarity"]["decoded"]["name"], "normal", "{point}");
+    }
+    assert!(points[2]["polarity"].is_null(), "{}", points[2]);
+    assert_eq!(points[2]["problems"], serde_json::json!([]));
+    let args = [
+        target.as_str(),
+        "--types",
+        "bi",
+        "--settings",
+        "--format",
+        "table",
+    ];
+    let text = stdout(&inventory(&args).await);
+    assert!(text.contains("Polarity"), "{text}");
+    let row = text.lines().find(|line| line.contains("binary-input:1"));
+    assert!(row.is_some_and(|row| row.contains("normal")), "{text}");
     relay.abort();
     server.stop().await.unwrap();
 }
@@ -151,11 +183,11 @@ async fn the_csv_is_one_row_an_object() {
         lines[0],
         "device,device_instance,object,name,description,units,state_texts,number_of_states,\
          commandable,relinquish_default,cov_increment,min_present_value,max_present_value,\
-         present_value,status_flags,problems"
+         polarity,present_value,status_flags,problems"
     );
     assert_eq!(lines.len(), 1 + 11);
     let zone = format!(
-        "{target},1234,analog-input:1,Zone Temp,,degrees-fahrenheit,,,false,,,,,72.5 °F,\
+        "{target},1234,analog-input:1,Zone Temp,,degrees-fahrenheit,,,false,,,,,,72.5 °F,\
          in-alarm | fault | out-of-service,"
     );
     assert_eq!(lines[2], zone);

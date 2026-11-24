@@ -103,11 +103,11 @@ pub fn inventory_options(types: Option<Vec<ObjectType>>) -> Result<InventoryOpti
     Ok(InventoryOptions::new().with_types(types))
 }
 
-/// The options of an inventory that reads everything a [`PointList`]
+/// The options of an inventory that reads every field a [`PointList`]
 /// holds: every one of the [`EXPORTED_TYPES`] with its settings
-/// (COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default),
-/// and the Device object, whose record gives the list's Device its
-/// Description.
+/// (COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default, a
+/// Binary Input's or Output's Polarity), and the Device object, whose
+/// record gives the list's Device its Description.
 pub fn point_list_options() -> InventoryOptions {
     let types = EXPORTED_TYPES.into_iter().chain([ObjectType::DEVICE]);
     InventoryOptions::new()
@@ -157,13 +157,17 @@ impl Model {
     /// list left out reads back as the object's default instead: an empty
     /// Description (the Device's too), COV_Increment 0, "Active" and
     /// "Inactive", "State 1" to "State N", the object's own relinquish
-    /// default, and the identity's name for the Device.
+    /// default, NORMAL for a Binary Input's or Output's Polarity, and the
+    /// identity's name for the Device. Built again, such a list makes the
+    /// same objects. A Polarity the device didn't give stays `None`, which
+    /// a builder makes NORMAL; the record names the problem.
     ///
     /// A list read from another device need not build: it can hold what
     /// `bacnet_objects::points::build_database` refuses, such as State_Text
     /// with other than one label per state, a Real that isn't finite,
-    /// Min_Pres_Value above Max_Pres_Value, or a multi-state relinquish
-    /// default that names no state. The builder stops at the first refusal.
+    /// Min_Pres_Value above Max_Pres_Value, a multi-state relinquish
+    /// default that names no state, or a Polarity other than NORMAL and
+    /// REVERSE. The builder stops at the first refusal.
     pub fn point_list(&self) -> PointList {
         PointList::new(self.device.clone(), self.points().cloned().collect())
     }
