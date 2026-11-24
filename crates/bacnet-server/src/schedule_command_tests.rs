@@ -161,9 +161,6 @@ async fn tick_schedules_dropped_mid_run_ends_the_command_run_unsuccessful() {
     tokio::time::timeout(Duration::from_secs(1), tick_schedules(&db))
         .await
         .unwrap_err();
-    // A task on the runtime was making the run, waiting out the delay: it
-    // ends the run when it next runs (#2781).
-    tokio::task::yield_now().await;
     assert_eq!(slot8(&db, ao(1)).await, PropertyValue::Real(50.0));
     assert_eq!(state(&db, cmd(1)).await, (false, false, vec![true, false]));
     assert_eq!(

@@ -73,9 +73,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// follows the notifications, waiting for them at most the APDU timeout
     /// (#2573). The server serves requests by then, so a task of its own
     /// makes those writes while `start` waits for it: a start left unpolled
-    /// holds up none of those requests (#2781). Dropped part way, the start
-    /// drops the server, and that task with it once it next yields, after
-    /// the write it is making at most.
+    /// holds up none of those requests (#2781). So a request the server
+    /// already has may be answered before those writes are made: on a
+    /// multi-thread runtime, as before, and now on a current-thread one too.
+    /// Dropped part way, the start drops the server, and that task with it
+    /// once it next yields, after the write it is making at most.
     ///
     /// A refusal, a transport that won't start among them, hands back the
     /// database ([`StartError`]).

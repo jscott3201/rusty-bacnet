@@ -126,8 +126,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // included (#2781): the set closed above admits no DCC or
                 // ReinitializeDevice request, the only requests that take
                 // the slot, and aborted those it held; dispatch never takes
-                // it; and the timer, aborted before the join, gives up its
-                // own wait for the slot without the guard.
+                // it. The timer, aborted once stop holds the slot, gives up
+                // its own wait for it without the guard. One queued ahead of
+                // stop, as an aborted request lets go, takes the slot first
+                // and makes its expiry, as it would have a moment before;
+                // stop then joins a timer that has ended. A drop's join
+                // (`join_released`, below) meets the same order.
                 let mut timer = self.dcc_timer.lock().await;
                 super::dcc_timer::cancel(&mut timer).await;
             }
@@ -420,7 +424,9 @@ async fn join_released(
         super::request_tasks::RequestTasks::observe(Some(result));
     }
     // No request is left to hold the slot. The guard goes before the join,
-    // as the timer may be queued for the slot itself.
+    // as the timer may be queued for the slot itself. A timer queued ahead of
+    // this wait, as an aborted request let go, makes its expiry first, and
+    // the join finds it ended (#2781).
     let timer = dcc_timer.lock().await.take();
     if let Some(timer) = timer {
         timer.abort();

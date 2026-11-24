@@ -9,12 +9,20 @@
 //! COV table, notification path or task set either, so nothing is reported
 //! and the runs go on inside one future: a run that writes another
 //! Command's or Channel's Present_Value starts that run beside it, and the
-//! future ends once every run has. `tick_schedules` polls it in its
-//! caller's task until it has to wait, then in a task on the runtime
-//! (#2781).
+//! future ends once every run has.
+//!
+//! `tick_schedules` polls that future in its caller's task until it has to
+//! wait, then in a task on the runtime, so no wait of a run's is left in a
+//! caller that stops polling (#2781). The future stays the caller's all
+//! the same ([`SharedRuns`]): the task polls it through a slot the caller
+//! empties as it is dropped, so a dropped tick ends its runs in the drop,
+//! as it did when they lived in the caller's own future.
 
-use std::future::Future;
-use std::sync::Arc;
+use std::future::{Future, poll_fn};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, TryLockError};
+use std::task::Poll;
 
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::command::CommandRun;
@@ -29,19 +37,95 @@ use futures_util::stream::FuturesUnordered;
 use tokio::sync::{RwLock, mpsc};
 
 use super::{RunHost, TakenRuns, end_when_free, execute};
+use crate::caller_waits::HeldDatabase;
 use crate::server::RemoteRequestError;
 use bacnet_device_core::write::Unfinished;
 
-/// Run `runs`, and any runs their writes start, to their ends.
+/// The runs a tick started, shared by its caller, which owns them, and the
+/// task that makes them once one has to wait (#2781).
+///
+/// The task polls them through [`Self::driver`], holding the slot's lock
+/// for one poll at a time; a poll waits for nothing but what a run's write
+/// waited for in the caller before (a durable target's save, say). Dropped,
+/// this takes the runs out of the slot without waiting for the lock and
+/// drops them, ending each unfinished one as unsuccessful as their own
+/// future's drop always has.
+/// Only a poll in progress on another thread as it is dropped keeps them:
+/// they write nothing more once this is dropped, but for a write that poll
+/// had begun, and end once it returns, when the task sees its caller gone
+/// and lets go of the slot. Whatever drops them, the database handle they
+/// hold goes off the runtime (#1513).
+pub(crate) struct SharedRuns {
+    slot: Slot,
+    gone: Arc<AtomicBool>,
+}
+
+/// The runs' future, while neither its end nor its caller's drop has taken
+/// it.
+pub(crate) type Slot = Arc<Mutex<Option<Pin<Box<dyn Future<Output = ()> + Send>>>>>;
+
+impl SharedRuns {
+    /// Run `runs`, and any runs their writes start, on `db`.
+    pub(crate) fn new(db: HeldDatabase, runs: TakenRuns) -> Self {
+        let gone = Arc::new(AtomicBool::new(false));
+        let stop = Arc::clone(&gone);
+        let runs: Pin<Box<dyn Future<Output = ()> + Send>> =
+            Box::pin(async move { run_unattached(&db, runs, &stop).await });
+        Self {
+            slot: Arc::new(Mutex::new(Some(runs))),
+            gone,
+        }
+    }
+
+    /// Poll the runs until they end, or until the caller has taken them.
+    pub(crate) fn driver(&self) -> impl Future<Output = ()> + Send + Sync + 'static {
+        let slot = Arc::clone(&self.slot);
+        poll_fn(move |cx| {
+            let mut runs = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(future) = runs.as_mut() else {
+                return Poll::Ready(());
+            };
+            let polled = future.as_mut().poll(cx);
+            if polled.is_ready() {
+                *runs = None;
+            }
+            polled
+        })
+    }
+
+    /// The slot, for a test to stand for a poll in progress.
+    #[cfg(test)]
+    pub(crate) fn slot(&self) -> Slot {
+        Arc::clone(&self.slot)
+    }
+}
+
+impl Drop for SharedRuns {
+    fn drop(&mut self) {
+        self.gone.store(true, Ordering::Release);
+        let runs = match self.slot.try_lock() {
+            Ok(mut runs) => runs.take(),
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().take(),
+            // A poll in progress: the task drops them once it returns.
+            Err(TryLockError::WouldBlock) => None,
+        };
+        // Dropped with the lock let go: ending them takes nothing of it.
+        drop(runs);
+    }
+}
+
+/// Run `runs`, and any runs their writes start, to their ends, making no
+/// write once `gone` is set.
 ///
 /// Dropping the returned future first, unpolled included, ends each
 /// unfinished run as unsuccessful, so none is left busy: a run being made
 /// through its [`execute`] owner, and one queued but not yet started through
 /// the queue's own guard.
-pub(crate) fn run_unattached(
-    db: &Arc<RwLock<ObjectDatabase>>,
+fn run_unattached<'a>(
+    db: &'a Arc<RwLock<ObjectDatabase>>,
     runs: TakenRuns,
-) -> impl Future<Output = ()> + Send + '_ {
+    gone: &'a AtomicBool,
+) -> impl Future<Output = ()> + Send + 'a {
     let (started, queued) = mpsc::unbounded_channel();
     runs.hand_over(|run| {
         // The receiver is in hand.
@@ -49,7 +133,7 @@ pub(crate) fn run_unattached(
     });
     let mut queue = Queue { db, queued };
     async move {
-        let host = Unattached { db, started };
+        let host = Unattached { db, started, gone };
         let mut running = FuturesUnordered::new();
         loop {
             // A run is only started from inside another's write, so once none
@@ -90,6 +174,8 @@ impl Drop for Queue<'_> {
 struct Unattached<'a> {
     db: &'a Arc<RwLock<ObjectDatabase>>,
     started: mpsc::UnboundedSender<CommandRun>,
+    /// Set once the tick that started the runs has been dropped.
+    gone: &'a AtomicBool,
 }
 
 impl RunHost for Unattached<'_> {
@@ -101,6 +187,13 @@ impl RunHost for Unattached<'_> {
         let request = request(command)?;
         let runs = {
             let mut db = self.db.write().await;
+            // The tick was dropped while a poll of the task's on another
+            // thread made the runs: write nothing more, and wait here for
+            // the task to drop the runs as that poll returns (#2781).
+            if self.gone.load(Ordering::Acquire) {
+                drop(db);
+                return std::future::pending().await;
+            }
             // Under the write's own guard: a run whose object was deleted
             // meanwhile writes nothing (#2265).
             if !super::is_current(&db, run) {

@@ -56,7 +56,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::command_lists::TakenRuns;
+use crate::command_lists::{SharedRuns, TakenRuns};
 use crate::committed_cov::{BackgroundCommit, CommitTransition, CommittedCov};
 use crate::cov::CovSubscriptionTable;
 use bacnet_device_core::write::local;
@@ -100,7 +100,8 @@ pub(crate) fn schedule_instant(frame: ClockFrame) -> Option<(SpecificDate, Time)
 /// run too (#1178, #1151). A
 /// run that would start an object already above it is ended as failed rather
 /// than started. Dropping the future first ends each unfinished run as
-/// unsuccessful, so no Command is left in process and no Channel IN_PROGRESS.
+/// unsuccessful in the drop, so no Command is left in process and no
+/// Channel IN_PROGRESS, but for the case the Cancellation section names.
 ///
 /// # Cancellation
 ///
@@ -115,10 +116,13 @@ pub(crate) fn schedule_instant(frame: ClockFrame) -> Option<(SpecificDate, Time)
 /// [`write_local`](crate::server::BACnetServer::write_local)'s Cancellation
 /// section describes for a local call (#2772): dropped before that task
 /// holds the guard, it makes no pass; dropped after, it may still make the
-/// whole pass, never part of it, and the runs end unsuccessful. Runs a task
-/// was making end when that task next runs, not inside the drop, so a
-/// tick made at once after the drop may find a Command still in process.
-/// Outside a runtime it waits in its caller's task.
+/// whole pass, never part of it. Its runs end in the drop all the same,
+/// even those a task was making, unless that task is in the middle of a
+/// poll for the call on another thread as it is dropped: on a multi-thread
+/// runtime, what that poll does still happens, a write it began may land
+/// after the drop, and the runs end as it returns, so a tick made at once
+/// may find a Command still in process. Outside a runtime it waits in its
+/// caller's task.
 pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
     use crate::caller_waits::{HeldDatabase, for_caller, on_runtime};
     let take = HeldDatabase::new(Arc::clone(db)).write_owned();
@@ -135,10 +139,11 @@ pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
     if runs.is_empty() {
         return;
     }
-    let held = HeldDatabase::new(Arc::clone(db));
-    let run = async move { crate::command_lists::run_unattached(&held, runs).await };
-    // `None`: its runtime dropped the task, which ended the runs it held.
-    let _ = for_caller(on_runtime, run, |()| ()).await;
+    // The call's own: dropped with it, this ends the runs in the drop.
+    let runs = SharedRuns::new(HeldDatabase::new(Arc::clone(db)), runs);
+    // `None`: its runtime dropped the task; `runs` ends what is left as it
+    // goes.
+    let _ = for_caller(on_runtime, runs.driver(), |()| ()).await;
 }
 
 /// Every Schedule's pass under `db_w`, the guard on `db`, and the Command

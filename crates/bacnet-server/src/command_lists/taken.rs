@@ -3,7 +3,7 @@
 //!
 //! A run is taken under the guard that committed the Present_Value write
 //! that queued it, but its owner (a task in the server's request set, or
-//! [`run_unattached`](super::run_unattached)'s queue) takes it up only once
+//! [`SharedRuns`](super::SharedRuns)' queue) takes it up only once
 //! the writer's COV, event and Schedule passes are done. A future cancelled
 //! in between, a `write_local` under a timeout for one, would drop the run
 //! with nothing to end it and leave its object busy. [`TakenRuns`] holds the

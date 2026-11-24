@@ -67,7 +67,11 @@ async fn refused_run_dropped_while_waiting_for_the_database_still_ends() {
     let db = Arc::new(RwLock::new(objects));
     let runs = take(&db, ch1).await;
     let (started, _queued) = mpsc::unbounded_channel();
-    let host = Unattached { db: &db, started };
+    let host = Unattached {
+        db: &db,
+        started,
+        gone: &AtomicBool::new(false),
+    };
     // CH-1's run is queued by CH-1's own write, so it's refused; the wait
     // for the database to end it is cut short.
     let reader = db.read().await;
@@ -115,7 +119,11 @@ async fn refused_command_run_marks_every_command_unsuccessful() {
     let db = Arc::new(RwLock::new(objects));
     let runs = take(&db, cmd1).await;
     let (started, _queued) = mpsc::unbounded_channel();
-    let host = Unattached { db: &db, started };
+    let host = Unattached {
+        db: &db,
+        started,
+        gone: &AtomicBool::new(false),
+    };
     assert!(admit(&host, &parent(cmd1), runs, |_| {}).await.is_err());
     let objects = db.read().await;
     for property in [
@@ -183,7 +191,7 @@ async fn unattached_channel_member_in_another_device_fails_unsent() {
     write_pv(&mut objects, ch1, PropertyValue::Real(4.0));
     let db = Arc::new(RwLock::new(objects));
     let runs = take(&db, ch1).await;
-    run_unattached(&db, runs).await;
+    run_unattached(&db, runs, &AtomicBool::new(false)).await;
     let objects = db.read().await;
     assert_eq!(
         read(&objects, ch1, PropertyIdentifier::WRITE_STATUS),
@@ -231,7 +239,11 @@ async fn a_write_for_a_stale_run_is_refused_under_its_guard() {
         .command_generation();
     let db = Arc::new(RwLock::new(objects));
     let (started, _queued) = mpsc::unbounded_channel();
-    let host = Unattached { db: &db, started };
+    let host = Unattached {
+        db: &db,
+        started,
+        gone: &AtomicBool::new(false),
+    };
     let command = BACnetActionCommand {
         device_identifier: None,
         object_identifier: ao1,

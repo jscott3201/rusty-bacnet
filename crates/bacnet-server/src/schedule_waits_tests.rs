@@ -255,3 +255,6 @@ async fn the_last_handle_a_ticks_task_holds_goes_off_the_runtime() {
         .expect("the database was dropped");
     assert_ne!(thread, std::thread::current().id());
 }
+
+#[path = "schedule_drop_tests.rs"]
+mod drops;
