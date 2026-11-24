@@ -19,6 +19,8 @@ const EVENT_NOTIFICATION: &[u8] = &[0x00, 0x05, 0x23, 0x02];
 /// A first segment of a ConfirmedCOVNotification: the service choice sits
 /// after the sequence number and window size.
 const SEGMENTED_COV_NOTIFICATION: &[u8] = &[0x0c, 0x05, 0x24, 0x00, 0x01, 0x01, 0xaa];
+/// A first segment of a ConfirmedEventNotification.
+const SEGMENTED_EVENT_NOTIFICATION: &[u8] = &[0x0c, 0x05, 0x25, 0x00, 0x01, 0x02, 0xaa];
 
 struct Seated {
     endpoint: EndpointIngress<TestTransport>,
@@ -123,6 +125,14 @@ async fn beside_a_server_only_its_own_notifications_are_the_seats() {
     assert!(served.reply_tx.is_some());
     assert_eq!(copy.apdu.as_ref(), EVENT_NOTIFICATION);
     assert!(copy.reply_tx.is_none());
+    assert_quiet(&mut seated);
+
+    // Of one in segments the client hears nothing segment by segment: the
+    // server hands it the whole request once reassembled (#2743).
+    let _reply = inject_expecting_reply(&seated.link, SEGMENTED_EVENT_NOTIFICATION).await;
+    let served = receive(&mut seated.ingress.inbound_requests).await;
+    assert_eq!(served.apdu.as_ref(), SEGMENTED_EVENT_NOTIFICATION);
+    assert!(served.reply_tx.is_some());
     assert_quiet(&mut seated);
 }
 

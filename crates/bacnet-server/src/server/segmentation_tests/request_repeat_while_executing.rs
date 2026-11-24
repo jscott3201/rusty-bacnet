@@ -114,6 +114,85 @@ impl Rig {
     fn notes(&self) -> usize {
         self.server.confirmed_request_tracker.segmented_notes()
     }
+
+    /// Segment `seq` of a ReadProperty in `chunks`, at `window`, whose answer
+    /// comes in segments: at a 50-octet APDU the long Present_Value
+    /// [`long_value`] writes doesn't fit one.
+    async fn read_segment(&self, invoke_id: u8, seq: usize, window: u8, chunks: &[Vec<u8>]) {
+        let request = ConfirmedRequestPdu {
+            segmented: true,
+            more_follows: seq + 1 < chunks.len(),
+            segmented_response_accepted: true,
+            max_segments: Some(16),
+            max_apdu_length: 50,
+            invoke_id,
+            sequence_number: Some(seq as u8),
+            proposed_window_size: Some(window),
+            service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+            service_request: Bytes::copy_from_slice(&chunks[seq]),
+        };
+        let apdu = Apdu::ConfirmedRequest(request);
+        inject_routed_apdu(&self.incoming, &self.router, &self.peer, &apdu).await;
+    }
+
+    /// Every segment of that ReadProperty at a window of two, back to back:
+    /// queued together, before the server takes any.
+    async fn read_request(&self, invoke_id: u8, chunks: &[Vec<u8>]) {
+        for seq in 0..chunks.len() {
+            self.read_segment(invoke_id, seq, 2, chunks).await;
+        }
+    }
+
+    /// Take a segmented answer to `invoke_id`, acknowledging every segment
+    /// it has, the last one too; returns how many there were. Nothing is
+    /// awaited after the last acknowledgment is queued.
+    async fn take_segmented_answer(&mut self, invoke_id: u8) -> u8 {
+        let mut sequence = 0;
+        loop {
+            let (reply, _) = self.reply().await;
+            let Apdu::ComplexAck(segment) = reply else {
+                panic!("expected a segment of the answer, got {reply:?}");
+            };
+            assert!(segment.segmented);
+            assert_eq!(
+                (segment.invoke_id, segment.sequence_number),
+                (invoke_id, Some(sequence))
+            );
+            let ack = Apdu::SegmentAck(segment_ack(invoke_id, false, sequence));
+            inject_routed_apdu(&self.incoming, &self.router, &self.peer, &ack).await;
+            sequence += 1;
+            if !segment.more_follows {
+                return sequence;
+            }
+        }
+    }
+}
+
+/// The CSV object's Present_Value, long enough that a ReadProperty of it at
+/// a 50-octet APDU is answered in segments; and that ReadProperty, in two.
+async fn long_value(server: &BACnetServer<TestTransport>) -> Vec<Vec<u8>> {
+    let oid = ObjectIdentifier::new(ObjectType::CHARACTERSTRING_VALUE, 1).unwrap();
+    server
+        .database()
+        .write()
+        .await
+        .get_mut(&oid)
+        .unwrap()
+        .write_property(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            PropertyValue::CharacterString("v".repeat(300)),
+            None,
+        )
+        .unwrap();
+    let mut read = BytesMut::new();
+    bacnet_services::read_property::ReadPropertyRequest {
+        object_identifier: oid,
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: None,
+    }
+    .encode(&mut read);
+    split_into(&read, 2)
 }
 
 #[tokio::test(start_paused = true)]
@@ -310,5 +389,62 @@ async fn an_invoke_id_reused_while_its_request_executes_opens_nothing() {
     assert!(matches!(answer, Apdu::SimpleAck(ack) if ack.invoke_id == 5));
     rig.quiet().await;
     assert_eq!(present_value(&rig.server).await, "the first request");
+    rig.server.stop().await.unwrap();
+}
+
+/// A segmented answer's transaction ends at its final Segment-ACK, in the
+/// order frames arrive (Clause 5.4.5.4): the requester may reuse the invoke
+/// ID once it has sent that acknowledgment, so the same request sent again
+/// right behind it is a new one. Its segment zero is acknowledged as such,
+/// not with the last acknowledgment of the request just answered, and it is
+/// executed and answered again, not discarded as a duplicate. The final
+/// acknowledgment and both segments are queued before the server runs, so
+/// on this single-threaded runtime the dispatch loop takes all three in one
+/// turn, ahead of the sending task the acknowledgment wakes.
+#[tokio::test(start_paused = true)]
+async fn the_same_request_right_behind_the_final_ack_of_its_answer_runs_again() {
+    let mut rig = Rig::start().await;
+    let chunks = long_value(&rig.server).await;
+    for seq in 0..2 {
+        rig.read_segment(81, seq, 1, &chunks).await;
+        rig.expect_ack(81, seq as u8, 1, "in order").await;
+    }
+    let segments = rig.take_segmented_answer(81).await;
+    assert!(segments > 1);
+    // Right behind the final acknowledgment, the whole request at a window
+    // of two.
+    rig.read_request(81, &chunks).await;
+    rig.expect_ack(81, 0, 2, "segment zero of the request sent again")
+        .await;
+    rig.expect_ack(81, 1, 2, "its final segment").await;
+    assert_eq!(rig.take_segmented_answer(81).await, segments);
+    rig.quiet().await;
+    assert_eq!(rig.notes(), 0);
+    rig.server.stop().await.unwrap();
+}
+
+/// So does a requester's Abort of the answer (Clause 5.4.5.4): the same
+/// request queued right behind it is new, and answered.
+#[tokio::test(start_paused = true)]
+async fn the_same_request_right_behind_an_abort_of_its_answer_runs_again() {
+    let mut rig = Rig::start().await;
+    let chunks = long_value(&rig.server).await;
+    rig.read_request(81, &chunks).await;
+    rig.expect_ack(81, 0, 2, "segment zero").await;
+    rig.expect_ack(81, 1, 2, "the final segment").await;
+    let (reply, _) = rig.reply().await;
+    assert!(matches!(reply, Apdu::ComplexAck(ref s) if s.sequence_number == Some(0)));
+    let abort = Apdu::Abort(AbortPdu {
+        sent_by_server: false,
+        invoke_id: 81,
+        abort_reason: AbortReason::OTHER,
+    });
+    inject_routed_apdu(&rig.incoming, &rig.router, &rig.peer, &abort).await;
+    rig.read_request(81, &chunks).await;
+    rig.expect_ack(81, 0, 2, "segment zero of the request sent again")
+        .await;
+    rig.expect_ack(81, 1, 2, "its final segment").await;
+    assert!(rig.take_segmented_answer(81).await > 1);
+    rig.quiet().await;
     rig.server.stop().await.unwrap();
 }

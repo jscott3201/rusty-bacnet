@@ -704,7 +704,10 @@ pub(super) fn seated_client_answers(request: &ConfirmedRequestPdu) -> bool {
 
 /// A confirmed request that reached a seated client beside a server role and
 /// is the server's to answer. A ConfirmedEventNotification is published to
-/// the client's subscribers; the client sends nothing either way.
+/// the client's subscribers: the copy ingress makes of one that comes whole,
+/// or the whole one the server hands on once it has reassembled its segments
+/// (#2743). A segment alone is never published. The client sends nothing
+/// either way.
 pub(super) fn heard_for_the_server(
     event_tx: &broadcast::Sender<ReceivedEventNotification>,
     received: &ReceivedApdu,

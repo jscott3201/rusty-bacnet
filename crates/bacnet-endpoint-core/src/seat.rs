@@ -25,8 +25,11 @@
 //!   or ConfirmedCOVNotificationMultiple goes to the client seat instead,
 //!   with its reply authority. A
 //!   ConfirmedEventNotification goes to the server role, and a copy with no
-//!   reply authority to the client seat. On an endpoint with no server role
-//!   every Confirmed-Request goes to the client seat;
+//!   reply authority to the client seat. One that comes in segments goes to
+//!   the server alone, segment by segment: once the server has reassembled
+//!   it, it hands the client the whole request ([`ClientCopies`], #2743), a
+//!   copy as ingress makes of one that comes whole. On an endpoint with no
+//!   server role every Confirmed-Request goes to the client seat;
 //! - an answer (Simple-ACK, Complex-ACK and its segments, Error, Reject, and
 //!   an Abort or Segment-ACK sent by the answering side) goes to the seat of
 //!   the role [`OutboundTransactionCoordinator::holder_of_source`] names for
@@ -100,7 +103,7 @@
 //! hold: it has a graceful stop of its own, best run before the endpoint's.
 
 use std::any::Any;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use bacnet_network::layer::{NetworkLayer, ReceivedApdu, ReceivedNetworkControl};
@@ -109,6 +112,11 @@ use bacnet_types::error::Error;
 use tokio::sync::{Notify, mpsc};
 
 use crate::coordinator::OutboundTransactionCoordinator;
+
+#[path = "seat_copies.rs"]
+mod copies;
+pub use copies::{ClientCopies, MAX_REASSEMBLED_COPY_OCTETS};
+pub(crate) use copies::{CopyBudget, ReservedCopy};
 
 /// APDUs a client seat queues by default before ingress drops for it. A
 /// Who-Is can bring hundreds of I-Ams at once, and the seat's queue is the
@@ -468,6 +476,10 @@ pub struct ServerSeat<T: TransportPort> {
     /// and its server serves its own Device.
     #[doc(hidden)]
     pub node: Option<NodeDevice>,
+    /// Where the server hands the node's client a request it reassembled
+    /// from segments that the client hears a copy of (#2743).
+    #[doc(hidden)]
+    pub client_copies: ClientCopies,
 }
 
 impl<T: TransportPort> std::fmt::Debug for ServerSeat<T> {
@@ -583,6 +595,9 @@ pub(crate) struct SeatSlot {
     /// By [`Role`].
     counts: [Counts; 2],
     control_full_drops: AtomicU64,
+    /// The octets of the reassembled requests' copies the client seat holds
+    /// (see [`ClientCopies`]).
+    reassembled_octets: Arc<AtomicUsize>,
 }
 
 /// The free slots of a seat of `capacity` that Unconfirmed-Requests leave:
@@ -620,6 +635,7 @@ impl SeatSlot {
             dcc: NodeDcc::default(),
             counts: Default::default(),
             control_full_drops: AtomicU64::new(0),
+            reassembled_octets: Arc::default(),
         });
         (slot, held)
     }
@@ -678,7 +694,7 @@ impl SeatSlot {
     /// Make the server's seat on `network`. One server at a time, as for
     /// the client.
     pub(crate) fn attach_server<T: TransportPort>(
-        &self,
+        self: &Arc<Self>,
         network: Arc<NetworkLayer<T>>,
         coordinator: Arc<OutboundTransactionCoordinator>,
         capacity: usize,
@@ -692,6 +708,7 @@ impl SeatSlot {
             number: self.number.for_seat(Role::Server),
             dcc: self.dcc.claim(),
             node: None,
+            client_copies: ClientCopies(Arc::downgrade(self)),
         })
     }
 
@@ -806,8 +823,14 @@ impl SeatSlot {
     /// [module docs](self)). One that isn't is dropped and counted here,
     /// before any copy is made. An answer is offered as it is.
     pub(crate) fn takes(&self, attached: &Attached, received: &ReceivedApdu) -> bool {
+        self.has_room(attached, received.apdu.first().map(|first| first >> 4))
+    }
+
+    /// [`Self::takes`], for an APDU of `pdu_type`.
+    #[inline]
+    fn has_room(&self, attached: &Attached, pdu_type: Option<u8>) -> bool {
         let capacity = attached.apdus.max_capacity();
-        let floor = match received.apdu.first().map(|first| first >> 4) {
+        let floor = match pdu_type {
             Some(1) => copy_floor(capacity),
             // Too small for three tiers: the server seat's confirmed
             // requests keep the request queue's rule (#2635) and may take

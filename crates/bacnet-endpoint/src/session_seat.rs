@@ -97,11 +97,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// **Who answers what.** Beside a server role the client answers only
     /// the COV notifications of its own subscriptions; the server answers
     /// a ConfirmedEventNotification, and the client still publishes it to
-    /// its `event_notifications()`. Known gap, tracked separately: one that
-    /// comes in segments the server reassembles and answers, and the client
-    /// doesn't publish it. A session with no server role leaves
-    /// the client to answer as a standalone one does, acknowledgment
-    /// included.
+    /// its `event_notifications()`. One that comes in segments the server
+    /// reassembles and answers, and then hands the client whole (#2743), so
+    /// the client publishes it once per transmission either way. A session with no server
+    /// role leaves the client to answer as a standalone one does,
+    /// acknowledgment included.
     ///
     /// **One device.** A DeviceCommunicationControl DISABLE_INITIATION a
     /// full server ([`with_server`](Self::with_server)) accepts binds this client too: its

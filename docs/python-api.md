@@ -7877,8 +7877,9 @@ async with BipEndpoint(1001, interface="192.168.1.10", broadcast_address="192.16
 - **Answers.** Beside the server role, the client answers only the COV
   notifications of its own subscriptions; the server role answers the
   rest. A ConfirmedEventNotification is the server's to acknowledge, and
-  the client publishes a copy to `event_notifications()`, unless it came in
-  segments (known gap, tracked separately).
+  the client publishes a copy to `event_notifications()`; of one that came
+  in segments, the whole notification, once the server has reassembled it
+  (#2743).
 - **SC.** The client starts after the hub link is up, so its
   `connection_events()` begins at that call, after the first `connected`:
   read the link at once with its `connection_status()`, or use the

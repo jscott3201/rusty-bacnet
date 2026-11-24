@@ -109,6 +109,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             execution,
             dcc: node_dcc,
             number: seat_number,
+            client_copies,
         } = match boxed(|| link.start(outputs.db(), &config, audit_routes)).await {
             Ok(started) => started,
             Err(error) => return Err(StartError::new(error, Some(outputs.refuse()))),
@@ -209,6 +210,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 warnings: Arc::default(),
                 config: Arc::clone(&config_dispatch),
                 execution,
+                client_copies,
             }),
             confirmed_request_tracker: Arc::clone(&confirmed_request_tracker),
             clock: clock.clone(),

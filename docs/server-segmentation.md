@@ -65,16 +65,17 @@ not reassembled or executed a second time. That note lives as long as the
 request is pending in the duplicate-request tracker, which keeps a request
 over 64 KiB by its length and a digest of its data rather than the data. It
 ends when the answer is handed to the link, or, for an answer sent in
-segments, at that answer's final acknowledgment; a requester's Abort for
-the invoke ID ends it sooner. After that a segment sent again draws the
-invalid-state Abort above, except segment zero, which opens a fresh
-transfer, as a request sent whole again is executed again:
-the tracker keeps nothing about answered requests. In the moment between
-the hand-off and the answer leaving the link, a repeat can still draw that
-Abort, which on a multi-thread runtime can reach the requester first. A
-request the tracker doesn't follow (past its 256 pending requests, or a
-LifeSafetyOperation, which has its own replay) has no note. This
-workspace's client sends segment zero alone and
+segments, when the server takes that answer's final acknowledgment, before
+the next frame, so a request that reuses the invoke ID right behind it is a
+new one; a requester's Abort for the invoke ID ends it sooner. After that a
+segment sent again draws the invalid-state Abort above, except segment
+zero, which opens a fresh transfer, as a request sent whole again is
+executed again: the tracker keeps nothing about answered requests. In the
+moment between the hand-off and the answer leaving the link, a repeat can
+still draw that Abort, which on a multi-thread runtime can reach the
+requester first. A request the tracker doesn't follow (past its 256 pending
+requests, or a LifeSafetyOperation, which has its own replay) has no note.
+This workspace's client sends segment zero alone and
 waits for its answer, so it sends nothing twice to a server that answers at
 once; a receiver that never answers segment zero alone costs it one segment
 timeout, once (see the client's segmented requests in
@@ -95,7 +96,16 @@ timeout and retries stay the session's. When the Device receives segments, the
 session's client also reassembles a segmented COV notification of either form
 (#2646) with the full server's receiver, acknowledging as the full server
 does, all with the server bit set, and answers the whole notification as one
-that came in one APDU. A standalone client, or one on a session with no
+that came in one APDU. A segmented ConfirmedEventNotification is the full
+server's to reassemble and answer; once it is whole the server hands it to the
+session's client, which publishes it to `event_notifications()` once per
+transmission and answers nothing, as with one that came in one APDU (#2743).
+Such copies hold at most 4 MiB on the client's seat
+(`MAX_REASSEMBLED_COPY_OCTETS`): a copy's share comes back once the client's
+dispatch has decoded it and dropped its octets, and what the client publishes
+to its subscribers is decoded and holds none. A copy past the bound is dropped
+and counted with the client seat's drops, and the server's answer does not
+depend on it. A standalone client, or one on a session with no
 server role, reassembles every segmented confirmed request the same way,
 unless its `ClientConfig::segmentation` receives no segments: it executes a
 notification and rejects any other service as unrecognized, as it does an
