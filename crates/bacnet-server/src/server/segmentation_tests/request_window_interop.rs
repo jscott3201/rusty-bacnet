@@ -1,7 +1,7 @@
 //! Segment zero is acknowledged at once (Clause 5.4.5.1, #2742), whatever
 //! window the requester proposes: a conforming requester sends it alone and
-//! waits (Clause 5.4.4.1). A requester that sends its whole first window
-//! without waiting, as this workspace's client still does, completes too.
+//! waits (Clause 5.4.4.1), as this workspace's client does. A requester
+//! that sends its whole first window without waiting completes too.
 
 use super::*;
 use crate::server::test_transport::StartMode;
@@ -106,17 +106,30 @@ async fn a_requester_that_sends_its_first_window_unasked_still_completes() {
 const SERVER_MAC: &[u8] = &[0x02];
 
 /// A full server whose sends this test reads, and this workspace's client
-/// at the other end of the link, proposing a window of four and sizing its
-/// segments for 480-octet APDUs.
-async fn server_and_client() -> (
+/// at the other end of the link, proposing `window` and sizing its segments
+/// for 480-octet APDUs. The last item is the sequence number of every
+/// segment the server took in, in order.
+async fn server_and_client(
+    window: u8,
+) -> (
     BACnetServer<TestTransport>,
     BACnetClient<LoopbackTransport>,
     SendLog,
+    Arc<std::sync::Mutex<Vec<u8>>>,
 ) {
     let (server_end, client_end) = LoopbackTransport::pair(SERVER_MAC.to_vec(), vec![0x01]);
+    let taken = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = Arc::clone(&taken);
     let transport = TestTransport::builder()
         .inner(server_end)
-        .start(StartMode::Closed)
+        .start(StartMode::Relay(64))
+        .on_inbound(move |frame| {
+            let npdu = decode_npdu(frame.npdu.clone()).unwrap();
+            if let Ok(Apdu::ConfirmedRequest(request)) = decode_apdu(npdu.payload) {
+                seen.lock().unwrap().extend(request.sequence_number);
+            }
+            async move { Some(frame) }
+        })
         .unicast(SendMode::Forward)
         .broadcast(SendMode::Ignore)
         .build();
@@ -135,11 +148,11 @@ async fn server_and_client() -> (
     let client = BACnetClient::generic_builder()
         .transport(client_end)
         .max_apdu_length(480)
-        .proposed_window_size(4)
+        .proposed_window_size(window)
         .build()
         .await
         .unwrap();
-    (server, client, sent)
+    (server, client, sent, taken)
 }
 
 /// What the server sent the client, in order, once the link is quiet.
@@ -165,66 +178,58 @@ async fn write_text(client: &BACnetClient<LoopbackTransport>, text: &str) -> Res
         .await
 }
 
-/// A request of ten segments: the client sends segments 0 to 3, takes the
-/// acknowledgment of segment zero and goes on from segment 1; the server
-/// discards the three it already has and answers each full window after.
+/// This workspace's client against this server, at windows of 1, 2 and 8,
+/// with requests inside and past the first window: segment zero goes alone,
+/// each later group as the answer grants, no segment goes twice, and the
+/// server sends Segment-ACKs and the answer, never an Abort (#2742).
 #[tokio::test]
-async fn this_workspaces_client_completes_a_request_past_its_first_window() {
-    let (mut server, mut client, sent) = server_and_client().await;
-    let text = "w".repeat(4_500);
-    write_text(&client, &text).await.unwrap();
-    assert_eq!(present_value(&server).await, text);
-    let replies = server_replies(&sent).await;
-    let acks: Vec<u8> = replies
-        .iter()
-        .filter_map(|apdu| match apdu {
-            Apdu::SegmentAck(ack) if !ack.negative_ack => Some(ack.sequence_number),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(acks, [0, 4, 8, 9], "{replies:?}");
-    assert!(
-        matches!(replies.last(), Some(Apdu::SimpleAck(_))),
-        "the answer last, and no Abort: {replies:?}"
-    );
-    assert_eq!(replies.len(), 5, "{replies:?}");
-    client.stop().await.unwrap();
-    server.stop().await.unwrap();
+async fn this_workspaces_client_sends_each_segment_once() {
+    for window in [1u8, 2, 8] {
+        for length in [700, 4_500] {
+            let (mut server, mut client, sent, taken) = server_and_client(window).await;
+            let text = "w".repeat(length);
+            write_text(&client, &text).await.unwrap();
+            assert_eq!(present_value(&server).await, text);
+            let replies = server_replies(&sent).await;
+            let taken = taken.lock().unwrap().clone();
+            let total = taken.len();
+            assert!(total >= 2, "window {window}, {length}: segmented");
+            assert_eq!(
+                taken,
+                (0..total as u8).collect::<Vec<_>>(),
+                "window {window}, {length}: each segment once"
+            );
+            // Segment zero, every group the window grants, and the last.
+            let mut expected: Vec<String> = (0..total)
+                .filter(|seq| *seq % usize::from(window) == 0 || *seq + 1 == total)
+                .map(|seq| format!("ack {seq}"))
+                .collect();
+            expected.push("answer".into());
+            let kinds: Vec<String> = replies
+                .iter()
+                .map(|apdu| match apdu {
+                    Apdu::SegmentAck(ack) if !ack.negative_ack => {
+                        format!("ack {}", ack.sequence_number)
+                    }
+                    Apdu::SimpleAck(_) => "answer".into(),
+                    other => panic!("window {window}, {length}: unexpected {other:?}"),
+                })
+                .collect();
+            assert_eq!(kinds, expected, "window {window}, {length}");
+            client.stop().await.unwrap();
+            server.stop().await.unwrap();
+        }
+    }
 }
 
-/// A request that fits in the client's first window: it sends all three
-/// segments at once. Here the answer reaches it before it acts on segment
-/// zero's acknowledgment, so it is done, and nothing else crosses the link.
-/// Had it acted on that acknowledgment first, it would have sent segments 1
-/// and 2 again, each drawing an Abort after the answer (pinned below).
-#[tokio::test]
-async fn this_workspaces_client_completes_a_request_inside_its_first_window() {
-    let (mut server, mut client, sent) = server_and_client().await;
-    let text = "f".repeat(1_100);
-    write_text(&client, &text).await.unwrap();
-    assert_eq!(present_value(&server).await, text);
-    let replies = server_replies(&sent).await;
-    let kinds: Vec<String> = replies
-        .iter()
-        .map(|apdu| match apdu {
-            Apdu::SegmentAck(ack) if !ack.negative_ack => format!("ack {}", ack.sequence_number),
-            Apdu::SimpleAck(_) => "answer".into(),
-            other => panic!("unexpected {other:?}"),
-        })
-        .collect();
-    assert_eq!(kinds, ["ack 0", "ack 2", "answer"]);
-    client.stop().await.unwrap();
-    server.stop().await.unwrap();
-}
-
-/// The client's sender before #2742's fix, played by hand: all three
-/// segments of a request at once at a window of four, then, on segment
-/// zero's acknowledgment, segments 1 and 2 again. The request is whole on
-/// the first pass and answered; the two sent again find no transfer and
-/// each draws an Abort (INVALID_APDU_IN_THIS_STATE) after the answer, which
-/// a requester that is done ignores. A server still working on the request
-/// would owe each a repeat of its last Segment-ACK instead (Clause 5.4.5.3);
-/// neither receiver, the old one or the shared one, keeps that state.
+/// A requester that sends its whole first window unasked (as this
+/// workspace's client did before #2742), played by hand: all three segments
+/// of a request at once at a window of four, then, on segment zero's
+/// acknowledgment, segments 1 and 2 again. The request is whole on the first
+/// pass and answered; the two sent again find no transfer and each draws an
+/// Abort (INVALID_APDU_IN_THIS_STATE) after the answer, which a requester
+/// that is done ignores. A server still working on the request would owe
+/// each a repeat of its last Segment-ACK instead (Clause 5.4.5.3, #2751).
 #[tokio::test]
 async fn segments_sent_again_after_the_answer_each_draw_an_abort() {
     let (mut server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;

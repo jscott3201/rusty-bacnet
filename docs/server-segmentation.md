@@ -57,7 +57,11 @@ A requester that sends its whole first window without waiting still
 completes: the segments it sends again after segment zero's acknowledgment
 are duplicates and are discarded. A segment sent again after the request is
 whole draws the invalid-state Abort above, even while the request is still
-being answered.
+being answered (#2751). This workspace's client sends segment zero alone and
+waits for its answer, so it sends nothing twice to a server that answers at
+once; a receiver that never answers segment zero alone costs it one segment
+timeout, once (see the client's segmented requests in
+[the Rust API](rust-api.md#segmented-requests)).
 
 `DeviceIdentity` is shared by full servers and endpoints, with a 5000 ms
 segment timeout. `with_apdu_segment_timeout_ms(...)` changes both. An

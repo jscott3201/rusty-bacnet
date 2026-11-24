@@ -9515,6 +9515,21 @@ Use `bip_builder()` for B/IP, `bip6_builder()` for B/IPv6 (client `ipv6`
 feature), `sc_builder()` for BACnet/SC, or `generic_builder()` with a
 prebuilt transport.
 
+### Segmented requests
+
+A request too long for one APDU goes as segments. The client sends segment
+zero alone, carrying the window it proposes
+(`ClientConfig::proposed_window_size`, 1 by default), and takes the window
+for the rest from the receiver's answer (Clause 5.4.4.1, #2742). At a window
+above one, a receiver that leaves segment zero unanswered for a whole
+segment timeout is remembered, and from then on gets the whole first window
+at once, as such receivers expect: the request that taught it waits that
+one segment timeout and goes on if the receiver answers segment zero sent
+again, or fails if it drops that too, and its next request works. The
+client remembers up to 256 such peers (a routed peer apart from its
+router), forgets one only to make room for another, and forgets them all
+when it ends. A window of one is unchanged.
+
 ### Choosing the client transport at runtime
 
 The B/IP, B/IPv6 and SC builders also offer `build_any()`, returning

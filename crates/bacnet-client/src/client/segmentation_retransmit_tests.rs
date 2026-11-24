@@ -74,23 +74,12 @@ async fn negative_ack_zero_advances_past_the_acknowledged_segment() {
         result
     });
 
-    let mut invoke_id = None;
-    for expected_seq in [0, 1] {
-        let received = timeout(Duration::from_secs(2), server_rx.recv())
-            .await
-            .expect("server timed out waiting for initial window segment")
-            .expect("server channel closed");
-        let npdu = decode_npdu(received.npdu).unwrap();
-        let decoded = apdu::decode_apdu(npdu.payload).unwrap();
-        let Apdu::ConfirmedRequest(req) = decoded else {
-            panic!("Expected ConfirmedRequest, got {:?}", decoded);
-        };
-        assert!(req.segmented);
-        assert_eq!(req.sequence_number, Some(expected_seq));
-        invoke_id = Some(req.invoke_id);
-    }
-
-    let invoke_id = invoke_id.unwrap();
+    // Segment zero goes alone (#2742); its answer here is NAK(0).
+    let req = recv_confirmed_segment(&mut server_rx, "segment zero").await;
+    assert_eq!(req.sequence_number, Some(0));
+    assert_eq!(req.proposed_window_size, Some(2));
+    expect_quiet(&mut server_rx, 100, "segment zero goes alone").await;
+    let invoke_id = req.invoke_id;
     send_local_response(
         &server_transport,
         &client_mac,
@@ -177,14 +166,13 @@ async fn segmented_request_ignores_stale_negative_ack_zero_after_progress() {
         result
     });
 
-    let mut invoke_id = None;
-    for expected_seq in [0, 1] {
-        let req = recv_confirmed_segment(&mut server_rx, "initial window").await;
+    let invoke_id =
+        grant_after_segment_zero(&mut server_rx, &server_transport, &client_mac, 2).await;
+    for expected_seq in [1, 2] {
+        let req = recv_confirmed_segment(&mut server_rx, "first window").await;
+        assert_eq!(req.invoke_id, invoke_id);
         assert_eq!(req.sequence_number, Some(expected_seq));
-        invoke_id = Some(req.invoke_id);
     }
-
-    let invoke_id = invoke_id.unwrap();
     send_local_response(
         &server_transport,
         &client_mac,
@@ -192,13 +180,13 @@ async fn segmented_request_ignores_stale_negative_ack_zero_after_progress() {
             negative_ack: false,
             sent_by_server: true,
             invoke_id,
-            sequence_number: 1,
+            sequence_number: 2,
             actual_window_size: 2,
         }),
     )
     .await;
 
-    for expected_seq in [2, 3] {
+    for expected_seq in [3, 4] {
         let req = recv_confirmed_segment(&mut server_rx, "second window").await;
         assert_eq!(req.invoke_id, invoke_id);
         assert_eq!(req.sequence_number, Some(expected_seq));
@@ -223,7 +211,7 @@ async fn segmented_request_ignores_stale_negative_ack_zero_after_progress() {
             negative_ack: false,
             sent_by_server: true,
             invoke_id,
-            sequence_number: 3,
+            sequence_number: 4,
             actual_window_size: 1,
         }),
     )
@@ -234,7 +222,7 @@ async fn segmented_request_ignores_stale_negative_ack_zero_after_progress() {
         assert_eq!(req.invoke_id, invoke_id);
         let seq = req.sequence_number.unwrap();
         assert!(
-            seq >= 4,
+            seq >= 5,
             "stale negative SegmentACK 0 rewound transfer to segment {seq}"
         );
         let more_follows = req.more_follows;
@@ -282,8 +270,37 @@ async fn expect_quiet(rx: &mut mpsc::Receiver<ReceivedNpdu>, ms: u64, context: &
     }
 }
 
-/// Common harness for the stale-SegmentAck tests (#368): a 100-byte payload
-/// at max-APDU 50 makes exactly three segments (44 + 44 + 12), window 2.
+/// The sender's first step (Clause 5.4.4.1, #2742): segment zero alone,
+/// proposing a window of two, and nothing more until it is answered. The
+/// answer here grants `window`. Returns the request's invoke ID.
+async fn grant_after_segment_zero(
+    rx: &mut mpsc::Receiver<ReceivedNpdu>,
+    transport: &LoopbackTransport,
+    client_mac: &[u8],
+    window: u8,
+) -> u8 {
+    let req = recv_confirmed_segment(rx, "segment zero").await;
+    assert_eq!(req.sequence_number, Some(0));
+    assert_eq!(req.proposed_window_size, Some(2));
+    expect_quiet(rx, 100, "segment zero goes alone").await;
+    send_local_response(
+        transport,
+        client_mac,
+        Apdu::SegmentAck(SegmentAck {
+            negative_ack: false,
+            sent_by_server: true,
+            invoke_id: req.invoke_id,
+            sequence_number: 0,
+            actual_window_size: window,
+        }),
+    )
+    .await;
+    req.invoke_id
+}
+
+/// Common harness for the stale-SegmentAck tests (#368): a 140-byte payload
+/// at max-APDU 50 makes four segments (44 + 44 + 44 + 8), window 2: segment
+/// zero alone, then [1, 3) and [3, 4).
 async fn start_three_segment_request(
     payload_len: usize,
 ) -> (
@@ -338,13 +355,12 @@ async fn start_three_segment_request(
 #[tokio::test]
 async fn stale_out_of_range_positive_ack_is_discarded() {
     let (task, server_transport, mut rx, client_mac, _server_mac) =
-        start_three_segment_request(100).await;
+        start_three_segment_request(140).await;
 
-    let mut invoke_id = 0;
-    for expected_seq in [0, 1] {
+    let invoke_id = grant_after_segment_zero(&mut rx, &server_transport, &client_mac, 2).await;
+    for expected_seq in [1, 2] {
         let req = recv_confirmed_segment(&mut rx, "first window").await;
         assert_eq!(req.sequence_number, Some(expected_seq));
-        invoke_id = req.invoke_id;
     }
 
     send_local_response(
@@ -368,13 +384,13 @@ async fn stale_out_of_range_positive_ack_is_discarded() {
             negative_ack: false,
             sent_by_server: true,
             invoke_id,
-            sequence_number: 1,
+            sequence_number: 2,
             actual_window_size: 2,
         }),
     )
     .await;
     let req = recv_confirmed_segment(&mut rx, "final segment").await;
-    assert_eq!(req.sequence_number, Some(2));
+    assert_eq!(req.sequence_number, Some(3));
     assert!(!req.more_follows);
 
     send_local_response(
@@ -384,7 +400,7 @@ async fn stale_out_of_range_positive_ack_is_discarded() {
             negative_ack: false,
             sent_by_server: true,
             invoke_id,
-            sequence_number: 2,
+            sequence_number: 3,
             actual_window_size: 2,
         }),
     )
@@ -408,13 +424,12 @@ async fn stale_out_of_range_positive_ack_is_discarded() {
 #[tokio::test]
 async fn stale_out_of_range_negative_ack_is_discarded() {
     let (task, server_transport, mut rx, client_mac, _server_mac) =
-        start_three_segment_request(100).await;
+        start_three_segment_request(140).await;
 
-    let mut invoke_id = 0;
-    for expected_seq in [0, 1] {
+    let invoke_id = grant_after_segment_zero(&mut rx, &server_transport, &client_mac, 2).await;
+    for expected_seq in [1, 2] {
         let req = recv_confirmed_segment(&mut rx, "first window").await;
         assert_eq!(req.sequence_number, Some(expected_seq));
-        invoke_id = req.invoke_id;
     }
 
     send_local_response(
@@ -438,13 +453,13 @@ async fn stale_out_of_range_negative_ack_is_discarded() {
             negative_ack: false,
             sent_by_server: true,
             invoke_id,
-            sequence_number: 1,
+            sequence_number: 2,
             actual_window_size: 2,
         }),
     )
     .await;
     let req = recv_confirmed_segment(&mut rx, "final segment").await;
-    assert_eq!(req.sequence_number, Some(2));
+    assert_eq!(req.sequence_number, Some(3));
 
     send_local_response(
         &server_transport,
@@ -453,7 +468,7 @@ async fn stale_out_of_range_negative_ack_is_discarded() {
             negative_ack: false,
             sent_by_server: true,
             invoke_id,
-            sequence_number: 2,
+            sequence_number: 3,
             actual_window_size: 2,
         }),
     )
@@ -480,15 +495,14 @@ async fn stale_out_of_range_negative_ack_is_discarded() {
 /// vacuity guard the removal leans on.
 #[tokio::test]
 async fn stale_in_range_out_of_window_ack_is_discarded() {
-    // 260 bytes at max-APDU 50 → six segments (5 × 44 + 40), window 2.
+    // 304 bytes at max-APDU 50 → seven segments (6 × 44 + 40), window 2.
     let (task, server_transport, mut rx, client_mac, _server_mac) =
-        start_three_segment_request(260).await;
+        start_three_segment_request(304).await;
 
-    let mut invoke_id = 0;
-    for expected_seq in [0, 1] {
-        let req = recv_confirmed_segment(&mut rx, "window [0,2)").await;
+    let invoke_id = grant_after_segment_zero(&mut rx, &server_transport, &client_mac, 2).await;
+    for expected_seq in [1, 2] {
+        let req = recv_confirmed_segment(&mut rx, "window [1,3)").await;
         assert_eq!(req.sequence_number, Some(expected_seq));
-        invoke_id = req.invoke_id;
     }
     send_local_response(
         &server_transport,
@@ -497,17 +511,17 @@ async fn stale_in_range_out_of_window_ack_is_discarded() {
             negative_ack: false,
             sent_by_server: true,
             invoke_id,
-            sequence_number: 1,
+            sequence_number: 2,
             actual_window_size: 2,
         }),
     )
     .await;
 
-    for expected_seq in [2, 3] {
-        let req = recv_confirmed_segment(&mut rx, "window [2,4)").await;
+    for expected_seq in [3, 4] {
+        let req = recv_confirmed_segment(&mut rx, "window [3,5)").await;
         assert_eq!(req.sequence_number, Some(expected_seq));
     }
-    // In range (0 < 6), out of window: must be discarded, not rewind to 1.
+    // In range (0 < 7), out of window: must be discarded, not rewind to 1.
     send_local_response(
         &server_transport,
         &client_mac,
@@ -529,15 +543,15 @@ async fn stale_in_range_out_of_window_ack_is_discarded() {
             negative_ack: false,
             sent_by_server: true,
             invoke_id,
-            sequence_number: 3,
+            sequence_number: 4,
             actual_window_size: 2,
         }),
     )
     .await;
-    for expected_seq in [4, 5] {
-        let req = recv_confirmed_segment(&mut rx, "window [4,6)").await;
+    for expected_seq in [5, 6] {
+        let req = recv_confirmed_segment(&mut rx, "window [5,7)").await;
         assert_eq!(req.sequence_number, Some(expected_seq));
-        if expected_seq == 5 {
+        if expected_seq == 6 {
             assert!(!req.more_follows);
         }
     }
@@ -548,7 +562,7 @@ async fn stale_in_range_out_of_window_ack_is_discarded() {
             negative_ack: false,
             sent_by_server: true,
             invoke_id,
-            sequence_number: 5,
+            sequence_number: 6,
             actual_window_size: 2,
         }),
     )
@@ -672,15 +686,14 @@ async fn lost_first_ack_recovers_via_negative_ack_zero() {
 #[tokio::test]
 async fn negative_ack_naming_last_of_window_advances_the_window() {
     let (task, server_transport, mut rx, client_mac, _server_mac) =
-        start_three_segment_request(100).await;
+        start_three_segment_request(140).await;
 
-    let mut invoke_id = 0;
-    for expected_seq in [0, 1] {
-        let req = recv_confirmed_segment(&mut rx, "window [0,2)").await;
+    let invoke_id = grant_after_segment_zero(&mut rx, &server_transport, &client_mac, 2).await;
+    for expected_seq in [1, 2] {
+        let req = recv_confirmed_segment(&mut rx, "window [1,3)").await;
         assert_eq!(req.sequence_number, Some(expected_seq));
-        invoke_id = req.invoke_id;
     }
-    // NAK(1): sequence 1 is the last segment of the [0,2) window.
+    // NAK(2): sequence 2 is the last segment of the [1,3) window.
     send_local_response(
         &server_transport,
         &client_mac,
@@ -688,14 +701,14 @@ async fn negative_ack_naming_last_of_window_advances_the_window() {
             negative_ack: true,
             sent_by_server: true,
             invoke_id,
-            sequence_number: 1,
+            sequence_number: 2,
             actual_window_size: 2,
         }),
     )
     .await;
 
-    let req = recv_confirmed_segment(&mut rx, "the window must advance to 2").await;
-    assert_eq!(req.sequence_number, Some(2));
+    let req = recv_confirmed_segment(&mut rx, "the window must advance to 3").await;
+    assert_eq!(req.sequence_number, Some(3));
     assert!(!req.more_follows);
     send_local_response(
         &server_transport,
@@ -704,7 +717,7 @@ async fn negative_ack_naming_last_of_window_advances_the_window() {
             negative_ack: false,
             sent_by_server: true,
             invoke_id,
-            sequence_number: 2,
+            sequence_number: 3,
             actual_window_size: 2,
         }),
     )
@@ -722,3 +735,6 @@ async fn negative_ack_naming_last_of_window_advances_the_window() {
         .unwrap()
         .expect("a NAK naming the window's last segment must advance, not stall");
 }
+
+#[path = "segmentation_first_window_tests.rs"]
+mod first_window;

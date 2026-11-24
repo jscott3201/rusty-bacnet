@@ -176,6 +176,10 @@ pub struct ClientConfig {
     /// its Device's.
     pub segmentation: Segmentation,
     /// Proposed window size for segmented transfers (1-127, default 1).
+    /// A segmented request sends segment zero alone with it and takes the
+    /// window from the answer; a peer that leaves segment zero unanswered
+    /// for a segment timeout gets the whole first window at once from then
+    /// on (#2742).
     pub proposed_window_size: u8,
     /// The segment timeout in milliseconds (Clause 5.3): how long a
     /// segmented request waits for each Segment-ACK before it sends its
@@ -937,6 +941,7 @@ mod inbound_replies;
 use inbound_replies::InboundReply;
 mod event_notifications;
 mod file_list;
+pub(crate) mod first_window;
 mod i_have;
 mod lifecycle;
 mod messages;
