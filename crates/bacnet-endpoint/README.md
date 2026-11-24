@@ -293,12 +293,13 @@ dial, and MS/TP station/timing knobs stay transport-specific by design.
 - All fallible boundaries return typed [`bacnet_types::error::Error`];
   queue-capacity, BBMD-ordering, SC identity/heartbeat, and MS/TP
   addressing misconfiguration fail fast at build time. The builders'
-  `build_session*` and the session's `start()` return
-  `bacnet_server::server::StartError`, which `?` turns into that `Error`,
-  and which hands back the object database (#2766): a builder's refusal the
-  one it was given, as given, and a start that ends the session (any
-  refusal once the link has started) the one it took. A refusal before the
-  link starts leaves it with the session, ready to start again.
+  `build_session*` and the session's `start()` return [`StartError`],
+  which `?` turns into that `Error`, and which hands back the object
+  database (#2766): a builder's refusal the one it was given, as given, and
+  a start that ends the session (any refusal once the link has started) the
+  one it took. A refusal before the link starts leaves it with the session,
+  ready to start again, which
+  [`can_start`](session::EndpointSession::can_start) tells.
 
 ## Trust: verified-origin getters
 

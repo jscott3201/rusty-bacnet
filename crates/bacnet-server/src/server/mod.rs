@@ -349,6 +349,8 @@ mod bip_builder;
 pub use bip_builder::BipServerBuilder;
 mod start_error;
 pub use start_error::StartError;
+#[doc(hidden)]
+pub use start_error::refused as __endpoint_start_refused;
 mod clock;
 mod command_runs;
 pub(crate) mod device_storage;

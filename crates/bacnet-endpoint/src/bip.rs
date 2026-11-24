@@ -41,7 +41,7 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_server::server::StartError;
+use bacnet_server::server::{__endpoint_start_refused as start_refused, StartError};
 use std::sync::Arc;
 
 use bacnet_transport::bbmd_lookup::BbmdResolver;
@@ -404,7 +404,7 @@ impl BipEndpointBuilder {
         .and_then(|routes| routes.bind_routed(&routed))
         .and_then(|_| self.session.validate());
         if let Err(error) = checked {
-            return Err(StartError::new(error, self.database.take()));
+            return Err(start_refused(error, self.database.take()));
         }
         let role = self.role;
         let session = self.session.clone();
@@ -417,7 +417,7 @@ impl BipEndpointBuilder {
         let built = transport(self).and_then(|link| EndpointSession::new(link, role, session));
         let mut endpoint = match built {
             Ok(endpoint) => endpoint,
-            Err(error) => return Err(StartError::new(error, database)),
+            Err(error) => return Err(start_refused(error, database)),
         };
         if let Some(db) = database {
             endpoint = endpoint.with_database(db);

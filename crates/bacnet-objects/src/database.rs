@@ -572,6 +572,19 @@ impl ObjectDatabase {
         }
     }
 
+    /// Undo what a refused start began, before the database goes back to
+    /// its caller: the outputs it drove
+    /// ([`release_outputs`](Self::release_outputs)), and a registered
+    /// Network Port it published, once the port's owner has gone
+    /// ([`withdraw_network_port_internal`](Self::withdraw_network_port_internal)).
+    /// The server's refused start and the endpoint's both take this one
+    /// step (#2752, #2766).
+    #[doc(hidden)]
+    pub fn undo_refused_start_internal(&mut self) {
+        self.release_outputs();
+        self.withdraw_network_port_internal();
+    }
+
     /// Hand the database's clocks to every timed object again, after one of
     /// them changed.
     fn rebind_clocks(&mut self) {

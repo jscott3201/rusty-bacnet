@@ -544,8 +544,9 @@ async fn sc_hub_settings_are_checked_before_any_dial() {
 }
 
 /// A dial no hub answers hands back the database the builder was given,
-/// as given (#2766): every object is still there for the next try.
-#[tokio::test]
+/// as given (#2766), and the same database serves every object from a
+/// session the SC builder dials again, to a hub that answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sc_a_dial_that_fails_hands_the_database_back() {
     let pki = Pki::new();
     let vmac = [0x02, 0, 0, 0, 0, 0x37];
@@ -562,6 +563,34 @@ async fn sc_a_dial_that_fails_hands_the_database_back() {
     let (error, back) = refused.into_parts();
     let back = back.unwrap_or_else(|| panic!("no database came back with: {error}"));
     assert_eq!(back.object_list().collect::<Vec<_>>(), objects);
+
+    let mut hub = pki.hub(0, "127.0.0.1:0", PRIMARY_VMAC).await.unwrap();
+    let mut session = ScEndpointBuilder::new(vmac, uuid(vmac))
+        .device(identity(vmac))
+        .database(back)
+        .connect_hub_session(ScHubDialer::new(&url(&hub), pki.node.clone()))
+        .await
+        .unwrap();
+    session.start().await.unwrap();
+    let mut client = BACnetClient::sc_builder()
+        .hub_url(&url(&hub))
+        .tls_config(pki.node.clone())
+        .vmac([0x02, 0, 0, 0, 0, 0x38])
+        .device_uuid([0x38; 16])
+        .build()
+        .await
+        .unwrap();
+    for oid in objects {
+        let read = client.read_property(&vmac, oid, PropertyIdentifier::OBJECT_NAME, None);
+        let ack = tokio::time::timeout(WAIT, read)
+            .await
+            .expect("read hung")
+            .unwrap_or_else(|error| panic!("{oid}: {error}"));
+        assert_eq!(ack.object_identifier, oid);
+    }
+    client.stop().await.unwrap();
+    session.stop().await.unwrap();
+    hub.stop().await;
 }
 
 /// A listener that accepts TCP and never answers, so a hub dial to it stalls

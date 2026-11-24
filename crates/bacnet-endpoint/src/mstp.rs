@@ -39,7 +39,7 @@
 use std::time::Duration;
 
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_server::server::StartError;
+use bacnet_server::server::{__endpoint_start_refused as start_refused, StartError};
 use bacnet_transport::mstp::{MstpConfig, MstpExecutionMode, MstpTransport, SerialPort};
 use bacnet_types::MacAddr;
 use bacnet_types::error::Error;
@@ -414,7 +414,7 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
                 crate::session::check_link_bindings(&bindings, &routed, &[self.this_station])
             });
         if let Err(error) = checked {
-            return Err(StartError::new(error, self.database.take()));
+            return Err(start_refused(error, self.database.take()));
         }
         let role = self.role;
         let session = self.session.clone();
@@ -427,7 +427,7 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         });
         let (mut endpoint, diagnostics) = match built {
             Ok(built) => built,
-            Err(error) => return Err(StartError::new(error, database)),
+            Err(error) => return Err(start_refused(error, database)),
         };
         endpoint.mstp_diagnostics = Some(diagnostics);
         if let Some(db) = database {

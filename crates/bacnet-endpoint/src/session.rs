@@ -92,10 +92,18 @@ mod frame_observation;
 #[path = "registered_port.rs"]
 mod registered_port;
 
+/// The refusal the link builders and [`EndpointSession::start`] return,
+/// which hands back the object database (#2766). It is the server
+/// builders' type, re-exported so a caller need not name `bacnet_server`.
+pub use bacnet_server::server::StartError;
 use bacnet_server::server::{
-    __endpoint_NotificationTransactions as NotificationTransactions, StartError,
-    drop_database_off_runtime,
+    __endpoint_NotificationTransactions as NotificationTransactions,
+    __endpoint_start_refused as start_refused, drop_database_off_runtime,
 };
+
+/// How many runtime turns a refused start waits, after its cleanup, for
+/// work it began to let go of the database (#2766).
+const HAND_BACK_TURNS: usize = 16;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Lifecycle {
@@ -660,18 +668,31 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// - the identity's Device bound as the local Device;
     /// - a registered Network Port the start published put back as it was
     ///   configured, so the next start reserves it again;
-    /// - once the start gave it to its server, what a refused server start
-    ///   leaves, as [`StartError`] lists it for a seat, and the outputs that
-    ///   start drove released: a Load Control's application is told to
-    ///   stop, and the object keeps its request;
-    /// - a source Audit Reporter the start installed taken out again.
+    /// - a source Audit Reporter the start installed taken out again;
+    /// - once the start gave it to its server, what [`StartError`] lists for
+    ///   a server's start on a seat, with the outputs that start drove
+    ///   released: a Load Control's application is told to stop, and the
+    ///   object keeps its request.
     ///
-    /// It is `None` where the session keeps its database: a refusal before
-    /// the link starts, which leaves the session ready to start again with
-    /// it, and a second start. A start cancelled after the link started
-    /// leaves it with the session too, which lets go of it off the runtime.
+    /// A refusal after the server was built (a source Audit installation
+    /// the started link refuses) comes once that server has run, until the
+    /// cleanup stopped it, with its requests held for the start's end. Its
+    /// periodic work may have had its first pass by then, and the database
+    /// keeps what that pass did, as a server's start and stop leave it: a
+    /// Schedule's value written to its Present_Value and the properties it
+    /// references, a Trend Log's records, the event transitions a first
+    /// sweep confirmed, whose notifications went out on the link.
+    ///
+    /// [`can_start`](Self::can_start) tells what a refusal without a
+    /// database means. `true`: it came before the link started, and the
+    /// session keeps the database, ready to correct and start again.
+    /// `false`: the session had already started, or this start ended it
+    /// while something it began still held the database a few runtime
+    /// turns after its cleanup; the session keeps the database then too,
+    /// and lets go of it off the runtime as it drops. A start cancelled
+    /// after the link started also leaves the database with the session.
     pub async fn start(&mut self) -> Result<(), StartError> {
-        let kept = |error| StartError::new(error, None);
+        let kept = |error| start_refused(error, None);
         if self.lifecycle.load(Ordering::Acquire) != Lifecycle::Ready as u8 {
             return Err(kept(Error::Encoding(
                 "endpoint session cannot be started more than once".into(),
@@ -693,23 +714,45 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             // Keep cleanup ownership in self before awaiting. Cancellation leaves
             // Stopping plus intact joins; stop/Drop can still finish teardown.
             let _ = self.stop().await;
-            return Err(StartError::new(error, self.hand_back_database()));
+            return Err(start_refused(error, self.hand_back_database().await));
         }
         Ok(())
     }
 
+    /// Whether [`start`](Self::start) may run: before the first start, and
+    /// after a start refused before its link started, which leaves the
+    /// session ready to correct and start again. `false` once a start has
+    /// begun the link, through stop and after it, so after a refused start
+    /// it tells a refusal the session can retry from one that ended it
+    /// (#2766).
+    pub fn can_start(&self) -> bool {
+        self.lifecycle.load(Ordering::Acquire) == Lifecycle::Ready as u8
+    }
+
     /// The database of a start the session's stop has just ended (#2766):
-    /// the stop let go of every other handle, so it comes out of its lock,
-    /// with what the start began released. A handle still shared, which no
-    /// path leaves, stays with the session, which lets go of it off the
-    /// runtime as it drops.
-    fn hand_back_database(&mut self) -> Option<ObjectDatabase> {
+    /// once every other handle has gone, it comes out of its lock with what
+    /// the start began undone. The stop has joined the session's own work,
+    /// so it waits at most [`HAND_BACK_TURNS`] runtime turns for anything
+    /// that still holds a handle; a handle shared past them stays with the
+    /// session, which lets go of it off the runtime as it drops. The
+    /// database stays in the session until it is taken, so a start
+    /// cancelled here leaves it there too.
+    async fn hand_back_database(&mut self) -> Option<ObjectDatabase> {
+        for _ in 0..HAND_BACK_TURNS {
+            if self
+                .database
+                .as_ref()
+                .is_none_or(|db| Arc::strong_count(db) == 1)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
         let db = self.database.take()?;
         match Arc::try_unwrap(db) {
             Ok(db) => {
                 let mut db = db.into_inner();
-                db.release_outputs();
-                db.withdraw_network_port_internal();
+                db.undo_refused_start_internal();
                 Some(db)
             }
             Err(shared) => {

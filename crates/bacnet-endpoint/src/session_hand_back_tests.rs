@@ -3,19 +3,11 @@
 //! and a start that ends its session gives back the one it took. Either
 //! serves every object from the next start.
 use super::*;
-use bacnet_objects::load_control::{
-    LoadControlObject, LoadControlPersistence, LoadControlSnapshot, LoadShedder, ShedRequest,
-    ShedStatus,
-};
-use bacnet_server::server::StartError;
 use bacnet_transport::bip::{BipMulticast, BipTransport};
 use bacnet_transport::mstp::LoopbackSerial;
 use bacnet_transport::sc::LoopbackWebSocket;
 use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
-use bacnet_types::enums::ShedState;
-use bacnet_types::primitives::{Date, Time};
 use std::net::Ipv4Addr;
-use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 fn identity() -> crate::DeviceIdentity {
@@ -93,6 +85,14 @@ async fn a_refused_bip_build_hands_the_database_back_as_given() {
         assert_eq!(objects(&back), expected, "refusal {n}: {error}");
         db = back;
     }
+    // A session setting is checked before the transport's multicast group.
+    let both = BipEndpointBuilder::new(Ipv4Addr::UNSPECIFIED, 0, Ipv4Addr::BROADCAST)
+        .multicast(Some(group))
+        .queue_capacity(0);
+    let refused = both.database(db).build_session().err().expect("refused");
+    let (error, back) = handed_back(refused);
+    assert!(error.to_string().contains("queue capacity"), "{error}");
+    db = back;
     let wire = Wire::new();
     let mut session = local()
         .device(identity())
@@ -124,11 +124,22 @@ async fn a_refused_mstp_build_hands_the_database_back_as_given() {
         assert_eq!(objects(&back), expected, "refusal {n}: {error}");
         db = back;
     }
+    // A session setting is checked before the link's source Audit bindings.
+    let both = station()
+        .source_audit_routed_device_binding(device, network, MacAddr::from_slice(&[5]))
+        .queue_capacity(0);
+    let refused = both.database(db).build_session().err().expect("refused");
+    let (error, db) = handed_back(refused);
+    assert!(error.to_string().contains("queue capacity"), "{error}");
+    // Serving over MS/TP takes a token-passing peer: `rb17_mstp_proof`
+    // serves a refused build's database from the MS/TP builder.
     serves_every_object(db).await;
 }
 
-/// The SC builder's refusals give the database back as given (a dial the
-/// hub refuses is `sc_link`'s).
+/// The SC builder's refusals give the database back as given. A loopback
+/// session serves only with a hub's side of the handshake driven by hand:
+/// `sc_link` dials a real hub, after a failed dial, to serve the database
+/// from the SC builder.
 #[tokio::test(start_paused = true)]
 async fn a_refused_sc_build_hands_the_database_back_as_given() {
     use crate::sc::ScEndpointBuilder;
@@ -178,9 +189,10 @@ async fn a_link_that_wont_start_hands_the_database_back() {
         let (error, db) = handed_back(session.start().await.unwrap_err());
         assert!(matches!(error, Error::Transport(_)), "{error}");
         assert_eq!(objects(&db), expected);
+        assert!(!session.can_start(), "the session ended");
         let again = session.start().await.unwrap_err();
         assert!(again.database().is_none(), "{again}");
-        assert!(session.stop().await.is_err(), "the session ended");
+        assert!(session.stop().await.is_err());
         serves_every_object(db).await;
     }
 }
@@ -202,6 +214,10 @@ async fn a_refusal_before_the_link_keeps_the_database_with_the_session() {
     let refused = session.start().await.unwrap_err();
     assert!(refused.to_string().contains("identity"), "{refused}");
     assert!(refused.database().is_none());
+    assert!(
+        session.can_start(),
+        "the session can be corrected and retried"
+    );
     let mut session = session.device(identity());
     session.start().await.unwrap();
     reads_every_object(&wire, &expected).await;
@@ -301,105 +317,9 @@ async fn a_server_build_the_started_link_refuses_hands_the_database_back() {
     session.stop().await.unwrap();
 }
 
-/// Storage holding a Load Control's request, which never fails.
-struct Store(StdMutex<Option<LoadControlSnapshot>>);
-
-impl LoadControlPersistence for Store {
-    fn load(&self, _: ObjectIdentifier) -> Result<Option<LoadControlSnapshot>, Error> {
-        Ok(self.0.lock().unwrap().clone())
-    }
-
-    fn save(&self, _: ObjectIdentifier, snapshot: &LoadControlSnapshot) -> Result<(), Error> {
-        *self.0.lock().unwrap() = Some(snapshot.clone());
-        Ok(())
-    }
-}
-
-/// An application that sheds at once, counting the requests it is asked
-/// to shed and its stops.
-#[derive(Default)]
-struct Shedder {
-    asked: StdMutex<usize>,
-    stops: StdMutex<usize>,
-}
-
-impl LoadShedder for Shedder {
-    fn shed(&self, request: &ShedRequest) -> ShedStatus {
-        *self.asked.lock().unwrap() += 1;
-        let level = request.requested.clone();
-        ShedStatus::new(
-            bacnet_objects::load_control::ShedProgress::Compliant,
-            level.clone(),
-            level,
-        )
-    }
-
-    fn stop(&self) {
-        *self.stops.lock().unwrap() += 1;
-    }
-}
-
-/// LC-1, restored with a shed under way for a century from 2020, which a
-/// start offers `shedder`.
-fn restored_load_control(shedder: &Arc<Shedder>) -> Box<dyn BACnetObject> {
-    const CENTURY: u64 = 100 * 365 * 24 * 60;
-    let mut saved = LoadControlSnapshot::default();
-    saved.state = ShedState::SHED_COMPLIANT;
-    saved.requested_shed_level = bacnet_types::constructed::BACnetShedLevel::Level(2);
-    let new_year = Date {
-        year: 120,
-        month: 1,
-        day: 1,
-        day_of_week: 3,
-    };
-    let midnight = Time {
-        hour: 0,
-        minute: 0,
-        second: 0,
-        hundredths: 0,
-    };
-    saved.start_time = (new_year, midnight);
-    saved.shed_duration = CENTURY;
-    let store = Arc::new(Store(StdMutex::new(Some(saved))));
-    let mut object = LoadControlObject::with_persistence(1, "LC-1", store).unwrap();
-    object.set_shedder(Arc::clone(shedder) as Arc<dyn LoadShedder>);
-    Box::new(object)
-}
-
-/// A source Audit installation the started link refuses comes after the
-/// session's server is built: the start stops that server, takes its
-/// handle on the database back, and hands the database over with the
-/// outputs the server's start drove released, so a restored shed's
-/// application is told to stop. The recipient is another station before
-/// the link starts and the node's own address after; the corrected
-/// session, with no source Audit, serves every object.
-#[tokio::test(start_paused = true)]
-async fn a_refusal_after_the_server_is_built_hands_the_database_back() {
-    let shedder = Arc::new(Shedder::default());
-    let mut db = database();
-    provision(&mut db, Wire::mac(NODE).as_slice());
-    let reporter = bacnet_objects::audit::AuditReporterObject::new(1, "Reporter").unwrap();
-    let reporter_oid = reporter.object_identifier();
-    db.add(Box::new(reporter)).unwrap();
-    db.add(restored_load_control(&shedder)).unwrap();
-    let expected = objects(&db);
-    let link = Wire::new()
-        .port(NODE)
-        .local_mac_until_started(Wire::mac(9).as_slice())
-        .build();
-    let mut session = EndpointSession::new(link, SessionRole::Both, SessionConfig::default())
-        .unwrap()
-        .device(identity())
-        .with_database(db)
-        .with_source_audit_reporter(reporter_oid);
-    let refused = session.start().await.unwrap_err();
-    assert!(*shedder.asked.lock().unwrap() > 0, "the server's start ran");
-    let (error, db) = handed_back(refused);
-    assert!(error.remote().is_some(), "{error}");
-    assert_eq!(*shedder.stops.lock().unwrap(), 1, "the shed is let go");
-    assert_eq!(objects(&db), expected);
-    serves_every_object(db).await;
-}
+/// Refusals once the start has built its server.
+#[path = "session_hand_back_built_tests.rs"]
+mod built;
 
 /// A start refused after it published its registered Network Port, bound
 /// to an ephemeral UDP port, hands the port back as configured (UDP 0), so
@@ -434,18 +354,5 @@ async fn a_published_port_comes_back_as_configured() {
             .bip_local_address()
             .is_some_and(|bound| bound.port() != 0)
     );
-    session.stop().await.unwrap();
-}
-
-/// The session's stop takes its server's handle on the database back as
-/// the server stops, where the server's drop would leave it to a task, so
-/// a refused start's cleanup leaves the session the only one.
-#[tokio::test(start_paused = true)]
-async fn a_stopped_server_holds_no_handle_on_the_database() {
-    let wire = Wire::new();
-    let (mut session, _) = default_session(&wire);
-    session.start().await.unwrap();
-    session.stop_server().await;
-    assert_eq!(Arc::strong_count(session.database.as_ref().unwrap()), 1);
     session.stop().await.unwrap();
 }

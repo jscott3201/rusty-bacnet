@@ -78,12 +78,14 @@ impl Drop for OffRuntime {
     }
 }
 
+/// The endpoint's refusals (#2766): a [`StartError`] for `error`, with the
+/// database the endpoint's build or start took, if any.
+pub fn refused(error: Error, database: Option<ObjectDatabase>) -> StartError {
+    StartError::new(error, database)
+}
+
 impl StartError {
-    /// A refusal for `error`, with the database the start took, if any.
-    /// The server's own builders and the endpoint crate's make these
-    /// (#2766).
-    #[doc(hidden)]
-    pub fn new(error: Error, database: Option<ObjectDatabase>) -> Self {
+    pub(crate) fn new(error: Error, database: Option<ObjectDatabase>) -> Self {
         Self(Box::new(Refused {
             error,
             database: OffRuntime(database),

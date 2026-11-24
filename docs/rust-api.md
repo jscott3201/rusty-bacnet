@@ -14159,22 +14159,32 @@ The port declares its own echo, as for a transport built by hand
 
 A refused build or start hands the object database back (#2766). The
 builders' `build_session`, `build_session_wrapped`, `build_loopback_session`,
-`build_hub_session` and `connect_hub_session` return
-`bacnet_server::server::StartError`, as a server builder's `build()` does:
-`?` turns it into `bacnet_types::error::Error`, and `into_parts()` gives the
-error and the database `database(...)` gave, as given, for every refusal, a
-hub dial that fails included. `EndpointSession::start` returns it too. A
-refusal before the link starts leaves the session ready to start again with
-its database, so the error carries none. One after ends the session (a link
-that won't start, such as a port another program holds; a registered Network
-Port it can't publish; a server build or source Audit installation the
-started link refuses), and the error carries the database: the one the
-session was given, or the stock one it built from the identity. The start's
-cleanup lets go of every other handle on it first, the stopped server's
-included, puts a registered Network Port it published back as configured,
-and releases the outputs the server's start drove (a Load Control's
-application is told to stop, and the object keeps its request), so the same
-database can go into the next session:
+`build_hub_session` and `connect_hub_session` return `StartError`
+(`bacnet_endpoint::StartError`, the server builders' type), as a server
+builder's `build()` does: `?` turns it into `bacnet_types::error::Error`,
+and `into_parts()` gives the error and the database `database(...)` gave,
+as given, for every refusal, a hub dial that fails included.
+`EndpointSession::start` returns it too. A refusal before the link starts
+leaves the session ready to start again with its database, so the error
+carries none. One after ends the session (a link that won't start, such as a
+port another program holds; a registered Network Port it can't publish; a
+server build or source Audit installation the started link refuses), and the
+error carries the database: the one the session was given, or the stock one
+it built from the identity. The start's cleanup lets go of every other handle
+on it first, the stopped server's included, puts a registered Network Port it
+published back as configured, and releases the outputs the server's start
+drove (a Load Control's application is told to stop, and the object keeps its
+request), so the same database can go into the next session. A refusal after
+the server was built comes once that server has run: the database keeps what
+its periodic work's first pass did, as any start and stop leave it (a
+Schedule's value written to the properties it references, a Trend Log's
+records, event transitions a first sweep confirmed).
+
+`EndpointSession::can_start()` tells what a refusal without a database
+means: `true`, the session keeps it and can be corrected and started again;
+`false`, the session had already started, or this start ended it while
+something it began still held the database a few runtime turns after its
+cleanup, and the session lets go of it as it drops.
 
 ```rust
 if let Err(refused) = session.start().await {
@@ -14189,8 +14199,11 @@ if let Err(refused) = session.start().await {
                     .build_session()?;
             session.start().await?;
         }
-        // Refused before the link started: the session keeps its database.
-        (error, None) => return Err(error),
+        // No database: can_start() says whether the session kept it to retry.
+        (error, None) => {
+            tracing::warn!(%error, retry = session.can_start(), "start refused");
+            return Err(error);
+        }
     }
 }
 ```

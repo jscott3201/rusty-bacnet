@@ -33,7 +33,7 @@ over a `TlsWebSocket` connected to a local constrained-TLS `ScHub` for RB-16 pro
 //! I/O.
 
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_server::server::StartError;
+use bacnet_server::server::{__endpoint_start_refused as start_refused, StartError};
 use bacnet_transport::sc::{ScReconnectConfig, ScTransport};
 use bacnet_transport::sc_frame::Vmac;
 use bacnet_types::MacAddr;
@@ -430,7 +430,7 @@ impl ScEndpointBuilder {
 
     /// A build refused for `error`, handing back the database (#2766).
     fn refused(&mut self, error: Error) -> StartError {
-        StartError::new(error, self.database.take())
+        start_refused(error, self.database.take())
     }
 
     /// Gives `transport` this node's UUID and heartbeat timing, and the

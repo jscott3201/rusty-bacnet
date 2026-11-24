@@ -249,11 +249,10 @@ impl<T: TransportPort> Drop for BACnetServer<T> {
 }
 
 impl<T: TransportPort> BACnetServer<T> {
-    /// What a drop does first, and the node's
+    /// Seal the server, as a drop and the node's
     /// [`__endpoint_into_database`](BACnetServer::__endpoint_into_database)
-    /// too: seal the server and abort its tasks, which it returns to be
-    /// joined before the database goes.
-    fn seal_and_abort(&mut self) -> Vec<JoinHandle<()>> {
+    /// both do first.
+    fn seal(&mut self) {
         if let Some(network) = self.network.as_ref().filter(|_| self.owns_link()) {
             network.seal_responses();
         }
@@ -273,7 +272,11 @@ impl<T: TransportPort> BACnetServer<T> {
         // they are joined, or with no runtime dropped, before the database
         // goes.
         super::event_send::lanes(&self.notification_transactions).seal();
-        let mut tasks: Vec<JoinHandle<()>> = [
+    }
+
+    /// The server's own tasks, each in its slot.
+    fn task_slots(&mut self) -> [&mut Option<JoinHandle<()>>; 10] {
+        [
             &mut self.dispatch_task,
             &mut self.network_number_task,
             &mut self.cov_purge_task,
@@ -285,9 +288,17 @@ impl<T: TransportPort> BACnetServer<T> {
             &mut self.binary_lighting_operation_task,
             &mut self.cov_revisit_task,
         ]
-        .into_iter()
-        .filter_map(Option::take)
-        .collect();
+    }
+
+    /// What a drop does first: seal the server and abort its tasks, which
+    /// it returns to be joined before the database goes.
+    fn seal_and_abort(&mut self) -> Vec<JoinHandle<()>> {
+        self.seal();
+        let mut tasks: Vec<JoinHandle<()>> = self
+            .task_slots()
+            .into_iter()
+            .filter_map(Option::take)
+            .collect();
         if let Ok(mut timer) = self.dcc_timer.try_lock() {
             tasks.extend(timer.take());
         }
@@ -351,16 +362,35 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// server drops as any server does.
     #[doc(hidden)]
     pub async fn __endpoint_into_database(mut self) -> Arc<RwLock<ObjectDatabase>> {
-        let tasks = self.seal_and_abort();
-        join_released(
-            tasks,
-            Arc::clone(&self.request_tasks),
-            Arc::clone(&self.notification_transactions),
-            Arc::clone(&self.dcc_timer),
-        )
-        .await;
+        self.retire().await;
         self.database_handed_back = true;
         Arc::clone(&self.db)
+    }
+
+    /// Seal the server, abort its tasks and join what a drop would, each
+    /// task kept in its slot until it has ended, so a call cancelled part
+    /// way leaves what it hasn't joined to the drop, which joins it before
+    /// the database goes (#2766).
+    pub(super) async fn retire(&mut self) {
+        self.seal();
+        for task in self.task_slots().into_iter().flatten() {
+            task.abort();
+        }
+        for slot in self.task_slots() {
+            stop_producer(slot).await;
+        }
+        while let Some(result) = self.request_tasks.join_next().await {
+            super::request_tasks::RequestTasks::observe(Some(result));
+        }
+        // No request is left to hold the slot, as in a drop's join.
+        {
+            let mut timer = self.dcc_timer.lock().await;
+            super::dcc_timer::cancel(&mut timer).await;
+        }
+        while let Some(result) = self.notification_transactions.join_next().await {
+            NotificationTransactions::observe(Some(result));
+        }
+        super::event_send::join_sealed(&self.notification_transactions).await;
     }
 }
 

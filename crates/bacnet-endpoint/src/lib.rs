@@ -20,5 +20,5 @@ mod wrapped_session_tests;
 
 pub use identity::{DeviceIdentity, NetworkPortEntry, build_database_with_extra};
 pub use session::{
-    EndpointSession, PolicyCountersSnapshot, SessionConfig, SessionExit, SessionRole,
+    EndpointSession, PolicyCountersSnapshot, SessionConfig, SessionExit, SessionRole, StartError,
 };
