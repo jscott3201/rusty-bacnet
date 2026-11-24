@@ -9,6 +9,7 @@ use crate::traits::{BACnetObject, Retirement};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 mod levels;
+mod release;
 mod retry;
 mod setting;
 mod staging;

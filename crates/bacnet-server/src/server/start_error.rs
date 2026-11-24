@@ -14,7 +14,10 @@ use bacnet_types::error::Error;
 /// began first: a bound transport is stopped, the outputs it drove are
 /// released (a Load Control's application is told to stop, and the object
 /// keeps its request), and a registered Network Port it published is put
-/// back as configured, so the same database can go into another start.
+/// back as configured, so the same database can go into another start. A
+/// returned Load Control still reads the shed state and levels its request
+/// had, though its application was told to stop, until the next start
+/// looks at the request again.
 ///
 /// The database comes back with what every start sets and the next sets
 /// again:

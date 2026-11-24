@@ -5618,8 +5618,9 @@ It answers `(progress, expected, actual)`: `"waiting"`, `"shedding"` or
 `{"kind": ..., "value": ...}` mappings in the requested choice. The optional
 `stop` is called with no arguments once a request `shed` was asked about
 ends, a DeleteObject of the Load Control included, and when a start that
-asked fails or is cancelled, which keeps the request for the next start
-(#2752); it needs `shed`. Make it idempotent: it may come with no
+asked fails or is cancelled. A start that fails keeps the request for the
+next start (#2752); a cancelled one drops the objects, so only the file a
+`storage_path` names keeps it. `stop` needs `shed`. Make it idempotent: it may come with no
 loads shed, and twice with no `shed` between. Without
 `shed` nothing is shed, and a request runs SHED_NON_COMPLIANT from Start_Time
 to its end. Both callables run with the server's object database locked, as

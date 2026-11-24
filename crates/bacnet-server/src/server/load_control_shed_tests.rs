@@ -594,6 +594,11 @@ async fn a_start_that_fails_lets_a_restored_shed_go() {
         PropertyValue::Enumerated(bacnet_types::enums::ShedState::SHED_COMPLIANT.to_raw())
     );
     assert_eq!(*store.saved.lock().unwrap(), Some(saved));
+    assert_eq!(
+        *app.stops.lock().unwrap(),
+        1,
+        "only the refused start's stop"
+    );
     server.stop().await.unwrap();
 }
 

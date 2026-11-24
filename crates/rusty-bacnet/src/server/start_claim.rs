@@ -64,18 +64,14 @@ fn sendable(object: Box<dyn BACnetObject>) -> Box<dyn BACnetObject + Send> {
     object
 }
 
-/// Put `object` into `db`, making first the checks the database's add makes
-/// of a new database (the reserved instance, a name in use), so a refused
-/// object stays the claim's. An object the add refuses for another reason
-/// goes with the refusal.
+/// Put `object` into `db`, asking first whether the database takes it
+/// ([`ObjectDatabase::check_addable`], the checks its add makes), so a
+/// refused object stays the claim's.
 fn admit(
     db: &mut ObjectDatabase,
     object: Box<dyn BACnetObject + Send>,
 ) -> Result<(), (Error, Option<Box<dyn BACnetObject + Send>>)> {
-    let oid = object.object_identifier();
-    let checked = ObjectIdentifier::new_addressable(oid.object_type(), oid.instance_number())
-        .and_then(|_| db.check_name_available(&oid, object.object_name()));
-    if let Err(error) = checked {
+    if let Err(error) = db.check_addable(object.as_ref()) {
         return Err((error, Some(object)));
     }
     db.add(object).map_err(|error| (error, None))

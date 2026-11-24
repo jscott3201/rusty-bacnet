@@ -1,6 +1,6 @@
-//! The last two of a refused start's paths (#2752): target Audit's
-//! installation refused once the link is up, and a refusal dropped without
-//! taking its database, which goes off the runtime.
+//! The rest of a refused start's paths (#2752): target Audit's installation
+//! refused once the link is up, a link that also fails to stop, and a
+//! refusal dropped without taking its database, which goes off the runtime.
 use std::borrow::Cow;
 use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc as std_mpsc;
@@ -55,11 +55,9 @@ impl BACnetObject for RefusesInstall {
     }
 }
 
-/// Target Audit refused as it installs, after the link started: the link
-/// is let go of and the database comes back, which the next start serves.
-#[tokio::test(start_paused = true)]
-async fn an_audit_installation_refused_after_the_link_started_hands_the_database_back() {
-    let borrows = Arc::new(AtomicUsize::new(0));
+/// The Device with an Audit recipient, a [`RefusesInstall`] Reporter
+/// counting into `borrows`, and a value.
+fn refusing_audit(borrows: &Arc<AtomicUsize>) -> ObjectDatabase {
     let mut db = ObjectDatabase::new();
     let mut device = device();
     let logger = oid(ObjectType::DEVICE, 20);
@@ -69,36 +67,78 @@ async fn an_audit_installation_refused_after_the_link_started_hands_the_database
     db.add(Box::new(device)).unwrap();
     db.add(Box::new(RefusesInstall {
         inner: AuditReporterObject::new(1, "reporter").unwrap(),
-        borrows: Arc::clone(&borrows),
+        borrows: Arc::clone(borrows),
     }))
     .unwrap();
     db.add(Box::new(BinaryValueObject::new(1, "BV-1").unwrap()))
         .unwrap();
-    let objects: Vec<_> = db.object_list().collect();
-    let audited = || ServerConfig {
+    db
+}
+
+fn audited() -> ServerConfig {
+    ServerConfig {
         audit_reporters: Some(AuditReportersConfig {
             reporters: vec![oid(ObjectType::AUDIT_REPORTER, 1)],
         }),
         ..config()
-    };
+    }
+}
+
+fn denied(error: &Error) -> bool {
+    error.remote()
+        == Some(RemoteError::Error {
+            class: ErrorClass::SERVICES,
+            code: ErrorCode::SERVICE_REQUEST_DENIED,
+        })
+}
+
+/// Target Audit refused as it installs, after the link started: the link
+/// is let go of and the database comes back, which the next start serves.
+#[tokio::test(start_paused = true)]
+async fn an_audit_installation_refused_after_the_link_started_hands_the_database_back() {
+    let borrows = Arc::new(AtomicUsize::new(0));
+    let db = refusing_audit(&borrows);
+    let objects: Vec<_> = db.object_list().collect();
     let link = TestTransport::new();
     let handle = link.handle();
     let (error, db) = refused(BACnetServer::start(audited(), db, link).await, &objects);
     assert_eq!(borrows.load(Ordering::Acquire), 3, "refused at the third");
-    assert_eq!(
-        error.remote(),
-        Some(RemoteError::Error {
-            class: ErrorClass::SERVICES,
-            code: ErrorCode::SERVICE_REQUEST_DENIED,
-        }),
-        "{error}"
-    );
+    assert!(denied(&error), "{error}");
     assert_eq!(handle.stops(), 1, "the started link is let go of");
     let mut server = BACnetServer::start(audited(), db, TestTransport::new())
         .await
         .unwrap();
     serves(&server, &objects).await;
     server.stop().await.unwrap();
+}
+
+/// A refused start whose link then fails to stop keeps its own error, and
+/// hands the database back: a port in use, and target Audit refused as it
+/// installs. The failed stop is only logged.
+#[tokio::test(start_paused = true)]
+async fn a_refusal_whose_link_fails_to_stop_keeps_its_own_error() {
+    let stuck = || async { Err(Error::Encoding("the link would not stop".into())) };
+    let in_use_link = TestTransport::builder()
+        .start_gate(|| async { Err(Error::Transport(std::io::ErrorKind::AddrInUse.into())) })
+        .on_stop(stuck)
+        .build();
+    let handle = in_use_link.handle();
+    let objects: Vec<_> = database().object_list().collect();
+    let (error, _) = refused(
+        BACnetServer::start(config(), database(), in_use_link).await,
+        &objects,
+    );
+    assert!(in_use(&error), "{error}");
+    assert_eq!(handle.stops(), 1, "the link was told to stop");
+
+    let borrows = Arc::new(AtomicUsize::new(0));
+    let db = refusing_audit(&borrows);
+    let objects: Vec<_> = db.object_list().collect();
+    let link = TestTransport::builder().on_stop(stuck).build();
+    let handle = link.handle();
+    let (error, _) = refused(BACnetServer::start(audited(), db, link).await, &objects);
+    assert!(denied(&error), "{error}");
+    assert_eq!(handle.stops(), 1, "the link was told to stop");
 }
 
 /// An object that says which thread drops it.

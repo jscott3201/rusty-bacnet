@@ -143,18 +143,12 @@ impl ObjectDatabase {
     /// ([`object_list`](Self::object_list), #2669); a replaced one keeps its
     /// place and leaves the revision alone.
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
-        let identifier = object.object_identifier();
-        ObjectIdentifier::new_addressable(identifier.object_type(), identifier.instance_number())?;
-        self.check_network_port_membership(&identifier)?;
-        self.check_audit_membership(&identifier, true)?;
+        self.check_addable(object.as_ref())?;
         if let Some(timed) = object.timed() {
             timed.bind_clocks(&self.clocks);
         }
         let oid = object.object_identifier();
         let name = object.object_name().to_string();
-
-        // Check for name collision with a *different* object
-        self.check_name_available(&oid, &name)?;
 
         // If replacing an existing object, remove its old name from the index
         // and invalidate state owned by enrollments that monitor it.
@@ -193,6 +187,19 @@ impl ObjectDatabase {
         }
         self.membership_changed(oid, true);
         Ok(())
+    }
+
+    /// Whether [`add`](Self::add) would take `object`: every refusal it
+    /// gives, given without taking the object, which `add` makes first
+    /// itself. A caller holding objects it can't rebuild checks here before
+    /// it hands one over (#2752).
+    pub fn check_addable(&self, object: &dyn BACnetObject) -> Result<(), Error> {
+        let identifier = object.object_identifier();
+        ObjectIdentifier::new_addressable(identifier.object_type(), identifier.instance_number())?;
+        self.check_network_port_membership(&identifier)?;
+        self.check_audit_membership(&identifier, true)?;
+        // A name in use by a *different* object.
+        self.check_name_available(&identifier, object.object_name())
     }
 
     /// Look up an object by its name. O(1) via the name index.
@@ -685,3 +692,6 @@ mod tests;
 
 #[cfg(test)]
 mod network_port_tests;
+
+#[cfg(test)]
+mod addable_tests;
