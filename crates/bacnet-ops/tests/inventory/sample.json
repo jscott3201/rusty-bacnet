@@ -126,7 +126,10 @@
       },
       "number_of_states": 3,
       "commandable": false,
-      "relinquish_default": null,
+      "relinquish_default": {
+        "value": "4",
+        "decoded": 4
+      },
       "cov_increment": null,
       "min_present_value": null,
       "max_present_value": null,
@@ -136,7 +139,12 @@
         "decoded": 2
       },
       "status_flags": null,
-      "problems": []
+      "problems": [
+        {
+          "property": "relinquish-default",
+          "error": "not one of the states 1 to 3"
+        }
+      ]
     },
     {
       "device": "192.168.1.10:47808",
@@ -176,6 +184,10 @@
         {
           "property": "units",
           "error": "PROPERTY:UNKNOWN_PROPERTY"
+        },
+        {
+          "property": "relinquish-default",
+          "error": "not a Real"
         }
       ]
     },

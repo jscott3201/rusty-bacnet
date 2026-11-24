@@ -14,10 +14,12 @@
 //! An object is skipped when its record lacks its Object_Name, the Units
 //! of an analog object or an Integer Value, or a multi-state object's
 //! Number_Of_States, the reason naming that property and what the device
-//! said of it. An optional setting the record lacks, or whose value isn't
-//! of the property's type, is `None`; so is a Polarity the device didn't
-//! give, or gave as other than an Enumerated, which the record lists among
-//! its problems, and a Binary Value's, as that type has none.
+//! said of it. An optional setting the record lacks is `None`: one the
+//! device didn't give, or gave as a value of another datatype than the
+//! property's, which the record lists among its problems (#2765); and a
+//! Binary Value's Polarity, as that type has none. A setting the record
+//! holds is the point's as the device gave it, one the builder would
+//! refuse included, which the record lists among its problems too.
 //!
 //! An input is [`Access::ReadOnly`] and an output
 //! [`Access::Commandable`]. A value is commandable when it has a
@@ -222,7 +224,9 @@ fn access<T>(role: Role, record: &PointRecord, decode: fn(&[u8]) -> Option<T>) -
 }
 
 /// An optional setting as its type decodes it; `None` when the record
-/// lacks it or its value is of another type.
+/// lacks it or its value doesn't fit the point: one of another type, which
+/// only a hand-built record holds, or a multi-state relinquish default
+/// above 4294967295, which the record names as no state.
 fn setting<T>(value: &Option<Value>, decode: fn(&[u8]) -> Option<T>) -> Option<T> {
     value.as_ref().and_then(|value| decode(&value.raw))
 }

@@ -1702,7 +1702,14 @@ included.
   optional property an object lacks is left empty. A property that should
   have read and didn't is listed with the device's error under the object's
   problems and never fails the command; an object the device refuses is a
-  row whose properties are all problems.
+  row whose properties are all problems. A value of another datatype than
+  the property has on that object type is a problem too (`not a Real`) and
+  is left empty, as is a State_Text entry that isn't a string (`state 2 is
+  not a character string`). A setting a point list couldn't be built with
+  is shown as the device gave it and named under problems: an analog
+  setting that isn't a finite number, a negative COV increment, a minimum
+  above the maximum, a binary relinquish default or polarity past 1, or a
+  multi-state relinquish default that names no state.
 - **What it costs.** The device summary, the Object_List, then one
   ReadPropertyMultiple for each batch, filled in Object_List order up to
   16 objects or 32 properties, whichever comes first: 10 analog inputs, 8

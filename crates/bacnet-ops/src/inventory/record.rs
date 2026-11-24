@@ -1,9 +1,10 @@
 //! A [`PointRecord`] from one object's rows as read.
 
-use bacnet_types::enums::PropertyIdentifier as P;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier as P};
+use bacnet_types::primitives::ObjectIdentifier;
 
 use super::plan::required;
+use super::settings::{mistyped, refused, state_text};
 use super::{PointRecord, Problem};
 use crate::device::DeviceAddress;
 use crate::format::{PropertyError, RawRow, StateTexts, Value, units};
@@ -11,7 +12,10 @@ use crate::reading::readings;
 use crate::write::{Commandability, unknown_property};
 
 /// `object`'s record from `rows`, the properties its read asked for, each
-/// its value or its error. The first row of a property counts.
+/// its value or its error. The first row of a property counts. A value of
+/// the wrong type is a problem and stays out of the record; a setting a
+/// point list builder would refuse is kept and is a problem too
+/// ([`refused`]).
 pub(crate) fn record(
     device: &DeviceAddress,
     device_instance: u32,
@@ -59,25 +63,29 @@ pub(crate) fn record(
                 has_priorities = true;
                 None
             }
-            P::RELINQUISH_DEFAULT => keep(value, &mut record.relinquish_default),
-            P::COV_INCREMENT => keep(value, &mut record.cov_increment),
-            P::MIN_PRES_VALUE => keep(value, &mut record.min_present_value),
-            P::MAX_PRES_VALUE => keep(value, &mut record.max_present_value),
-            P::POLARITY => {
-                // One Enumerated, as the export decodes it.
-                let enumerated = matches!(value.decode(), Ok(PropertyValue::Enumerated(_)));
-                record.polarity = enumerated.then_some(value);
-                record.polarity.is_none().then(|| wrong("an Enumerated"))
+            P::RELINQUISH_DEFAULT => {
+                typed(object_type, property, value, &mut record.relinquish_default)
             }
+            P::COV_INCREMENT => typed(object_type, property, value, &mut record.cov_increment),
+            P::MIN_PRES_VALUE => typed(object_type, property, value, &mut record.min_present_value),
+            P::MAX_PRES_VALUE => typed(object_type, property, value, &mut record.max_present_value),
+            P::POLARITY => typed(object_type, property, value, &mut record.polarity),
             P::PRESENT_VALUE => keep(value, &mut record.present_value),
             P::STATUS_FLAGS => keep(value, &mut record.status_flags),
-            // State_Text is read from the rows above.
+            // State_Text is read from the rows above, an entry that isn't
+            // a string as an empty text.
+            P::STATE_TEXT => state_text(&value),
             _ => None,
         };
         if let Some(error) = problem {
             record.problems.push(Problem::new(property, error));
         }
     }
+    record.problems.extend(refused(&record));
+    // In the order asked, the settings' ranges among the rest.
+    record
+        .problems
+        .sort_by_key(|problem| seen.iter().position(|&asked| asked == problem.property));
     record.commandable = match Commandability::of(object_type, P::PRESENT_VALUE) {
         Commandability::Always => true,
         Commandability::Never => false,
@@ -91,6 +99,22 @@ pub(crate) fn record(
 fn keep(value: Value, field: &mut Option<Value>) -> Option<PropertyError> {
     *field = Some(value);
     None
+}
+
+/// Put `value` in `field` when it is of the datatype `property` has on an
+/// object of `object_type`; a value that isn't is the problem returned,
+/// and `field` stays empty, so the export finds nothing there either.
+fn typed(
+    object_type: ObjectType,
+    property: P,
+    value: Value,
+    field: &mut Option<Value>,
+) -> Option<PropertyError> {
+    let problem = mistyped(object_type, property, &value);
+    if problem.is_none() {
+        *field = Some(value);
+    }
+    problem
 }
 
 /// Put `value`'s character string in `field`, exactly as the device sent

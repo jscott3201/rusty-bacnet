@@ -98,6 +98,7 @@
 mod plan;
 pub(crate) mod read;
 mod record;
+mod settings;
 mod write;
 
 use bacnet_transport::port::TransportPort;
@@ -193,7 +194,7 @@ pub struct Problem {
     pub property: PropertyIdentifier,
     /// The device's error for it, [`PropertyError::NoValue`] for one its
     /// answer left out, or what was wrong with the value it gave
-    /// ([`PropertyError::Other`]: `not a character string`).
+    /// ([`PropertyError::Other`]: `not a character string`, `negative`).
     #[serde(serialize_with = "write::display")]
     pub error: PropertyError,
 }
@@ -212,8 +213,10 @@ impl Problem {
 /// device sent it: clean it before showing it
 /// ([`clean_name`](crate::format::clean_name)). A field is `None` when the
 /// object's type has no such property, the object lacks an optional one,
-/// the options didn't ask for it, or its read failed; only the last is
-/// listed in [`problems`](Self::problems).
+/// the options didn't ask for it, or its read failed, a value of another
+/// datatype than the property's included; only the last is listed in
+/// [`problems`](Self::problems). A setting a point list builder would
+/// refuse is kept as the device gave it and listed there too.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct PointRecord {
@@ -249,17 +252,23 @@ pub struct PointRecord {
     /// Priority_Array means unknown: the device wouldn't say.
     pub commandable: bool,
     /// Its Relinquish_Default, read with
-    /// [`settings`](InventoryOptions::settings).
+    /// [`settings`](InventoryOptions::settings), of its Present_Value's
+    /// datatype: a REAL on an analog output or value, an Enumerated on a
+    /// binary one, an Unsigned on a multi-state one, and so on by type. One
+    /// of another datatype is a problem instead.
     #[serde(serialize_with = "write::value")]
     pub relinquish_default: Option<Value>,
     /// Its COV_Increment, read with settings: a REAL for an analog
-    /// object, an Unsigned for an integer one.
+    /// object, an Unsigned for an Integer or Positive Integer Value, a
+    /// Double for a Large Analog Value. One of another datatype is a
+    /// problem instead.
     #[serde(serialize_with = "write::value")]
     pub cov_increment: Option<Value>,
-    /// Its Min_Pres_Value, read with settings.
+    /// Its Min_Pres_Value, read with settings, of its Present_Value's
+    /// datatype; one of another is a problem instead.
     #[serde(serialize_with = "write::value")]
     pub min_present_value: Option<Value>,
-    /// Its Max_Pres_Value, read with settings.
+    /// Its Max_Pres_Value, read with settings, as Min_Pres_Value.
     #[serde(serialize_with = "write::value")]
     pub max_present_value: Option<Value>,
     /// A Binary Input's or Output's Polarity, read with settings; one
@@ -278,10 +287,23 @@ pub struct PointRecord {
     pub status_flags: Option<Value>,
     /// The properties asked for that gave no usable value, in the order
     /// asked: one the device refused, one whose value isn't of the
-    /// property's type, and each property of an object the device doesn't
-    /// have or left out of its answer. An optional property the object
-    /// simply lacks (the device says it is an unknown property) is not a
-    /// problem.
+    /// datatype the property has on the object's type (`not a Real`),
+    /// and each property of an object the device doesn't have or left out
+    /// of its answer. A State_Text entry that isn't a string is one too
+    /// (`state 2 is not a character string`), the entry held as an empty
+    /// text.
+    ///
+    /// So is a setting kept as the device gave it that a point list
+    /// builder (`bacnet_objects::points::build_database`) would refuse,
+    /// so the inventory says so before a rebuild does. On the types a
+    /// point list holds: an analog setting that isn't a finite number, a
+    /// negative COV_Increment, Min_Pres_Value above Max_Pres_Value, a
+    /// binary relinquish default or a Polarity past 1, and a multi-state
+    /// relinquish default that names no state (`not one of the states 1
+    /// to 3`).
+    ///
+    /// An optional property the object simply lacks (the device says it
+    /// is an unknown property) is not a problem.
     pub problems: Vec<Problem>,
 }
 
@@ -475,6 +497,9 @@ mod tests;
 
 #[cfg(test)]
 mod record_tests;
+
+#[cfg(test)]
+mod settings_tests;
 
 #[cfg(test)]
 mod write_tests;

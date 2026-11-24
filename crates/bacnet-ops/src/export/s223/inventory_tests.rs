@@ -210,7 +210,8 @@ fn a_missing_required_property_skips_the_object() {
     assert_eq!(failed(unasked).as_deref(), Some("object-name: not read"));
     // An integer value needs its Units as an analog object does; its range
     // and relinquish default decode as INTEGER and its increment as an
-    // Unsigned of any size, and anything else there is None.
+    // Unsigned of any size, and anything else there is None, a problem on
+    // the record.
     let iv = oid(ObjectType::INTEGER_VALUE, 1);
     let no_units = entry_of(iv, &[name(), refused(P::UNITS)]);
     assert_eq!(
@@ -236,6 +237,10 @@ fn a_missing_required_property_skips_the_object() {
     .with_min_pres_value(i32::MIN);
     expected.max_pres_value = None;
     assert_eq!(entry_of(iv, &rows), Ok(Point::new(iv, "Zone", expected)));
+    let said = record(iv, &rows)
+        .problem(P::MAX_PRES_VALUE)
+        .map(ToString::to_string);
+    assert_eq!(said.as_deref(), Some("not a Signed"));
     let msi = oid(ObjectType::MULTI_STATE_INPUT, 1);
     let states = [name(), row(P::NUMBER_OF_STATES, text("three"))];
     let states = entry_of(msi, &states);
@@ -278,10 +283,11 @@ fn a_missing_required_property_skips_the_object() {
 
 /// A Binary Input's or Output's Polarity is the one its record holds,
 /// NORMAL and REVERSE alike and any other number too, so a list keeps what
-/// the device has; one the device didn't give, or of another type, is
-/// `None`, and the object is still a point. A Binary Value's is `None`
-/// even when a hand-built record holds one: that type has no Polarity,
-/// and a builder would refuse it.
+/// the device has (the record names any other number as a problem, which
+/// a builder would refuse); one the device didn't give, or of another
+/// type, is `None`, and the object is still a point. A Binary Value's is
+/// `None` even when a hand-built record holds one: that type has no
+/// Polarity, and a builder would refuse it.
 #[test]
 fn a_binary_points_polarity_is_the_records() {
     use PropertyIdentifier as P;
@@ -300,6 +306,9 @@ fn a_binary_points_polarity_is_the_records() {
         assert_eq!(of(object, &[name(), polarity(1)]), Some(Polarity::REVERSE));
         let other = Some(Polarity::from_raw(7));
         assert_eq!(of(object, &[name(), polarity(7)]), other);
+        let said = record(object, &[name(), polarity(7)]).problems;
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert_eq!(said[0].error.to_string(), "neither normal nor reverse");
         assert_eq!(of(object, &[name(), refused(P::POLARITY)]), None);
         let unsigned = row(P::POLARITY, PropertyValue::Unsigned(1));
         assert_eq!(of(object, &[name(), unsigned]), None);
