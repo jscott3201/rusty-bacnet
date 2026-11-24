@@ -4289,15 +4289,19 @@ Async BACnet server that hosts objects and responds to remote requests.
 
 `device_instance` takes 0 to 4194302. Instance 4194303 is reserved, since no
 object may have it (Clause 12.1.1), so the constructor raises `ValueError` for
-it or anything larger (#2171). The nine analog, binary and multi-state
-builders check each registration at the call, as the endpoints' builders do
-(see [Point registration checks](#point-registration-checks)). The other
-builders check less at the call. An object they add under an identifier
-already registered replaces the earlier one silently, the last one winning.
-An object the database won't take raises `ValueError` at `start()`:
-"duplicate object name" for a name another object holds, the Device's
-included, and "object refused" for any other reason, such as an object at
-instance 4194303.
+it or anything larger (#2171). Every `add_*` builder checks its object at
+the call (see [Builder checks](#builder-checks)): an identifier
+or name the Device or an earlier registration already has raises
+`ValueError`, and instance 4194303 raises `BacnetError`. A repeated
+identifier is refused, not replaced (#2748): register each object once.
+A start that fails before it hands the registrations to the database, as an
+SC hub that refuses the dial or a transport or router that cannot be
+prepared does, or one that is cancelled, keeps them, the Audit recipient and
+the forwarding configuration, so the application can correct the fault and
+start again. A start the Rust server's own startup refuses afterwards, such
+as a transport that will not bind, has consumed them: build the server
+again. `add_*` and a second `start()` raise `RuntimeError` while a start is
+in progress.
 
 ### Constructor
 
@@ -4404,12 +4408,15 @@ server.add_multistate_output(instance=1, name="Speed", number_of_states=3)
 server.add_multistate_value(instance=1, name="Season", number_of_states=4)
 ```
 
-#### Point registration checks
+#### Builder checks
 
-These nine builders, on `BACnetServer` and on each endpoint, read their
-arguments into one registration and check it with the same code (#2711).
-The checks run at the call, before anything is kept, in this order, so a
-call with two faults raises the same error on every surface:
+Every `BACnetServer.add_*` builder, and each endpoint's nine point
+builders, checks its object with the same code at the call (#2711, #2748),
+before anything is kept. The nine analog, binary and multi-state builders
+read their arguments into one registration first and check it in this order,
+so a call with two faults raises the same error on every surface; every
+other builder makes steps 1 and 2 before it opens or clears a `storage_path`
+file, then builds as it did:
 
 1. An instance of 4194303 or more raises `BacnetError`: no object may have
    4194303 (#2171).
@@ -4429,9 +4436,11 @@ call with two faults raises the same error on every surface:
 A refused registration keeps nothing and leaves the earlier ones for
 start. On `BACnetServer` it also leaves any `storage_path` file alone,
 `clear_written_reporting=True` included: every check comes before storage
-attaches. Until #2711 these builders, like the other `BACnetServer`
-builders still, took a repeated identifier as a silent replacement of the
-earlier registration and found a duplicate name only at `start()`.
+attaches. Until #2711 these builders took a repeated identifier as a silent
+replacement of the earlier registration and found a duplicate name only at
+`start()`; the other `BACnetServer` builders did until #2748. There is no
+call that removes or replaces a registration before start: register the
+final form of each object once, or build the server again.
 
 #### Keeping written reporting settings
 
@@ -7752,7 +7761,7 @@ An object name and its type/instance pair must each be unique across the
 Device, its Network Ports and the pending objects. An invalid addition raises
 at the builder call and preserves earlier registrations. `BACnetServer`'s
 builders make the same checks with the same code; see
-[Point registration checks](#point-registration-checks).
+[Builder checks](#builder-checks).
 
 The endpoint's server serves those objects as a standalone server serves
 its own, and a peer writes them as far as the endpoint's `mutation_policy`

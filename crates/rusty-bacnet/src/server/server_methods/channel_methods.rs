@@ -81,6 +81,7 @@ impl BACnetServer {
             storage_path,
             clear_written_config,
         };
+        self.precheck_pending(ObjectType::CHANNEL, instance, name)?;
         let obj = channel(instance, name, channel_number, settings).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
     }

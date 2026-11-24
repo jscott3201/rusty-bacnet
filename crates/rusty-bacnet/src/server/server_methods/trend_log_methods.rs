@@ -107,6 +107,7 @@ impl BACnetServer {
             total_record_count,
             clear_written_reporting,
         };
+        self.precheck_pending(ObjectType::TREND_LOG, instance, name)?;
         let obj =
             trend_log(instance, name, buffer_size, storage_path, settings).map_err(to_py_err)?;
         self.push_pending(Box::new(obj))
@@ -195,6 +196,7 @@ impl BACnetServer {
             total_record_count,
             clear_written_reporting,
         };
+        self.precheck_pending(ObjectType::TREND_LOG_MULTIPLE, instance, name)?;
         let obj = trend_log_multiple(instance, name, buffer_size, storage_path, settings)
             .map_err(to_py_err)?;
         self.push_pending(Box::new(obj))

@@ -1,4 +1,5 @@
-"""Local server database errors precede any SC network connection attempt."""
+"""Local server database errors precede any SC network connection attempt:
+the clashes are refused at the builder call (#2748), before any start."""
 import asyncio
 
 from rusty_bacnet import BACnetServer
@@ -28,17 +29,14 @@ class ServerLocalValidationTests(MtlsFixture):
                     sc_client_cert=self.path("server.pem"),
                     sc_client_key=self.path("server.key"),
                 )
-                # A point builder refuses a name in use at the call (#2711);
-                # a File object's builder leaves the clash to the database.
-                if collision == "pending_names":
-                    node.add_analog_input(0, "duplicate", 64, 72.5)
-                    node.add_file(1, "duplicate")
-                else:
-                    node.add_file(0, "Selected Device")
                 try:
                     caught = None
                     try:
-                        await asyncio.wait_for(node.start(), 3)
+                        if collision == "pending_names":
+                            node.add_analog_input(0, "duplicate", 64, 72.5)
+                            node.add_file(1, "duplicate")
+                        else:
+                            node.add_file(0, "Selected Device")
                     except Exception as error:
                         caught = error
                     self.assertEqual(
@@ -47,8 +45,8 @@ class ServerLocalValidationTests(MtlsFixture):
                     )
                     self.assertIsInstance(caught, ValueError)
                     self.assertIn("duplicate object name", str(caught))
-                    # This exact listener must observe a real connection. Since
-                    # start has completed, no future can defer a hidden dial.
+                    # This exact listener must observe a real connection. No
+                    # start ran, so no future can defer a hidden dial.
                     _reader, writer = await asyncio.open_connection(*address)
                     writer.close()
                     await writer.wait_closed()

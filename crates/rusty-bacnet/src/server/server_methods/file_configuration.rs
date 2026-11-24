@@ -45,7 +45,6 @@ impl BACnetServer {
         }
         let object = guard
             .iter()
-            .rev()
             .find(|object| object.object_identifier() == oid)
             .ok_or_else(|| missing_file(instance))?;
         let configuration = object
@@ -66,7 +65,6 @@ impl BACnetServer {
         }
         let object = guard
             .iter_mut()
-            .rev()
             .find(|object| object.object_identifier() == oid)
             .ok_or_else(|| missing_file(instance))?;
         let configuration = object
@@ -267,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_lookup_uses_file_identity_and_reverse_replacement_order() {
+    fn pending_lookup_uses_file_identity() {
         Python::initialize();
         let server = test_server();
         server
@@ -277,7 +275,7 @@ mod tests {
             .push_pending(Box::new(BinaryValueObject::new(4, "NON-FILE").unwrap()))
             .unwrap();
         server
-            .push_pending(Box::new(file(4, "SECOND", b"second")))
+            .push_pending(Box::new(file(5, "SECOND", b"second")))
             .unwrap();
 
         Python::attach(|py| {
@@ -293,7 +291,7 @@ mod tests {
                 .unwrap()
                 .stream_data()
                 .unwrap(),
-            b"first"
+            b"effective"
         );
         assert_eq!(
             guard[2]
@@ -301,7 +299,7 @@ mod tests {
                 .unwrap()
                 .stream_data()
                 .unwrap(),
-            b"effective"
+            b"second"
         );
     }
 

@@ -46,6 +46,7 @@ impl BACnetServer {
         port_filter: Option<Vec<(u8, bool)>>,
     ) -> PyResult<()> {
         let recipients = crate::types::destinations(recipients)?;
+        self.precheck_pending(ObjectType::NOTIFICATION_FORWARDER, instance, name)?;
         let mut nf = match storage_path {
             Some(path) => {
                 let storage =
@@ -67,14 +68,25 @@ impl BACnetServer {
                 .collect()
         }));
         let counters = (instance, nf.save_counters());
-        let mut pending = self.lock_pending()?;
-        self.check_takes_objects()?;
-        self.pending_forwarder_save_counters
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?
-            .push(counters);
-        pending.push(Box::new(nf));
-        Ok(())
+        let identifier = nf.object_identifier();
+        let name = nf.object_name().to_string();
+        // Its save counters join the pending list's, under the same lock.
+        self.admit_pending_with(
+            (
+                identifier.object_type(),
+                identifier.instance_number(),
+                &name,
+            ),
+            || Ok(()),
+            || Ok(Box::new(nf)),
+            || {
+                self.pending_forwarder_save_counters
+                    .lock()
+                    .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?
+                    .push(counters);
+                Ok(())
+            },
+        )
     }
 
     /// Sample each Notification Forwarder's save counters, keyed by

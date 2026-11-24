@@ -77,22 +77,17 @@ pub(super) fn pending_audit_log_index(
     objects: &[Box<dyn BACnetObject + Send>],
     object_id: ObjectIdentifier,
 ) -> PyResult<usize> {
-    let mut matches = objects
+    // Each identifier is kept once: `add_*` refuses a repeat (#2748).
+    let index = objects
         .iter()
-        .enumerate()
-        .filter(|(_, object)| object.object_identifier() == object_id);
-    let (index, object) = matches.next().ok_or_else(|| {
-        PyValueError::new_err(format!(
-            "no pending Audit Log object with instance {}",
-            object_id.instance_number()
-        ))
-    })?;
-    if matches.next().is_some() {
-        return Err(PyValueError::new_err(format!(
-            "duplicate pending Audit Log instance {}",
-            object_id.instance_number()
-        )));
-    }
+        .position(|object| object.object_identifier() == object_id)
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "no pending Audit Log object with instance {}",
+                object_id.instance_number()
+            ))
+        })?;
+    let object = &objects[index];
     if object.audit_log().is_none() {
         return Err(PyValueError::new_err(
             "selected Audit Log does not support Audit storage",
@@ -105,22 +100,17 @@ pub(super) fn pending_audit_reporter_index(
     objects: &[Box<dyn BACnetObject + Send>],
     object_id: ObjectIdentifier,
 ) -> PyResult<usize> {
-    let mut matches = objects
+    // Each identifier is kept once: `add_*` refuses a repeat (#2748).
+    let index = objects
         .iter()
-        .enumerate()
-        .filter(|(_, object)| object.object_identifier() == object_id);
-    let (index, object) = matches.next().ok_or_else(|| {
-        PyValueError::new_err(format!(
-            "no pending Audit Reporter object with instance {}",
-            object_id.instance_number()
-        ))
-    })?;
-    if matches.next().is_some() {
-        return Err(PyValueError::new_err(format!(
-            "duplicate pending Audit Reporter instance {}",
-            object_id.instance_number()
-        )));
-    }
+        .position(|object| object.object_identifier() == object_id)
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "no pending Audit Reporter object with instance {}",
+                object_id.instance_number()
+            ))
+        })?;
+    let object = &objects[index];
     if object.audit_reporter().is_none() {
         return Err(PyValueError::new_err(
             "selected object does not support the Audit Reporter capability",

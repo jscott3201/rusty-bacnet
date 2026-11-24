@@ -418,6 +418,34 @@ class NodeMtlsTests(MtlsFixture):
         self.assertEqual(await asyncio.to_thread(self.websocket, await hub.address(), "client",
                                                 read_property=True), "TLSv1.3")
 
+    async def test_a_refused_dial_keeps_the_registrations_for_the_next_start(self):
+        # The hub is not there yet: the dial is refused after the Device is
+        # built, and every registration (and the Audit recipient) is still
+        # pending for the start that follows (#2748).
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        node = self.node(BACnetServer, f"wss://127.0.0.1:{port}")
+        self.addAsyncCleanup(self.stop_server, node)
+        pending_count = getattr(node, "_pending_registration_count")
+        node.add_analog_input(0, "Kept AI", 64, 72.5)
+        node.add_file(1, "Kept file")
+        with self.assertRaises(Exception) as refused:
+            await self.start_node(node)
+        self.assertNotIsInstance(refused.exception, asyncio.TimeoutError)
+        self.assertEqual(pending_count(), 2)
+        # The registrations came back whole, so the same names are taken.
+        with self.assertRaisesRegex(ValueError, "duplicate object name: Kept AI"):
+            node.add_binary_input(5, "Kept AI")
+        node.add_binary_input(1, "Added after failure")
+        hub = self.hub(listen=f"127.0.0.1:{port}")
+        self.addAsyncCleanup(self.stop_hub, hub)
+        await asyncio.wait_for(hub.start(), 3)
+        await self.start_node(node)
+        self.assertEqual(pending_count(), 0)
+        self.assertEqual(await asyncio.to_thread(self.websocket, await hub.address(), "client",
+                                                read_property=True), "TLSv1.3")
+
     async def test_client_repairs_files_and_reads_through_trusted_hub(self):
         hub = self.hub()
         self.addAsyncCleanup(self.stop_hub, hub)
