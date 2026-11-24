@@ -189,3 +189,68 @@ async fn taken_runs_holding_the_last_handle_let_it_go_off_the_runtime() {
         .expect("the database was dropped");
     assert_ne!(thread, std::thread::current().id());
 }
+
+/// The real release: the call goes while the slot is held, as by a poll
+/// of the task's on another thread, and leaves the run to the task, which,
+/// polled again as its caller went, drops its driver and the run with it.
+#[tokio::test(start_paused = true)]
+async fn the_task_ends_a_run_its_caller_left_to_it() {
+    use crate::caller_waits::{HeldDatabase, for_caller, on_runtime};
+    use crate::command_lists::SharedRuns;
+    let db = database();
+    let runs = SharedRuns::new(HeldDatabase::new(Arc::clone(&db)), taken_run(&db).await);
+    let slot = runs.slot();
+    let mut call: Tick<'_> = Box::pin(async move {
+        let _ = for_caller(on_runtime, runs.driver(), |()| ()).await;
+        drop(runs);
+    });
+    // AO-1, then the 5-second delay, in the task once it has polled.
+    assert!(poll_once(&mut call).is_pending());
+    tokio::task::yield_now().await;
+    assert_eq!(slot8(&db, ao(1)).await, PropertyValue::Real(50.0));
+    {
+        let _polling = slot.lock().unwrap();
+        drop(call);
+    }
+    assert!(state(&db, cmd(1)).await.0, "left to the task");
+    tokio::task::yield_now().await;
+    assert!(!state(&db, cmd(1)).await.0, "the task ended the run");
+    assert_eq!(slot8(&db, ao(2)).await, PropertyValue::Null);
+}
+
+/// A tick polled on one runtime, its run queued for the database in that
+/// runtime's task, and the runtime dropped while the tick is kept unpolled:
+/// the task's driver drops the run with the task, so the database, let go
+/// of later, goes to a writer on another runtime, not to a waiter nothing
+/// polls.
+#[test]
+fn a_ticks_task_dropped_with_its_runtime_leaves_no_waiter() {
+    let runtime = || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap()
+    };
+    let (first, second) = (runtime(), runtime());
+    let db = database();
+    let mut tick: Tick<'_> = Box::pin(tick_schedules(&db));
+    let held = first.block_on(async {
+        // The pass, AO-1, then the 5-second delay, in a task of this runtime.
+        assert!(poll_once(&mut tick).is_pending());
+        let held = Arc::clone(&db).write_owned().await;
+        // The delay runs out: the run's next step queues behind the guard.
+        tokio::time::advance(Duration::from_secs(5)).await;
+        tokio::task::yield_now().await;
+        held
+    });
+    drop(first);
+    drop(held);
+    second.block_on(async {
+        let guard = tokio::time::timeout(STUCK, db.write())
+            .await
+            .expect("the database went to a waiter nothing polls");
+        drop(guard);
+    });
+    drop(tick);
+}

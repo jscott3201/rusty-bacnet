@@ -117,12 +117,13 @@ pub(crate) fn schedule_instant(frame: ClockFrame) -> Option<(SpecificDate, Time)
 /// section describes for a local call (#2772): dropped before that task
 /// holds the guard, it makes no pass; dropped after, it may still make the
 /// whole pass, never part of it. Its runs end in the drop all the same,
-/// even those a task was making, unless that task is in the middle of a
-/// poll for the call on another thread as it is dropped: on a multi-thread
-/// runtime, what that poll does still happens, a write it began may land
-/// after the drop, and the runs end as it returns, so a tick made at once
-/// may find a Command still in process. Outside a runtime it waits in its
-/// caller's task.
+/// even those a task was making, unless that task is mid-poll on another
+/// thread as the call is dropped, whatever thread drops it: then one write
+/// already under way may still land after the drop, the runs end as that
+/// poll returns, and a tick made at once may find that Command or Channel
+/// still busy. A task that ends without its caller, dropped with its
+/// runtime say, ends them too. Outside a runtime it waits in its caller's
+/// task.
 pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
     use crate::caller_waits::{HeldDatabase, for_caller, on_runtime};
     let take = HeldDatabase::new(Arc::clone(db)).write_owned();

@@ -18,11 +18,11 @@
 //! empties as it is dropped, so a dropped tick ends its runs in the drop,
 //! as it did when they lived in the caller's own future.
 
-use std::future::{Future, poll_fn};
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, TryLockError};
-use std::task::Poll;
+use std::task::{Context, Poll};
 
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::command::CommandRun;
@@ -44,24 +44,22 @@ use bacnet_device_core::write::Unfinished;
 /// The runs a tick started, shared by its caller, which owns them, and the
 /// task that makes them once one has to wait (#2781).
 ///
-/// The task polls them through [`Self::driver`], holding the slot's lock
-/// for one poll at a time; a poll waits for nothing but what a run's write
+/// The task polls them through a [`Driver`], holding the slot's lock for
+/// one poll at a time; a poll waits for nothing but what a run's write
 /// waited for in the caller before (a durable target's save, say). Dropped,
 /// this takes the runs out of the slot without waiting for the lock and
 /// drops them, ending each unfinished one as unsuccessful as their own
-/// future's drop always has.
-/// Only a poll in progress on another thread as it is dropped keeps them:
-/// they write nothing more once this is dropped, but for a write that poll
-/// had begun, and end once it returns, when the task sees its caller gone
-/// and lets go of the slot. Whatever drops them, the database handle they
-/// hold goes off the runtime (#1513).
+/// future's drop always has. Only a poll in progress on another thread as
+/// it is dropped keeps them: they write nothing more once this is dropped,
+/// but for a write that poll had begun, and end once it returns, when the
+/// task sees its caller gone and drops the driver. Whatever drops them, the
+/// database handle they hold goes off the runtime (#1513).
 pub(crate) struct SharedRuns {
     slot: Slot,
     gone: Arc<AtomicBool>,
 }
 
-/// The runs' future, while neither its end nor its caller's drop has taken
-/// it.
+/// The runs' future, while neither its end nor a drop has taken it.
 pub(crate) type Slot = Arc<Mutex<Option<Pin<Box<dyn Future<Output = ()> + Send>>>>>;
 
 impl SharedRuns {
@@ -77,20 +75,9 @@ impl SharedRuns {
         }
     }
 
-    /// Poll the runs until they end, or until the caller has taken them.
-    pub(crate) fn driver(&self) -> impl Future<Output = ()> + Send + Sync + 'static {
-        let slot = Arc::clone(&self.slot);
-        poll_fn(move |cx| {
-            let mut runs = slot.lock().unwrap_or_else(PoisonError::into_inner);
-            let Some(future) = runs.as_mut() else {
-                return Poll::Ready(());
-            };
-            let polled = future.as_mut().poll(cx);
-            if polled.is_ready() {
-                *runs = None;
-            }
-            polled
-        })
+    /// The task's side of the runs.
+    pub(crate) fn driver(&self) -> Driver {
+        Driver(Arc::clone(&self.slot))
     }
 
     /// The slot, for a test to stand for a poll in progress.
@@ -103,14 +90,47 @@ impl SharedRuns {
 impl Drop for SharedRuns {
     fn drop(&mut self) {
         self.gone.store(true, Ordering::Release);
-        let runs = match self.slot.try_lock() {
-            Ok(mut runs) => runs.take(),
-            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().take(),
-            // A poll in progress: the task drops them once it returns.
-            Err(TryLockError::WouldBlock) => None,
+        // `None` for a poll in progress: the task drops them once it returns.
+        drop(take_unless_polled(&self.slot));
+    }
+}
+
+/// Polls a tick's runs until they end, or until their caller has taken
+/// them. Dropped first, as its task ends, is aborted or goes with its
+/// runtime while the caller lives on, it drops what is left of them, so no
+/// wait of theirs, a queued lock waiter among them, outlives the task.
+pub(crate) struct Driver(Slot);
+
+impl Future for Driver {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let mut runs = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(future) = runs.as_mut() else {
+            return Poll::Ready(());
         };
-        // Dropped with the lock let go: ending them takes nothing of it.
-        drop(runs);
+        let polled = future.as_mut().poll(cx);
+        if polled.is_ready() {
+            *runs = None;
+        }
+        polled
+    }
+}
+
+impl Drop for Driver {
+    fn drop(&mut self) {
+        drop(take_unless_polled(&self.0));
+    }
+}
+
+/// The runs in `slot`, taken out without waiting for its lock, or `None`
+/// when a poll holds it or they are gone already. The caller drops them
+/// once the lock is let go: ending them takes nothing of it.
+fn take_unless_polled(slot: &Slot) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>> {
+    match slot.try_lock() {
+        Ok(mut runs) => runs.take(),
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().take(),
+        Err(TryLockError::WouldBlock) => None,
     }
 }
 
