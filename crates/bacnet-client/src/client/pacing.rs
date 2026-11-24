@@ -20,7 +20,12 @@
 //!
 //! The endpoint client paces through this same type (#1542), before it
 //! reserves an invoke ID, so a request waiting for its turn holds nothing
-//! from the device's shared pool.
+//! from the device's shared pool. On a node that audits the client's
+//! requests, the node takes the turn ([`Turn`]) as it admits the request
+//! (#2652): it waits for the turn to come due holding nothing, then for its
+//! admission, and then takes the turn if it is still due, or lets the
+//! admission go and waits again. So a request that waited for admission
+//! still gets the whole interval after the one before it.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -143,16 +148,6 @@ impl PaceGuard {
     pub(crate) fn unpaced() -> Self {
         Self { sent: None }
     }
-
-    /// Move the request's turn out, leaving a guard that ends none: for a
-    /// segmented request its node audits, which only borrows its caller's
-    /// guard (#2617).
-    #[cold]
-    pub(crate) fn take(&mut self) -> Self {
-        Self {
-            sent: self.sent.take(),
-        }
-    }
 }
 
 impl Drop for PaceGuard {
@@ -169,6 +164,58 @@ impl Drop for PaceGuard {
                 lane.finished = Some(Instant::now());
             }
         }
+    }
+}
+
+/// A request's turn at its destination, not yet taken: an audited client's,
+/// which its node takes once it has admitted the request (#2652).
+pub(crate) struct Turn {
+    pacer: Arc<RequestPacer>,
+    key: PaceKey,
+    /// The client's tasks, as [`RequestPacer::wait`] watches them.
+    ended: watch::Receiver<()>,
+}
+
+impl Turn {
+    pub(crate) fn new(
+        pacer: &Arc<RequestPacer>,
+        key: PaceKey,
+        ended: &watch::Receiver<()>,
+    ) -> Self {
+        Self {
+            pacer: Arc::clone(pacer),
+            key,
+            ended: ended.clone(),
+        }
+    }
+
+    /// Wait for the turn and take it, as [`RequestPacer::wait`] does:
+    /// `None` once the client's tasks end first. Dropping the wait takes
+    /// nothing.
+    pub(crate) async fn take(&self) -> Option<PaceGuard> {
+        self.pacer.wait(self.key.clone(), &self.ended).await
+    }
+
+    /// Wait until the turn is due, without taking it: `false` once the
+    /// client's tasks end first. Another request to the destination may
+    /// take it before this one does.
+    pub(crate) async fn due(&self) -> bool {
+        let mut ending = None;
+        while let Some(due) = self.pacer.due(&self.key) {
+            let ending = ending.get_or_insert_with(|| self.ended.clone());
+            tokio::select! {
+                biased;
+                // Never sent on, so this resolves only when the sender drops.
+                _ = ending.changed() => return false,
+                () = tokio::time::sleep_until(due) => {}
+            }
+        }
+        true
+    }
+
+    /// Take the turn if it is due now.
+    pub(crate) fn try_take(&self) -> Option<PaceGuard> {
+        self.pacer.try_claim(&self.key)
     }
 }
 
@@ -191,6 +238,20 @@ impl RequestPacer {
     #[inline]
     pub(crate) fn paces(&self) -> bool {
         !self.interval.is_zero()
+    }
+
+    /// Whether a request waits for its turn in its client's request path:
+    /// one of a client this pacer spaces, unless the client's node audits
+    /// its requests. That node takes the turn once it has admitted the
+    /// request (#2652), so a request that waits there for its admission
+    /// takes its turn after that wait, not before it.
+    #[inline]
+    pub(crate) fn paces_in_request_path(&self) -> bool {
+        self.paces()
+            && !matches!(
+                self.audit.get(),
+                Some(super::source_audit::Role::Audited(_))
+            )
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Lanes> {
@@ -271,6 +332,27 @@ impl RequestPacer {
                 () = tokio::time::sleep_until(due) => {}
             }
         }
+    }
+
+    /// When a request to `key` may go, or `None` when it may go now.
+    fn due(&self, key: &PaceKey) -> Option<Instant> {
+        let lanes = self.lock();
+        let due = lanes.by_destination.get(key)?.due(self.interval);
+        (due > Instant::now()).then_some(due)
+    }
+
+    /// A turn for `key` if one is due now, taken as [`Self::wait`] takes
+    /// it; the check and the claim under one lock.
+    fn try_claim(self: &Arc<Self>, key: &PaceKey) -> Option<PaceGuard> {
+        let mut lanes = self.lock();
+        let now = Instant::now();
+        if (lanes.by_destination.get(key)).is_some_and(|lane| lane.due(self.interval) > now) {
+            return None;
+        }
+        let (key, generation, ticket) = self.claim(&mut lanes, key, now);
+        Some(PaceGuard {
+            sent: Some((Arc::clone(self), key, generation, ticket)),
+        })
     }
 
     /// Make a request sent `now` the latest to `key`, returning the lane's

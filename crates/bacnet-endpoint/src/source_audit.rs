@@ -22,7 +22,7 @@ use bacnet_types::constructed::{
 use bacnet_types::enums::{AuditLevel, AuditOperation, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
-use tokio::sync::{RwLock, Semaphore, oneshot};
+use tokio::sync::{RwLock, oneshot};
 
 #[path = "source_recipient.rs"]
 pub(crate) mod recipient;
@@ -39,6 +39,8 @@ mod delivery;
 mod failures;
 #[path = "source_audit_seated.rs"]
 mod seated;
+#[path = "source_audit_slots.rs"]
+pub(crate) mod slots;
 pub(crate) use seated::SeatAuditor;
 
 pub(crate) struct SourceAudit {
@@ -51,7 +53,8 @@ pub(crate) struct SourceAudit {
     broadcast: Ipv4Addr,
     egress: EndpointEgress,
     notifications: Weak<NotificationTransactions>,
-    operations: Arc<Semaphore>,
+    /// The 64 operation slots, shared out by lane (#2652).
+    slots: Arc<slots::Slots>,
     max_apdu: u16,
     failures: Arc<AuditFailureQueue<SourceRoute>>,
     /// The routers learned for routed bindings' networks (#2371).
@@ -117,7 +120,7 @@ impl SourceAudit {
             broadcast,
             egress,
             notifications: Arc::downgrade(notifications),
-            operations: Arc::new(Semaphore::new(64)),
+            slots: Arc::new(slots::Slots::new()),
             max_apdu,
             failures,
             routers,
@@ -143,20 +146,20 @@ impl SourceAudit {
 
     #[cfg(test)]
     pub(crate) fn available_operations(&self) -> usize {
-        self.operations.available_permits()
+        self.slots.available()
     }
 
     /// Whether a stop or drop of the session has sealed admission.
     #[cfg(test)]
     pub(crate) fn sealed(&self) -> bool {
-        self.operations.is_closed()
+        self.slots.is_closed()
     }
 
     pub(crate) fn close(&self) {
         if let Some(runtime) = self.runtime.upgrade() {
             runtime.seal();
         }
-        self.operations.close();
+        self.slots.close();
     }
 
     /// An audited operation goes to one station: a direct unicast on the
@@ -212,7 +215,7 @@ impl SourceAudit {
         operation: AuditOperation,
         source: Option<&bacnet_objects::device::AuditWriteSource>,
     ) {
-        if self.operations.is_closed() {
+        if self.slots.is_closed() {
             return;
         }
         let Some(runtime) = self

@@ -74,9 +74,6 @@ pub(super) struct SegmentedRequestLimits<'a> {
     /// Routed-path lease to mark terminal when the request finishes. A
     /// request its node audits lets it go (#2617).
     pub(super) routed_path_lease: &'a mut Option<RoutedPathLease>,
-    /// The request's turn at the destination, which a request its node
-    /// audits takes along (#2617).
-    pub(super) pace: &'a mut pacing::PaceGuard,
     /// The network and MAC of the discovery-table row that sized the
     /// request, whose age the device's answer restarts; `None` when no row
     /// did (see `BACnetClient::note_answer`).

@@ -1,5 +1,6 @@
 use super::*;
 use crate::session::bus_port::bus_port;
+use crate::source_audit::slots::SLOTS;
 
 #[tokio::test(start_paused = true)]
 async fn source_read_filters_priority_independence_and_unsupported_destinations() {
@@ -99,10 +100,12 @@ async fn source_read_filters_priority_independence_and_unsupported_destinations(
     sink.stop().await.unwrap();
 }
 
-/// 64 audited reads admitted while the database is held: each holds a slot
-/// and waits for the database, with no invoke ID and nothing sent, and a
-/// 65th waits for a slot. A stop then seals admission at once, waits for
-/// the database itself, and ends every one of them unsent.
+/// 64 audited reads, a lane's share to each of 16 stations, the first the
+/// peer (#2652), admitted while the database is held: each holds a slot and
+/// waits for the database, with no invoke ID and nothing sent, and a 65th
+/// waits for a slot. A stop then seals admission at once, waits for the
+/// database itself, and ends every one of them unsent: the peer is sent
+/// nothing.
 #[tokio::test(start_paused = true)]
 async fn source_read_whole_operation_capacity_bounds_prelease_waiters_and_stop() {
     let (peer, mut requests) = network().await;
@@ -114,10 +117,10 @@ async fn source_read_whole_operation_capacity_bounds_prelease_waiters_and_stop()
     let database = Arc::clone(session.database.as_ref().unwrap());
     let guard = database.write().await;
     let mut tasks = Vec::new();
-    for _ in 0..64 {
+    for n in 0..SLOTS {
         tasks.push(start_read(
             &client,
-            peer.local_mac(),
+            &filling(&peer, n),
             PropertyIdentifier::PRESENT_VALUE,
             None,
         ));

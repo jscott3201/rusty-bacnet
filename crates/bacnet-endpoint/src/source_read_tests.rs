@@ -236,6 +236,22 @@ fn start_read(
     })
 }
 
+/// Station `n` on the link, with no node behind it: nothing it is sent
+/// is answered. Each is a source Audit lane of its own (#2652).
+fn silent(n: usize) -> [u8; 6] {
+    encode_bip_mac([127, 0, 0, 1], u16::try_from(n + 1).unwrap())
+}
+
+/// The station of the `n`th of the 64 requests that fill the slots, a
+/// lane's share to each of 16 stations: the first is `peer`, so what
+/// reaches it is seen, and the rest are [`silent`].
+fn filling(peer: &NetworkLayer<TestTransport>, n: usize) -> Vec<u8> {
+    match n / crate::source_audit::slots::LANE_SHARE {
+        0 => peer.local_mac().to_vec(),
+        lane => silent(lane).to_vec(),
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn source_read_wire_fields_both_roles_modes_and_result_before_delivery() {
     let (peer, mut requests) = network().await;

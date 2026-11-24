@@ -34,7 +34,7 @@ pub(super) fn record_drop(
                 });
             if !current
                 || db.local_device().identifier() != Some(batch.context.device)
-                || source.operations.is_closed()
+                || source.slots.is_closed()
                 || !source
                     .runtime
                     .upgrade()

@@ -18,7 +18,6 @@
 //! again with the new compiler and setting the bounds from those, not a
 //! regression to chase here.
 
-use super::pacing::PaceKey;
 use super::segmentation_context::SegmentedRequestLimits;
 use super::station::ConfirmedTarget;
 use super::*;
@@ -56,8 +55,6 @@ async fn the_request_futures_stay_within_their_bounds() {
     );
     let read_size = std::mem::size_of_val(&read);
     drop(read);
-    // The client doesn't pace, so its turn is the empty one.
-    let mut pace = client.pacer.turn(PaceKey::of(target)).await;
     let mut lease = None;
     let mut limits = SegmentedRequestLimits {
         named: &target,
@@ -65,7 +62,6 @@ async fn the_request_futures_stay_within_their_bounds() {
         remote_max_segments: None,
         routed_forwarded_npci_len: None,
         routed_path_lease: &mut lease,
-        pace: &mut pace,
         sized_by: None,
         attributes: None,
     };

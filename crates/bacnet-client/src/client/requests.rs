@@ -239,8 +239,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // waiting when the client's tasks end (its stop, or its node's stop
         // or drop) ends then, as the open requests do, and claims no turn
         // (#2720). A client with no interval names no destination and
-        // waits for nothing.
-        let mut _pace = if self.pacer.paces() {
+        // waits for nothing, and neither here does one whose node audits
+        // its requests: the node takes the turn once it admits the request
+        // (#2652).
+        let _pace = if self.pacer.paces_in_request_path() {
             let key = pacing::PaceKey::of(target);
             match self.pacer.wait(key, &self.routing_query.ended).await {
                 Some(pace) => pace,
@@ -342,7 +344,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 remote_max_segments,
                 routed_forwarded_npci_len,
                 routed_path_lease: &mut path_lease,
-                pace: &mut _pace,
                 sized_by,
                 attributes,
             };
@@ -377,7 +378,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         named,
                         service_choice,
                         service_data,
-                        _pace,
                         attributes,
                     );
                     return request.await;

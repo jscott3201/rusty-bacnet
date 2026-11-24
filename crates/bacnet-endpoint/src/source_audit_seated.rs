@@ -2,10 +2,10 @@
 //!
 //! The client hands the session every confirmed request of a service Table
 //! 19-5 maps to READ or WRITE (see `bacnet_client::client::SourceAuditor`).
-//! It has already waited for its turn at the destination. Here the request
-//! is admitted: one of 64 slots, waited for when all are held, then the
-//! database guard, the Reporter's filters, a recipient, one station, a
-//! timestamp. Then a task the session owns runs it, so a caller that goes
+//! Here the request is admitted: once its turn at the destination is due,
+//! a slot from its lane's share of the 64 ([`super::slots`], #2652) and
+//! the turn with it, then the database guard, the Reporter's filters, a
+//! recipient, one station, a timestamp. Then a task the session owns runs it, so a caller that goes
 //! away loses neither the request nor its records: the client retries with
 //! the same invoke ID and the records carry the real answer. A request the
 //! Reporter doesn't select, or that has no recipient, runs unaudited in the
@@ -74,16 +74,34 @@ impl Selection {
 impl SourceAudit {
     /// Admit and carry out a request of the session's client, as the
     /// module documentation describes.
-    async fn audit_seated(self: &Arc<Self>, request: AuditedRequest) -> Result<Bytes, Error> {
-        // At most 64 operations are held at once. Past them a request waits
-        // here for a slot, in its caller's task: nothing is spawned for it,
-        // its timeout starts once it is admitted, and a stop (which closes
-        // the slots) or its caller going away ends the wait with nothing
-        // sent and no slot held.
-        let permit = Arc::clone(&self.operations)
-            .acquire_owned()
-            .await
-            .map_err(|_| Error::Encoding("endpoint shutdown".into()))?;
+    async fn audit_seated(self: &Arc<Self>, mut request: AuditedRequest) -> Result<Bytes, Error> {
+        let lane = slots::Lane::of(request.station());
+        let slot = loop {
+            // Its turn at the destination (`min_request_interval_ms`) is
+            // taken with its slot, so the interval holds between requests
+            // as they are admitted (#2652). It first waits for the turn to
+            // come due, holding nothing, so a request waiting out the
+            // interval keeps no other out of its lane.
+            request.turn_due().await?;
+            // At most 64 operations are held at once, and at most a lane's
+            // share by one lane. Past them a request waits here for a slot,
+            // in its caller's task: nothing is spawned for it, its timeout
+            // starts once it is admitted, and a stop (which closes the
+            // slots) or its caller going away ends the wait with nothing
+            // sent and no slot held. A slot is taken only with the turn:
+            // one another request to the destination took meanwhile sends
+            // it back to wait for the next, holding nothing.
+            match (self.slots)
+                .admit(lane.clone(), || request.try_take_turn())
+                .await
+            {
+                slots::Admission::Admitted(slot) => break slot,
+                slots::Admission::NotReady => {}
+                slots::Admission::Closed => {
+                    return Err(Error::Encoding("endpoint shutdown".into()));
+                }
+            }
+        };
         // A request that waited for its slot while the node's
         // DeviceCommunicationControl took effect goes no further: refused
         // before it takes a sequence number, as one made then is.
@@ -91,9 +109,7 @@ impl SourceAudit {
             return Err(Error::InitiationDisabled { sent: false });
         }
         let mut db = self.db.write().await;
-        if self.operations.is_closed() {
-            return Err(Error::Encoding("endpoint shutdown".into()));
-        }
+        // A stop is seen here: `close` seals the owner before the slots.
         let runtime = self
             .runtime
             .upgrade()
@@ -149,7 +165,7 @@ impl SourceAudit {
         {
             drop(db);
             drop(runtime);
-            drop(permit);
+            drop(slot);
             return request.execute().await.result;
         }
         let status = reporter.status_internal();
@@ -161,7 +177,7 @@ impl SourceAudit {
         let Some(route) = route else {
             drop(db);
             drop(runtime);
-            drop(permit);
+            drop(slot);
             return request.execute().await.result;
         };
         let station = request.station().clone();
@@ -230,14 +246,14 @@ impl SourceAudit {
         let weak_owner = Arc::downgrade(&owner);
         let source = Arc::clone(self);
         let (reply, response) = oneshot::channel();
-        // A rejected spawn drops the request, its permit and the reply; the
+        // A rejected spawn drops the request, its slot and the reply; the
         // worker never retains its owner. The stop that closes the owner
         // aborts the worker, so an operation it cuts off is not recorded.
         owner.spawn(async move {
-            let _permit = permit;
+            let _slot = slot;
             let outcome = request.execute().await;
             // A stop that began while the request ran cut it off.
-            let recorded = outcome.attempted && !source.operations.is_closed();
+            let recorded = outcome.attempted && !source.slots.is_closed();
             if let Some(owner) = weak_owner.upgrade().filter(|_| recorded) {
                 for (target, result) in &outcome.records {
                     if !selection.selects(target) {

@@ -244,3 +244,6 @@ mod durable_drop;
 
 #[path = "source_pacing_tests.rs"]
 mod pacing;
+
+#[path = "source_audit_share_tests.rs"]
+mod share;

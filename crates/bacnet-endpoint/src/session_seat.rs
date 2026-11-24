@@ -45,11 +45,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// WritePropertyMultiple, AtomicWriteFile, AddListElement and
     /// RemoveListElement. Each is admitted by the Reporter's settings and
     /// then owned by the session, so a caller that goes away loses neither
-    /// the request nor its records. At most 64 are held at once; past them
-    /// a request waits for a slot in its caller's task, and its timeout
-    /// starts once it is admitted. A write sent with a priority is a
-    /// command at that priority, which the Audit_Priority_Filter applies to;
-    /// one without a priority is not filtered by priority. An audited
+    /// the request nor its records. At most 64 are held at once, and at
+    /// most 4 by one station on the link or by the stations of another
+    /// network together (#2652). Past them a request waits for a slot in
+    /// its caller's task, one whose station or network holds its 4 behind
+    /// that one only, and its timeout starts once it is admitted. It waits
+    /// out its turn at the destination (`min_request_interval_ms`) holding
+    /// nothing and takes the turn with its slot. A waiting request takes a
+    /// slot only as it is polled, so one its caller no longer polls holds
+    /// none. A write sent with a priority is a command at that
+    /// priority, which the Audit_Priority_Filter applies to; one without a
+    /// priority is not filtered by priority. An audited
     /// request goes to one station, direct or behind a router, and a raw
     /// request of an audited service that doesn't decode is refused before
     /// it is sent, a write whose value isn't whole application data among
