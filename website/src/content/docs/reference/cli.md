@@ -345,9 +345,10 @@ Arguments:
 Options:
 
 - `--types <TYPES>`: Object types to read, comma-separated (ai,ao,msv, ...); default: every object, of any type.
-- `--values`: Also read each object's Present\_Value and Status\_Flags.
+- `--values`: Also read each object's Present\_Value, Status\_Flags, Event\_State and Reliability, and the priority in control of a commandable one.
 - `--settings`: Also read each object's COV\_Increment, Min\_Pres\_Value, Max\_Pres\_Value, Relinquish\_Default and Polarity, where it has them.
-- `--csv-exact`: With --format csv: write device text exactly. Without it, a name, description, state text or string value that starts with =, +, -, @, a tab or a carriage return gets an apostrophe before it, so a spreadsheet doesn't run it as a formula.
+- `--details`: Also read each object's Device\_Type and Profile\_Name, where it has them.
+- `--csv-exact`: With --format csv: write device text exactly. Without it, a name, description, device type, profile name, state text or string value that starts with =, +, -, @, a tab or a carriage return gets an apostrophe before it, so a spreadsheet doesn't run it as a formula.
 
 ### bacnet readm
 

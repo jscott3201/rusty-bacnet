@@ -187,7 +187,14 @@ async fn values_and_settings_are_read_when_asked() {
 
     let with_values = InventoryOptions::new().with_values(true);
     let inventory = device.inventory(&with_values).await.unwrap();
-    assert_eq!(count(&log, RPM), 3 + 1 + 3, "{inventory:?}");
+    // Values add four properties an object, five on an output (#2620):
+    // the Device 5 (its name from the summary), the input 7, the analog
+    // output and values 8 each, the binary input 8, the binary output and
+    // value 9 each, the multi-state input 8, output and value 9 each, the
+    // integer value 8 and the trend log 6. At 32 a batch that is 4 + 3 +
+    // 3 + 3 objects (28, 25, 26 and 23 properties): four batches, against
+    // three before.
+    assert_eq!(count(&log, RPM), 3 + 1 + 4, "{inventory:?}");
     assert_eq!(count(&log, RP), 2, "the Object_List, twice");
     let point = |object_type, instance| inventory.point(oid(object_type, instance)).unwrap();
     let ai = point(ObjectType::ANALOG_INPUT, 1);
@@ -215,6 +222,9 @@ async fn values_and_settings_are_read_when_asked() {
         let mut valued = valued.clone();
         valued.present_value = None;
         valued.status_flags = None;
+        valued.command_priority = None;
+        valued.event_state = None;
+        valued.reliability = None;
         assert_eq!(&valued, plain);
     }
 
@@ -224,7 +234,7 @@ async fn values_and_settings_are_read_when_asked() {
     // only because the second batch (the Binary Input to the Multi-state
     // Value) comes to exactly the 32 properties a batch holds; a device
     // with more binary objects takes more requests for it.
-    assert_eq!(count(&log, RPM), 7 + 1 + 3, "{inventory:?}");
+    assert_eq!(count(&log, RPM), 8 + 1 + 3, "{inventory:?}");
     let av = inventory.point(oid(ObjectType::ANALOG_VALUE, 1)).unwrap();
     assert_eq!(av.relinquish_default.as_ref().unwrap().as_f64(), Some(0.0));
     assert_eq!(av.cov_increment.as_ref().unwrap().as_f64(), Some(0.0));
@@ -593,7 +603,11 @@ async fn one_record_reads_as_the_inventory_does() {
 
     let missing = device.point_record("ai:99", &options).await.unwrap();
     assert!(missing.name.is_none());
-    assert_eq!(missing.problems.len(), 5, "{missing:?}");
+    assert_eq!(
+        missing.problems.len(),
+        7,
+        "every property asked: {missing:?}"
+    );
     // A record read on its own asks for everything, the Device's name too.
     let own = device.point_record(oid(ObjectType::DEVICE, LAB), &options);
     assert_eq!(own.await.unwrap().name.as_deref(), Some("Lab \"AHU\""));

@@ -13375,7 +13375,10 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
 
 - **Options.** `InventoryOptions::new()` reads every object the Object_List
   names. `.with_types(..)` narrows it, `.with_values(true)` adds each
-  object's Present_Value and Status_Flags, and `.with_settings(true)` its
+  object's Present_Value, Status_Flags, Event_State and Reliability and
+  the priority in control of one that takes commands,
+  `.with_details(true)` its Device_Type and Profile_Name (#2620), and
+  `.with_settings(true)` its
   COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default and a
   Binary Input's or Output's Polarity (a required property there, so one
   the device doesn't give, or gives as other than an Enumerated, is a
@@ -13388,9 +13391,11 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   and Priority_Array where only a read can tell whether the object takes
   commands (the value types and any type this release doesn't know).
 - **A record.** `PointRecord { device, device_instance, object, name,
-  description, units, state_texts, number_of_states, commandable,
-  relinquish_default, cov_increment, min_present_value, max_present_value,
-  polarity, present_value, status_flags, problems }`. Text is exactly as
+  description, device_type, profile_name, units, state_texts,
+  number_of_states, commandable, relinquish_default, cov_increment,
+  min_present_value, max_present_value, polarity, present_value,
+  command_priority, status_flags, event_state, reliability, problems }`.
+  Text is exactly as
   the device sent it. `units` is the `EngineeringUnits` value, and the
   values are
   `Value`s, so their text names the units and the state (`72.5 °F`,
@@ -13417,7 +13422,19 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   `bacnet_types::bitstring::StatusFlags` (`IN_ALARM`, `FAULT`,
   `OVERRIDDEN`, `OUT_OF_SERVICE`); a Status_Flags that isn't a bit string
   is kept in `status_flags` with a problem beside it, and `flags()` is
-  `None` (#2620).
+  `None` (#2620). `event_state` and `reliability` are named Enumerateds
+  (`normal`, `no-fault-detected`); Event_State is required on the types
+  whose property tables make it so unconditionally (the analog, binary and
+  multi-state objects, Loop, the logs, Access Door and others), the rest
+  of these properties optional on every type. `command_priority` is the
+  priority in control, as a Current_Command_Priority gives it: an Unsigned
+  from 1 to 16 named by what the project calls it (`8 (operator,
+  manual)`, `10 (site defined)`), or NULL, written `relinquish default`.
+  An output, Access Door or lighting output reads its own property, which
+  an older device may lack (`None`, no problem); a value object's comes
+  from the Priority_Array already read, an array that isn't sixteen
+  values being a Priority_Array problem. `device_type` and `profile_name`
+  are device text.
 - **The inventory.** `Inventory { address, device, cov, points, unread,
   stopped }`. `device` is the `DeviceSummary` (`describe_device`'s). `cov`
   is the device's `CovSupport` for SubscribeCOV, known from the summary at
@@ -13437,7 +13454,9 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   size is the smaller of 16 and 32/p rounded down (31 analog inputs, at
   three properties each, go ten a batch and take 4 requests), and a mix
   one or two more than its types would apart: about N/8 + 2 requests for a
-  typical controller, N/5 + 2 with values. Settings add up to four
+  typical controller, N/4 + 2 with values. Values add four properties an
+  object, five on an output, so a batch holds 3 to 5 objects; details add
+  two. Settings add up to four
   properties an object, so fewer objects fit a batch and a device with
   many of them takes more requests: a Binary Input then reads five (its
   Polarity among them) and goes six a batch, a Binary Output six and goes
@@ -13451,7 +13470,8 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   each property. An answer in segments costs no more requests. A device
   that refuses ReadPropertyMultiple costs that one
   refused request, then a ReadProperty for each property: 13 for the
-  summary, one for the Object_List, and each object's own count. No
+  summary, one for the Object_List, and each object's own count (four
+  more with values, five on an output; two more with details). No
   property is read twice, and every request waits at the device's gate
   under the client's `RequestLimits`.
 - **What it holds.** The Object_List, the records built so far, and the
@@ -13496,15 +13516,17 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   `Inventory::to_csv(&CsvOptions::new())` (and `write_csv`) writes
   one row a record under `inventory::CSV_HEADER`: `device`,
   `device_instance`, `object` (`analog-input:1`), `name`, `description`,
-  `units` (the kebab name), `state_texts` (joined with `|`, a `|` or `\`
-  inside a text escaped with `\`), `number_of_states`, `commandable`,
-  `relinquish_default`, `cov_increment`, `min_present_value`,
-  `max_present_value`, `polarity`, `present_value`, `status_flags` (each
-  value's text) and `problems`. A field holding a comma, a double quote or
+  `device_type`, `profile_name`, `units` (the kebab name), `state_texts`
+  (joined with `|`, a `|` or `\` inside a text escaped with `\`),
+  `number_of_states`, `commandable`, `relinquish_default`,
+  `cov_increment`, `min_present_value`, `max_present_value`, `polarity`,
+  `present_value`, `command_priority`, `status_flags`, `event_state`,
+  `reliability` (each value's text) and `problems`. A field holding a comma, a double quote or
   a line break is quoted, its quotes doubled; rows end with a line feed.
   The JSON keeps
   device text exactly. The CSV guards it by default: a `name`,
-  `description` or `state_texts` cell that starts with `=`, `+`, `-`, `@`,
+  `description`, `device_type`, `profile_name` or `state_texts` cell that
+  starts with `=`, `+`, `-`, `@`,
   a tab or a carriage return, which a spreadsheet would run as a formula,
   gets an apostrophe before it (for `state_texts`, the joined cell);
   leading spaces and line breaks before such a character don't hide it. A

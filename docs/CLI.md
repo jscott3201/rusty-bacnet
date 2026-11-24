@@ -1670,7 +1670,8 @@ anything that doesn't decode ends the list as `[raw ..]`.
 
 ```bash
 bacnet inventory 192.168.1.100                           # every object: name, units, states
-bacnet inventory 1234 --values                           # with each Present_Value and Status_Flags
+bacnet inventory 1234 --values                           # with each value, state and priority in control
+bacnet inventory 1234 --details                          # with each Device_Type and Profile_Name
 bacnet inventory 2:1234 --types ai,ao,msv --values       # some object types only
 bacnet inventory 192.168.1.100 --format csv > ahu1.csv   # one row an object
 bacnet inventory 192.168.1.100 --values --json > ahu1.json
@@ -1686,8 +1687,9 @@ included.
 | Flag | Description |
 |------|-------------|
 | `--types <TYPES>` | Only these object types, comma-separated, by the target grammar's names (`ai`, `msv`, `trend-log` and so on) |
-| `--values` | Also read each object's Present_Value and Status_Flags |
+| `--values` | Also read each object's Present_Value, Status_Flags, Event_State and Reliability, and the priority in control of one that takes commands |
 | `--settings` | Also read each object's COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default and Polarity, where its type has them |
+| `--details` | Also read each object's Device_Type and Profile_Name |
 | `--format table\|json\|csv`, `--json` | How to print; a table at a terminal and JSON through a pipe unless given |
 | `--csv-exact` | With `--format csv`: write device text exactly, without the formula guard |
 
@@ -1696,6 +1698,17 @@ included.
   object's Active_Text and Inactive_Text; a multi-state object's
   Number_Of_States and State_Text. With `--settings`, a binary input's or
   output's Polarity too (`normal` or `reverse`); a binary value has none.
+  With `--values`, each object's Event_State and Reliability, named
+  (`normal`, `no-fault-detected`), and the priority in control of one
+  that takes commands: an output's (or Access Door's, or a lighting
+  output's) own Current_Command_Priority, which an older device may not
+  have (left empty, no problem), or what a value object's Priority_Array
+  shows, at no request of its own. It reads `8 (operator, manual)`, `10
+  (site defined)`, or `relinquish default` when no priority holds a
+  command. With `--details`, each object's Device_Type and Profile_Name,
+  as the device wrote them. Event_State is required on the types whose
+  property tables make it so, such as the analog, binary and multi-state
+  objects; the others are optional everywhere.
   An output is commandable by its type; a value object, or an object of a
   type this release doesn't know, is commandable when it has a
   Priority_Array, which is read to find out. An
@@ -1723,23 +1736,28 @@ included.
   that each read p properties take N divided by the batch's size, rounded
   up, where the size is the smaller of 16 and 32/p rounded down: 31 analog
   inputs, at three properties each, take 4 requests. That is about N/8 + 2
-  requests for a typical controller, N/5 + 2 with `--values`, one at a
-  time. `--settings` adds up to four properties an object, so fewer
-  objects fit a batch and a device with many of them takes more requests:
-  a binary input then reads five (its Polarity among them) and goes six a
-  batch, a binary output six and goes five. A target given by address
+  requests for a typical controller, N/4 + 2 with `--values`, one at a
+  time. `--values` adds four properties an object (five on an output,
+  its Current_Command_Priority among them), so 4 analog inputs or outputs
+  go in a batch and 3 binary or multi-state outputs. `--settings` adds up
+  to four properties an object, so fewer objects fit a batch and a device
+  with many of them takes more requests: a binary input then reads five
+  (its Polarity among them) and goes six a batch, a binary output six and
+  goes five. `--details` adds two: 6 analog inputs a batch, 5 binary
+  inputs. A target given by address
   costs one more, a read of the Device object by the wildcard instance. A device that can't send a batch's answer for its
   size is asked for that batch an object at a time, and for at most half
   as many objects a batch from then on, down to one: at most four such
   refused batches. A device that
   refuses ReadPropertyMultiple costs one refused request, then a
   ReadProperty a property: 13 for the summary, one for the Object_List, and
-  two to five an object (two more with `--values`).
+  two to five an object (four more with `--values`, five on an output;
+  two more with `--details`).
 - **Output.** Stdout carries only the data, and a one-line summary goes to
   stderr in every format. The table cleans device text for the screen
-  (control characters as spaces), and shows the values' and settings'
-  columns when they were read and a problems column when any object has
-  one. JSON keeps device text exactly as the device sent it, and so does
+  (control characters as spaces), and shows the values', settings' and
+  details' columns when they were read and a problems column when any
+  object has one. JSON keeps device text exactly as the device sent it, and so does
   CSV but for its formula guard (below).
 - **Exit status.** 0 when every object was read, also when the device has
   none of the selected types (stderr says so). 1 when the device doesn't
@@ -1772,6 +1790,8 @@ error's text, is set:
       "object": { "type": "analog-input", "type_number": 0, "instance": 1 },
       "name": "Zone Temp",
       "description": "Room 101",
+      "device_type": null,
+      "profile_name": null,
       "units": { "value": 64, "name": "degrees-fahrenheit", "symbol": "°F" },
       "state_texts": { "active": null, "inactive": null, "states": [] },
       "number_of_states": null,
@@ -1782,7 +1802,10 @@ error's text, is set:
       "max_present_value": null,
       "polarity": null,
       "present_value": { "value": "72.5 °F", "decoded": 72.5 },
+      "command_priority": null,
       "status_flags": { "value": "none", "decoded": { "bits": "0000", "names": [] } },
+      "event_state": { "value": "normal", "decoded": { "value": 0, "name": "normal" } },
+      "reliability": { "value": "no-fault-detected", "decoded": { "value": 0, "name": "no-fault-detected" } },
       "problems": []
     }
   ],
@@ -1791,7 +1814,10 @@ error's text, is set:
 }
 ```
 
-Every record has every field, `null` where there is nothing to say. A
+Every record has every field, `null` where there is nothing to say. An
+object's priority in control is `{"value": "8 (operator, manual)",
+"decoded": 8}`, its `decoded` `null` with the value `relinquish default`
+when no priority holds a command. A
 problem is `{"property": "units", "error": "PROPERTY:UNKNOWN_PROPERTY"}`.
 Property names, in `problems` and as the keys of `device.properties`, are
 in kebab case (`units`, `vendor-name`).
@@ -1801,9 +1827,9 @@ The field names are stable.
 these and in this order:
 
 ```text
-device,device_instance,object,name,description,units,state_texts,number_of_states,commandable,relinquish_default,cov_increment,min_present_value,max_present_value,polarity,present_value,status_flags,problems
-192.168.1.100:47808,1234,analog-input:1,Zone Temp,"Room 101, east",degrees-fahrenheit,,,false,,,,,,72.5 °F,none,
-192.168.1.100:47808,1234,multi-state-value:1,Mode,,,Off|Low|High,3,true,,,,,,2 (Low),none,
+device,device_instance,object,name,description,device_type,profile_name,units,state_texts,number_of_states,commandable,relinquish_default,cov_increment,min_present_value,max_present_value,polarity,present_value,command_priority,status_flags,event_state,reliability,problems
+192.168.1.100:47808,1234,analog-input:1,Zone Temp,"Room 101, east",,,degrees-fahrenheit,,,false,,,,,,72.5 °F,,none,normal,no-fault-detected,
+192.168.1.100:47808,1234,multi-state-value:1,Mode,,,,,Off|Low|High,3,true,,,,,,2 (Low),"8 (operator, manual)",none,normal,no-fault-detected,
 ```
 
 - `object` is `type:instance`, the form the other commands take; `units` is
@@ -1816,8 +1842,8 @@ device,device_instance,object,name,description,units,state_texts,number_of_state
   quotes with its quotes doubled (RFC 4180); other fields are bare, and an
   empty field means nothing to say. Rows end with a line feed.
 - A spreadsheet runs a cell that starts with `=`, `+`, `-`, `@`, a tab or
-  a carriage return as a formula. So a `name`, `description` or
-  `state_texts` cell that starts with one (for `state_texts`, the joined
+  a carriage return as a formula. So a `name`, `description`,
+  `device_type`, `profile_name` or `state_texts` cell that starts with one (for `state_texts`, the joined
   cell) gets an apostrophe before it, which a spreadsheet shows as text:
   `=1+1` is written `'=1+1`. Leading spaces and line breaks before such a
   character don't hide it. A program that reads the CSV back sees the

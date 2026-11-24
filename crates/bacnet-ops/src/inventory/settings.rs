@@ -56,13 +56,19 @@ pub(super) fn mistyped(
 }
 
 /// Whether `value` is of `datatype`, and the datatype's name in a problem;
-/// `None` for a datatype no setting has.
+/// `None` for a datatype no property the inventory judges has.
 fn judged(datatype: Datatype, value: &V) -> Option<(bool, &'static str)> {
     let string = "a character string";
     Some(match datatype {
         Datatype::Real => (matches!(value, V::Real(_)), "a Real"),
         Datatype::Double => (matches!(value, V::Double(_)), "a Double"),
         Datatype::Unsigned => (matches!(value, V::Unsigned(_)), "an Unsigned"),
+        // Current_Command_Priority's: NULL when no priority holds a
+        // command.
+        Datatype::OptionalUnsigned => (
+            matches!(value, V::Unsigned(_) | V::Null),
+            "an Unsigned or NULL",
+        ),
         Datatype::Integer => (matches!(value, V::Signed(_)), "a Signed"),
         Datatype::Enumerated => (matches!(value, V::Enumerated(_)), "an Enumerated"),
         Datatype::CharacterString => (matches!(value, V::CharacterString(_)), string),
@@ -84,8 +90,17 @@ fn judged(datatype: Datatype, value: &V) -> Option<(bool, &'static str)> {
 
 /// What the device gave instead, for a problem: its datatype and its text
 /// as `shown` writes it, cleaned and cut as a name is, since a string or a
-/// state's name in it is device text.
+/// state's name in it is device text. A number is written bare: the
+/// object's Units, which a read lends the text of every number, aren't
+/// what came for an Event_State (#2620).
 fn got(decoded: &V, shown: &Value) -> String {
+    let number = match decoded {
+        V::Unsigned(n) => Some(n.to_string()),
+        V::Signed(n) => Some(n.to_string()),
+        V::Real(n) => Some(n.to_string()),
+        V::Double(n) => Some(n.to_string()),
+        _ => None,
+    };
     let kind = match decoded {
         V::Null => return "got NULL".into(),
         V::List(values) if values.is_empty() => return "got no value".into(),
@@ -104,7 +119,8 @@ fn got(decoded: &V, shown: &Value) -> String {
         V::ObjectIdentifier(_) => "an object identifier",
         _ => "a constructed value",
     };
-    format!("got {kind}, {}", clean_name(&shown.text))
+    let text = number.unwrap_or_else(|| clean_name(&shown.text));
+    format!("got {kind}, {text}")
 }
 
 /// One application value as read, with its octets.
@@ -115,7 +131,7 @@ type Undecoded = (usize, usize);
 
 /// Each application value in `data` with its octets, or where the first
 /// that doesn't decode starts.
-fn values(data: &[u8]) -> Result<Vec<Entry<'_>>, Undecoded> {
+pub(super) fn values(data: &[u8]) -> Result<Vec<Entry<'_>>, Undecoded> {
     let mut offset = 0;
     let mut out = Vec::new();
     while offset < data.len() {
@@ -130,7 +146,7 @@ fn values(data: &[u8]) -> Result<Vec<Entry<'_>>, Undecoded> {
 /// Why the value at `at` in `data` doesn't decode, for a problem: a
 /// character string names its character set, such as one this stack
 /// doesn't convert (IBM/Microsoft DBCS, JIS X 0208, UCS-4).
-fn undecodable(data: &[u8], at: usize) -> String {
+pub(super) fn undecodable(data: &[u8], at: usize) -> String {
     let set = match decode_tag(data, at) {
         Ok((tag, start)) if tag.class == TagClass::Application && tag.number == 7 => {
             data.get(start).copied()

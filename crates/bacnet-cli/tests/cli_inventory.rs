@@ -109,10 +109,12 @@ async fn the_json_is_the_whole_inventory() {
     server.stop().await.unwrap();
 }
 
-/// `--values` adds each object's Present_Value and Status_Flags in the
-/// same requests, the text naming units; `--types` narrows the objects
-/// read; `--settings` adds the relinquish default and a binary input's or
-/// output's Polarity.
+/// `--values` adds each object's Present_Value, Status_Flags, Event_State
+/// and Reliability in the same requests, the text naming units and
+/// states, and an output's priority in control, named; `--types` narrows
+/// the objects read; `--settings` adds the relinquish default and a binary
+/// input's or output's Polarity; `--details` adds Device_Type and
+/// Profile_Name, empty where an object has none.
 #[tokio::test]
 async fn values_types_and_settings() {
     let (mut server, device) = server().await;
@@ -130,7 +132,36 @@ async fn values_types_and_settings() {
     );
     assert_eq!(points[2]["present_value"]["decoded"], 55.0);
     assert!(points[2]["relinquish_default"].is_null());
+    assert_eq!(points[0]["reliability"]["value"], "open-loop");
+    assert!(points[0]["event_state"]["decoded"]["name"].is_string());
+    let commanded = serde_json::json!({"value": "10 (site defined)", "decoded": 10});
+    assert_eq!(points[2]["command_priority"], commanded);
+    assert!(points[0]["command_priority"].is_null(), "an input");
+    // 7 + 7 + 8 properties: one batch.
     assert_eq!(seen.lock().unwrap().len(), 1 + 2 + 1, "one batch of three");
+
+    let args = [target.as_str(), "--types", "ai", "--details", "--json"];
+    let json: Value = serde_json::from_str(&stdout(&inventory(&args).await)).unwrap();
+    let point = &json["points"][0];
+    assert!(point["device_type"].is_null() && point["profile_name"].is_null());
+    assert_eq!(
+        point["problems"],
+        serde_json::json!([]),
+        "optional: {point}"
+    );
+    let args = [
+        target.as_str(),
+        "--types",
+        "ai",
+        "--details",
+        "--format",
+        "table",
+    ];
+    let text = stdout(&inventory(&args).await);
+    assert!(
+        text.contains("Device type") && text.contains("Profile"),
+        "{text}"
+    );
 
     let args = [target.as_str(), "--types", "ao", "--settings", "--json"];
     let json: Value = serde_json::from_str(&stdout(&inventory(&args).await)).unwrap();
@@ -181,18 +212,20 @@ async fn the_csv_is_one_row_an_object() {
     let lines: Vec<&str> = csv.lines().collect();
     assert_eq!(
         lines[0],
-        "device,device_instance,object,name,description,units,state_texts,number_of_states,\
-         commandable,relinquish_default,cov_increment,min_present_value,max_present_value,\
-         polarity,present_value,status_flags,problems"
+        "device,device_instance,object,name,description,device_type,profile_name,units,\
+         state_texts,number_of_states,commandable,relinquish_default,cov_increment,\
+         min_present_value,max_present_value,polarity,present_value,command_priority,\
+         status_flags,event_state,reliability,problems"
     );
     assert_eq!(lines.len(), 1 + 11);
     let zone = format!(
-        "{target},1234,analog-input:1,Zone Temp,,degrees-fahrenheit,,,false,,,,,,72.5 °F,\
+        "{target},1234,analog-input:1,Zone Temp,,,,degrees-fahrenheit,,,false,,,,,,72.5 °F,,\
          in-alarm | fault | out-of-service,"
     );
-    assert_eq!(lines[2], zone);
+    assert!(lines[2].starts_with(&zone), "{}", lines[2]);
+    assert!(lines[2].ends_with(",open-loop,"), "named: {}", lines[2]);
     assert!(
-        lines[9].contains(",multi-state-value:1,Mode,,,State 1|State 2|State 3,3,true,"),
+        lines[9].contains(",multi-state-value:1,Mode,,,,,State 1|State 2|State 3,3,true,"),
         "{}",
         lines[9]
     );
@@ -211,7 +244,18 @@ async fn the_table_lists_the_objects() {
     let args = [target.as_str(), "--values", "--format", "table"];
     let output = inventory(&args).await;
     let text = stdout(&output);
-    for column in ["Object", "Name", "Units", "Value", "Status", "Commandable"] {
+    let columns = [
+        "Object",
+        "Name",
+        "Units",
+        "Value",
+        "Priority",
+        "Status",
+        "Event state",
+        "Reliability",
+        "Commandable",
+    ];
+    for column in columns {
         assert!(text.contains(column), "{column}\n{text}");
     }
     let row = |object: &str| {

@@ -26,6 +26,23 @@ fn point(object_type: ObjectType, instance: u32, rows: Vec<RawRow>) -> PointReco
     record(&address(), 1234, oid(object_type, instance), rows)
 }
 
+/// A Priority_Array of sixteen slots, NULL but for `held`.
+fn priorities(held: Option<(usize, PropertyValue)>) -> RawRow {
+    let mut slots = vec![PropertyValue::Null; 16];
+    if let Some((level, value)) = held {
+        slots[level - 1] = value;
+    }
+    row(P::PRIORITY_ARRAY, PropertyValue::List(slots))
+}
+
+/// The place of `column` in [`CSV_HEADER`].
+fn col(column: &str) -> usize {
+    CSV_HEADER
+        .split(',')
+        .position(|name| name == column)
+        .unwrap_or_else(|| panic!("no column {column}"))
+}
+
 fn flags() -> RawRow {
     let bits = PropertyValue::BitString {
         unused_bits: 4,
@@ -38,7 +55,10 @@ fn flags() -> RawRow {
 /// a value, state texts of both kinds, commas, quotes, line feeds and
 /// bars in device text, problems (a refused property, a setting of the
 /// wrong type left empty, one out of range kept), a bare record of an
-/// unknown type, and a reading that stopped.
+/// unknown type, a reading that stopped, and the run-time state and
+/// details (#2620): an event state and a reliability, a device type and a
+/// profile name, and a priority in control from a value object's
+/// Priority_Array or an output's own property.
 fn sample() -> Inventory {
     let device = oid(ObjectType::DEVICE, 1234);
     let summary = vec![
@@ -51,16 +71,20 @@ fn sample() -> Inventory {
     let zone = vec![
         row(P::OBJECT_NAME, text("Zone Temp")),
         row(P::DESCRIPTION, text("Room 101, east")),
+        row(P::DEVICE_TYPE, text("10k thermistor, type II")),
+        row(P::PROFILE_NAME, text("acme-zone-temp")),
         row(P::UNITS, PropertyValue::Enumerated(64)),
         row(P::PRESENT_VALUE, PropertyValue::Real(72.5)),
         flags(),
+        row(P::EVENT_STATE, PropertyValue::Enumerated(1)),
+        row(P::RELIABILITY, PropertyValue::Enumerated(4)),
     ];
     let fan = vec![
         row(P::OBJECT_NAME, text("Fan \"A\"")),
         row(P::DESCRIPTION, text("line one\nline two")),
         row(P::ACTIVE_TEXT, text("On")),
         row(P::INACTIVE_TEXT, text("Off|Standby")),
-        row(P::PRIORITY_ARRAY, PropertyValue::Null),
+        priorities(Some((8, PropertyValue::Enumerated(1)))),
         row(P::RELINQUISH_DEFAULT, PropertyValue::Enumerated(0)),
         row(P::PRESENT_VALUE, PropertyValue::Enumerated(1)),
     ];
@@ -69,7 +93,7 @@ fn sample() -> Inventory {
         row(P::OBJECT_NAME, text("Mode")),
         row(P::NUMBER_OF_STATES, PropertyValue::Unsigned(3)),
         row(P::STATE_TEXT, PropertyValue::List(states)),
-        row(P::PRIORITY_ARRAY, PropertyValue::Null),
+        priorities(None),
         row(P::RELINQUISH_DEFAULT, PropertyValue::Unsigned(4)),
         row(P::PRESENT_VALUE, PropertyValue::Unsigned(2)),
     ];
@@ -90,6 +114,7 @@ fn sample() -> Inventory {
     let formula = vec![
         row(P::OBJECT_NAME, text("+SUM(A1)")),
         row(P::DESCRIPTION, text("-2+3")),
+        row(P::DEVICE_TYPE, text("-5 V input")),
         row(P::UNITS, PropertyValue::Enumerated(62)),
         row(P::MIN_PRES_VALUE, PropertyValue::Real(-40.0)),
         row(P::PRESENT_VALUE, PropertyValue::Real(-12.5)),
@@ -104,6 +129,11 @@ fn sample() -> Inventory {
     let string = vec![
         row(P::OBJECT_NAME, text("Note")),
         row(P::PRESENT_VALUE, text("=HYPERLINK(\"x\")")),
+    ];
+    let damper = vec![
+        row(P::OBJECT_NAME, text("Damper")),
+        row(P::PRESENT_VALUE, PropertyValue::Real(35.0)),
+        row(P::CURRENT_COMMAND_PRIORITY, PropertyValue::Unsigned(10)),
     ];
     Inventory {
         address: address(),
@@ -129,6 +159,7 @@ fn sample() -> Inventory {
                 2,
                 vec![row(P::OBJECT_NAME, text(" =1+1"))],
             ),
+            point(ObjectType::ANALOG_OUTPUT, 5, damper),
         ],
         unread: vec![oid(ObjectType::ANALOG_INPUT, 2)],
         stopped: Some(OpsError::at(
@@ -205,11 +236,14 @@ fn the_json_holds_typed_fields() {
     let mut fields = keys(zone);
     fields.sort();
     let expected = [
+        "command_priority",
         "commandable",
         "cov_increment",
         "description",
         "device",
         "device_instance",
+        "device_type",
+        "event_state",
         "max_present_value",
         "min_present_value",
         "name",
@@ -218,6 +252,8 @@ fn the_json_holds_typed_fields() {
         "polarity",
         "present_value",
         "problems",
+        "profile_name",
+        "reliability",
         "relinquish_default",
         "state_texts",
         "status_flags",
@@ -235,6 +271,16 @@ fn the_json_holds_typed_fields() {
     assert_eq!(zone["status_flags"]["decoded"]["names"][0], "fault");
     assert_eq!(zone["commandable"], false);
     assert!(zone["relinquish_default"].is_null() && zone["number_of_states"].is_null());
+    // Details as the device sent them; the run-time state named.
+    assert_eq!(zone["device_type"], "10k thermistor, type II");
+    assert_eq!(zone["profile_name"], "acme-zone-temp");
+    let fault = serde_json::json!({"value": "fault", "decoded": {"value": 1, "name": "fault"}});
+    assert_eq!(zone["event_state"], fault);
+    assert_eq!(zone["reliability"]["value"], "open-loop");
+    assert!(
+        zone["command_priority"].is_null(),
+        "an input takes no commands"
+    );
 
     let fan = &json["points"][1];
     assert_eq!(fan["name"], "Fan \"A\"");
@@ -242,6 +288,10 @@ fn the_json_holds_typed_fields() {
     assert_eq!(fan["state_texts"]["inactive"], "Off|Standby");
     assert_eq!(fan["commandable"], true);
     assert_eq!(fan["present_value"]["decoded"]["name"], "active");
+    // The priority in control from the Priority_Array, as the property
+    // would give it, named.
+    let eight = serde_json::json!({"value": "8 (operator, manual)", "decoded": 8});
+    assert_eq!(fan["command_priority"], eight);
     let mode = &json["points"][2];
     assert_eq!(mode["state_texts"]["states"][1], "Low, slow");
     assert_eq!(mode["number_of_states"], 3);
@@ -252,6 +302,12 @@ fn the_json_holds_typed_fields() {
         "error": "not one of the states 1 to 3",
     });
     assert_eq!(mode["problems"], serde_json::json!([unnamed]));
+    let none = serde_json::json!({"value": "relinquish default", "decoded": null});
+    assert_eq!(mode["command_priority"], none, "no slot holds a command");
+    // An output's own Current_Command_Priority, named.
+    let damper = &json["points"][10];
+    assert_eq!(damper["command_priority"]["value"], "10 (site defined)");
+    assert_eq!(damper["command_priority"]["decoded"], 10);
     let setpoint = &json["points"][3];
     let problem = serde_json::json!({"property": "units", "error": "PROPERTY:UNKNOWN_PROPERTY"});
     // A relinquish default of the wrong type is empty and named.
@@ -270,7 +326,7 @@ fn the_json_holds_typed_fields() {
     assert!(zone["polarity"].is_null() && fan["polarity"].is_null());
 }
 
-/// The CSV's header is the documented one, every row has its seventeen
+/// The CSV's header is the documented one, every row has its twenty-two
 /// fields, and a field holding a comma, a quote or a line break is quoted
 /// with its quotes doubled; a bar inside a state text is escaped.
 #[test]
@@ -278,39 +334,51 @@ fn the_csv_quotes_what_it_must() {
     let csv = sample().to_csv(&CsvOptions::new());
     let mut lines = csv.split('\n');
     assert_eq!(lines.next(), Some(CSV_HEADER));
-    assert_eq!(CSV_HEADER.split(',').count(), 17);
+    assert_eq!(CSV_HEADER.split(',').count(), 22);
     assert!(csv.ends_with('\n'));
     let rows = parse(&csv);
-    assert_eq!(rows.len(), 1 + 10);
-    assert!(rows.iter().all(|row| row.len() == 17), "{rows:?}");
+    assert_eq!(rows.len(), 1 + 11);
+    assert!(rows.iter().all(|row| row.len() == 22), "{rows:?}");
+    let cell = |row: &[String], column| row[col(column)].clone();
     let zone = &rows[1];
     assert_eq!(zone[..3], ["192.168.1.10:47808", "1234", "analog-input:1"]);
-    assert_eq!(
-        zone[3..6],
-        ["Zone Temp", "Room 101, east", "degrees-fahrenheit"]
-    );
-    assert_eq!((zone[8].as_str(), zone[14].as_str()), ("false", "72.5 °F"));
+    assert_eq!(zone[3..5], ["Zone Temp", "Room 101, east"]);
+    assert_eq!(cell(zone, "device_type"), "10k thermistor, type II");
+    assert_eq!(cell(zone, "profile_name"), "acme-zone-temp");
+    assert_eq!(cell(zone, "units"), "degrees-fahrenheit");
+    assert_eq!(cell(zone, "commandable"), "false");
+    assert_eq!(cell(zone, "present_value"), "72.5 °F");
+    assert_eq!(cell(zone, "event_state"), "fault");
+    assert_eq!(cell(zone, "reliability"), "open-loop");
     assert!(csv.contains(",\"Room 101, east\","), "a comma: {csv}");
     let fan = &rows[2];
     assert_eq!(fan[3], "Fan \"A\"");
     assert!(csv.contains(",\"Fan \"\"A\"\"\","), "quotes doubled: {csv}");
     assert_eq!(fan[4], "line one\nline two");
-    assert_eq!(fan[6], "Off\\|Standby|On", "inactive, then active");
-    assert_eq!(fan[14], "active (On)");
+    let texts = cell(fan, "state_texts");
+    assert_eq!(texts, "Off\\|Standby|On", "inactive, then active");
+    assert_eq!(cell(fan, "present_value"), "active (On)");
+    assert_eq!(cell(fan, "command_priority"), "8 (operator, manual)");
     let mode = &rows[3];
-    assert_eq!(mode[6], "Off|Low, slow|High\\\\er");
-    assert_eq!(mode[7], "3");
+    assert_eq!(cell(mode, "state_texts"), "Off|Low, slow|High\\\\er");
+    assert_eq!(cell(mode, "number_of_states"), "3");
+    assert_eq!(cell(mode, "command_priority"), "relinquish default");
     let setpoint = &rows[4];
     assert_eq!(setpoint[3], "'=Setpoint", "guarded");
-    assert_eq!(setpoint[11], "-40", "a number is left alone");
-    assert_eq!(setpoint[9], "", "a relinquish default of the wrong type");
+    let min = cell(setpoint, "min_present_value");
+    assert_eq!(min, "-40", "a number is left alone");
+    let wrong = cell(setpoint, "relinquish_default");
+    assert_eq!(wrong, "", "a relinquish default of the wrong type");
     assert_eq!(
-        setpoint[16],
+        cell(setpoint, "problems"),
         "units: PROPERTY:UNKNOWN_PROPERTY; relinquish-default: not a Real (got a character \
          string, \"auto\")"
     );
-    assert_eq!(rows[6][3..8], ["", "", "", "", ""], "nothing read: empty");
-    assert_eq!((rows[8][13].as_str(), zone[13].as_str()), ("reverse", ""));
+    let read = &rows[6][3..col("commandable")];
+    assert!(read.iter().all(String::is_empty), "nothing read: empty");
+    let polarity = (cell(&rows[8], "polarity"), cell(zone, "polarity"));
+    assert_eq!(polarity, ("reverse".to_string(), String::new()));
+    assert_eq!(cell(&rows[11], "command_priority"), "10 (site defined)");
 
     // A carriage return is quoted too, kept as it is.
     let rows = vec![row(P::OBJECT_NAME, text("a\r\nb"))];
@@ -350,7 +418,8 @@ fn parse(csv: &str) -> Vec<Vec<String>> {
 
 /// A cell of device text that a spreadsheet would run as a formula (it
 /// starts with `=`, `+`, `-`, `@`, a tab or a carriage return) is written
-/// behind an apostrophe: names, descriptions and the state texts' cell.
+/// behind an apostrophe: names, descriptions, device types, profile
+/// names and the state texts' cell.
 /// Numbers and the cells of our own wording are not, and
 /// [`CsvOptions::exact`] writes everything as the device sent it. The
 /// JSON is always exact.
@@ -363,23 +432,28 @@ fn the_csv_guards_device_text_that_reads_as_a_formula() {
     let (formula, at_sign, string, spaced) = (7, 8, 9, 10);
     assert_eq!(guarded[spaced][3], "' =1+1", "before the original text");
     assert_eq!(exact[spaced][3], " =1+1");
-    assert_eq!(guarded[formula][3..5], ["'+SUM(A1)", "'-2+3"]);
-    assert_eq!(exact[formula][3..5], ["+SUM(A1)", "-2+3"]);
+    let guarded_text = ["'+SUM(A1)", "'-2+3", "'-5 V input"];
+    assert_eq!(guarded[formula][3..6], guarded_text);
+    assert_eq!(exact[formula][3..6], ["+SUM(A1)", "-2+3", "-5 V input"]);
     for rows in [&guarded, &exact] {
-        assert_eq!(rows[formula][11], "-40 °C", "Min_Pres_Value");
-        assert_eq!(rows[formula][14], "-12.5 °C", "Present_Value");
+        let min = &rows[formula][col("min_present_value")];
+        assert_eq!(min, "-40 °C", "Min_Pres_Value");
+        let value = &rows[formula][col("present_value")];
+        assert_eq!(value, "-12.5 °C", "Present_Value");
         assert_eq!(rows[formula][2], "analog-value:10");
     }
     assert_eq!(guarded[at_sign][3..5], ["'@cmd", "'\tindented"]);
+    let texts = col("state_texts");
     assert_eq!(
-        guarded[at_sign][6], "'=off|on",
+        guarded[at_sign][texts], "'=off|on",
         "the joined cell's first character"
     );
-    assert_eq!(exact[at_sign][6], "=off|on");
+    assert_eq!(exact[at_sign][texts], "=off|on");
     // A string value's text is written in quotes, so its cell starts with
     // one and reads as text either way.
     for rows in [&guarded, &exact] {
-        assert_eq!(rows[string][14], "\"=HYPERLINK(\"x\")\"", "a string value");
+        let value = &rows[string][col("present_value")];
+        assert_eq!(value, "\"=HYPERLINK(\"x\")\"", "a string value");
     }
     // Each guarded character, and an ordinary one beside them.
     for (lead, guard) in [
