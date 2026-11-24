@@ -262,11 +262,13 @@ pub(crate) struct Cli {
           value_parser = crate::mstp_thread::parse_cpu)]
     pub(crate) mstp_cpus: Vec<usize>,
 
-    /// Output format (table, json; csv too for inventory).
-    #[arg(long, global = true)]
-    pub(crate) format: Option<String>,
+    /// Output format: table or json, and csv for inventory alone; without
+    /// it, a table at a terminal and JSON otherwise. A format the command
+    /// doesn't print is refused.
+    #[arg(long, global = true, value_enum)]
+    pub(crate) format: Option<crate::formats::Format>,
 
-    /// JSON output shorthand.
+    /// JSON output shorthand; it outranks --format.
     #[arg(long, global = true)]
     pub(crate) json: bool,
 

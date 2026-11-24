@@ -31,8 +31,10 @@ pub fn screen(text: &str) -> String {
     bacnet_ops::format::clean_text(text)
 }
 
-/// Output format for CLI results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Output format for CLI results. Its derived `ValueEnum` lists its
+/// variants for [`crate::formats`]: the formats a command printing through
+/// it takes are its variants, by the `--format` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum OutputFormat {
     /// Human-readable table layout.
     Table,

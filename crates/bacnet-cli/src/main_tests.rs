@@ -109,6 +109,57 @@ fn a_refused_one_shot_never_reaches_the_network() {
     }
 }
 
+/// A format the command doesn't print is a usage error (status 2) before
+/// the write guard, `sc-check`, `mstp-ports` or the network path (#2778);
+/// one it prints goes on as before.
+#[test]
+fn a_refused_format_never_reaches_the_network() {
+    let usage = std::process::ExitCode::from(2);
+    for args in [
+        &[
+            "bacnet", "read", "10.0.0.1", "av:1", "pv", "--format", "csv",
+        ][..],
+        &[
+            "bacnet", "--format", "csv", "write", "10.0.0.1", "av:1", "pv", "1",
+        ],
+        &["bacnet", "--json", "export", "223-experimental", "10.0.0.1"],
+        &["bacnet", "--json", "tui"],
+        &[
+            "bacnet",
+            "mcp",
+            "serve",
+            "--stdio",
+            "--passive",
+            "--format",
+            "json",
+        ],
+        &[
+            "bacnet",
+            "sc-check",
+            "--sc-cert",
+            "missing",
+            "--format",
+            "csv",
+        ],
+        &["bacnet", "mstp-ports", "--format", "csv"],
+    ] {
+        assert_eq!(run_guarded(args), (usage, false), "{args:?}");
+    }
+    for args in [
+        &["bacnet", "inventory", "10.0.0.1", "--format", "csv"][..],
+        &[
+            "bacnet", "--format", "table", "read", "10.0.0.1", "av:1", "pv",
+        ],
+        &["bacnet", "export", "223-experimental", "10.0.0.1"],
+    ] {
+        assert_eq!(
+            run_guarded(args),
+            (std::process::ExitCode::SUCCESS, true),
+            "{args:?}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn sc_check_parser_preserves_non_utf8_credential_bytes() {

@@ -15,12 +15,14 @@ use bacnet_transport::port::TransportPort;
 
 use crate::args::Command;
 use crate::destination::Destination;
-use crate::output::{OutputFormat, screen};
+use crate::output::screen;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// How `bacnet inventory` prints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How `bacnet inventory` prints ([`crate::formats::layout`] picks it). Its
+/// derived `ValueEnum` lists its variants for [`crate::formats`]: they are
+/// the formats the inventory takes, by the `--format` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Layout {
     /// A table for people, device text cleaned for the screen.
     Table,
@@ -28,18 +30,6 @@ pub enum Layout {
     Json,
     /// The records as CSV ([`Inventory::to_csv`]).
     Csv,
-}
-
-impl Layout {
-    /// `--format csv` is the CSV; otherwise the format every command
-    /// resolves (`--json`, `--format`, or by whether stdout is a terminal).
-    pub fn of(csv: bool, format: OutputFormat) -> Self {
-        match (csv, format) {
-            (true, _) => Self::Csv,
-            (false, OutputFormat::Json) => Self::Json,
-            (false, OutputFormat::Table) => Self::Table,
-        }
-    }
 }
 
 /// What `bacnet inventory` was asked for.
