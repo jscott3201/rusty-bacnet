@@ -40,8 +40,10 @@ use crate::watch::CovSupport;
 /// read element by element that fails, which names the element
 /// ([`InventoryHalt::ObjectList`]); and [`InventoryHalt::Cancelled`] once
 /// the reader's stop flag is set, checked before each batch and before
-/// each ReadProperty of a batch read property by property: the records
-/// read before it are dropped with the call.
+/// each ReadProperty of a batch read property by property. A stop after
+/// the Object_List is in keeps what was read, as a device going silent
+/// does: the inventory in the halt holds the records read whole and
+/// lists the rest in [`Inventory::unread`].
 pub async fn read_inventory<T: TransportPort + 'static>(
     reader: &mut Reader<'_, T>,
     options: &InventoryOptions,
@@ -80,7 +82,7 @@ pub async fn read_inventory<T: TransportPort + 'static>(
     let mut most = MAX_BATCH;
     while next < wanted.len() {
         if reader.cancel.load(Ordering::Relaxed) {
-            return Err(InventoryHalt::Cancelled);
+            return Err(cancelled(inventory, &wanted[next..]));
         }
         let count = one_batch(&wanted[next..], most, options, &own);
         let objects = &wanted[next..next + count];
@@ -88,10 +90,14 @@ pub async fn read_inventory<T: TransportPort + 'static>(
             Ok(read) => read,
             // No route to the device any more: as a device gone silent.
             Err(Halt::Device(error)) => Records::stopped(error),
-            Err(Halt::Cancelled) => return Err(InventoryHalt::Cancelled),
+            // Before the batch's first request.
+            Err(Halt::Cancelled) => return Err(cancelled(inventory, &wanted[next..])),
         };
         next += read.records.len();
         inventory.points.extend(read.records);
+        if read.cancelled {
+            return Err(cancelled(inventory, &wanted[next..]));
+        }
         if let Some(error) = read.stopped {
             inventory.unread = wanted[next..].to_vec();
             inventory.stopped = Some(OpsError::at(&reader.device, error));
@@ -102,6 +108,13 @@ pub async fn read_inventory<T: TransportPort + 'static>(
         }
     }
     Ok(inventory)
+}
+
+/// The halt for a stop flag raised with `unread` still to read: the
+/// inventory so far, its records kept.
+fn cancelled(mut inventory: Inventory, unread: &[ObjectIdentifier]) -> InventoryHalt {
+    inventory.unread = unread.to_vec();
+    InventoryHalt::Cancelled(Some(Box::new(inventory)))
 }
 
 /// One object's record as [`read_inventory`] reads it, for a caller that
@@ -119,17 +132,23 @@ pub async fn read_point_record<T: TransportPort + 'static>(
 ) -> Result<PointRecord, Halt> {
     let read = records(reader, &[object], options, None).await?;
     match (read.records.into_iter().next(), read.stopped) {
-        (Some(record), None) => Ok(record),
         (_, Some(error)) => Err(Halt::Device(error)),
-        (None, None) => unreachable!("a batch of one object reads it or stops"),
+        // The flag went up part way through the object's properties.
+        (None, None) if read.cancelled => Err(Halt::Cancelled),
+        (Some(record), None) => Ok(record),
+        (None, None) => unreachable!("a batch of one object reads it, stops or is stopped"),
     }
 }
 
 /// Why [`read_inventory`] failed.
 #[derive(Debug)]
 pub enum InventoryHalt {
-    /// The reader's stop flag went up.
-    Cancelled,
+    /// The reader's stop flag went up. Once the Object_List is in, the
+    /// inventory read until then: the records read whole, the objects not
+    /// read in [`Inventory::unread`], and [`Inventory::stopped`] empty, as
+    /// the device didn't end it. `None` when the flag went up while the
+    /// summary or the list was read, before any record.
+    Cancelled(Option<Box<Inventory>>),
     /// The device, or the way to it, failed the summary's read or the
     /// Object_List's.
     Device(Error),
@@ -142,7 +161,7 @@ pub enum InventoryHalt {
 impl From<Halt> for InventoryHalt {
     fn from(halt: Halt) -> Self {
         match halt {
-            Halt::Cancelled => Self::Cancelled,
+            Halt::Cancelled => Self::Cancelled(None),
             Halt::Device(error) => Self::Device(error),
         }
     }
@@ -151,7 +170,7 @@ impl From<Halt> for InventoryHalt {
 impl std::fmt::Display for InventoryHalt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Cancelled => f.write_str("the inventory was stopped"),
+            Self::Cancelled(_) => f.write_str("the inventory was stopped"),
             Self::Device(error) => write!(f, "{error}"),
             Self::ObjectList(stop) => write!(f, "Object_List {stop}"),
         }
@@ -169,6 +188,9 @@ pub(super) struct Records {
     stopped: Option<Error>,
     /// The answer was too large for the device to send.
     too_large: bool,
+    /// The reader's stop flag went up while the batch was read property
+    /// by property: the objects after `records` weren't read.
+    cancelled: bool,
 }
 
 impl Records {
@@ -178,6 +200,7 @@ impl Records {
             records: Vec::new(),
             stopped: Some(error),
             too_large: false,
+            cancelled: false,
         }
     }
 }
@@ -262,8 +285,8 @@ pub(super) async fn records<T: TransportPort + 'static>(
             (!row.wanted.is_empty()).then_some(row)
         })
         .collect();
-    let (mut answers, stopped, too_large) = if rows.is_empty() {
-        (Vec::new(), None, false)
+    let (mut answers, stopped, too_large, cancelled) = if rows.is_empty() {
+        (Vec::new(), None, false, false)
     } else {
         let read = batch::read_until(
             reader.client,
@@ -278,20 +301,18 @@ pub(super) async fn records<T: TransportPort + 'static>(
         if read.refused_rpm {
             reader.rpm = false;
         }
-        if read.cancelled {
-            return Err(Halt::Cancelled);
-        }
-        // An object read only in part before the device stopped is not
-        // read.
+        // An object read only in part before the device stopped, or the
+        // stop flag went up, is not read.
         let whole = read.rows.len() - usize::from(read.partial);
         let answers: Vec<_> = read.rows.into_iter().take(whole).collect();
-        (answers, read.stopped, read.too_large)
+        (answers, read.stopped, read.too_large, read.cancelled)
     };
     // One record an object, in the order asked, each answer found by its
     // key whatever order the answers came back in. An object with nothing
     // to ask is built from what is known. While the device answers, an
     // object without an answer has no value for any property; once it has
-    // stopped, the first such object ends the records.
+    // stopped, or the stop flag went up, the first such object ends the
+    // records.
     let mut records = Vec::with_capacity(objects.len());
     for (key, &object) in objects.iter().enumerate() {
         let sent = rows.iter().any(|row| row.key == key);
@@ -299,7 +320,7 @@ pub(super) async fn records<T: TransportPort + 'static>(
             .iter()
             .position(|(answered, _)| *answered == key)
             .map(|at| answers.swap_remove(at).1);
-        if sent && answer.is_none() && stopped.is_some() {
+        if sent && answer.is_none() && (stopped.is_some() || cancelled) {
             break;
         }
         // In the order asked for, the summary's rows in their places. A
@@ -330,6 +351,7 @@ pub(super) async fn records<T: TransportPort + 'static>(
         records,
         stopped,
         too_large,
+        cancelled,
     })
 }
 

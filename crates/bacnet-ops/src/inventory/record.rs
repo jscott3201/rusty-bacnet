@@ -3,6 +3,7 @@
 use bacnet_types::enums::{ObjectType, PropertyIdentifier as P};
 use bacnet_types::primitives::ObjectIdentifier;
 
+use super::control;
 use super::plan::required;
 use super::settings::{mistyped, refused, state_text};
 use super::{PointRecord, Problem};
@@ -15,7 +16,9 @@ use crate::write::{Commandability, unknown_property};
 /// its value or its error. The first row of a property counts. A value of
 /// the wrong type is a problem and stays out of the record; a setting a
 /// point list builder would refuse is kept and is a problem too
-/// ([`refused`]).
+/// ([`refused`]). Read with
+/// values (the rows hold a Present_Value), a value object with a
+/// Priority_Array gets its priority in control from that array.
 pub(crate) fn record(
     device: &DeviceAddress,
     device_instance: u32,
@@ -28,7 +31,7 @@ pub(crate) fn record(
     // names states by the cleaned form.
     record.state_texts.states = StateTexts::from_rows(&rows).states;
     record.units = units(&rows);
-    let mut has_priorities = false;
+    let mut priorities: Option<Value> = None;
     let mut seen: Vec<P> = Vec::with_capacity(rows.len());
     for reading in readings(rows.into_iter().map(|row| (object, None, row)).collect()) {
         let property = reading.property;
@@ -49,6 +52,8 @@ pub(crate) fn record(
         let problem = match property {
             P::OBJECT_NAME => text(&value, &mut record.name),
             P::DESCRIPTION => text(&value, &mut record.description),
+            P::DEVICE_TYPE => typed_text(object_type, property, &value, &mut record.device_type),
+            P::PROFILE_NAME => typed_text(object_type, property, &value, &mut record.profile_name),
             P::ACTIVE_TEXT => text(&value, &mut record.state_texts.active),
             P::INACTIVE_TEXT => text(&value, &mut record.state_texts.inactive),
             P::UNITS => record.units.is_none().then(|| wrong("an engineering unit")),
@@ -60,7 +65,7 @@ pub(crate) fn record(
                     .then(|| wrong("an Unsigned"))
             }
             P::PRIORITY_ARRAY => {
-                has_priorities = true;
+                priorities = Some(value);
                 None
             }
             P::RELINQUISH_DEFAULT => {
@@ -71,7 +76,16 @@ pub(crate) fn record(
             P::MAX_PRES_VALUE => typed(object_type, property, value, &mut record.max_present_value),
             P::POLARITY => typed(object_type, property, value, &mut record.polarity),
             P::PRESENT_VALUE => keep(value, &mut record.present_value),
-            P::STATUS_FLAGS => keep(value, &mut record.status_flags),
+            // As its siblings: one that isn't a bit string is a problem
+            // and stays out, so `PointRecord::flags` sees only bit strings.
+            P::STATUS_FLAGS => typed(object_type, property, value, &mut record.status_flags),
+            P::EVENT_STATE => typed(object_type, property, value, &mut record.event_state),
+            P::RELIABILITY => typed(object_type, property, value, &mut record.reliability),
+            P::CURRENT_COMMAND_PRIORITY => {
+                let (kept, problem) = control::read(object_type, value);
+                record.command_priority = kept;
+                problem
+            }
             // State_Text is read from the rows above, an entry that isn't
             // a string as an empty text.
             P::STATE_TEXT => state_text(object_type, &value),
@@ -85,8 +99,20 @@ pub(crate) fn record(
         Commandability::Always => true,
         Commandability::Never => false,
         // Only a Priority_Array says so.
-        _ => has_priorities,
+        _ => priorities.is_some(),
     };
+    // A value object's priority in control, with its values: what its
+    // Priority_Array shows, as no Current_Command_Priority is asked of it.
+    let values = seen.contains(&P::PRESENT_VALUE);
+    if values
+        && !seen.contains(&P::CURRENT_COMMAND_PRIORITY)
+        && let Some(array) = &priorities
+    {
+        match control::from_array(object_type, array) {
+            Ok(value) => record.command_priority = Some(value),
+            Err(error) => record.problems.push(Problem::new(P::PRIORITY_ARRAY, error)),
+        }
+    }
     // What a point list builder would refuse; a relinquish default only
     // where the point holds one, so after `commandable`.
     record.problems.extend(refused(&record));
@@ -117,6 +143,19 @@ fn typed(
         *field = Some(value);
     }
     problem
+}
+
+/// Put `value`'s character string in `field`, exactly as the device sent
+/// it, when it is of the datatype `property` has on an object of
+/// `object_type`; a value that isn't is the problem returned, saying what
+/// came back.
+fn typed_text(
+    object_type: ObjectType,
+    property: P,
+    value: &Value,
+    field: &mut Option<String>,
+) -> Option<PropertyError> {
+    mistyped(object_type, property, value).or_else(|| text(value, field))
 }
 
 /// Put `value`'s character string in `field`, exactly as the device sent

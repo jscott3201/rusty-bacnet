@@ -33,6 +33,7 @@ over a `TlsWebSocket` connected to a local constrained-TLS `ScHub` for RB-16 pro
 //! I/O.
 
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_server::server::{__endpoint_start_refused as start_refused, StartError};
 use bacnet_transport::sc::{ScReconnectConfig, ScTransport};
 use bacnet_transport::sc_frame::Vmac;
 use bacnet_types::MacAddr;
@@ -273,11 +274,18 @@ impl ScEndpointBuilder {
     /// no TLS, no hub dial; the caller drives the hub side for handshake in
     /// unit proofs. RB-15 tests prefer [`LoopbackTransport`](bacnet_transport::loopback::LoopbackTransport)
     /// for full session I/O and use this builder for config validation only.
+    ///
+    /// A refusal, any of [`validate_only`](Self::validate_only)'s, hands
+    /// back the database [`database`](Self::database) gave, as given
+    /// ([`StartError`], #2766).
     pub fn build_loopback_session(
-        self,
+        mut self,
         ws: bacnet_transport::sc::LoopbackWebSocket,
-    ) -> Result<EndpointSession<ScTransport<bacnet_transport::sc::LoopbackWebSocket>>, Error> {
-        self.validate()?;
+    ) -> Result<EndpointSession<ScTransport<bacnet_transport::sc::LoopbackWebSocket>>, StartError>
+    {
+        if let Err(error) = self.validate() {
+            return Err(self.refused(error));
+        }
         let transport = ScTransport::new(ws, self.vmac);
         self.compose(transport, std::convert::identity)
     }
@@ -299,14 +307,19 @@ impl ScEndpointBuilder {
     /// [`reconnect`](Self::reconnect) can only reuse this socket.
     /// [`connect_hub_session`](Self::connect_hub_session) dials the hub
     /// itself and redials it, and a failover hub, after a loss.
+    ///
+    /// A refusal hands back the database [`database`](Self::database)
+    /// gave, as given ([`StartError`], #2766).
     #[cfg(feature = "sc-tls")]
     #[cfg_attr(docsrs, doc(cfg(feature = "sc-tls")))]
     pub fn build_hub_session(
-        self,
+        mut self,
         ws: bacnet_transport::sc_tls::TlsWebSocket,
-    ) -> Result<EndpointSession<ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>, Error> {
-        self.validate()?;
-        self.check_identity()?;
+    ) -> Result<EndpointSession<ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>, StartError>
+    {
+        if let Err(error) = self.validate().and_then(|()| self.check_identity()) {
+            return Err(self.refused(error));
+        }
         let transport = ScTransport::new(ws, self.vmac);
         self.compose(transport, std::convert::identity)
     }
@@ -322,7 +335,9 @@ impl ScEndpointBuilder {
     /// checks, with this builder's [`reconnect`](Self::reconnect)
     /// configuration, which a failover hub needs. With it, the transport redials a lost hub and
     /// moves between the primary and failover hubs as the client's does;
-    /// follow it through [`EndpointSession::sc_link`].
+    /// follow it through [`EndpointSession::sc_link`]. A refusal, a dial
+    /// that fails included, hands back the database
+    /// [`database`](Self::database) gave, as given ([`StartError`], #2766).
     ///
     /// ```no_run
     /// use bacnet_endpoint::sc::ScEndpointBuilder;
@@ -351,7 +366,8 @@ impl ScEndpointBuilder {
     pub async fn connect_hub_session(
         self,
         hubs: bacnet_transport::sc::ScHubDialer,
-    ) -> Result<EndpointSession<ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>, Error> {
+    ) -> Result<EndpointSession<ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>, StartError>
+    {
         self.connect_hub_session_wrapped(hubs, std::convert::identity)
             .await
     }
@@ -369,12 +385,15 @@ impl ScEndpointBuilder {
         mut self,
         hubs: bacnet_transport::sc::ScHubDialer,
         wrap: impl FnOnce(ScTransport<bacnet_transport::sc_tls::TlsWebSocket>) -> U,
-    ) -> Result<EndpointSession<U>, Error> {
-        self.validate()?;
-        self.check_identity()?;
+    ) -> Result<EndpointSession<U>, StartError> {
+        if let Err(error) = self.validate().and_then(|()| self.check_identity()) {
+            return Err(self.refused(error));
+        }
         let reconnect = self.reconnect.take();
-        let transport = Box::pin(hubs.connect(self.vmac, reconnect)).await?;
-        self.compose(transport, wrap)
+        match Box::pin(hubs.connect(self.vmac, reconnect)).await {
+            Ok(transport) => self.compose(transport, wrap),
+            Err(error) => Err(self.refused(error)),
+        }
     }
 
     /// A composed identity must carry this builder's device UUID and, when
@@ -409,6 +428,11 @@ impl ScEndpointBuilder {
         Ok(())
     }
 
+    /// A build refused for `error`, handing back the database (#2766).
+    fn refused(&mut self, error: Error) -> StartError {
+        start_refused(error, self.database.take())
+    }
+
     /// Gives `transport` this node's UUID and heartbeat timing, and the
     /// reconnect configuration unless the hub dialer took it, then composes
     /// the session over it as `wrap` wraps it, keeping the transport's link
@@ -420,7 +444,7 @@ impl ScEndpointBuilder {
         mut self,
         transport: ScTransport<W>,
         wrap: impl FnOnce(ScTransport<W>) -> U,
-    ) -> Result<EndpointSession<U>, Error> {
+    ) -> Result<EndpointSession<U>, StartError> {
         let mut transport = transport
             .with_device_uuid(self.device_uuid)
             .with_heartbeat_interval_ms(self.heartbeat_interval_ms)
@@ -429,7 +453,12 @@ impl ScEndpointBuilder {
             transport = transport.with_reconnect(config);
         }
         let link = transport.link_monitor();
-        let mut endpoint = EndpointSession::new(wrap(transport), self.role, self.session.clone())?;
+        // `validate` checked the session settings before any dial.
+        let mut endpoint =
+            match EndpointSession::new(wrap(transport), self.role, self.session.clone()) {
+                Ok(endpoint) => endpoint,
+                Err(error) => return Err(self.refused(error)),
+            };
         endpoint.sc_link = Some(link);
         if let Some(db) = self.database.take() {
             endpoint = endpoint.with_database(db);

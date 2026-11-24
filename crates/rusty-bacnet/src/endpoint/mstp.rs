@@ -162,7 +162,8 @@ impl MstpEndpointConfig {
                     transport,
                 ))
             })
-            .map_err(to_py_err)?;
+            // The next start builds the objects again (#2766).
+            .map_err(|refused| to_py_err(refused.into()))?;
         let session = match &config.source_audit {
             Some(source) => source.select(session),
             None => session,

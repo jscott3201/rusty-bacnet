@@ -33,6 +33,8 @@
       },
       "name": "Zone Temp",
       "description": "Room 101, east",
+      "device_type": "10k thermistor, type II",
+      "profile_name": "acme-zone-temp",
       "units": {
         "value": 64,
         "name": "degrees-fahrenheit",
@@ -54,6 +56,7 @@
         "value": "72.5 °F",
         "decoded": 72.5
       },
+      "command_priority": null,
       "status_flags": {
         "value": "fault",
         "decoded": {
@@ -61,6 +64,20 @@
           "names": [
             "fault"
           ]
+        }
+      },
+      "event_state": {
+        "value": "fault",
+        "decoded": {
+          "value": 1,
+          "name": "fault"
+        }
+      },
+      "reliability": {
+        "value": "open-loop",
+        "decoded": {
+          "value": 4,
+          "name": "open-loop"
         }
       },
       "problems": []
@@ -75,6 +92,8 @@
       },
       "name": "Fan \"A\"",
       "description": "line one\nline two",
+      "device_type": null,
+      "profile_name": null,
       "units": null,
       "state_texts": {
         "active": "On",
@@ -101,7 +120,13 @@
           "name": "active"
         }
       },
+      "command_priority": {
+        "value": "8 (operator, manual)",
+        "decoded": 8
+      },
       "status_flags": null,
+      "event_state": null,
+      "reliability": null,
       "problems": []
     },
     {
@@ -114,6 +139,8 @@
       },
       "name": "Mode",
       "description": null,
+      "device_type": null,
+      "profile_name": null,
       "units": null,
       "state_texts": {
         "active": null,
@@ -138,7 +165,13 @@
         "value": "2 (Low, slow)",
         "decoded": 2
       },
+      "command_priority": {
+        "value": "relinquish default",
+        "decoded": null
+      },
       "status_flags": null,
+      "event_state": null,
+      "reliability": null,
       "problems": [
         {
           "property": "relinquish-default",
@@ -156,6 +189,8 @@
       },
       "name": "=Setpoint",
       "description": null,
+      "device_type": null,
+      "profile_name": null,
       "units": null,
       "state_texts": {
         "active": null,
@@ -179,7 +214,10 @@
       },
       "polarity": null,
       "present_value": null,
+      "command_priority": null,
       "status_flags": null,
+      "event_state": null,
+      "reliability": null,
       "problems": [
         {
           "property": "units",
@@ -201,6 +239,8 @@
       },
       "name": "Café 🔥",
       "description": null,
+      "device_type": null,
+      "profile_name": null,
       "units": null,
       "state_texts": {
         "active": null,
@@ -215,7 +255,10 @@
       "max_present_value": null,
       "polarity": null,
       "present_value": null,
+      "command_priority": null,
       "status_flags": null,
+      "event_state": null,
+      "reliability": null,
       "problems": []
     },
     {
@@ -228,6 +271,8 @@
       },
       "name": null,
       "description": null,
+      "device_type": null,
+      "profile_name": null,
       "units": null,
       "state_texts": {
         "active": null,
@@ -242,7 +287,10 @@
       "max_present_value": null,
       "polarity": null,
       "present_value": null,
+      "command_priority": null,
       "status_flags": null,
+      "event_state": null,
+      "reliability": null,
       "problems": []
     },
     {
@@ -255,6 +303,8 @@
       },
       "name": "+SUM(A1)",
       "description": "-2+3",
+      "device_type": "-5 V input",
+      "profile_name": null,
       "units": {
         "value": 62,
         "name": "degrees-celsius",
@@ -279,7 +329,10 @@
         "value": "-12.5 °C",
         "decoded": -12.5
       },
+      "command_priority": null,
       "status_flags": null,
+      "event_state": null,
+      "reliability": null,
       "problems": []
     },
     {
@@ -292,6 +345,8 @@
       },
       "name": "@cmd",
       "description": "\tindented",
+      "device_type": null,
+      "profile_name": null,
       "units": null,
       "state_texts": {
         "active": "on",
@@ -312,7 +367,10 @@
         }
       },
       "present_value": null,
+      "command_priority": null,
       "status_flags": null,
+      "event_state": null,
+      "reliability": null,
       "problems": []
     },
     {
@@ -325,6 +383,8 @@
       },
       "name": "Note",
       "description": null,
+      "device_type": null,
+      "profile_name": null,
       "units": null,
       "state_texts": {
         "active": null,
@@ -342,7 +402,10 @@
         "value": "\"=HYPERLINK(\"x\")\"",
         "decoded": "=HYPERLINK(\"x\")"
       },
+      "command_priority": null,
       "status_flags": null,
+      "event_state": null,
+      "reliability": null,
       "problems": []
     },
     {
@@ -355,6 +418,8 @@
       },
       "name": " =1+1",
       "description": null,
+      "device_type": null,
+      "profile_name": null,
       "units": null,
       "state_texts": {
         "active": null,
@@ -369,7 +434,48 @@
       "max_present_value": null,
       "polarity": null,
       "present_value": null,
+      "command_priority": null,
       "status_flags": null,
+      "event_state": null,
+      "reliability": null,
+      "problems": []
+    },
+    {
+      "device": "192.168.1.10:47808",
+      "device_instance": 1234,
+      "object": {
+        "type": "analog-output",
+        "type_number": 1,
+        "instance": 5
+      },
+      "name": "Damper",
+      "description": null,
+      "device_type": null,
+      "profile_name": null,
+      "units": null,
+      "state_texts": {
+        "active": null,
+        "inactive": null,
+        "states": []
+      },
+      "number_of_states": null,
+      "commandable": true,
+      "relinquish_default": null,
+      "cov_increment": null,
+      "min_present_value": null,
+      "max_present_value": null,
+      "polarity": null,
+      "present_value": {
+        "value": "35",
+        "decoded": 35.0
+      },
+      "command_priority": {
+        "value": "10 (site defined)",
+        "decoded": 10
+      },
+      "status_flags": null,
+      "event_state": null,
+      "reliability": null,
       "problems": []
     }
   ],

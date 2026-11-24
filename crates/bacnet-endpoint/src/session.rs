@@ -29,8 +29,10 @@
 //! without a goodbye and without waiting.
 //!
 //! The session keeps its object database through `stop()` and lets go of it
-//! when it drops. Every holder of the database (the session, its server,
-//! the source Audit runtime and the session's tasks) lets go through
+//! when it drops; a start refused once the link has started hands it back
+//! instead ([`start`](EndpointSession::start), #2766). Every holder of the
+//! database (the session, its server, the source Audit runtime and the
+//! session's tasks) lets go through
 //! [`drop_database_off_runtime`], so whichever goes last, in async code the
 //! objects and any durable saves they wait for drop on Tokio's blocking pool,
 //! not on a runtime worker (#1561).
@@ -90,9 +92,18 @@ mod frame_observation;
 #[path = "registered_port.rs"]
 mod registered_port;
 
+/// The refusal the link builders and [`EndpointSession::start`] return,
+/// which hands back the object database (#2766). It is the server
+/// builders' type, re-exported so a caller need not name `bacnet_server`.
+pub use bacnet_server::server::StartError;
 use bacnet_server::server::{
-    __endpoint_NotificationTransactions as NotificationTransactions, drop_database_off_runtime,
+    __endpoint_NotificationTransactions as NotificationTransactions,
+    __endpoint_start_refused as start_refused, drop_database_off_runtime,
 };
+
+/// How many runtime turns a refused start waits, after its cleanup, for
+/// work it began to let go of the database (#2766).
+const HAND_BACK_TURNS: usize = 16;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Lifecycle {
@@ -655,13 +666,51 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Profile initialization errors after ingress starts cancel and join ingress
     /// before returning, leaving the session terminal. Canceling that cleanup
     /// leaves a stopping session whose teardown can resume with [`stop`](Self::stop).
-    pub async fn start(&mut self) -> Result<(), Error> {
+    ///
+    /// A refusal is a [`StartError`], which `?` turns into [`Error`]. One
+    /// that ends the session, once the link has started (a link that won't
+    /// start, a registered Network Port it can't publish, a server build or
+    /// a source Audit installation the started link refuses), hands back
+    /// the database (#2766): the one [`with_database`](Self::with_database)
+    /// gave, or the stock one the start built from the identity. The
+    /// session's cleanup has let go of every other handle on it by then, a
+    /// server the start built included. It comes back with what a start
+    /// sets and the next start sets again:
+    ///
+    /// - the identity's Device bound as the local Device;
+    /// - a registered Network Port the start published put back as it was
+    ///   configured, so the next start reserves it again;
+    /// - a source Audit Reporter the start installed taken out again;
+    /// - once the start gave it to its server, what [`StartError`] lists for
+    ///   a server's start on a seat, with the outputs that start drove
+    ///   released: a Load Control's application is told to stop, and the
+    ///   object keeps its request.
+    ///
+    /// A refusal after the server was built (a source Audit installation
+    /// the started link refuses) comes once that server has run, until the
+    /// cleanup stopped it, with its requests held for the start's end. Its
+    /// periodic work may have had its first pass by then, and the database
+    /// keeps what that pass did, as a server's start and stop leave it: a
+    /// Schedule's value written to its Present_Value and the properties it
+    /// references, a Trend Log's records, the event transitions a first
+    /// sweep confirmed, whose notifications went out on the link.
+    ///
+    /// [`can_start`](Self::can_start) tells what a refusal without a
+    /// database means. `true`: it came before the link started, and the
+    /// session keeps the database, ready to correct and start again.
+    /// `false`: the session had already started, or this start ended it
+    /// while something it began still held the database a few runtime
+    /// turns after its cleanup; the session keeps the database then too,
+    /// and lets go of it off the runtime as it drops. A start cancelled
+    /// after the link started also leaves the database with the session.
+    pub async fn start(&mut self) -> Result<(), StartError> {
+        let kept = |error| start_refused(error, None);
         if self.lifecycle.load(Ordering::Acquire) != Lifecycle::Ready as u8 {
-            return Err(Error::Encoding(
+            return Err(kept(Error::Encoding(
                 "endpoint session cannot be started more than once".into(),
-            ));
+            )));
         }
-        let source_routes = self.prepare_start().await?;
+        let source_routes = self.prepare_start().await.map_err(kept)?;
         if self.lifecycle.compare_exchange(
             Lifecycle::Ready as u8,
             Lifecycle::Running as u8,
@@ -669,17 +718,60 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             Ordering::Acquire,
         ) != Ok(Lifecycle::Ready as u8)
         {
-            return Err(Error::Encoding(
+            return Err(kept(Error::Encoding(
                 "endpoint session cannot be started more than once".into(),
-            ));
+            )));
         }
         if let Err(error) = self.start_link(source_routes).await {
             // Keep cleanup ownership in self before awaiting. Cancellation leaves
             // Stopping plus intact joins; stop/Drop can still finish teardown.
             let _ = self.stop().await;
-            return Err(error);
+            return Err(start_refused(error, self.hand_back_database().await));
         }
         Ok(())
+    }
+
+    /// Whether [`start`](Self::start) may run: before the first start, and
+    /// after a start refused before its link started, which leaves the
+    /// session ready to correct and start again. `false` once a start has
+    /// begun the link, through stop and after it, so after a refused start
+    /// it tells a refusal the session can retry from one that ended it
+    /// (#2766).
+    pub fn can_start(&self) -> bool {
+        self.lifecycle.load(Ordering::Acquire) == Lifecycle::Ready as u8
+    }
+
+    /// The database of a start the session's stop has just ended (#2766):
+    /// once every other handle has gone, it comes out of its lock with what
+    /// the start began undone. The stop has joined the session's own work,
+    /// so it waits at most [`HAND_BACK_TURNS`] runtime turns for anything
+    /// that still holds a handle; a handle shared past them stays with the
+    /// session, which lets go of it off the runtime as it drops. The
+    /// database stays in the session until it is taken, so a start
+    /// cancelled here leaves it there too.
+    async fn hand_back_database(&mut self) -> Option<ObjectDatabase> {
+        for _ in 0..HAND_BACK_TURNS {
+            if self
+                .database
+                .as_ref()
+                .is_none_or(|db| Arc::strong_count(db) == 1)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let db = self.database.take()?;
+        match Arc::try_unwrap(db) {
+            Ok(db) => {
+                let mut db = db.into_inner();
+                db.undo_refused_start_internal();
+                Some(db)
+            }
+            Err(shared) => {
+                self.database = Some(shared);
+                None
+            }
+        }
     }
 
     /// Stops dispatch, roles and ingress once; joins termination.
@@ -714,10 +806,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// destructors can lose it. Let go of every guard first where storage
     /// must be settled when this returns.
     ///
-    /// The stopped server lets go of its database handle from a task, a
-    /// runtime turn after this call returns, as a standalone server's drop
-    /// does: code that takes the database back once the session is gone
-    /// (`Arc::try_unwrap` of a clone it kept) lets that turn pass first.
+    /// The stopped server has let go of its database handle when this call
+    /// returns (#2766), but for settling handed to a task as above, which
+    /// holds one until it has run.
     ///
     /// A [`client`](Self::client) still alive doesn't hold the
     /// stop up (#2617): its tasks end, the link stops, and its requests

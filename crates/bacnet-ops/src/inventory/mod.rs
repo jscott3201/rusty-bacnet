@@ -8,7 +8,9 @@
 //! A record holds the object's name, description, units, state texts and
 //! whether it takes commands; with [`InventoryOptions::settings`] its
 //! COV_Increment, range, Relinquish_Default and Polarity too; with
-//! [`InventoryOptions::values`] its Present_Value and Status_Flags. Which
+//! [`InventoryOptions::values`] its Present_Value, Status_Flags,
+//! Event_State, Reliability and priority in control; with
+//! [`InventoryOptions::details`] its Device_Type and Profile_Name. Which
 //! properties that is for each object type is one list, [`properties`].
 //!
 //! # What it costs
@@ -19,19 +21,25 @@
 //! first, so its size follows from how many properties each object's type
 //! reads ([`properties`]): 16 objects of a type that reads two, 10 analog
 //! inputs, 8 binary inputs or analog values, 6 multi-state values. With
-//! values each object reads two more, and a batch holds 4 to 8; with
-//! settings as well, 3 to 8. Settings alone add up to four properties an
-//! object, so fewer objects fit a batch and a device with many of them
-//! takes more requests: a Binary Input then reads five (its Polarity among
-//! them) and goes six a batch, a Binary Output six and goes five, against
-//! eight of either without. N objects of one type that each read p
-//! properties take N divided by the batch's size, rounded up, where the
-//! size is the smaller of 16 and 32/p rounded down: 31 analog inputs, at
-//! three properties each, go ten a batch and take 4 requests. A mix of
-//! types takes at most one or two more than its types would apart: about
-//! N/8 + 2 for a typical controller, N/5 + 2 with values. A handle made from an address
-//! whose instance isn't known yet costs one more, a read of the Device
-//! object by the wildcard instance.
+//! values each object reads four more (Present_Value, Status_Flags,
+//! Event_State, Reliability), an output, Access Door or lighting output
+//! five (its Current_Command_Priority too; a value object's priority in
+//! control comes from the Priority_Array it reads anyway), and a batch
+//! holds 3 to 5: 4 analog inputs or analog outputs, 3 binary or
+//! multi-state outputs; with settings as well, 2 to 5. Settings alone add
+//! up to four properties an object, so fewer objects fit a batch and a
+//! device with many of them takes more requests: a Binary Input then reads
+//! five (its Polarity among them) and goes six a batch, a Binary Output
+//! six and goes five, against eight of either without. Details add two
+//! (Device_Type, Profile_Name): 6 analog inputs a batch, 5 binary inputs.
+//! N objects of one type that each read p properties take N divided by the
+//! batch's size, rounded up, where the size is the smaller of 16 and 32/p
+//! rounded down: 31 analog inputs, at three properties each, go ten a
+//! batch and take 4 requests. A mix of types takes at most one or two more
+//! than its types would apart: about N/8 + 2 for a typical controller,
+//! N/4 + 2 with values. A handle made from an address whose instance isn't
+//! known yet costs one more, a read of the Device object by the wildcard
+//! instance.
 //!
 //! - A batch whose answer the device can't send for its size (it doesn't
 //!   segment, or its buffer is small) is asked again an object at a time,
@@ -42,11 +50,14 @@
 //!   a ReadProperty for each property.
 //! - A batch the device fails as a whole for another reason is read by
 //!   ReadProperty, a property a request, so one bad object can't put
-//!   errors on its neighbours.
+//!   errors on its neighbours. Such a failure isn't a refusal of the
+//!   service, so the next batch is tried by ReadPropertyMultiple again: a
+//!   device that fails every one costs one wasted request a batch.
 //! - A device that refuses ReadPropertyMultiple costs that one refused
 //!   request (remembered by the client, so only once), then a ReadProperty
 //!   for each property: 13 for the summary, one for the Object_List, and
-//!   each object's count from [`properties`].
+//!   each object's count from [`properties`]: four more an object with
+//!   values (five on an output), two more with details.
 //! - An Object_List the device can't send whole is read element by
 //!   element: one request for its size and one an object.
 //!
@@ -81,7 +92,10 @@
 //!
 //! [`raw::read_inventory`](crate::raw::read_inventory) is the layer under
 //! [`Device::inventory`], for a caller that owns a low-level client and a
-//! [`raw::Reader`](crate::raw::Reader).
+//! [`raw::Reader`](crate::raw::Reader). A raw read whose stop flag goes up
+//! once the Object_List is in keeps its records the same way, in the
+//! [`raw::InventoryHalt::Cancelled`](InventoryHalt::Cancelled) it ends
+//! with.
 //!
 //! # JSON and CSV
 //!
@@ -95,6 +109,7 @@
 //!
 //! [`RequestLimits`]: crate::limits::RequestLimits
 
+mod control;
 mod plan;
 pub(crate) mod read;
 mod record;
@@ -102,8 +117,9 @@ mod settings;
 mod write;
 
 use bacnet_transport::port::TransportPort;
+use bacnet_types::bitstring::{StatusFlags, status_flags_from_bacnet};
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use serde::Serialize;
 
 pub use self::plan::properties;
@@ -126,7 +142,7 @@ use crate::watch::{CovSupport, Watched};
 ///
 /// // Every object, names and units only.
 /// let all = InventoryOptions::new();
-/// assert!(all.types.is_none() && !all.values && !all.settings);
+/// assert!(all.types.is_none() && !all.values && !all.settings && !all.details);
 /// // The analog inputs alone, with their values.
 /// let inputs = InventoryOptions::new()
 ///     .with_types([ObjectType::ANALOG_INPUT])
@@ -140,15 +156,21 @@ pub struct InventoryOptions {
     /// the Object_List names, of any type, a vendor's included. Objects of
     /// other types are left out without a request.
     pub types: Option<Vec<ObjectType>>,
-    /// Also read each object's Present_Value and Status_Flags: two more
-    /// properties an object in the same requests, so fewer objects fit a
-    /// batch. Off by default.
+    /// Also read each object's run-time state: its Present_Value,
+    /// Status_Flags, Event_State and Reliability, and on an object whose
+    /// Present_Value always takes commands its Current_Command_Priority
+    /// ([`properties`]): four or five more properties an object in the
+    /// same requests, so fewer objects fit a batch. Off by default.
     pub values: bool,
     /// Also read each object's settings, where its type has them:
     /// COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default
     /// and Polarity ([`properties`]): up to four more properties an object
     /// in the same requests, so fewer objects fit a batch. Off by default.
     pub settings: bool,
+    /// Also read each object's Device_Type and Profile_Name: what it is
+    /// connected to, and the profile that describes it (#2620); two more
+    /// properties an object in the same requests. Off by default.
+    pub details: bool,
 }
 
 impl InventoryOptions {
@@ -163,8 +185,8 @@ impl InventoryOptions {
         self
     }
 
-    /// The same options, reading each object's Present_Value and
-    /// Status_Flags or not.
+    /// The same options, reading each object's run-time state
+    /// ([`values`](Self::values)) or not.
     pub fn with_values(mut self, values: bool) -> Self {
         self.values = values;
         self
@@ -173,6 +195,13 @@ impl InventoryOptions {
     /// The same options, reading each object's settings or not.
     pub fn with_settings(mut self, settings: bool) -> Self {
         self.settings = settings;
+        self
+    }
+
+    /// The same options, reading each object's Device_Type and
+    /// Profile_Name or not.
+    pub fn with_details(mut self, details: bool) -> Self {
+        self.details = details;
         self
     }
 
@@ -233,6 +262,15 @@ pub struct PointRecord {
     pub name: Option<String>,
     /// Its Description.
     pub description: Option<String>,
+    /// Its Device_Type, read with [`details`](InventoryOptions::details):
+    /// the device's text for what the object is connected to, such as the
+    /// kind of sensor behind an input; optional in the tables. One that
+    /// isn't a character string is a problem instead.
+    pub device_type: Option<String>,
+    /// Its Profile_Name, read with details: the name of the profile the
+    /// object follows, as its device writes it; optional, and a problem
+    /// when it isn't a character string, as Device_Type.
+    pub profile_name: Option<String>,
     /// Its Units, for the types that have the property. JSON: `{"value":
     /// 62, "name": "degrees-celsius", "symbol": "°C"}`; CSV: the name.
     #[serde(serialize_with = "write::units")]
@@ -262,6 +300,17 @@ pub struct PointRecord {
     /// object, an Unsigned for an Integer or Positive Integer Value, a
     /// Double for a Large Analog Value. One of another datatype is a
     /// problem instead.
+    ///
+    /// It is also a sign, at no cost of its own, of whether a
+    /// subscription to the object's Present_Value is worth trying: on
+    /// those six types the tables have the property exist exactly when the
+    /// object reports changes of its Present_Value (the footnotes to their
+    /// property tables, from Table 12-2 on). So with settings read, a
+    /// value here is evidence that the object reports them, not proof:
+    /// some devices give the property whether or not they do. `None` with
+    /// no [`problem`](Self::problem) for it says a conforming device's
+    /// object doesn't; [`Inventory::cov`] says whether the device offers
+    /// SubscribeCOV at all. Other types have no such sign.
     #[serde(serialize_with = "write::value")]
     pub cov_increment: Option<Value>,
     /// Its Min_Pres_Value, read with settings, of its Present_Value's
@@ -282,9 +331,39 @@ pub struct PointRecord {
     /// "decoded": 72.5}`, the text and the typed form.
     #[serde(serialize_with = "write::value")]
     pub present_value: Option<Value>,
-    /// Its Status_Flags, read with values.
+    /// The priority in control of its Present_Value, read with values on
+    /// a [`commandable`](Self::commandable) object: an Unsigned from 1 to
+    /// 16, or NULL when no priority holds a command and Relinquish_Default
+    /// applies, as the object's Current_Command_Priority says it. An
+    /// output (or Access Door, or lighting output) gives it as that
+    /// property. The 2020 tables require it there, but it is treated as
+    /// optional, since a device built to an earlier revision may not have
+    /// it: `None` then, with no problem. A value object's comes from the
+    /// Priority_Array already
+    /// read, the first slot that holds a command, at no request of its
+    /// own. Its text names the priority (`8 (operator, manual)`, `10 (site
+    /// defined)`) or says `relinquish default`. JSON: `{"value": "8
+    /// (operator, manual)", "decoded": 8}`, `decoded` null when
+    /// relinquished.
+    #[serde(serialize_with = "write::value")]
+    pub command_priority: Option<Value>,
+    /// Its Status_Flags, read with values, its text and JSON naming the
+    /// flags set (`in-alarm | fault`); [`flags`](Self::flags) gives them
+    /// typed. One that isn't a bit string is a problem instead.
     #[serde(serialize_with = "write::value")]
     pub status_flags: Option<Value>,
+    /// Its Event_State, read with values, named (`normal`, `offnormal`);
+    /// required on the types whose property tables list it so. One that
+    /// isn't an Enumerated is a problem instead.
+    #[serde(serialize_with = "write::value")]
+    pub event_state: Option<Value>,
+    /// Its Reliability, read with values, named (`no-fault-detected`,
+    /// `open-loop`). Treated as optional on every type, though some tables
+    /// require it (Access Door, Schedule, Network Port and others), since
+    /// a device built to an earlier revision may not have it. One that
+    /// isn't an Enumerated is a problem instead.
+    #[serde(serialize_with = "write::value")]
+    pub reliability: Option<Value>,
     /// The properties asked for that gave no usable value, in the order
     /// asked: one the device refused, one whose value isn't of the
     /// datatype the property has on the object's type, named with what
@@ -323,6 +402,8 @@ impl PointRecord {
             object,
             name: None,
             description: None,
+            device_type: None,
+            profile_name: None,
             units: None,
             state_texts: StateTexts::default(),
             number_of_states: None,
@@ -333,7 +414,10 @@ impl PointRecord {
             max_present_value: None,
             polarity: None,
             present_value: None,
+            command_priority: None,
             status_flags: None,
+            event_state: None,
+            reliability: None,
             problems: Vec::new(),
         }
     }
@@ -344,6 +428,36 @@ impl PointRecord {
             .iter()
             .find(|problem| problem.property == property)
             .map(|problem| &problem.error)
+    }
+
+    /// Its [`status_flags`](Self::status_flags) as the four flags, each by
+    /// name: [`StatusFlags::IN_ALARM`], `FAULT`, `OVERRIDDEN` and
+    /// `OUT_OF_SERVICE`. A flag the device's bit string is too short to
+    /// hold reads as clear. `None` when the flags weren't read (no
+    /// [`values`](InventoryOptions::values), or a type without them) or
+    /// didn't come as a bit string, which is a
+    /// [`problem`](Self::problem) then and leaves the field empty.
+    ///
+    /// ```
+    /// use bacnet_ops::inventory::Inventory;
+    /// use bacnet_types::bitstring::StatusFlags;
+    ///
+    /// /// The names of an inventory's points in fault, read with values.
+    /// fn faulted(inventory: &Inventory) -> Vec<&str> {
+    ///     let fault = |flags: StatusFlags| flags.contains(StatusFlags::FAULT);
+    ///     inventory
+    ///         .points
+    ///         .iter()
+    ///         .filter(|point| point.flags().is_some_and(fault))
+    ///         .filter_map(|point| point.name.as_deref())
+    ///         .collect()
+    /// }
+    /// ```
+    pub fn flags(&self) -> Option<StatusFlags> {
+        match self.status_flags.as_ref()?.decode().ok()? {
+            PropertyValue::BitString { data, .. } => Some(status_flags_from_bacnet(&data)),
+            _ => None,
+        }
     }
 }
 
@@ -367,13 +481,17 @@ pub struct Inventory {
     /// own: what the summary's Protocol_Services_Supported lists, or what
     /// the device did when this client's watches asked
     /// ([`Device::cov_support`]). It is the device's, not a point's:
-    /// whether one object reports changes is known only once a watch has
-    /// asked it.
+    /// whether one object reports changes is known once a watch has asked
+    /// it, or, for an analog object or an integer value read with
+    /// [`settings`](InventoryOptions::settings), from whether it has a
+    /// [`cov_increment`](PointRecord::cov_increment).
     pub cov: CovSupport,
     /// The objects read, in Object_List order.
     pub points: Vec<PointRecord>,
     /// The objects of the selected types not read because the reading
-    /// stopped, in Object_List order; empty when it didn't.
+    /// stopped, or a raw read's stop flag ended it
+    /// ([`raw::InventoryHalt::Cancelled`](InventoryHalt::Cancelled)),
+    /// in Object_List order; empty when neither did.
     #[serde(serialize_with = "write::objects")]
     pub unread: Vec<ObjectIdentifier>,
     /// Why the reading stopped early: the device went silent
@@ -438,7 +556,7 @@ impl<T: TransportPort + 'static> Device<T> {
                     element = Some((stop.index, stop.total));
                     stop.error
                 }
-                InventoryHalt::Cancelled => device_error(Halt::Cancelled),
+                InventoryHalt::Cancelled(_) => device_error(Halt::Cancelled),
             })
         });
         let mut inventory = match (read, element) {
@@ -505,7 +623,13 @@ mod tests;
 mod record_tests;
 
 #[cfg(test)]
+mod routed_tests;
+
+#[cfg(test)]
 mod settings_tests;
+
+#[cfg(test)]
+mod state_tests;
 
 #[cfg(test)]
 mod write_tests;

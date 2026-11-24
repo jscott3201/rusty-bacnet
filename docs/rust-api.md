@@ -13375,7 +13375,10 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
 
 - **Options.** `InventoryOptions::new()` reads every object the Object_List
   names. `.with_types(..)` narrows it, `.with_values(true)` adds each
-  object's Present_Value and Status_Flags, and `.with_settings(true)` its
+  object's Present_Value, Status_Flags, Event_State and Reliability and
+  the priority in control of one that takes commands,
+  `.with_details(true)` its Device_Type and Profile_Name (#2620), and
+  `.with_settings(true)` its
   COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default and a
   Binary Input's or Output's Polarity (a required property there, so one
   the device doesn't give, or gives as other than an Enumerated, is a
@@ -13388,15 +13391,18 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   and Priority_Array where only a read can tell whether the object takes
   commands (the value types and any type this release doesn't know).
 - **A record.** `PointRecord { device, device_instance, object, name,
-  description, units, state_texts, number_of_states, commandable,
-  relinquish_default, cov_increment, min_present_value, max_present_value,
-  polarity, present_value, status_flags, problems }`. Text is exactly as
+  description, device_type, profile_name, units, state_texts,
+  number_of_states, commandable, relinquish_default, cov_increment,
+  min_present_value, max_present_value, polarity, present_value,
+  command_priority, status_flags, event_state, reliability, problems }`.
+  Text is exactly as
   the device sent it. `units` is the `EngineeringUnits` value, and the
   values are
   `Value`s, so their text names the units and the state (`72.5 °F`,
   `2 (Low)`). `commandable` is what `Commandability::of` says of the type,
   settled by the Priority_Array where the type alone can't. A property the
-  object's type doesn't have, an optional one it lacks, or one the options
+  object's type doesn't have, an optional one it lacks (the device says
+  it is unknown; any other error is a problem), or one the options
   didn't ask for is `None`. One that should have read and didn't is listed
   in `problems` with the device's error, and never fails the inventory: an
   object the device refuses is a record whose properties are all problems.
@@ -13413,11 +13419,39 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   builder won't take, a Real that isn't finite, a negative COV_Increment,
   Min_Pres_Value above Max_Pres_Value, a state or Polarity the object
   can't hold) is kept as the device gave it and listed in `problems` too.
+  `PointRecord::flags()` gives the Status_Flags read with values as a
+  `bacnet_types::bitstring::StatusFlags` (`IN_ALARM`, `FAULT`,
+  `OVERRIDDEN`, `OUT_OF_SERVICE`); a Status_Flags that isn't a bit string
+  is a problem and leaves `status_flags` empty, as any value of the wrong
+  type does (#2620). `event_state` and `reliability` are named Enumerateds
+  (`normal`, `no-fault-detected`); Event_State is required on the types
+  whose property tables make it so unconditionally (the analog, binary and
+  multi-state objects, Loop, the logs, Access Door and others).
+  Reliability and Current_Command_Priority are treated as optional on
+  every type, though some tables require them (Reliability on Access Door,
+  Schedule and Network Port among others, Current_Command_Priority on the
+  six types that always take commands): a device built to an earlier
+  revision may lack them. Device_Type and Profile_Name are optional.
+  `command_priority` is the
+  priority in control, as a Current_Command_Priority gives it: an Unsigned
+  from 1 to 16 named by what the project calls it (`8 (operator,
+  manual)`, `10 (site defined)`), or NULL, written `relinquish default`.
+  An output, Access Door or lighting output reads its own property
+  (`None`, no problem, where the device lacks it); a value object's comes
+  from the Priority_Array already read, by whether each slot is NULL, an
+  array that isn't sixteen values being a Priority_Array problem. `device_type` and `profile_name`
+  are device text.
 - **The inventory.** `Inventory { address, device, cov, points, unread,
   stopped }`. `device` is the `DeviceSummary` (`describe_device`'s). `cov`
   is the device's `CovSupport` for SubscribeCOV, known from the summary at
-  no request of its own; whether one point reports changes is known only
-  once a watch has asked it. `Inventory::point(object)` finds a record.
+  no request of its own. Whether one point reports changes is known once a
+  watch has asked it, or, read with settings, from an analog object's or
+  integer value's `cov_increment`: on those six types the property exists
+  exactly when the object reports changes of its Present_Value (the
+  footnotes to their tables in Clause 12), so a value there is evidence
+  that a subscription is worth trying, not proof, as some devices give the
+  property regardless, and `None` with no problem says a conforming
+  device's object doesn't report them (#2620). `Inventory::point(object)` finds a record.
 - **What it costs.** By ReadPropertyMultiple: the summary, the Object_List,
   then one request for each batch, filled in Object_List order up to 16
   objects or 32 properties, whichever comes first: 16 objects of a type
@@ -13427,7 +13461,9 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   size is the smaller of 16 and 32/p rounded down (31 analog inputs, at
   three properties each, go ten a batch and take 4 requests), and a mix
   one or two more than its types would apart: about N/8 + 2 requests for a
-  typical controller, N/5 + 2 with values. Settings add up to four
+  typical controller, N/4 + 2 with values. Values add four properties an
+  object, five on an output, so a batch holds 3 to 5 objects; details add
+  two. Settings add up to four
   properties an object, so fewer objects fit a batch and a device with
   many of them takes more requests: a Binary Input then reads five (its
   Polarity among them) and goes six a batch, a Binary Output six and goes
@@ -13439,9 +13475,13 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   a time costs three, then a request an object). A single object whose
   answer is too large costs its refused request and a ReadProperty for
   each property. An answer in segments costs no more requests. A device
-  that refuses ReadPropertyMultiple costs that one
+  that fails a whole ReadPropertyMultiple with an error of its own (not a
+  refusal of the service) has that batch read by ReadProperty and the
+  next tried by ReadPropertyMultiple again: one wasted request a batch. A
+  device that refuses ReadPropertyMultiple costs that one
   refused request, then a ReadProperty for each property: 13 for the
-  summary, one for the Object_List, and each object's own count. No
+  summary, one for the Object_List, and each object's own count (four
+  more with values, five on an output; two more with details). No
   property is read twice, and every request waits at the device's gate
   under the client's `RequestLimits`.
 - **What it holds.** The Object_List, the records built so far, and the
@@ -13466,12 +13506,15 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   &options)` and `raw::read_point_record` are the layer under
   `Device::inventory`, for a caller that owns a low-level client and a
   `raw::Reader`. `read_inventory` fails with `raw::InventoryHalt`
-  (`Cancelled`, `Device(error)` or `ObjectList(ListStop)`, the last naming
-  the element) and `read_point_record` with `Halt`; the `bacnet` CLI uses
-  them. A
+  (`Cancelled(partial)`, `Device(error)` or `ObjectList(ListStop)`, the
+  last naming the element) and `read_point_record` with `Halt`; the
+  `bacnet` CLI uses them. A
   reader's stop flag is checked before each batch and before each
-  ReadProperty of a batch read property by property; a stopped read is
-  `Cancelled` and what it had read is dropped.
+  ReadProperty of a batch read property by property. A read stopped once
+  the Object_List is in keeps what it read, as a silent device's does:
+  `Cancelled(Some(inventory))` holds the records read whole and lists the
+  rest in `unread`, with `stopped` empty; one stopped while the summary or
+  the list was read is `Cancelled(None)` (#2620).
 - **JSON and CSV.** `Inventory` and `PointRecord` implement
   `serde::Serialize` with stable field names, and `Inventory::to_json()`
   is the indented document `bacnet inventory --json` prints: `address`,
@@ -13483,15 +13526,17 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   `Inventory::to_csv(&CsvOptions::new())` (and `write_csv`) writes
   one row a record under `inventory::CSV_HEADER`: `device`,
   `device_instance`, `object` (`analog-input:1`), `name`, `description`,
-  `units` (the kebab name), `state_texts` (joined with `|`, a `|` or `\`
-  inside a text escaped with `\`), `number_of_states`, `commandable`,
-  `relinquish_default`, `cov_increment`, `min_present_value`,
-  `max_present_value`, `polarity`, `present_value`, `status_flags` (each
-  value's text) and `problems`. A field holding a comma, a double quote or
+  `device_type`, `profile_name`, `units` (the kebab name), `state_texts`
+  (joined with `|`, a `|` or `\` inside a text escaped with `\`),
+  `number_of_states`, `commandable`, `relinquish_default`,
+  `cov_increment`, `min_present_value`, `max_present_value`, `polarity`,
+  `present_value`, `command_priority`, `status_flags`, `event_state`,
+  `reliability` (each value's text) and `problems`. A field holding a comma, a double quote or
   a line break is quoted, its quotes doubled; rows end with a line feed.
   The JSON keeps
   device text exactly. The CSV guards it by default: a `name`,
-  `description` or `state_texts` cell that starts with `=`, `+`, `-`, `@`,
+  `description`, `device_type`, `profile_name` or `state_texts` cell that
+  starts with `=`, `+`, `-`, `@`,
   a tab or a carriage return, which a spreadsheet would run as a formula,
   gets an apostrophe before it (for `state_texts`, the joined cell);
   leading spaces and line breaks before such a character don't hide it. A
@@ -14170,6 +14215,57 @@ With standard frames the default identity resolves to 480 before Device generati
 The port declares its own echo, as for a transport built by hand
 (`with_echo(Echo::full())`; see [Echo](#echo)).
 
+A refused build or start hands the object database back (#2766). The
+builders' `build_session`, `build_session_wrapped`, `build_loopback_session`,
+`build_hub_session` and `connect_hub_session` return `StartError`
+(`bacnet_endpoint::StartError`, the server builders' type), as a server
+builder's `build()` does: `?` turns it into `bacnet_types::error::Error`,
+and `into_parts()` gives the error and the database `database(...)` gave,
+as given, for every refusal, a hub dial that fails included.
+`EndpointSession::start` returns it too. A refusal before the link starts
+leaves the session ready to start again with its database, so the error
+carries none. One after ends the session (a link that won't start, such as a
+port another program holds; a registered Network Port it can't publish; a
+server build or source Audit installation the started link refuses), and the
+error carries the database: the one the session was given, or the stock one
+it built from the identity. The start's cleanup lets go of every other handle
+on it first, the stopped server's included, puts a registered Network Port it
+published back as configured, and releases the outputs the server's start
+drove (a Load Control's application is told to stop, and the object keeps its
+request), so the same database can go into the next session. A refusal after
+the server was built comes once that server has run: the database keeps what
+its periodic work's first pass did, as any start and stop leave it (a
+Schedule's value written to the properties it references, a Trend Log's
+records, event transitions a first sweep confirmed).
+
+`EndpointSession::can_start()` tells what a refusal without a database
+means: `true`, the session keeps it and can be corrected and started again;
+`false`, the session had already started, or this start ended it while
+something it began still held the database a few runtime turns after its
+cleanup, and the session lets go of it as it drops.
+
+```rust
+if let Err(refused) = session.start().await {
+    match refused.into_parts() {
+        // The session ended: start another over the same objects.
+        (error, Some(db)) => {
+            tracing::warn!(%error, "port 47808 refused; trying 47809");
+            let mut session =
+                BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 47809, Ipv4Addr::BROADCAST)
+                    .database(db)
+                    .device(identity)
+                    .build_session()?;
+            session.start().await?;
+        }
+        // No database: can_start() says whether the session kept it to retry.
+        (error, None) => {
+            tracing::warn!(%error, retry = session.can_start(), "start refused");
+            return Err(error);
+        }
+    }
+}
+```
+
 ### Choosing standalone or shared client/server roles
 
 | Standalone construction | Shared endpoint composition |
@@ -14504,7 +14600,8 @@ session.stop().await?; // stops the server, then the link
   server while the server builds.
   A start that fails after the server is built stops it; one cancelled there
   leaves it holding its requests unanswered until `stop()` or drop. A server
-  build that fails or is cancelled drops the database it was given.
+  build that fails ends the session, and the start's `StartError` hands the
+  database back (#2766); one cancelled drops it.
 - Stopping: `stop()` stops the server first, which joins its work and settles
   its saves while the link is still up, then the session's other roles and
   the link. A cancelled stop keeps the server, and the next call stops it
@@ -14641,8 +14738,8 @@ session.stop().await?; // stops the server, then the link
   database through each of these refusals. One check needs the started link
   and comes after it: target Audit's recipient as the started link sees it,
   an Address naming this network by its number or a group address only the
-  bound link reveals. That refusal ends the session and drops the database
-  the server was given.
+  bound link reveals. That refusal ends the session, and the start's
+  `StartError` hands the database back (#2766).
 - Routed source Audit bindings learn their networks' routers at the
   session's ingress, from every request and every answer a lease of the
   session's holds that comes from such a network, whichever role takes it.
@@ -14681,7 +14778,9 @@ before `stop()` where storage must be settled when it returns.
 Canceling `stop()` retains its original dispatch or ingress outcome and the
 server it has not finished stopping. Call it again to finish. The session
 stays stopping until then, and returns the saved outcome. It keeps its
-object database through `stop()` and lets go of it when it drops.
+object database through `stop()` and lets go of it when it drops; a start
+refused once the link has started hands it back instead (see
+[Builders](#builders)).
 
 Every endpoint holder of the database lets go through
 `bacnet_server::server::drop_database_off_runtime` (#1561): the session, its
@@ -14689,11 +14788,10 @@ server (whose aborted tasks may hold it last), the source Audit runtime (which
 an audited request in flight may hold last) and the session's Number task. So
 whichever goes last, in async code a durable object's final saves run on
 Tokio's blocking pool, not on a runtime worker. The server `stop()` stops
-hands its handle to a task that lets go of it on the runtime's next turn, as
-a standalone server's drop does: code that takes the database back once the
-session is gone (`Arc::try_unwrap` of a clone it kept) lets that turn pass
-first. Storage may still change after a drop returns. Await `stop()`, with
-no guard held, for the joined save boundary.
+has let go of its handle when `stop()` returns (#2766), but for settling it
+handed to a task because a guard was held. Storage may still change after a
+drop returns. Await `stop()`, with no guard held, for the joined save
+boundary.
 
 ### The narrow server role is gone
 

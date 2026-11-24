@@ -83,7 +83,7 @@ pub(crate) async fn read(
             })?;
             Err(error)
         }
-        Err(InventoryHalt::Cancelled) => unreachable!("nothing sets the export's stop flag"),
+        Err(InventoryHalt::Cancelled(_)) => unreachable!("nothing sets the export's stop flag"),
     }
 }
 

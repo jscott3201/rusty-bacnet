@@ -189,21 +189,9 @@ async fn execute_command<T: TransportPort + 'static>(
         Command::Export { format } => {
             boxed(|| commands::export::export_cmd(client, format)).await?
         }
-        Command::Inventory {
-            target,
-            types,
-            values,
-            settings,
-            csv_exact,
-        } => {
-            let args = commands::inventory::InventoryArgs {
-                target,
-                types,
-                values: *values,
-                settings: *settings,
-                csv_exact: *csv_exact,
-                layout: commands::inventory::Layout::of(csv, format),
-            };
+        Command::Inventory { .. } => {
+            let layout = commands::inventory::Layout::of(csv, format);
+            let args = commands::inventory::InventoryArgs::of(cmd, layout);
             boxed(|| commands::inventory::inventory_cmd(client, args)).await?;
         }
         Command::Readm { target, specs } => {

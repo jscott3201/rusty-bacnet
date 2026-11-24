@@ -458,7 +458,7 @@ async fn source_post_start_address_rejection_joins_ingress_and_is_terminal() {
     let mut session = session
         .with_database(db)
         .with_source_audit_reporter(selected());
-    assert!(session.start().await.is_err());
+    let refused = session.start().await.unwrap_err();
     assert_eq!(observed.starts.load(Ordering::SeqCst), 1);
     assert_eq!(
         observed.stops.load(Ordering::SeqCst),
@@ -472,11 +472,10 @@ async fn source_post_start_address_rejection_joins_ingress_and_is_terminal() {
     );
     assert!(session.client().is_err() && session.server().is_none());
     assert_eq!(session.active_leases(), 0);
-    assert!(!source(
-        &*session.database.as_ref().unwrap().read().await,
-        selected()
-    ));
-    assert!(session.start().await.is_err());
+    // The terminal start hands the database back (#2766).
+    let db = refused.into_parts().1.expect("the database comes back");
+    assert!(!source(&db, selected()));
+    assert!(session.start().await.unwrap_err().database().is_none());
 }
 
 /// The link's broadcast address is no route at any port (#2348), as the
