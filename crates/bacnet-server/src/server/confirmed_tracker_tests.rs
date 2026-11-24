@@ -258,3 +258,36 @@ fn a_segment_note_attaches_to_the_admitted_entry_only() {
     assert_eq!(tracker.segmented_notes(), 0, "it ends with its entry");
     drop(older);
 }
+
+/// Two pending requests of one requester under one invoke ID, each with a
+/// note: a repeat is answered from the newer one's (#2751).
+#[test]
+fn a_repeat_is_answered_from_the_newest_note() {
+    let tracker = Arc::new(ConfirmedRequestTracker::default());
+    let route = bacnet_network::response_route::ResponseRoute::unverified();
+    let note = |id, last| {
+        tracker.note_segmented(
+            id,
+            b"peer",
+            None,
+            TransportProvenance::unverified(),
+            route.clone(),
+            5,
+            last,
+            1,
+        )
+    };
+    let first_id = tracker.next_admission();
+    let first = new(begin(&tracker, request(5, Bytes::from_static(b"first"))));
+    note(first_id, 5);
+    let second_id = tracker.next_admission();
+    let second = new(begin(&tracker, request(5, Bytes::from_static(b"second"))));
+    note(second_id, 2);
+    let repeat =
+        || tracker.repeated_segment(b"peer", None, &TransportProvenance::unverified(), &route, 5);
+    assert_eq!(repeat(), Some((2, 1)), "the newer request's");
+    drop(second);
+    assert_eq!(repeat(), Some((5, 1)), "then the older one's");
+    drop(first);
+    assert_eq!(repeat(), None);
+}

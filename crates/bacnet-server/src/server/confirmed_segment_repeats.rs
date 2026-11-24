@@ -41,7 +41,7 @@ impl TrackerState {
         requester: &'a CanonicalRequester,
         direct_identity: &'a Option<DirectScIdentity>,
         invoke_id: u8,
-    ) -> impl Iterator<Item = u64> + 'a {
+    ) -> impl DoubleEndedIterator<Item = u64> + 'a {
         self.entries
             .iter()
             .filter(move |entry| {
@@ -117,9 +117,11 @@ impl ConfirmedRequestTracker {
         }
         let requester = canonical_requester(source_mac, source_network);
         let direct_identity = provenance.direct_sc_identity();
-        // The pending entries first (few), then their notes by id.
+        // The pending entries first (few), newest first, then their notes
+        // by id: a newer request under the invoke ID is the one repeated.
         state
             .ids_of(&requester, &direct_identity, invoke_id)
+            .rev()
             .find_map(|id| {
                 state.segmented.iter().find(|record| {
                     record.id == id

@@ -69,15 +69,17 @@ impl Rig {
             .await;
     }
 
-    /// The next reply, and the routed peer it went to.
+    /// The next reply, and the routed peer it went to. Waits in steps of a
+    /// millisecond of the paused clock (a busy yield wouldn't advance it),
+    /// for at most two seconds of it.
     async fn reply(&mut self) -> (Apdu, NpduAddress) {
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while sent_count(&self.sent) <= self.index {
-                tokio::task::yield_now().await;
+        for _ in 0..2_000 {
+            if sent_count(&self.sent) > self.index {
+                break;
             }
-        })
-        .await
-        .expect("timed out waiting for a reply");
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert!(sent_count(&self.sent) > self.index, "no reply came");
         let frame = self.sent.frame(self.index);
         self.index += 1;
         let npdu = frame.decode_npdu();
@@ -248,5 +250,65 @@ async fn a_requesters_abort_ends_the_note() {
     drop(guard);
     let (answer, _) = rig.reply().await;
     assert!(matches!(answer, Apdu::SimpleAck(ack) if ack.invoke_id == 8));
+    rig.server.stop().await.unwrap();
+}
+
+/// Another peer's Abort with the same invoke ID ends nothing of this one's:
+/// its note stays, and a repeat of its final segment is acknowledged again.
+#[tokio::test(start_paused = true)]
+async fn another_peers_abort_leaves_the_note() {
+    let mut rig = Rig::start().await;
+    let chunks = split_into(&write_property_payload("not yours to abort"), 3);
+    let db = Arc::clone(rig.server.database());
+    let guard = db.write().await;
+    for (seq, chunk) in chunks.iter().enumerate() {
+        rig.segment(9, seq as u8, 1, seq < 2, chunk).await;
+        rig.expect_ack(9, seq as u8, 1, "in order").await;
+    }
+    let abort = Apdu::Abort(AbortPdu {
+        sent_by_server: false,
+        invoke_id: 9,
+        abort_reason: AbortReason::OTHER,
+    });
+    let other = routed_address(400, 10);
+    inject_routed_apdu(&rig.incoming, &rig.router, &other, &abort).await;
+    rig.quiet().await;
+    assert_eq!(rig.notes(), 1);
+    rig.segment(9, 2, 1, false, &chunks[2]).await;
+    rig.expect_ack(9, 2, 1, "the final segment again").await;
+    drop(guard);
+    let (answer, _) = rig.reply().await;
+    assert!(matches!(answer, Apdu::SimpleAck(ack) if ack.invoke_id == 9));
+    rig.server.stop().await.unwrap();
+}
+
+/// A requester that gave up on a request (no Abort) and reuses its invoke
+/// ID while the server still executes it: the new request's segments are,
+/// by Clause 5.4.5.3, repeats of the one executing, each answered with its
+/// last acknowledgment, and open no transfer. (So a second note under one
+/// requester and invoke ID can't come from the wire this way; the newest
+/// one wins where two exist: confirmed_tracker_tests.)
+#[tokio::test(start_paused = true)]
+async fn an_invoke_id_reused_while_its_request_executes_opens_nothing() {
+    let mut rig = Rig::start().await;
+    let first = split_into(&write_property_payload("the first request"), 6);
+    let second = split_into(&write_property_payload("the second request"), 3);
+    let db = Arc::clone(rig.server.database());
+    let guard = db.write().await;
+    for (seq, chunk) in first.iter().enumerate() {
+        rig.segment(5, seq as u8, 1, seq < 5, chunk).await;
+        rig.expect_ack(5, seq as u8, 1, "the first, in order").await;
+    }
+    for (seq, chunk) in second.iter().enumerate() {
+        rig.segment(5, seq as u8, 1, seq < 2, chunk).await;
+        rig.expect_ack(5, 5, 1, "the second: the first's last ack")
+            .await;
+    }
+    rig.quiet().await;
+    drop(guard);
+    let (answer, _) = rig.reply().await;
+    assert!(matches!(answer, Apdu::SimpleAck(ack) if ack.invoke_id == 5));
+    rig.quiet().await;
+    assert_eq!(present_value(&rig.server).await, "the first request");
     rig.server.stop().await.unwrap();
 }
