@@ -35,8 +35,10 @@ impl BACnetClient {
     }
 
     /// Ask the BBMD at `address` to take `entries` (rows as `Bbmd(bdt=)`
-    /// takes them) as its Broadcast Distribution Table. A BBMD that follows
-    /// the 2020 standard refuses: `BacnetBvlcNakError`, result code 0x0010.
+    /// takes them) as its Broadcast Distribution Table, the path for an
+    /// older BBMD. A BBMD that follows the 2020 standard refuses:
+    /// `BacnetBvlcNakError`, result code 0x0010; its Network Port takes a
+    /// `PropertyValue.bdt(rows)` write instead (#2710).
     fn write_bdt<'py>(
         &self,
         py: Python<'py>,

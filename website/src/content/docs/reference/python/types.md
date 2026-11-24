@@ -240,8 +240,11 @@ see docs/python-api.md), and a Network Port's
 BBMD\_Broadcast\_Distribution\_Table (`"bdt_entry"`: a `BdtEntry`)
 and BBMD\_Foreign\_Device\_Table (`"fdt_entry"`: an `FdtEntry`, as
 `read_fdt` gives it). A whole read of those two is tagged `"bdt"`
-or `"fdt"`, not `"list"`, empty ones included (#2690); they read
-only, with no typed write from the rows yet. Access\_Event\_Time and
+or `"fdt"`, not `"list"`, empty ones included (#2690);
+`PropertyValue.bdt(rows)` builds a BDT to write from rows (#2710),
+and the FDT is read-only. A Network Port's FD\_BBMD\_Address and
+BACnet\_IP\_Global\_Address read as `"host_n_port"`: the address text
+a `BdtEntry` gives its BBMD, `None` for no host (#2710). Access\_Event\_Time and
 Last\_Restore\_Time read as `"timestamp"`, and Subordinate\_List as a list of
 `"device_object_reference"`. Tags elements are `"name_value"`
 mappings with `"name": str` and `"value": None | PropertyValue`. Semantic tags
@@ -288,8 +291,8 @@ octets it was read from.
 
 Properties:
 
-- `tag: str`: Type tag: 'null', 'boolean', 'unsigned', 'signed', 'real', 'double', 'octet\_string', 'character\_string', 'bit\_string', 'enumerated', 'date', 'time', 'object\_identifier', 'list', 'application\_data', 'tagged' (a value read as its tags, `value` a list of `TagNode`), 'bdt' or 'fdt' (a whole Network Port BDT or FDT, `value` a list of `BdtEntry` or `FdtEntry`), or one typed constructed element: 'destination', 'port\_permission', 'read\_access\_specification', 'read\_access\_result', 'action\_list', 'device\_object\_reference', 'authentication\_factor\_format', 'stage\_limit\_value', 'access\_rule', 'device\_object\_property\_reference', 'object\_property\_reference', 'property\_access\_result', 'recipient', 'daily\_schedule', 'special\_event', 'calendar\_entry', 'date\_range', 'timestamp', 'cov\_subscription', 'value\_source', 'scale', 'prescale', 'address\_binding', 'shed\_level', 'authentication\_factor', 'event\_parameter', 'bdt\_entry', 'fdt\_entry'.
-- `value: Any`: The Python-native value (int, float, str, bytes, bool, dict, tuple, ObjectIdentifier, BitString, list, or None); `application_data` is `bytes` (except a DateTime Value's set Priority\_Array slot, `[date, time]`), `tagged` a list of `TagNode`, `bdt` a list of `BdtEntry`, `fdt` a list of `FdtEntry`, and a typed constructed element the form its typed write takes, or the form docs/python-api.md gives it. A date is `(year, month, day, day_of_week)` with the full year, or 255 for an unspecified year, as in every other date the binding reads. A bit string is a `BitString`, named when the value was read from a property of known bit-string type.
+- `tag: str`: Type tag: 'null', 'boolean', 'unsigned', 'signed', 'real', 'double', 'octet\_string', 'character\_string', 'bit\_string', 'enumerated', 'date', 'time', 'object\_identifier', 'list', 'application\_data', 'tagged' (a value read as its tags, `value` a list of `TagNode`), 'bdt' or 'fdt' (a whole Network Port BDT or FDT, `value` a list of `BdtEntry` or `FdtEntry`), or one typed constructed element: 'destination', 'port\_permission', 'read\_access\_specification', 'read\_access\_result', 'action\_list', 'device\_object\_reference', 'authentication\_factor\_format', 'stage\_limit\_value', 'access\_rule', 'device\_object\_property\_reference', 'object\_property\_reference', 'property\_access\_result', 'recipient', 'daily\_schedule', 'special\_event', 'calendar\_entry', 'date\_range', 'timestamp', 'cov\_subscription', 'value\_source', 'scale', 'prescale', 'address\_binding', 'shed\_level', 'authentication\_factor', 'event\_parameter', 'bdt\_entry', 'fdt\_entry', 'host\_n\_port'.
+- `value: Any`: The Python-native value (int, float, str, bytes, bool, dict, tuple, ObjectIdentifier, BitString, list, or None); `application_data` is `bytes` (except a DateTime Value's set Priority\_Array slot, `[date, time]`), `tagged` a list of `TagNode`, `bdt` a list of `BdtEntry`, `fdt` a list of `FdtEntry`, `host_n_port` the address text (`"ip:port"`, `"[v6]:port"` or `"name:port"`, `None` for no host), and a typed constructed element the form its typed write takes, or the form docs/python-api.md gives it. A date is `(year, month, day, day_of_week)` with the full year, or 255 for an unspecified year, as in every other date the binding reads. A bit string is a `BitString`, named when the value was read from a property of known bit-string type.
 - `name: str | None`: The name of an enumerated value read from a property whose enumeration is known (`"HIGH_LIMIT"` for an Event\_State of 3), else None. `value` stays the number. Values built with the constructors carry no property, so their name is None; copies and pickles of a read value keep it.
 - `read_context: PropertyReadContext | None`: The object, property and array index the ACK named, for a value a network `read_property` or `read_property_multiple` returned; None for any other value (local reads, COV values, Group members, values you build). It takes no part in equality, hashing or `repr`; copies and pickles keep it.
 - `octets: bytes`: The value's octets as a write of it carries them. For a read value, a `tagged` or `application_data` value and a typed constructed element hold the octets exactly as received, and a whole typed collection its elements' back to back. A primitive (or a list of them) is re-encoded from its decoded value in the shortest form, so it decodes to the same value but can differ from what the device sent (an integer with leading zero octets, a character string in UCS-2 or ISO 8859-1 comes back as UTF-8). Raises ValueError for a value that doesn't encode.
@@ -432,6 +435,43 @@ a closing tag that closes nothing, opening tags nested past 32, more
 than 10,000 elements), or hold an application value this type has no
 form for, raise ValueError. A `list` of tagged values keeps its
 items tagged.
+
+### PropertyValue.bdt
+
+```python
+@staticmethod
+def bdt(rows: Iterable[BdtEntry]) -> PropertyValue
+```
+
+A Network Port's BBMD\_Broadcast\_Distribution\_Table to write,
+built from rows in the form a whole read of it gives (#2710): each
+a `BdtEntry` mapping, `address` as `"ip:port"`,
+`"[v6]:port"` or `"name:port"` and `broadcast_mask` dotted
+text, `None` or left out. Each row is encoded with the stack's BDT
+entry codec; the value is tagged `"bdt"` and `.value` gives the
+rows back, so `PropertyValue.bdt(read.value)` equals a read the
+stack could have encoded.
+
+The entry form gives a B/IP BBMD a mask and a B/IPv6 one none; the
+builder encodes each row's mask as given, whatever its address, and
+leaves the rule to the device the table is written to. This stack's
+own B/IP BBMD refuses, when the table is written (WriteProperty
+VALUE\_OUT\_OF\_RANGE), a row that names its BBMD by host name or IPv6
+address, or that has no mask.
+
+A row the entry can't hold raises ValueError naming it
+(`rows[2]: ...`): an `address` that is `None` or missing (the
+list holds no entry without a host), a port that isn't plain decimal
+from 0 to 65535 (no sign, no leading zero), an IPv6 address without
+brackets or with a zone, a host that is neither an IPv4 address nor
+a host name (RFC 1123 labels, at most 253 octets, not digits and
+dots alone, the rule `ForeignDevice` targets follow), a mask that
+isn't four dotted octets, or another key. A row of the wrong type
+raises TypeError. A read can show a name that rule refuses (one with
+a colon, say): write such a table back as the read value itself.
+A 2020 BBMD takes its BDT this way, through WriteProperty and an
+ACTIVATE\_CHANGES reinitialize; `BACnetClient.write_bdt` stays the
+path for an older one.
 
 ## TagNode
 
@@ -2110,9 +2150,11 @@ a read of the property gives it (#2690). `address` is the BBMD in
 the `"ip:port"` text `read_bdt()` uses for IPv4, `"[v6]:port"`
 for IPv6 and `"name:port"` for a host name; `None` when the entry
 names no host. `broadcast_mask` is dotted text, `None` when the
-entry has none. The text is for display (a name may itself hold a
-colon); the value's `.octets` are the exact form. Rows aren't
-accepted as `Bbmd(bdt=)` input.
+entry has none. The value's `.octets` are the exact form.
+`PropertyValue.bdt(rows)` builds a table to write from these rows
+(#2710); a row whose `address` is `None`, or names a host the
+host-name rule refuses, doesn't build. Rows aren't accepted as
+`Bbmd(bdt=)` input, which configures this device's own BBMD.
 
 Keys:
 

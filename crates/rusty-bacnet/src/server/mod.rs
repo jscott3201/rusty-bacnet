@@ -12,10 +12,8 @@ use bacnet_objects::access_control::{
     AccessUserObject, AccessZoneObject, CredentialDataInputObject,
 };
 use bacnet_objects::accumulator::{AccumulatorObject, PulseConverterObject};
-use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::audit::{AuditLogObject, AuditReporterObject, FileAuditLogPersistence};
 use bacnet_objects::averaging::AveragingObject;
-use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::command::CommandObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -28,9 +26,6 @@ use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
 use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject};
 use bacnet_objects::load_control::{FileLoadControlPersistence, LoadControlObject};
 use bacnet_objects::loop_obj::LoopObject;
-use bacnet_objects::multistate::{
-    MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
-};
 use bacnet_objects::notification_class::{FileNotificationClassPersistence, NotificationClass};
 use bacnet_objects::program::ProgramObject;
 use bacnet_objects::schedule::{CalendarObject, ScheduleObject};
@@ -53,15 +48,18 @@ use bacnet_transport::bip6::Bip6Transport;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference, BACnetStageLimitValue,
 };
-use bacnet_types::enums::EventType;
+use bacnet_types::enums::{EventType, ObjectType};
 use bacnet_types::primitives::PropertyValue;
 
 use crate::errors::to_py_err;
+use crate::point_registration::admit;
 use crate::types::{PyEventType, PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
 
 mod audit_configuration;
 use audit_configuration::AuditNotificationSink;
 mod host;
+mod registered_port;
+mod start_claim;
 pub(crate) use audit_configuration::{
     reporter_audit_level, reporter_auditable_operations, validate_audit_recipient,
 };
@@ -171,17 +169,22 @@ pub struct BACnetServer {
     device_storage: Option<bacnet_objects::object_profile::FileTagsPersistence>,
     audit_notification_sink: Option<AuditNotificationSink>,
     audit_reporters: Option<server::AuditReportersConfig>,
-    audit_recipient: std::sync::Mutex<Option<bacnet_types::constructed::BACnetRecipient>>,
+    audit_recipient: Arc<std::sync::Mutex<Option<bacnet_types::constructed::BACnetRecipient>>>,
     device_bindings: std::collections::BTreeMap<u32, server::DeviceBinding>,
     /// Freeze forwarding and Reporter settings at ownership transfer, including startup in flight.
-    forwarding_configuration_started: AtomicBool,
+    forwarding_configuration_started: Arc<AtomicBool>,
+    /// Whether a `start()` holds the registrations it took and has not
+    /// finished: `add_*` and a second `start()` refuse meanwhile, so what
+    /// a refused start gives back cannot clash with a later call.
+    start_in_flight: Arc<AtomicBool>,
     /// Whether the server has been started.
     started: Arc<AtomicBool>,
-    /// Objects to add before starting. Cleared after start.
-    pending_objects: std::sync::Mutex<Vec<Box<dyn BACnetObject + Send>>>,
+    /// Objects to add before starting. A start takes them; one that is
+    /// refused before it hands them to the database gives them back.
+    pending_objects: Arc<std::sync::Mutex<Vec<Box<dyn BACnetObject + Send>>>>,
     /// Save counters of the pending Notification Forwarders, by instance,
     /// pushed with each forwarder under the `pending_objects` lock.
-    pending_forwarder_save_counters: std::sync::Mutex<Vec<ForwarderSaveCounterEntry>>,
+    pending_forwarder_save_counters: Arc<std::sync::Mutex<Vec<ForwarderSaveCounterEntry>>>,
     /// Save counters of the forwarders the running server holds, replaced
     /// under the `inner` lock when a start publishes its server.
     forwarder_save_counters: Arc<std::sync::Mutex<Vec<ForwarderSaveCounterEntry>>>,
@@ -206,12 +209,100 @@ impl BACnetServer {
             .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))
     }
 
-    /// Atomically check that the server is not started and push an object.
-    /// Prevents TOCTOU race between checking `started` and modifying `pending_objects`.
-    fn push_pending(&self, obj: Box<dyn BACnetObject + Send>) -> PyResult<()> {
-        let mut guard = self.lock_pending()?;
+    /// Keep `object` for start, once [`admit`] has checked its identifier
+    /// and name against the Device and the objects kept so far, under the
+    /// same lock as the check that the server takes objects (#2748).
+    /// Every `add_*` builder ends here, so each raises at the call: a
+    /// ValueError for a repeated identifier or name, a BacnetError for an
+    /// instance no object may have.
+    fn push_pending(&self, object: Box<dyn BACnetObject + Send>) -> PyResult<()> {
+        let name = object.object_name().to_string();
+        let identifier = object.object_identifier();
+        self.admit_pending(
+            (
+                identifier.object_type(),
+                identifier.instance_number(),
+                &name,
+            ),
+            || Ok(()),
+            || Ok(object),
+        )
+    }
+
+    /// [`admit`] one object into the pending list: refuse a call that comes
+    /// too late, then run the checks of `admit` against the Device and
+    /// every object kept, then `build` it and keep it. A builder with
+    /// storage passes its own `check` and `build`, so a refusal comes
+    /// before anything touches a file.
+    fn admit_pending(
+        &self,
+        identity: (ObjectType, u32, &str),
+        check: impl FnOnce() -> PyResult<()>,
+        build: impl FnOnce() -> PyResult<Box<dyn BACnetObject + Send>>,
+    ) -> PyResult<()> {
+        self.admit_pending_with(identity, check, build, || Ok(()))
+    }
+
+    /// [`admit_pending`](Self::admit_pending), running `kept` once the
+    /// object is admitted and built, before it joins the list and under
+    /// the same lock: a refusal from it keeps nothing.
+    fn admit_pending_with(
+        &self,
+        identity: (ObjectType, u32, &str),
+        check: impl FnOnce() -> PyResult<()>,
+        build: impl FnOnce() -> PyResult<Box<dyn BACnetObject + Send>>,
+        kept: impl FnOnce() -> PyResult<()>,
+    ) -> PyResult<()> {
+        let mut pending = self.lock_pending()?;
         self.check_takes_objects()?;
-        guard.push(obj);
+        let taken = self.taken(&pending);
+        let object = admit(identity, taken, check, build)?;
+        kept()?;
+        pending.push(object);
+        Ok(())
+    }
+
+    /// Run the checks a builder with storage makes before it opens or
+    /// clears a file (#2748): the same ones [`push_pending`](Self::push_pending)
+    /// repeats under the lock when the object is kept.
+    fn precheck_pending(&self, object_type: ObjectType, instance: u32, name: &str) -> PyResult<()> {
+        let pending = self.lock_pending()?;
+        self.check_takes_objects()?;
+        let taken = self.taken(&pending);
+        admit((object_type, instance, name), taken, || Ok(()), || Ok(()))
+    }
+
+    /// What a new object's identifier and name are checked against: the
+    /// Device, then the objects kept so far.
+    fn taken<'a>(
+        &'a self,
+        pending: &'a [Box<dyn BACnetObject + Send>],
+    ) -> impl Iterator<Item = (ObjectType, u32, &'a str)> {
+        let device = (
+            ObjectType::DEVICE,
+            self.device_instance,
+            self.device_name.as_str(),
+        );
+        let kept = pending.iter().map(|object| {
+            let identifier = object.object_identifier();
+            (
+                identifier.object_type(),
+                identifier.instance_number(),
+                object.object_name(),
+            )
+        });
+        std::iter::once(device).chain(kept)
+    }
+
+    /// Refuse a change to the pending registrations while a `start()` holds
+    /// them: what it gives back after a refusal must not meet a newer call.
+    fn check_start_not_in_flight(&self) -> PyResult<()> {
+        if self.start_in_flight.load(Ordering::Acquire) {
+            return Err(PyRuntimeError::new_err(
+                "start() is in progress: registrations and their configuration \
+                 cannot change until it ends",
+            ));
+        }
         Ok(())
     }
 
@@ -225,6 +316,7 @@ impl BACnetServer {
                  endpoint's add_* calls before its start",
             ));
         }
+        self.check_start_not_in_flight()?;
         if self.started.load(Ordering::Acquire) {
             return Err(PyRuntimeError::new_err(
                 "cannot add objects after start() — server is already running",

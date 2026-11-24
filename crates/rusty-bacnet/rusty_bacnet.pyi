@@ -2535,8 +2535,11 @@ class PropertyValue:
       BBMD_Broadcast_Distribution_Table (``"bdt_entry"``: a ``BdtEntry``)
       and BBMD_Foreign_Device_Table (``"fdt_entry"``: an ``FdtEntry``, as
       ``read_fdt`` gives it). A whole read of those two is tagged ``"bdt"``
-      or ``"fdt"``, not ``"list"``, empty ones included (#2690); they read
-      only, with no typed write from the rows yet. Access_Event_Time and
+      or ``"fdt"``, not ``"list"``, empty ones included (#2690);
+      ``PropertyValue.bdt(rows)`` builds a BDT to write from rows (#2710),
+      and the FDT is read-only. A Network Port's FD_BBMD_Address and
+      BACnet_IP_Global_Address read as ``"host_n_port"``: the address text
+      a ``BdtEntry`` gives its BBMD, ``None`` for no host (#2710). Access_Event_Time and
       Last_Restore_Time read as ``"timestamp"``, and Subordinate_List as a list of
       ``"device_object_reference"``. Tags elements are ``"name_value"``
       mappings with ``"name": str`` and ``"value": None | PropertyValue``. Semantic tags
@@ -2641,6 +2644,38 @@ class PropertyValue:
         form for, raise ValueError. A ``list`` of tagged values keeps its
         items tagged."""
         ...
+    @staticmethod
+    def bdt(rows: Iterable[BdtEntry]) -> PropertyValue:
+        """A Network Port's BBMD_Broadcast_Distribution_Table to write,
+        built from rows in the form a whole read of it gives (#2710): each
+        a ``BdtEntry`` mapping, ``address`` as ``"ip:port"``,
+        ``"[v6]:port"`` or ``"name:port"`` and ``broadcast_mask`` dotted
+        text, ``None`` or left out. Each row is encoded with the stack's BDT
+        entry codec; the value is tagged ``"bdt"`` and ``.value`` gives the
+        rows back, so ``PropertyValue.bdt(read.value)`` equals a read the
+        stack could have encoded.
+
+        The entry form gives a B/IP BBMD a mask and a B/IPv6 one none; the
+        builder encodes each row's mask as given, whatever its address, and
+        leaves the rule to the device the table is written to. This stack's
+        own B/IP BBMD refuses, when the table is written (WriteProperty
+        VALUE_OUT_OF_RANGE), a row that names its BBMD by host name or IPv6
+        address, or that has no mask.
+
+        A row the entry can't hold raises ValueError naming it
+        (``rows[2]: ...``): an ``address`` that is ``None`` or missing (the
+        list holds no entry without a host), a port that isn't plain decimal
+        from 0 to 65535 (no sign, no leading zero), an IPv6 address without
+        brackets or with a zone, a host that is neither an IPv4 address nor
+        a host name (RFC 1123 labels, at most 253 octets, not digits and
+        dots alone, the rule ``ForeignDevice`` targets follow), a mask that
+        isn't four dotted octets, or another key. A row of the wrong type
+        raises TypeError. A read can show a name that rule refuses (one with
+        a colon, say): write such a table back as the read value itself.
+        A 2020 BBMD takes its BDT this way, through WriteProperty and an
+        ACTIVATE_CHANGES reinitialize; ``BACnetClient.write_bdt`` stays the
+        path for an older one."""
+        ...
 
     @property
     def tag(self) -> str:
@@ -2657,7 +2692,7 @@ class PropertyValue:
         'special_event', 'calendar_entry', 'date_range', 'timestamp',
         'cov_subscription', 'value_source', 'scale', 'prescale',
         'address_binding', 'shed_level', 'authentication_factor',
-        'event_parameter', 'bdt_entry', 'fdt_entry'."""
+        'event_parameter', 'bdt_entry', 'fdt_entry', 'host_n_port'."""
         ...
 
     @property
@@ -2666,7 +2701,9 @@ class PropertyValue:
         ObjectIdentifier, BitString, list, or None); ``application_data`` is ``bytes``
         (except a DateTime Value's set Priority_Array slot, ``[date, time]``),
         ``tagged`` a list of ``TagNode``, ``bdt`` a list of ``BdtEntry``,
-        ``fdt`` a list of ``FdtEntry``, and a typed constructed element the
+        ``fdt`` a list of ``FdtEntry``, ``host_n_port`` the address text
+        (``"ip:port"``, ``"[v6]:port"`` or ``"name:port"``, ``None`` for no
+        host), and a typed constructed element the
         form its typed write takes, or the form docs/python-api.md gives it. A date is ``(year, month, day,
         day_of_week)`` with the full year, or 255 for an unspecified year,
         as in every other date the binding reads. A bit string is a
@@ -4568,9 +4605,11 @@ class BdtEntry(TypedDict):
     the ``"ip:port"`` text ``read_bdt()`` uses for IPv4, ``"[v6]:port"``
     for IPv6 and ``"name:port"`` for a host name; ``None`` when the entry
     names no host. ``broadcast_mask`` is dotted text, ``None`` when the
-    entry has none. The text is for display (a name may itself hold a
-    colon); the value's ``.octets`` are the exact form. Rows aren't
-    accepted as ``Bbmd(bdt=)`` input."""
+    entry has none. The value's ``.octets`` are the exact form.
+    ``PropertyValue.bdt(rows)`` builds a table to write from these rows
+    (#2710); a row whose ``address`` is ``None``, or names a host the
+    host-name rule refuses, doesn't build. Rows aren't accepted as
+    ``Bbmd(bdt=)`` input, which configures this device's own BBMD."""
     address: str | None
     broadcast_mask: str | None
 
@@ -6926,7 +6965,10 @@ class BACnetClient:
 
     def write_bdt(self, address: str, entries: Sequence[str | tuple[str, str]]) -> Awaitable[None]:
         """Ask a BBMD to take ``entries`` (rows as ``Bbmd(bdt=)`` takes them)
-        as its BDT. A BBMD that follows the 2020 standard refuses with 0x0010."""
+        as its BDT: the BVLC Write-Broadcast-Distribution-Table, the path
+        for an older BBMD. A BBMD that follows the 2020 standard refuses with
+        0x0010; write its Network Port's BBMD_Broadcast_Distribution_Table
+        with ``PropertyValue.bdt(rows)`` instead (#2710)."""
         ...
 
     def read_fdt(self, address: str) -> Awaitable[list[FdtEntry]]:
@@ -7308,8 +7350,20 @@ class BACnetServer:
     start() loads the explicit site CA and operational cert/key, each file read
     up to 1 MiB, before dialing or draining registrations. Local TLS
     configuration errors, a larger file included, raise RuntimeError;
-    repair the files and retry on the same server. Later startup failures do not
-    have a general registration rollback guarantee.
+    repair the files and retry on the same server. So does a start refused
+    before it hands the registrations to the database (#2748): a
+    ``registered_network_port`` that names no Network Port or differs from
+    the transport's, an SC hub that refuses the dial, or a Device that cannot
+    be prepared. Only an SC dial and a router lookup wait before that
+    hand-off, so cancelling a B/IP, B/IPv6 or MS/TP start gives nothing
+    back. A refusal inside the Rust server's own startup (a transport that
+    will not bind, another refusal of the registered port) has consumed the
+    registrations: build the server again.
+
+    Every ``add_*`` builder checks its object at the call (#2711, #2748):
+    instance 4194303 raises BacnetError; an identifier or name the Device or
+    an earlier registration already has raises ValueError. A repeated
+    identifier is refused, not replaced: register each object once.
 
     SC also requires keyword-only sc_device_uuid: exactly 16 bytes, not all zero,
     copied at construction. Missing, None, wrong length, or all-zero values
@@ -7443,8 +7497,10 @@ class BACnetServer:
         which go to the client, and confirmed event notifications, which
         reach both with only this server's answer sent; confirmed audit
         notifications reach this server alone. Unconfirmed requests reach
-        both. A start refused before the server runs, such as for a
-        duplicate object name, leaves the share for the next start. Its
+        both. A start refused before the Rust server's own startup, such as
+        a Device that cannot be prepared, leaves the share
+        for the next start; one that server refuses after it took the share
+        spends it. Its
         local broadcasts, such as its I-Am and an unconfirmed event
         notification to a local-broadcast recipient, go to each of the
         router's networks, isolated ports included (#2601); a recipient
@@ -7582,7 +7638,20 @@ class BACnetServer:
 
     # --- Analog objects ---
     def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
-        """``tags``, ``profile_location`` and ``profile_name`` provision the
+        """The nine analog, binary and multi-state builders check each
+        registration as the endpoints' builders do, in the same order
+        (#2711), before anything is kept: instance 4194303 or past raises
+        BacnetError; an object identifier or name the Device or an earlier
+        registration already has raises ValueError (a repeated identifier
+        used to replace the earlier object silently); then the profile
+        keywords and the values. A refused registration leaves the others
+        for start and touches no ``storage_path`` file, even with
+        ``clear_written_reporting=True``. ``present_value`` must
+        be finite: NaN or an infinity raises BacnetProtocolError
+        VALUE_OUT_OF_RANGE. A multi-state builder takes 1 to 1024 states;
+        another count raises BacnetError.
+
+        ``tags``, ``profile_location`` and ``profile_name`` provision the
         optional Tags, Profile_Location and Profile_Name rows; each is served
         only when given. Tags takes writes over the network, the other two
         are read-only. A tag name with a semicolon, a tag value that isn't
@@ -9029,11 +9098,21 @@ class BACnetServer:
     def start(self) -> Awaitable[None]:
         """Start the server and begin accepting BACnet requests.
 
-        An added object the database won't take raises ValueError: "duplicate
-        object name: ..." for a name another object holds, or "object
-        refused: ..." for any other reason, an instance of 4194303 among them
-        (#2171). An endpoint's server (``await endpoint.server()``) raises
-        RuntimeError: it started with its endpoint.
+        Every registration was checked at its ``add_*`` call, so the database
+        takes them all. A start refused before it hands them to the database
+        (a ``registered_network_port`` that names no port or differs from the
+        transport's, an SC hub that refuses the dial, a Device that cannot be
+        prepared) keeps them, with the Audit recipient and the forwarding
+        configuration, for the next call (#2748); one the Rust server's
+        startup refuses after that (a transport that will not bind) has
+        consumed them. Only an SC dial and a router lookup wait before the
+        hand-off, so cancelling a B/IP, B/IPv6 or MS/TP start gives nothing
+        back; what a cancelled SC start gives back returns when its future is
+        dropped, so an immediate retry can raise "in progress" once. A running
+        server raises RuntimeError; so do ``add_*``, ``set_file_*``, Audit
+        selection and a second ``start()`` while a start is in progress. An endpoint's server
+        (``await endpoint.server()``) raises RuntimeError: it started with its
+        endpoint.
         """
         ...
 
@@ -10217,7 +10296,9 @@ class BipEndpoint:
         """Register an Analog Input before start.
 
         ``present_value`` (a finite number, default 0.0) sets Present_Value
-        directly.
+        directly; NaN or an infinity raises BacnetProtocolError
+        VALUE_OUT_OF_RANGE. Every point builder checks its registration as
+        ``BACnetServer.add_analog_input`` says, with the same code (#2711).
 
         Profile keywords as on ``BACnetServer.add_analog_input``: each
         provisions its optional row, served only when given. The parameter
@@ -10243,7 +10324,8 @@ class BipEndpoint:
         """Register a Multi-state Input before start.
 
         ``present_value`` sets Present_Value directly. ``None`` keeps the
-        object type's default."""
+        object type's default. The three multi-state builders take 1 to
+        1024 states; another count raises BacnetError."""
         ...
 
     def add_multistate_output(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
@@ -10503,7 +10585,9 @@ class ScEndpoint:
         """Register an Analog Input before start.
 
         ``present_value`` (a finite number, default 0.0) sets Present_Value
-        directly.
+        directly; NaN or an infinity raises BacnetProtocolError
+        VALUE_OUT_OF_RANGE. Every point builder checks its registration as
+        ``BACnetServer.add_analog_input`` says, with the same code (#2711).
 
         Profile keywords as on ``BACnetServer.add_analog_input``: each
         provisions its optional row, served only when given. The parameter
@@ -10529,7 +10613,8 @@ class ScEndpoint:
         """Register a Multi-state Input before start.
 
         ``present_value`` sets Present_Value directly. ``None`` keeps the
-        object type's default."""
+        object type's default. The three multi-state builders take 1 to
+        1024 states; another count raises BacnetError."""
         ...
 
     def add_multistate_output(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
@@ -10773,7 +10858,9 @@ class MstpEndpoint:
         """Register an Analog Input before start.
 
         ``present_value`` (a finite number, default 0.0) sets Present_Value
-        directly.
+        directly; NaN or an infinity raises BacnetProtocolError
+        VALUE_OUT_OF_RANGE. Every point builder checks its registration as
+        ``BACnetServer.add_analog_input`` says, with the same code (#2711).
 
         Profile keywords as on ``BACnetServer.add_analog_input``: each
         provisions its optional row, served only when given. The parameter
@@ -10799,7 +10886,8 @@ class MstpEndpoint:
         """Register a Multi-state Input before start.
 
         ``present_value`` sets Present_Value directly. ``None`` keeps the
-        object type's default."""
+        object type's default. The three multi-state builders take 1 to
+        1024 states; another count raises BacnetError."""
         ...
 
     def add_multistate_output(self, instance: int, name: str, number_of_states: int, *, present_value: int | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:

@@ -1,3 +1,4 @@
+use super::super::start_claim::{StartCells, StartClaim};
 use super::super::*;
 use bacnet_objects::object_profile::TagsPersistence;
 use bacnet_transport::port::TransportPort;
@@ -22,15 +23,24 @@ fn refused_object(error: bacnet_types::error::Error) -> PyErr {
 
 #[pymethods]
 impl BACnetServer {
-    /// Start the server. It will begin responding to BACnet requests. An
-    /// endpoint's server (#2617) raises RuntimeError: it started with its
-    /// endpoint.
+    /// Start the server. It will begin responding to BACnet requests. A
+    /// running server, or one whose start is in progress, raises
+    /// RuntimeError. An endpoint's server (#2617) raises RuntimeError: it
+    /// started with its endpoint.
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.owned("start()")?;
         crate::logging_bridge::refresh_at_start(py);
         // Validate the selected sink before TLS/serial/network preparation or
         // ownership transfer. Keep registration stable until it is drained.
         let mut pending = self.lock_pending()?;
+        if self.start_in_flight.load(Ordering::Acquire) {
+            return Err(PyRuntimeError::new_err("start() is already in progress"));
+        }
+        if self.started.load(Ordering::Acquire) {
+            return Err(PyRuntimeError::new_err(
+                "cannot start() — server is already running",
+            ));
+        }
         let audit_notification_sink = self.audit_notification_sink;
         if let Some(sink) = audit_notification_sink {
             sink.validate(&pending)?;
@@ -60,6 +70,9 @@ impl BACnetServer {
                 audit_configuration::pending_audit_log_index(&pending, object.object_identifier())?;
             }
         }
+        // What the Rust server's builder would refuse about the registered
+        // port, checked while the registrations are still here to keep.
+        self.check_registered_port(&pending)?;
         let identity = bacnet_objects::DeviceIdentity::new(self.device_instance, 555)
             .map_err(to_py_err)?
             .with_name(self.device_name.clone())
@@ -121,7 +134,6 @@ impl BACnetServer {
 
         let started = self.started.clone();
         let device_instance = self.device_instance;
-        let audit_recipient = recipient_input.take();
         let transport_type = self.transport_type.clone();
         let interface = self.interface;
         let port = self.port;
@@ -163,8 +175,8 @@ impl BACnetServer {
         let clock_zone = self.clock_zone;
         let clock_zone_writable = self.clock_zone_writable;
 
-        let objects: Vec<Box<dyn BACnetObject + Send>> = pending.drain(..).collect();
         // Taken under the pending lock, with the forwarders they belong to.
+        // The last fallible step: nothing is taken until it has passed.
         let forwarder_save_counters = std::mem::take(
             &mut *self
                 .pending_forwarder_save_counters
@@ -172,13 +184,26 @@ impl BACnetServer {
                 .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?,
         );
         let live_forwarder_save_counters = Arc::clone(&self.forwarder_save_counters);
-        self.forwarding_configuration_started
-            .store(true, Ordering::Release);
+        // What the start takes goes back if the start is refused before the
+        // objects reach the database (#2748).
+        let mut claim = StartClaim::take(
+            StartCells {
+                pending_objects: Arc::clone(&self.pending_objects),
+                pending_forwarder_save_counters: Arc::clone(&self.pending_forwarder_save_counters),
+                audit_recipient: Arc::clone(&self.audit_recipient),
+                forwarding_configuration_started: Arc::clone(
+                    &self.forwarding_configuration_started,
+                ),
+                start_in_flight: Arc::clone(&self.start_in_flight),
+            },
+            &mut pending,
+            forwarder_save_counters,
+            recipient_input.take(),
+        );
+        drop(recipient_input);
         drop(pending);
 
         let future = async move {
-            let mut db = ObjectDatabase::new();
-
             // Prepare non-SC transports locally before constructing our Device.
             let prepared_transport: Option<AppTransport> = match transport_type.as_str() {
                 "bip" => {
@@ -217,8 +242,9 @@ impl BACnetServer {
                         .ok_or_else(|| PyRuntimeError::new_err("MS/TP transport was not prepared"))?
                         .into(),
                 ),
-                // The router's server port is taken only once the database
-                // is valid, so a refused start leaves it for the next one.
+                // The router's server port is taken below, after the Device
+                // is built, so a refusal before that leaves it for the next
+                // start.
                 "router" => {
                     if router.is_none() {
                         return Err(PyRuntimeError::new_err("transport='router' needs router="));
@@ -244,7 +270,7 @@ impl BACnetServer {
                 >::LOCAL_RECEIVE_APDU_CAPACITY,
             };
 
-            // Validate the generated Device and entire pending DB before SC I/O.
+            // Validate the generated Device before SC I/O.
             let identity = identity.resolve(local_capacity).map_err(to_py_err)?;
             let config = DeviceConfig {
                 identity,
@@ -257,23 +283,16 @@ impl BACnetServer {
                 None => DeviceObject::new(config),
             }
             .map_err(to_py_err)?;
-            if let Some(recipient) = audit_recipient {
+            if let Some(recipient) = claim.recipient() {
                 device
-                    .provision_audit_recipient(recipient)
+                    .provision_audit_recipient(recipient.clone())
                     .map_err(to_py_err)?;
             }
 
-            // Move pending objects into the database. The Device's
-            // Object_List is the database's own: the Device, then the
-            // objects in the order they were added (#2669).
-            for obj in objects {
-                db.add(obj).map_err(refused_object)?;
-            }
-            db.add(Box::new(device)).map_err(refused_object)?;
-
             let transport = match (prepared_transport, router) {
                 (Some(transport), _) => transport,
-                // The database is valid: now spend the router's port.
+                // Spend the router's port. A refusal after this one, in the
+                // Rust server's own startup, spends it with the registrations.
                 (None, Some(router)) => AppTransport::Router(router.take().await?),
                 (None, None) => {
                     let hub_url = sc_hub.ok_or_else(|| {
@@ -308,6 +327,18 @@ impl BACnetServer {
                     AnyTransport::Sc(Box::new(sc)).into()
                 }
             };
+
+            // Move pending objects into the database, now that nothing
+            // before the Rust server's own startup can refuse. Each was
+            // checked against the Device and the others when it was added,
+            // so the database takes them all. The Device's Object_List is
+            // the database's own: the Device, then the objects in the order
+            // they were added (#2669).
+            let mut db = ObjectDatabase::new();
+            for obj in claim.hand_off_objects() {
+                db.add(obj).map_err(refused_object)?;
+            }
+            db.add(Box::new(device)).map_err(refused_object)?;
 
             let mut builder = builder
                 .database(db)
@@ -356,7 +387,8 @@ impl BACnetServer {
             let mut published = inner.write().await;
             *live_forwarder_save_counters
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = forwarder_save_counters;
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                claim.take_forwarder_save_counters();
             *published = Some(srv);
             drop(published);
             started.store(true, Ordering::Release);

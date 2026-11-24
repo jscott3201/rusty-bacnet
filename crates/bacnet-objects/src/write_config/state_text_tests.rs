@@ -214,26 +214,20 @@ fn storage_refuses_labels_past_its_cap_with_the_setter() {
     });
 }
 
-/// With storage, a write that would leave a label past 512 octets, or more
-/// than 1,024 states, is refused with RESOURCES /
-/// NO_SPACE_TO_WRITE_PROPERTY before anything is saved: a label written
-/// whole or alone, and any write to an object the application built with
-/// more states than storage keeps. A label at the cap is taken, in octets
-/// of UTF-8, not characters. Without storage the same writes are taken.
+/// With storage, a write that would leave a label past 512 octets is
+/// refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY before anything is
+/// saved: a label written whole or alone. A label at the cap is taken, in
+/// octets of UTF-8, not characters. Without storage the same writes are
+/// taken. An object can't hold more states than storage keeps: its
+/// constructor refuses a count past MAX_NUMBER_OF_STATES (#2711).
 #[test]
 fn storage_refuses_a_state_text_past_its_caps_with_the_write() {
     let long = "é".repeat(MAX_KEPT_STATE_TEXT_OCTETS / 2) + "x";
     let at_cap = "é".repeat(MAX_KEPT_STATE_TEXT_OCTETS / 2);
     on_each!(|new, Object| {
-        let past: [(u32, Option<u32>, PropertyValue); 4] = [
+        let past: [(u32, Option<u32>, PropertyValue); 2] = [
             (STATES, Some(1), text(&long)),
             (STATES, None, labels(&[long.clone(), "b".into()])),
-            (MAX_NUMBER_OF_STATES + 1, Some(1), text("one")),
-            (
-                MAX_NUMBER_OF_STATES + 1,
-                None,
-                labels(&defaults(MAX_NUMBER_OF_STATES + 1)),
-            ),
         ];
         for (states, index, value) in past {
             let storage = MemoryConfig::new();

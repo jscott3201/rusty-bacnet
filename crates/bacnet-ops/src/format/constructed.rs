@@ -10,8 +10,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use bacnet_encoding::constructed::{
     ConstructedElement, decode_bdt_entry, decode_calendar_entry, decode_daily_schedule,
     decode_date_range, decode_device_object_property_reference, decode_device_object_reference,
-    decode_fdt_entry, decode_name_value, decode_object_property_reference_at, decode_special_event,
-    decode_value_source, split_elements,
+    decode_fdt_entry, decode_host_n_port, decode_name_value, decode_object_property_reference_at,
+    decode_special_event, decode_value_source, split_elements,
 };
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_types::constructed::{
@@ -140,6 +140,7 @@ pub(super) fn renderer(element: ConstructedElement) -> Option<Render> {
         E::AccessRule => commands::access_rule,
         E::BdtEntry => bdt_entry,
         E::FdtEntry => fdt_entry,
+        E::HostNPort => host_n_port,
         _ => return None,
     })
 }
@@ -181,6 +182,7 @@ pub(super) fn element_name(element: ConstructedElement) -> &'static str {
         E::EventParameter => "event-parameter",
         E::BdtEntry => "bdt-entry",
         E::FdtEntry => "fdt-entry",
+        E::HostNPort => "host-n-port",
         _ => "element",
     }
 }
@@ -370,6 +372,17 @@ fn bdt_entry(
         }
         (text, end)
     })
+}
+
+/// A Network Port's FD_BBMD_Address or BACnet_IP_Global_Address (#2710):
+/// the host and port as a BDT entry shows its BBMD.
+fn host_n_port(
+    _: &ValueFormat<'_>,
+    _: usize,
+    octets: &[u8],
+    offset: usize,
+) -> Result<(String, usize), Error> {
+    decode_host_n_port(octets, offset).map(|(address, end)| (host_n_port_text(&address), end))
 }
 
 /// One FDT entry: the foreign device, the time to live it registered with

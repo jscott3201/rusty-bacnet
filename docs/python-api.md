@@ -1238,7 +1238,9 @@ Code that handled `application_data` reads should expect:
   give. Broken framing still raises as for any read.
 - **Network Port tables.** A whole read of a Network Port's
   BBMD_Broadcast_Distribution_Table (414) or BBMD_Foreign_Device_Table
-  (415) is tagged `bdt` or `fdt` (#2690), not `tagged`: see
+  (415) is tagged `bdt` or `fdt` (#2690), not `tagged`, and its
+  FD_BBMD_Address (418) and BACnet_IP_Global_Address (407) read as
+  `host_n_port`, the address text (#2710): see
   [Typed constructed values](#typed-constructed-values).
 - **Failed typed reads.** A typed constructed property whose octets don't
   decode as its elements (a malformed Recipient_List, say) falls back to
@@ -1373,8 +1375,9 @@ collection's elements back to back), for comparing with a capture or for
 | Trend Log; Averaging, Event Enrollment | Log_DeviceObjectProperty; Object_Property_Reference (one value) | `"device_object_property_reference"` | a `DeviceObjectPropertyReference` mapping with every key | existing property writes where writable |
 | any object with intrinsic reporting | Event_Algorithm_Inhibit_Ref (one value) | `"object_property_reference"` | `{"object_identifier", "property_identifier", "property_array_index"}`: a `DeviceObjectPropertyReference` mapping without `device_identifier`; instance 4194303 while unset | existing property writes where writable |
 | Access Point; Lift, Escalator | Access_Event_Credential; Energy_Meter_Ref (one value) | `"device_object_reference"` | an `ObjectIdentifier`, or `(device, object)` | none |
-| Network Port | BBMD_Broadcast_Distribution_Table | `"bdt_entry"` | a `BdtEntry`: `{"address", "broadcast_mask"}`, `address` the BBMD as display text (`"ip:port"` as `read_bdt()` gives IPv4, `"[v6]:port"` or `"name:port"`; `None` for an entry that names no host), `broadcast_mask` dotted text or `None` | none yet |
-| Network Port | BBMD_Foreign_Device_Table | `"fdt_entry"` | an `FdtEntry`, as `read_fdt()` gives it: `{"address", "ttl", "seconds_remaining"}`, `address` `"ip:port"` or `"[v6]:port"` | none yet |
+| Network Port | BBMD_Broadcast_Distribution_Table | `"bdt_entry"` | a `BdtEntry`: `{"address", "broadcast_mask"}`, `address` the BBMD (`"ip:port"` as `read_bdt()` gives IPv4, `"[v6]:port"` or `"name:port"`; `None` for an entry that names no host), `broadcast_mask` dotted text or `None` | `PropertyValue.bdt(rows)` (#2710) |
+| Network Port | BBMD_Foreign_Device_Table | `"fdt_entry"` | an `FdtEntry`, as `read_fdt()` gives it: `{"address", "ttl", "seconds_remaining"}`, `address` `"ip:port"` or `"[v6]:port"` | none: the property is read-only, filled by registrations |
+| Network Port | FD_BBMD_Address, BACnet_IP_Global_Address (one value) | `"host_n_port"` | the address text a `BdtEntry` gives: `"ip:port"`, `"[v6]:port"` or `"name:port"`; `None` for no host, the port then in `.octets` only | existing property writes of the read value |
 | Global Group | Present_Value | `"property_access_result"` | the member's `DeviceObjectPropertyReference` keys, then `"value"` (shaped as a read of the member) and `"error"` (`(ErrorClass, ErrorCode)`), one of them `None` | none |
 | Device | Audit_Notification_Recipient (one value) | `"recipient"` | an `AuditRecipientInput` mapping | `configure_audit_recipient(...)` |
 | Device | Active_COV_Subscriptions | `"cov_subscription"` | `{"recipient", "process_identifier", "object_identifier", "property_identifier", "property_array_index", "issue_confirmed_notifications", "time_remaining", "cov_increment"}`; `recipient` an `AuditRecipientInput` mapping, `cov_increment` a `float` or `None` | none |
@@ -1398,16 +1401,84 @@ ReadPropertyMultiple, COV values and the local `BACnetServer.read_property`
 (#2690). A BDT row's address is the `"ip:port"` text `read_bdt()` gives
 for IPv4, with `"[v6]:port"` and `"name:port"` for the other host kinds,
 so a script can compare a Network Port read with the BVLC reads of the same
-BBMD; that text is for display (a host name may itself hold a colon), and
-the value's `.octets` are the exact form. The rows are read-only for now:
-they aren't accepted as `Bbmd(bdt=)` input, no `PropertyValue` is built from
-rows, so writing a changed table means encoding its octets yourself and
-passing `PropertyValue.application_data`. Writing back a value as read
+BBMD; the value's `.octets` are the exact form. Writing back a value as read
 sends its octets unchanged. Octets that aren't the entries, to the last
 octet, or more than 10,000 entries, read as `tagged` or `application_data`
 holding the octets as served; application-tagged values that aren't
-entries don't become a plain list, as they would for other typed lists. FD_BBMD_Address and BACnet_IP_Global_Address have no typed
-form yet and read as `tagged`.
+entries don't become a plain list, as they would for other typed lists.
+
+FD_BBMD_Address and BACnet_IP_Global_Address hold the same host and port
+as a BDT entry's BBMD, and read as one `host_n_port` value whose `.value`
+is that address text (#2710); `None` stands for the no-host choice, which
+a global address uses with port 0 while it isn't known (Clause 12.56.33).
+`.octets` keep the value exactly as served. A value that isn't exactly one
+host and port reads as `tagged`, its octets as served.
+
+##### Writing a BDT from rows
+
+`PropertyValue.bdt(rows)` builds a BBMD_Broadcast_Distribution_Table value
+from rows in the form a read gives (#2710). Each row is a `BdtEntry`
+mapping: `address` as `"ip:port"`, `"[v6]:port"` or `"name:port"`, and
+`broadcast_mask` as dotted text, `None` or left out. The rows are encoded
+with the stack's own BDT entry codec, so a table read from a device that
+encodes as the stack does builds back to the same octets:
+`PropertyValue.bdt(read.value) == read`.
+
+```python
+BDT = rb.PropertyIdentifier.BBMD_BROADCAST_DISTRIBUTION_TABLE
+read = await client.read_property(address, port, BDT)
+rows = read.value + [{"address": "192.0.2.40:47808", "broadcast_mask": "255.255.255.255"}]
+await client.write_property(address, port, BDT, rb.PropertyValue.bdt(rows))
+await client.reinitialize_device(address, rb.ReinitializedState.ACTIVATE_CHANGES)
+```
+
+Masks: the entry form gives a B/IP BBMD's rows a mask and a B/IPv6 BBMD's
+none (Clause 21). The builder encodes each row's mask as the row gives it,
+whatever the address, and leaves the rule to the device the table is
+written to. This stack's own B/IP BBMD refuses the write
+(`BacnetProtocolError` VALUE_OUT_OF_RANGE) when a row names its BBMD by
+host name or IPv6 address, or has no mask.
+
+Each row is checked as it is read, and an error names it by index
+(`rows[3]: ...`). `ValueError` covers:
+
+- an `address` that is `None` or missing (Clause 12.56.34 keeps entries
+  without a host out of the list, so a row read from such an entry doesn't
+  build);
+- a port that isn't plain decimal from 0 to 65535: ASCII digits only, no
+  sign, no leading zero;
+- an IPv6 address without brackets or with a zone;
+- a host that is neither an IPv4 address nor a host name. A host name
+  follows the rule `ForeignDevice` targets do: RFC 1123 labels of letters,
+  digits and hyphens, at most 253 octets, and not digits and dots alone, so
+  a mistyped address (`192.168.1.300`, `01.2.3.4`) is refused instead of
+  taken as a name;
+- a mask that isn't four dotted octets, and a key other than the two.
+
+A row of the wrong type raises `TypeError`. A device's table can hold a
+name that rule refuses (one with a colon, or one past ASCII), and so can
+show a row that doesn't build; to send such a table, or any table exactly
+as read, write the read value itself, whose `.octets` are what the device
+served. A port encoded in more octets than it needs, or a host name in
+another character set, reads as the same row but builds in the stack's
+shortest form.
+
+The written table is pending until the device activates it: a
+ReinitializeDevice with ACTIVATE_CHANGES (or WARMSTART) puts it in effect
+(Clause 12.56.13). This is the 2020 way to change a BBMD's table. Three
+related paths stay as they are:
+
+- `Bbmd(bdt=...)` configures this process's own BBMD at start, from
+  `"ip:port"` strings or `("ip:port", "mask")` pairs; it doesn't take these
+  rows. A table written to our own BBMD's registered Network Port this way
+  is activated with the rest of its pending values and saved in
+  `bdt_persist_path`.
+- `BACnetClient.write_bdt(address, entries)` sends the BVLC
+  Write-Broadcast-Distribution-Table an older BBMD takes; a 2020 BBMD
+  refuses it with 0x0010 (see [BBMD management](#bbmd-management)).
+- The Foreign Device Table has no builder: Clause 12.56.36 makes
+  BBMD_Foreign_Device_Table read-only, since the BBMD fills it from
+  registrations.
 
 Single reference reads use these forms through local reads, client and endpoint
 RP/RPM, and device-aware singular and batch reads. A property-reference mapping
@@ -2005,8 +2076,10 @@ three seconds for the answer:
 
 - `read_bdt(address)` returns the Broadcast Distribution Table as
   `("ip:port", "mask")` rows, the shape `Bbmd(bdt=)` takes.
-- `write_bdt(address, entries)` asks the BBMD to take `entries` as its BDT. A
-  BBMD that follows the 2020 standard refuses (result code 0x0010).
+- `write_bdt(address, entries)` asks the BBMD to take `entries` as its BDT,
+  for an older BBMD. A BBMD that follows the 2020 standard refuses (result
+  code 0x0010): write its Network Port's BBMD_Broadcast_Distribution_Table
+  instead (see [Writing a BDT from rows](#writing-a-bdt-from-rows)).
 - `read_fdt(address)` returns the Foreign Device Table, a dict per entry with
   `address`, `ttl` and `seconds_remaining` (the grace period included).
 - `delete_fdt_entry(address, entry)` asks it to delete the foreign device at
@@ -4216,10 +4289,29 @@ Async BACnet server that hosts objects and responds to remote requests.
 
 `device_instance` takes 0 to 4194302. Instance 4194303 is reserved, since no
 object may have it (Clause 12.1.1), so the constructor raises `ValueError` for
-it or anything larger (#2171). At `start()`, an added object the database
-won't take raises `ValueError`: "duplicate object name" for a name already
-held, "object refused" for any other reason, such as an object at instance
-4194303.
+it or anything larger (#2171). Every `add_*` builder checks its object at
+the call (see [Builder checks](#builder-checks)): an identifier
+or name the Device or an earlier registration already has raises
+`ValueError`, and instance 4194303 raises `BacnetError`. A repeated
+identifier is refused, not replaced (#2748): register each object once.
+A start that is refused before it hands the registrations to the database
+keeps them, the Audit recipient and the forwarding configuration, so the
+application can correct the fault and start again. `start()` checks first
+what the pending objects and the constructor's settings already show: a
+`registered_network_port` that names no Network Port, one of the wrong
+family, or one whose address or UDP port differs from the transport's raises
+`ValueError`. After that, an SC hub that refuses the dial and a router or
+Device that cannot be prepared are refused with the registrations kept. Only
+an SC dial and a router lookup wait before that hand-off, so cancelling a
+B/IP, B/IPv6 or MS/TP start does not give anything back. A refusal inside the
+Rust server's own startup, such as a transport that will not bind or a
+registered port its builder refuses for another reason, has consumed the
+registrations: build the server again. A running server raises
+`RuntimeError` from `start()`. `add_*`, the `set_file_*` calls, Audit
+selection and a second `start()` raise `RuntimeError` while a start is in
+progress; what a cancelled start gives back returns when the cancelled
+future is dropped on a runtime thread, so a retry straight after a cancel can
+meet that error once. Retry after a moment.
 
 ### Constructor
 
@@ -4325,6 +4417,44 @@ server.add_multistate_input(instance=1, name="Mode", number_of_states=4)
 server.add_multistate_output(instance=1, name="Speed", number_of_states=3)
 server.add_multistate_value(instance=1, name="Season", number_of_states=4)
 ```
+
+#### Builder checks
+
+Every `BACnetServer.add_*` builder, and each endpoint's nine point
+builders, checks its object with the same code at the call (#2711, #2748),
+before anything is kept. The nine analog, binary and multi-state builders
+read their arguments into one registration first and check it in this order,
+so a call with two faults raises the same error on every surface; every
+other builder makes steps 1 and 2, and the pure checks of its list keywords
+(a timer's state-change set, a forwarder's recipients), before it opens or
+clears a `storage_path` file, then builds as it did. On a free-threaded
+interpreter two calls for one identifier can both pass those checks before
+either keeps its object: the second is still refused when kept, but its
+storage may have been opened or cleared first:
+
+1. An instance of 4194303 or more raises `BacnetError`: no object may have
+   4194303 (#2171).
+2. An object identifier or a name the Device or an earlier registration
+   already has raises `ValueError` ("duplicate object identifier" or
+   "duplicate object name"). On an endpoint its declared Network Ports
+   count too.
+3. A profile keyword the object would refuse (`tags`,
+   `profile_location`, `profile_name`) raises `BacnetProtocolError`.
+4. A value the object refuses raises from the builder as the object refuses
+   it: a NaN or infinite Analog Input `present_value` is
+   `BacnetProtocolError` VALUE_OUT_OF_RANGE, as are the parameter keywords'
+   refusals below. A multi-state builder takes 1 to 1024 states, the same
+   cap a peer's CreateObject or State_Text write meets; another count
+   raises `BacnetError`.
+
+A refused registration keeps nothing and leaves the earlier ones for
+start. On `BACnetServer` it also leaves any `storage_path` file alone,
+`clear_written_reporting=True` included: every check comes before storage
+attaches. Until #2711 these builders took a repeated identifier as a silent
+replacement of the earlier registration and found a duplicate name only at
+`start()`; the other `BACnetServer` builders did until #2748. There is no
+call that removes or replaces a registration before start: register the
+final form of each object once, or build the server again.
 
 #### Keeping written reporting settings
 
@@ -5031,14 +5161,14 @@ remain in use.
 
 Malformed policy or instance (including booleans, non-integers and values outside
 `0..=4194303`) raises `ValueError`, except an instance outside unsigned32, which
-raises `OverflowError`. Missing/wrong-type registrations and duplicate
-registrations of the selected Audit Log instance also raise `ValueError`. An object
-of another type with the same instance number is not an Audit Log. Selection is
-revalidated at `start()` before transport preparation or registration transfer, so
-a duplicate registered after selection cannot silently replace the sink. These
-validation failures preserve pending registrations and the previous configuration.
-Configuration while running raises `RuntimeError`. This does not add general
-rollback for unrelated later startup failures.
+raises `OverflowError`. Missing/wrong-type registrations also raise `ValueError`. An object
+of another type with the same instance number is not an Audit Log. A repeated Audit
+Log instance is refused at `add_audit_log` (#2748), so nothing registered after
+selection can replace the sink; `start()` revalidates the selection before
+transport preparation or registration transfer. These validation failures preserve
+pending registrations and the previous configuration. Configuration while running
+or while a start is in progress raises `RuntimeError`. A refusal inside the Rust
+server's own startup still consumes the registrations (see `BACnetServer`).
 
 **Migration:** existing constructors and `add_audit_log()` calls need no change and
 continue to deny inbound notifications. To opt in, register the log, call the new
@@ -5158,7 +5288,7 @@ finally:
   `start()` consumes registrations raise `RuntimeError`, including while startup
   is in flight and after stop.
   Validation/TLS/serial preparation failures before transfer do not freeze these
-  settings. Later startup failures retain the existing lack of general rollback.
+  settings. A refusal inside the Rust server's own startup consumes the registrations.
   Recreate the server, register the same storage paths and reapply settings on
   reopen: parent references and bindings are not durable snapshot data.
 
@@ -5285,7 +5415,7 @@ child.add_device_binding(9, await parent.local_address())
   Configuration freezes at ownership transfer: valid calls during startup, while
   running or after stop raise `RuntimeError`. Input validation precedes that check.
   Validation and TLS/serial preparation failures before transfer leave it retryable;
-  later failures retain the existing lack of general rollback. Recreate and reapply
+  a refusal inside the Rust server's own startup consumes the registrations. Recreate and reapply
   static settings/bindings on a new server; they are not persisted.
 
 By default `Monitored_Objects` remains absent (catch-all) and `Audit_Priority_Filter`
@@ -7643,7 +7773,9 @@ noncommandable Values take the initial value as a local application update.
 A Binary Input given no value keeps its unset physical-input state.
 An object name and its type/instance pair must each be unique across the
 Device, its Network Ports and the pending objects. An invalid addition raises
-at the builder call and preserves earlier registrations.
+at the builder call and preserves earlier registrations. `BACnetServer`'s
+builders make the same checks with the same code; see
+[Builder checks](#builder-checks).
 
 The endpoint's server serves those objects as a standalone server serves
 its own, and a peer writes them as far as the endpoint's `mutation_policy`
@@ -7854,10 +7986,13 @@ async with endpoint:
   reaches the new server: `await endpoint.server()` again. `configure_*`
   raises `RuntimeError` too. The endpoint's `client()` doesn't wait for a
   server call in flight.
-- **Invoke IDs.** The server and the client share the endpoint's 256: the
-  server holds at most 64 at once for its confirmed COV, event and Audit
-  notifications. Past them a confirmed COV notification waits for one to
-  come back and then goes, if its value still differs from what the
+- **Invoke IDs.** The server and the client share the endpoint's 256, and
+  each keeps a reserve the other can't take: 128 for the client's requests,
+  64 for the server's confirmed COV, event and Audit notifications. Beyond
+  it either borrows from the quarter neither keeps, so the client holds at
+  most 192 at once and the server 128 (#2617). A client call past its share
+  raises at once. Past the server's, a confirmed COV notification waits for
+  an ID to come back and then goes, if its value still differs from what the
   subscriber last acknowledged (#2661). A report held back by the
   subscriber's in-flight limit or the server's pool of 255 waits the same
   way, until its reports, or any reports, end and leave it room (#2671).
@@ -8882,9 +9017,8 @@ larger than 1048576 bytes`), as is a stream that never ends. Unreadable, empty, 
 credentials and cert/key mismatch raise `RuntimeError` with `TLS config error:`.
 Server **local TLS configuration** failures leave pending object registrations
 intact; repair files at the same paths and retry `start()`. The client also reloads
-files on retry. This is not general startup rollback: later failures, including
-TLS peer rejection after dialing, retain existing lifecycle behavior and may
-consume server registrations. Preflight checks rustls configuration validity,
+files on retry. A refused dial, TLS peer rejection included, keeps them too (#2748); a failure
+inside the Rust server's own startup after the dial may consume them. Preflight checks rustls configuration validity,
 not the local certificate's date or issuer against the site store; the remote
 peer validates that certificate during the real handshake.
 

@@ -1,60 +1,31 @@
-"""Local server database errors precede any SC network connection attempt."""
-import asyncio
-
+"""Name clashes in an SC server's database are refused at the builder call
+(#2748), so no start reaches a database error, let alone a dial. The refused
+dial that keeps the registrations is covered by test_sc_hub_mtls
+(``test_a_refused_dial_keeps_the_registrations_for_the_next_start``)."""
 from rusty_bacnet import BACnetServer
 from test_sc_hub_mtls import MtlsFixture, SERVER_UUID
 
 
 class ServerLocalValidationTests(MtlsFixture):
-    async def test_invalid_local_database_does_not_dial_sc(self):
-        for collision in ("pending_names", "device_name"):
-            with self.subTest(collision=collision):
-                accepted = []
-                observed = asyncio.Event()
+    def node(self):
+        return BACnetServer(
+            893, "Selected Device", transport="sc",
+            sc_hub="wss://127.0.0.1:1",
+            sc_vmac=b"\x02\0\0\0\0\2", sc_device_uuid=SERVER_UUID,
+            sc_ca_cert=self.path("site.pem"),
+            sc_client_cert=self.path("server.pem"),
+            sc_client_key=self.path("server.key"),
+        )
 
-                def connected(_reader, writer):
-                    accepted.append(writer)
-                    observed.set()
-                    # A mistaken dial terminates promptly; no TLS timeout oracle.
-                    writer.close()
+    def test_a_name_clash_is_refused_at_the_call(self):
+        node = self.node()
+        node.add_analog_input(0, "duplicate", 64, 72.5)
+        with self.assertRaisesRegex(ValueError, "duplicate object name: duplicate"):
+            node.add_file(1, "duplicate")
+        self.assertEqual(node._pending_registration_count(), 1)
 
-                listener = await asyncio.start_server(connected, "127.0.0.1", 0)
-                address = listener.sockets[0].getsockname()
-                node = BACnetServer(
-                    893, "Selected Device", transport="sc",
-                    sc_hub=f"wss://127.0.0.1:{address[1]}",
-                    sc_vmac=b"\x02\0\0\0\0\2", sc_device_uuid=SERVER_UUID,
-                    sc_ca_cert=self.path("site.pem"),
-                    sc_client_cert=self.path("server.pem"),
-                    sc_client_key=self.path("server.key"),
-                )
-                name = "duplicate" if collision == "pending_names" else "Selected Device"
-                node.add_analog_input(0, name, 64, 72.5)
-                if collision == "pending_names":
-                    node.add_binary_input(1, name)
-                try:
-                    caught = None
-                    try:
-                        await asyncio.wait_for(node.start(), 3)
-                    except Exception as error:
-                        caught = error
-                    self.assertEqual(
-                        len(accepted), 0,
-                        f"local {collision} error attempted SC dial; returned {caught!r}",
-                    )
-                    self.assertIsInstance(caught, ValueError)
-                    self.assertIn("duplicate object name", str(caught))
-                    # This exact listener must observe a real connection. Since
-                    # start has completed, no future can defer a hidden dial.
-                    _reader, writer = await asyncio.open_connection(*address)
-                    writer.close()
-                    await writer.wait_closed()
-                    await asyncio.wait_for(observed.wait(), 3)
-                    self.assertEqual(len(accepted), 1)
-                finally:
-                    await node.stop()
-                    listener.close()
-                    await listener.wait_closed()
-                    for writer in accepted:
-                        writer.close()
-                        await writer.wait_closed()
+    def test_the_devices_name_is_refused_at_the_call(self):
+        node = self.node()
+        with self.assertRaisesRegex(ValueError, "duplicate object name: Selected Device"):
+            node.add_file(0, "Selected Device")
+        self.assertEqual(node._pending_registration_count(), 0)

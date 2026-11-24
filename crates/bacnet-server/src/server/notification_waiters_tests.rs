@@ -7,11 +7,24 @@
 //! them as tasks on four worker threads.
 
 use super::*;
+use bacnet_endpoint_core::coordinator::{NOTIFICATION_RESERVE, REQUESTER_RESERVE, TerminalPolicy};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Wake;
 
+#[path = "notification_reserve_tests.rs"]
+mod reserve;
+
 const EVENT: ConfirmedServiceChoice = ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION;
+
+/// What a node's client leases for a read it sends to `peer`.
+fn client_read(peer: CanonicalPeer) -> LeaseMetadata {
+    LeaseMetadata::requester(
+        peer,
+        ConfirmedServiceChoice::READ_PROPERTY,
+        TerminalPolicy::ComplexAck,
+    )
+}
 
 type Reserved = Result<NotificationReservation, NotificationReserveError>;
 
@@ -214,31 +227,37 @@ fn a_head_passed_over_takes_the_next_id() {
     assert!(head.served());
 }
 
-/// A server on a node's seat: its cap of 64, not the node's pool, is the
-/// limit.
+/// The most a server on a node's seat may hold: the node's pool less the
+/// client's reserve (#2617).
+const SEAT_CEILING: usize = 256 - REQUESTER_RESERVE;
+
+/// A server on a node's seat: the node's pool, which keeps the client
+/// [`REQUESTER_RESERVE`] and the server [`NOTIFICATION_RESERVE`] (#2617).
 fn seated() -> (
     Arc<OutboundTransactionCoordinator>,
     Arc<NotificationTransactions>,
 ) {
-    let coordinator = Arc::new(OutboundTransactionCoordinator::new());
-    let transactions =
-        NotificationTransactions::with_lease_cap(Arc::clone(&coordinator), SEAT_LEASES);
+    let coordinator = Arc::new(OutboundTransactionCoordinator::with_reserves(
+        REQUESTER_RESERVE,
+        NOTIFICATION_RESERVE,
+    ));
+    let transactions = NotificationTransactions::with_coordinator(Arc::clone(&coordinator));
     (coordinator, transactions)
 }
 
-/// On a seat at its cap, the node's pool with IDs to spare, the server's
-/// own work keeps the order: the oldest waiter takes the first lease to
-/// end, and a head that other work passed over takes the next.
+/// On a seat at its ceiling, the node's pool with IDs to spare, the
+/// server's own work keeps the order: the oldest waiter takes the first
+/// lease to end, and a head that other work passed over takes the next.
 #[test]
 fn on_a_seat_the_order_holds_among_the_servers_own_work() {
     let (_coordinator, transactions) = seated();
-    let mut leases: Vec<_> = (0..SEAT_LEASES)
-        .map(|_| fresh(&transactions).expect("within the cap"))
+    let mut leases: Vec<_> = (0..SEAT_CEILING)
+        .map(|_| fresh(&transactions).expect("within the ceiling"))
         .collect();
-    assert!(exhausted(&fresh(&transactions)), "at the cap");
+    assert!(exhausted(&fresh(&transactions)), "at the ceiling");
     assert_eq!(
         transactions.active_count(),
-        SEAT_LEASES,
+        SEAT_CEILING,
         "the pool has more"
     );
     let mut waiters = queued(&transactions, 2);
@@ -257,14 +276,20 @@ fn on_a_seat_the_order_holds_among_the_servers_own_work() {
     assert!(waiters[1].served());
 }
 
-/// On a seat holding no lease of its own, the node's client holding the
-/// whole pool, closing ends no lease, and still wakes the head as well as
-/// the rest, each to find it closed.
+/// On a seat holding no lease of its own, other leases filling the server's
+/// share of the node's pool and the node's client the rest, closing ends no
+/// lease, and still wakes the head as well as the rest, each to find it
+/// closed.
 #[test]
 fn closing_wakes_a_head_with_no_lease_to_end() {
     let (coordinator, transactions) = seated();
-    for peer in 0..=u8::MAX {
-        let metadata = LeaseMetadata::notification(canonical_direct_peer(&[peer]), EVENT);
+    for at in 0..=u8::MAX {
+        let peer = canonical_direct_peer(&[at]);
+        let metadata = if usize::from(at) < SEAT_CEILING {
+            LeaseMetadata::notification(peer, EVENT)
+        } else {
+            client_read(peer)
+        };
         coordinator.reserve(metadata).expect("a free ID");
     }
     let mut waiters = queued(&transactions, 2);

@@ -174,13 +174,17 @@ fn remove_list_element_malformed_tail_errors_without_partial_commit() {
 
 #[test]
 fn add_list_element_over_cap_returns_the_clause_15_1_error() {
-    // Fill to MAX_ALARM_VALUES (1024) so any new element trips the cap. The
-    // object has a state for every value, so each is in range (#1429).
-    let (mut db, oid) = msi_db_with_states(2048, (1..=1024).collect());
-    // Unsigned 2000 (0x22 0x07 0xD0) is not in the list. Clause 15.1 names
+    // Fill to MAX_ALARM_VALUES (1024) so any new element trips the cap. That
+    // cap equals MAX_NUMBER_OF_STATES, the most states an object may have
+    // (#2711), so a full list of distinct states leaves no state to add: the
+    // cap is reached only through a repeated entry. State 1 is listed twice
+    // to leave state 1024 free; each value is in range (#1429).
+    let held: Vec<u32> = (1..=1023).chain([1]).collect();
+    let (mut db, oid) = msi_db_with_states(1024, held.clone());
+    // Unsigned 1024 (0x22 0x04 0x00) is not in the list. Clause 15.1 names
     // AddListElement's own error, not WriteProperty's
     // NO_SPACE_TO_WRITE_PROPERTY, and the element that did not fit.
-    const NEW: [u8; 3] = [0x22, 0x07, 0xD0];
+    const NEW: [u8; 3] = [0x22, 0x04, 0x00];
     assert_eq!(
         list_refusal(add(&mut db, oid, &NEW)),
         (
@@ -201,7 +205,10 @@ fn add_list_element_over_cap_returns_the_clause_15_1_error() {
     );
     // Present elements alone still fit.
     add(&mut db, oid, &unsigned(&[7, 9])).unwrap();
-    assert_eq!(alarm_values(&db, oid), list_of(1..=1024));
+    assert_eq!(
+        alarm_values(&db, oid),
+        list_of(held.into_iter().map(u64::from))
+    );
 }
 
 #[test]

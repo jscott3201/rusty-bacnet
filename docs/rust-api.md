@@ -4977,7 +4977,10 @@ Positive Integer and Large Analog Value, take Units (an Enumerated up to
 65535). The Multi-state Input, Output and Value take
 Number_Of_States (1 to `multistate::MAX_NUMBER_OF_STATES`, 1024),
 which resizes State_Text. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
-if a value the object holds would name a state past it. Of the configuration
+if a value the object holds would name a state past it. The application's
+own count meets the same cap: the multi-state constructors and
+`set_number_of_states` refuse one past it with `Error::OutOfRange` (#2711).
+Of the configuration
 objects (#2208), Calendar, Schedule, Notification Class, Trend Log and
 Structured View take Object_Name; Notification Class takes Priority (three
 Unsigned values up to 255) and Ack_Required; Trend Log takes Buffer_Size (up to
@@ -10388,8 +10391,9 @@ A confirmed report also needs room: an invoke ID, a slot of the server's pool
 of 255 confirmed COV notifications in flight, and one of its subscriber's
 `max_confirmed_in_flight_per_peer` (16 by default). The server's confirmed
 event, COV and Audit notifications and the reads its runs make share one pool of
-256 invoke IDs; on an endpoint session's seat the server holds at most 64 of the
-node's. The two in-flight limits keep a subscriber that subscribes to much and
+256 invoke IDs; on an endpoint session with both roles the server always finds
+64 of the node's and holds at most 128, the other 128 kept for the client
+(#2617). The two in-flight limits keep a subscriber that subscribes to much and
 acknowledges slowly from tying up the server (#533, #561). A report that finds
 no room is not sent and the baselines stay, and its coordinate (the
 subscription, or every reference of the COV-multiple context, a split report's
@@ -12714,10 +12718,16 @@ of the server that doesn't wait (a COV report, an Audit record, a run's
 request) may take a freed ID first, but once it has, the next free ID is
 kept for the oldest waiter: until that waiter takes it, a Command or Channel
 run's request fails, an Audit record is dropped or kept for a retry, and a
-COV report is owed a look, as when no ID is free. A known limit, tracked on
-#2617: a node's client role leases from the node's pool apart from this
-order, so while that pool is full a client that keeps leasing can take each
-freed ID ahead of the waiters. A Device recipient's
+COV report is owed a look, as when no ID is free. On an endpoint session
+with both roles the client leases from the node's pool apart from this
+order, but only while the server holds at least its reserve of 64 (#2617):
+under it the server always finds an ID. There the ID kept for the oldest
+waiter is the last of that reserve, which the client can't take, so the
+server's other work leaves it until the server is two under its reserve,
+and the oldest waiter is served within two of the server's request
+lifetimes (the APDU timeout times the retries plus one, after its sends,
+which a busy link such as MS/TP waiting for the token can delay) of its
+first wait, however busy the client is. A Device recipient's
 binding is read again once its ID comes: a binding refreshed meanwhile still
 takes the notification, and one that lapsed or moved is looked for as at a
 first send, the ID given back while it is (#2569). A Device recipient the
@@ -14409,13 +14419,21 @@ session.stop().await?; // stops the server, then the link
   still queued when it stops is dropped unanswered and counted only as
   handed over (`apdus`).
 - One pool of invoke IDs: the server and the client roles share the session's
-  256, and the server holds at most 64 at once: its confirmed COV, event and
-  Audit notifications (the session's source Audit records among them) and the
-  reads its runs make. Past that each does what it does when the pool is
-  empty: a confirmed event notification waits for an ID, an Audit record is
-  counted lost, and a confirmed COV notification's subscription waits for one
-  of the server's IDs to come back and is then looked at again (#2661). The
-  client's requests find the rest of the pool.
+  256, and each keeps a reserve the other can't take (#2617): 128 for the
+  client's requests (`REQUESTER_RESERVE`), 64 for the server's confirmed COV,
+  event and Audit notifications (the session's source Audit records among
+  them) and the requests its runs make (`NOTIFICATION_RESERVE`). Beyond its
+  reserve either borrows from the quarter neither keeps, so the client holds
+  at most 192 at once and the server 128. A role under its reserve always
+  finds an ID, however many the other holds, slow peers' leases included.
+  Past what it may hold, a client request fails at once with the exhausted
+  error, and the server does what it does when the pool is empty: a confirmed
+  event notification waits for an ID, an Audit record is counted lost or kept
+  for a retry, and a confirmed COV notification's subscription waits for an
+  ID to come back and is then looked at again (#2661). A session with one
+  role keeps a reserve for that role only, so it may take the whole pool; a
+  client on a `ServerOnly` session may borrow up to 192, and a `ClientOnly`
+  session's source Audit records up to 128.
 - The session keeps the one owner of the local network number; the server
   runs none and takes the number it publishes. Target Audit routes its
   recipient by that number, so a seated server takes `audit_reporters`.

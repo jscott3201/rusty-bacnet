@@ -603,20 +603,13 @@ class AuditContractArtifactTests(unittest.TestCase):
                     configure(1, policy=policy)
             self.assertEqual(pending(), 2)
 
-            # Registration after selection must not silently replace the sink.
-            server.add_audit_log(1, "Duplicate", str(Path(directory) / "duplicate"))
-            for policy in ("deny_all", "allow_all"):
-                with self.assertRaisesRegex(ValueError, "duplicate pending Audit Log"):
-                    configure(1, policy=policy)
-            for _ in range(2):
-                # Synchronous failure even outside an event loop: no future,
-                # transport or ownership transfer has been started.
-                with self.assertRaisesRegex(ValueError, "duplicate pending Audit Log"):
-                    _unused = server.start()
-                self.assertEqual(pending(), 3)
+            # Registration after selection cannot replace the sink: a repeat
+            # of its identifier is refused at the call (#2748).
+            with self.assertRaisesRegex(ValueError, "duplicate object identifier"):
+                server.add_audit_log(1, "Duplicate", str(Path(directory) / "duplicate"))
+            self.assertEqual(pending(), 2)
 
-            # Repair by explicitly selecting a different unambiguous log. Other
-            # objects keep their existing same-ID replacement semantics.
+            # Select a different log.
             server.add_audit_log(2, "Repaired", str(Path(directory) / "repaired"))
             configure(2, policy="allow_all")
 
@@ -926,7 +919,7 @@ class AuditContractArtifactTests(unittest.TestCase):
             with self.subTest(options=options):
                 asyncio.run(bounded_reporter_test(exercise(options, expected, priority_bytes)))
 
-    def test_reporter_start_revalidates_duplicates_without_draining(self) -> None:
+    def test_a_repeated_reporter_is_refused_at_the_call(self) -> None:
         server = BACnetServer(device_instance=8)
         server.add_audit_reporter(1, "Selected")
         settings = dict(audit_level="audit_all",
@@ -934,13 +927,10 @@ class AuditContractArtifactTests(unittest.TestCase):
         server.configure_audit_recipient({"kind": "device", "object_identifier": ObjectIdentifier(ObjectType.DEVICE, 9)})
         configure = cast(Callable[..., None], server.configure_audit_reporters)
         configure([{"instance": 1, **settings}])
-        server.add_audit_reporter(1, "Duplicate")
-        with self.assertRaisesRegex(ValueError, "duplicate pending Audit Reporter"):
-            configure([{"instance": 1, **{**settings, "audit_level": "none"}}])
-        for _ in range(2):
-            with self.assertRaisesRegex(ValueError, "duplicate pending Audit Reporter"):
-                _unused = server.start()
-            self.assertEqual(getattr(server, "_pending_registration_count")(), 2)
+        with self.assertRaisesRegex(ValueError, "duplicate object identifier"):
+            server.add_audit_reporter(1, "Duplicate")
+        self.assertEqual(getattr(server, "_pending_registration_count")(), 1)
+        configure([{"instance": 1, **{**settings, "audit_level": "none"}}])
 
     def test_reporter_configuration_freezes_at_transfer_but_not_preparation_failure(self) -> None:
         async def exercise() -> None:
@@ -1223,19 +1213,15 @@ class AuditContractArtifactTests(unittest.TestCase):
 
             asyncio.run(inspect_parent())
 
-    def test_parent_start_revalidates_duplicates_without_draining(self) -> None:
+    def test_a_repeated_audit_log_is_refused_at_the_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             server = BACnetServer(device_instance=8)
             server.add_audit_log(1, "Child", str(Path(directory) / "child"))
             server.configure_audit_log_parent(1, parent_device_instance=9, parent_audit_log_instance=7)
-            # Even a nonselected log with a parent must not be silently replaced at start.
-            server.add_audit_log(1, "Duplicate", str(Path(directory) / "duplicate"))
-            with self.assertRaisesRegex(ValueError, "duplicate pending Audit Log"):
-                server.configure_audit_log_parent(1, parent_device_instance=10, parent_audit_log_instance=2)
-            for _ in range(2):
-                with self.assertRaisesRegex(ValueError, "duplicate pending Audit Log"):
-                    _unused = server.start()
-                self.assertEqual(getattr(server, "_pending_registration_count")(), 2)
+            with self.assertRaisesRegex(ValueError, "duplicate object identifier"):
+                server.add_audit_log(1, "Duplicate", str(Path(directory) / "duplicate"))
+            self.assertEqual(getattr(server, "_pending_registration_count")(), 1)
+            server.configure_audit_log_parent(1, parent_device_instance=10, parent_audit_log_instance=2)
 
     def test_forwarding_configuration_freezes_at_start_ownership_transfer(self) -> None:
         async def exercise() -> None:

@@ -5,7 +5,9 @@
 use super::*;
 use std::ffi::CStr;
 
-use bacnet_encoding::constructed::{encode_bdt_entry_list, encode_fdt_entry_list};
+use bacnet_encoding::constructed::{
+    encode_bdt_entry_list, encode_fdt_entry_list, encode_host_n_port,
+};
 use bacnet_types::constructed::{
     BACnetBDTEntry, BACnetFDTEntry, BACnetHostAddress, BACnetHostNPort,
 };
@@ -211,4 +213,57 @@ fn a_table_past_the_row_bound_reads_as_its_octets() {
     let value = decode_read_value(PORT, FDT, None, &past).unwrap();
     assert_eq!(value.tag_name(), "application_data");
     assert_eq!(value.inner, PropertyValue::ApplicationData(past));
+}
+
+/// FD_BBMD_Address and BACnet_IP_Global_Address (#2710) read as one
+/// `host_n_port`: the address text a BDT row gives its BBMD, the octets
+/// exact. A value that isn't exactly one host and port reads generically,
+/// keeping its octets, and so does the same value on another object type.
+#[test]
+fn a_host_and_port_reads_as_a_bdt_rows_address() {
+    let encoded = |host, port| {
+        let mut buf = BytesMut::new();
+        encode_host_n_port(&mut buf, &BACnetHostNPort { host, port }).unwrap();
+        buf.to_vec()
+    };
+    for property in [
+        PropertyIdentifier::FD_BBMD_ADDRESS,
+        PropertyIdentifier::BACNET_IP_GLOBAL_ADDRESS,
+    ] {
+        for (host, port, expected) in [
+            (
+                BACnetHostAddress::Ip([192, 0, 2, 2].into()),
+                47808,
+                c"'192.0.2.2:47808'",
+            ),
+            (
+                BACnetHostAddress::Ip("2001:db8::2".parse().unwrap()),
+                47809,
+                c"'[2001:db8::2]:47809'",
+            ),
+            (
+                BACnetHostAddress::Name("bbmd.example".into()),
+                47808,
+                c"'bbmd.example:47808'",
+            ),
+            // Not determined yet (Clause 12.56.33): no host and port 0.
+            (BACnetHostAddress::None, 0, c"None"),
+        ] {
+            let octets = encoded(host, port);
+            assert_read((PORT, property, None), &octets, "host_n_port", expected);
+        }
+        let one = encoded(BACnetHostAddress::Ip([192, 0, 2, 2].into()), 47808);
+        // Two values, a trailing octet, a port past an Unsigned16.
+        let two = [&one[..], &one[..]].concat();
+        let trailing = [&one[..], &[0x21, 0x01]].concat();
+        let big_port = [0x0e, 0x1c, 192, 0, 2, 2, 0x0f, 0x1b, 1, 0, 0];
+        for octets in [&two[..], &trailing[..], &big_port[..]] {
+            let value = decode_read_value(PORT, property, None, octets).unwrap();
+            assert_eq!(value.element(), None, "{octets:02x?}");
+            assert_eq!(value.tag_name(), "tagged", "{octets:02x?}");
+            assert_eq!(value.inner, PropertyValue::ApplicationData(octets.to_vec()));
+        }
+        let other = decode_read_value(ObjectType::ANALOG_INPUT, property, None, &one).unwrap();
+        assert_eq!(other.tag_name(), "tagged");
+    }
 }

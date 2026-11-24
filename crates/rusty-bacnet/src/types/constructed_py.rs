@@ -11,10 +11,11 @@ use bacnet_types::constructed::{
     BACnetAuthenticationFactor, BACnetAuthenticationFactorFormat, BACnetAuthenticationPolicy,
     BACnetBDTEntry, BACnetCOVSubscription, BACnetCalendarEntry, BACnetDateRange, BACnetDestination,
     BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference, BACnetEventParameter,
-    BACnetFDTEntry, BACnetHostAddress, BACnetNameValue, BACnetObjectPropertyReference,
-    BACnetPortPermission, BACnetPrescale, BACnetPropertyAccessResult, BACnetRecipient, BACnetScale,
-    BACnetShedLevel, BACnetSpecialEvent, BACnetStageLimitValue, BACnetTimeValue, BACnetValueSource,
-    ReadAccessSpecification, SpecialEventPeriod,
+    BACnetFDTEntry, BACnetHostAddress, BACnetHostNPort, BACnetNameValue,
+    BACnetObjectPropertyReference, BACnetPortPermission, BACnetPrescale,
+    BACnetPropertyAccessResult, BACnetRecipient, BACnetScale, BACnetShedLevel, BACnetSpecialEvent,
+    BACnetStageLimitValue, BACnetTimeValue, BACnetValueSource, ReadAccessSpecification,
+    SpecialEventPeriod,
 };
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{BACnetTimeStamp, PropertyValue};
@@ -65,6 +66,9 @@ pub(super) enum Decoded {
     EventParameter(BACnetEventParameter),
     BdtEntry(BACnetBDTEntry),
     FdtEntry(BACnetFDTEntry),
+    /// A Network Port's FD_BBMD_Address or BACnet_IP_Global_Address
+    /// (#2710).
+    HostNPort(BACnetHostNPort),
 }
 
 impl Decoded {
@@ -185,6 +189,7 @@ impl Decoded {
             }
             Self::BdtEntry(entry) => bdt_entry_to_py(py, &entry)?.into_any().unbind(),
             Self::FdtEntry(entry) => fdt_entry_to_py(py, &entry)?.into_any().unbind(),
+            Self::HostNPort(address) => any(py, host_n_port_text(&address))?,
         })
     }
 }
@@ -194,14 +199,8 @@ impl Decoded {
 /// for the choice that names no host), and `broadcast_mask` as dotted text,
 /// or `None` when the entry carries none.
 fn bdt_entry_to_py<'py>(py: Python<'py>, entry: &BACnetBDTEntry) -> PyResult<Bound<'py, PyDict>> {
-    let bbmd = &entry.bbmd_address;
-    let address = match &bbmd.host {
-        BACnetHostAddress::Ip(ip) => Some(SocketAddr::new(*ip, bbmd.port).to_string()),
-        BACnetHostAddress::Name(name) => Some(format!("{name}:{}", bbmd.port)),
-        BACnetHostAddress::None => None,
-    };
     let dict = PyDict::new(py);
-    dict.set_item("address", address)?;
+    dict.set_item("address", host_n_port_text(&entry.bbmd_address))?;
     dict.set_item(
         "broadcast_mask",
         entry
@@ -209,6 +208,18 @@ fn bdt_entry_to_py<'py>(py: Python<'py>, entry: &BACnetBDTEntry) -> PyResult<Bou
             .map(|mask| Ipv4Addr::from(mask).to_string()),
     )?;
     Ok(dict)
+}
+
+/// A host and port as a BDT row's `address` shows it (#2690), and as
+/// FD_BBMD_Address and BACnet_IP_Global_Address read (#2710): `"ip:port"`,
+/// `"[v6]:port"` or `"name:port"`; `None` for the choice that names no
+/// host, whose port the value's octets keep.
+fn host_n_port_text(address: &BACnetHostNPort) -> Option<String> {
+    match &address.host {
+        BACnetHostAddress::Ip(ip) => Some(SocketAddr::new(*ip, address.port).to_string()),
+        BACnetHostAddress::Name(name) => Some(format!("{name}:{}", address.port)),
+        BACnetHostAddress::None => None,
+    }
 }
 
 /// One FDT entry (#2690), the `FdtEntry` mapping `read_fdt` gives:

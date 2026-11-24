@@ -19,7 +19,7 @@ use bacnet_encoding::constructed::{
     decode_authentication_factor_format, decode_authentication_policy, decode_bdt_entry,
     decode_calendar_entry, decode_cov_subscription, decode_daily_schedule, decode_date_range,
     decode_destination, decode_device_object_property_reference, decode_device_object_reference,
-    decode_event_parameter, decode_fdt_entry, decode_name_value,
+    decode_event_parameter, decode_fdt_entry, decode_host_n_port, decode_name_value,
     decode_object_property_reference_at, decode_port_permission, decode_prescale,
     decode_property_access_result, decode_read_access_specification, decode_recipient,
     decode_scale, decode_shed_level, decode_special_event, decode_stage_limit_value,
@@ -173,6 +173,7 @@ impl TypedElement for Element {
             Self::EventParameter => "event_parameter",
             Self::BdtEntry => "bdt_entry",
             Self::FdtEntry => "fdt_entry",
+            Self::HostNPort => "host_n_port",
             // An element newer than the binding has no typed form here
             // (`decode_at` refuses it), so no read is ever tagged with it.
             _ => GENERIC_TAG,
@@ -289,6 +290,7 @@ impl TypedElement for Element {
             Self::EventParameter => with(event_parameter(octets, offset), Decoded::EventParameter),
             Self::BdtEntry => with(decode_bdt_entry(octets, offset), Decoded::BdtEntry),
             Self::FdtEntry => with(decode_fdt_entry(octets, offset), Decoded::FdtEntry),
+            Self::HostNPort => with(decode_host_n_port(octets, offset), Decoded::HostNPort),
             _ => Err(Error::decoding(
                 offset,
                 "the binding has no typed form for this element",

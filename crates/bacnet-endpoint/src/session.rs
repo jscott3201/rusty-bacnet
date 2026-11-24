@@ -125,6 +125,20 @@ enum Lifecycle {
 /// [`client`](EndpointSession::client) gives a client on a running session
 /// of any role, above the one shared coordinator.
 ///
+/// The role also decides how the client and the server share the session's
+/// 256 invoke IDs (#2617). Each role the session runs keeps a reserve the
+/// other can't take: [`REQUESTER_RESERVE`] (128) for the client on a
+/// `ClientOnly` or `Both` session, [`NOTIFICATION_RESERVE`] (64) for the
+/// server's confirmed notifications and its runs' requests on a
+/// `ServerOnly` or `Both` session. Beyond its reserve either borrows what
+/// the other's doesn't keep, so on a one-role session that role may take
+/// the whole pool, and with both the client holds at most 192 and the
+/// server 128. A client request refused an ID fails at once; the server's
+/// work waits for one.
+///
+/// [`REQUESTER_RESERVE`]: bacnet_endpoint_core::coordinator::REQUESTER_RESERVE
+/// [`NOTIFICATION_RESERVE`]: bacnet_endpoint_core::coordinator::NOTIFICATION_RESERVE
+///
 /// A session with a server role needs a Device identity
 /// ([`device`](EndpointSession::device)): its start refuses one without,
 /// before the link starts.
@@ -137,6 +151,19 @@ pub enum SessionRole {
     ServerOnly,
     /// Both sibling roles above one ingress/coordinator.
     Both,
+}
+
+impl SessionRole {
+    /// The invoke IDs the session's pool keeps for the client and for the
+    /// server: each role the session runs keeps its reserve.
+    fn invoke_id_reserves(self) -> (usize, usize) {
+        use bacnet_endpoint_core::coordinator::{NOTIFICATION_RESERVE, REQUESTER_RESERVE};
+        match self {
+            Self::ClientOnly => (REQUESTER_RESERVE, 0),
+            Self::ServerOnly => (0, NOTIFICATION_RESERVE),
+            Self::Both => (REQUESTER_RESERVE, NOTIFICATION_RESERVE),
+        }
+    }
 }
 
 /// Session tuning (bounded queues, client timers).
@@ -431,7 +458,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// ```
     pub fn new(transport: T, role: SessionRole, config: SessionConfig) -> Result<Self, Error> {
         config.validate()?;
-        let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+        let (requester, notification) = role.invoke_id_reserves();
+        let coordinator = Arc::new(OutboundTransactionCoordinator::with_reserves(
+            requester,
+            notification,
+        ));
         let client_config = ClientConfig {
             apdu_timeout_ms: config.apdu_timeout_ms,
             apdu_retries: config.apdu_retries,

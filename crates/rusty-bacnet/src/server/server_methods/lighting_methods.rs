@@ -149,6 +149,7 @@ impl BACnetServer {
             storage_path,
             clear_written_default,
         };
+        self.precheck_pending(ObjectType::COLOR, instance, name)?;
         let mut obj = color(instance, name, output).map_err(to_py_err)?;
         obj.set_value_source_tracking(value_source_tracking);
         provision_profile(tags, profile_location, profile_name, |p| obj.set_profile(p))?;
@@ -205,6 +206,7 @@ impl BACnetServer {
             storage_path,
             clear_written_default,
         };
+        self.precheck_pending(ObjectType::COLOR_TEMPERATURE, instance, name)?;
         let mut obj = color_temperature(instance, name, limits, output).map_err(to_py_err)?;
         obj.set_value_source_tracking(value_source_tracking);
         provision_profile(tags, profile_location, profile_name, |p| obj.set_profile(p))?;

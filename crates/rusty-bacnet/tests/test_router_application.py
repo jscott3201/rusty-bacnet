@@ -291,15 +291,17 @@ class RouterApplicationTests(unittest.IsolatedAsyncioTestCase):
         await client.__aenter__()
         await client.stop()
 
-    async def test_a_refused_server_start_leaves_the_port_for_the_next(self):
+    async def test_a_refused_registration_leaves_the_port_for_the_next(self):
         router = rb.BACnetRouter([bbmd_port(1)], application="client_and_server")
         await router.start()
         self.addAsyncCleanup(cleanup, router.close)
         broken = rb.BACnetServer(BASE + 200, transport="router", router=router)
         broken.add_analog_input(0, "Same name", 62, 1.0)
-        broken.add_analog_input(1, "Same name", 62, 2.0)
+        # Every builder refuses a name in use at the call (#2711, #2748), so
+        # no start is refused over one; the refused server is never started
+        # and the router's port stays free.
         with self.assertRaisesRegex(ValueError, "duplicate object name"):
-            await broken.start()
+            broken.add_file(1, "Same name")
         hosted = rb.BACnetServer(BASE + 201, transport="router", router=router)
         hosted.add_analog_input(0, "Hosted sensor", 62, 3.0)
         await hosted.start()

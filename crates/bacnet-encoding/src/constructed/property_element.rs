@@ -115,11 +115,15 @@ pub enum ConstructedElement {
     /// A Network Port's BBMD_Foreign_Device_Table element, a
     /// `BACnetFDTEntry` (`decode_fdt_entry`).
     FdtEntry,
+    /// A host and port, a `BACnetHostNPort` (`decode_host_n_port`): a
+    /// Network Port's FD_BBMD_Address and BACnet_IP_Global_Address, the
+    /// structure a BDT entry names its BBMD with.
+    HostNPort,
 }
 
 impl ConstructedElement {
     /// Every element, each once.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 31] = [
         Self::NameValue,
         Self::Destination,
         Self::PortPermission,
@@ -150,6 +154,7 @@ impl ConstructedElement {
         Self::EventParameter,
         Self::BdtEntry,
         Self::FdtEntry,
+        Self::HostNPort,
     ];
 }
 
@@ -230,6 +235,9 @@ pub fn property_element(
         (O::ACCUMULATOR, P::PRESCALE) => (E::Prescale, Single),
         (O::NETWORK_PORT, P::BBMD_BROADCAST_DISTRIBUTION_TABLE) => (E::BdtEntry, Collection),
         (O::NETWORK_PORT, P::BBMD_FOREIGN_DEVICE_TABLE) => (E::FdtEntry, Collection),
+        (O::NETWORK_PORT, P::FD_BBMD_ADDRESS | P::BACNET_IP_GLOBAL_ADDRESS) => {
+            (E::HostNPort, Single)
+        }
         // Every object type that has these properties gives them one datatype.
         (_, P::TAGS) => (E::NameValue, Collection),
         (_, P::EVENT_TIME_STAMPS | P::COMMAND_TIME_ARRAY) => (E::TimeStamp, Collection),
@@ -313,6 +321,17 @@ mod tests {
                 P::BBMD_FOREIGN_DEVICE_TABLE,
                 Some((E::FdtEntry, ElementShape::Collection)),
             ),
+            (
+                O::NETWORK_PORT,
+                P::FD_BBMD_ADDRESS,
+                Some((E::HostNPort, ElementShape::Single)),
+            ),
+            (
+                O::NETWORK_PORT,
+                P::BACNET_IP_GLOBAL_ADDRESS,
+                Some((E::HostNPort, ElementShape::Single)),
+            ),
+            (O::ANALOG_INPUT, P::FD_BBMD_ADDRESS, None),
             (O::ANALOG_INPUT, P::BBMD_FOREIGN_DEVICE_TABLE, None),
             (O::ANALOG_INPUT, P::PRESENT_VALUE, None),
             (O::SCHEDULE, P::PRESENT_VALUE, None),
