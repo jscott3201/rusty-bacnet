@@ -23,6 +23,10 @@ struct Entry {
 struct TrackerState {
     next_id: u64,
     entries: Vec<Entry>,
+    /// What a repeated segment of a reassembled request still executing is
+    /// answered with (#2751). Only the segmented branch reads or writes it;
+    /// `begin` and the drop of a pending request never touch it.
+    segmented: Vec<segment_repeats::Record>,
 }
 
 /// Exact duplicate detection only while the ordinary server transaction is live.
@@ -158,6 +162,9 @@ impl Drop for PendingConfirmedRequest {
         }
     }
 }
+
+#[path = "confirmed_segment_repeats.rs"]
+mod segment_repeats;
 
 #[cfg(test)]
 #[path = "confirmed_tracker_tests.rs"]

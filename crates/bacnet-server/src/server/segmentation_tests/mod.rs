@@ -319,6 +319,7 @@ mod request_progress;
 mod request_progress_expiry;
 mod request_reassembly;
 mod request_receive_timeout;
+mod request_repeat_while_executing;
 mod request_window_interop;
 mod routing_overlap;
 

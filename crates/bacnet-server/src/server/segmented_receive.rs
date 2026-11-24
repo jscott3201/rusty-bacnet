@@ -81,6 +81,38 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .await;
             return;
         }
+        // A segment of a request already whole and still executing is
+        // acknowledged again (Clause 5.4.5.3, #2751).
+        if !receivers.is_open(
+            source_mac,
+            received.source_network.as_ref(),
+            invoke_id,
+            received.provenance.clone(),
+        ) && let Some((sequence_number, actual_window_size)) =
+            dispatch_context.confirmed_request_tracker.repeated_segment(
+                source_mac,
+                received.source_network.as_ref(),
+                &received.provenance,
+                &route,
+                invoke_id,
+            )
+        {
+            debug!(
+                invoke_id,
+                seq = request.sequence_number,
+                "Acknowledging again a segment of a request still executing"
+            );
+            let ack = SegmentAckPdu {
+                negative_ack: false,
+                sent_by_server: true,
+                invoke_id,
+                sequence_number,
+                actual_window_size,
+            };
+            let source_network = received.source_network.as_ref();
+            Self::send_request_segment_ack(network, source_mac, source_network, &route, ack).await;
+            return;
+        }
         let receipt = receivers.receive(
             Segment {
                 source_mac,
@@ -144,6 +176,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .await;
             }
             Receipt::Complete(done) => {
+                let (last_sequence, window) =
+                    (done.ack.sequence_number, done.ack.actual_window_size);
                 Self::send_request_segment_ack(
                     network,
                     source_mac,
@@ -157,14 +191,30 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     payload_len = done.request.service_request.len(),
                     "Reassembled segmented ConfirmedRequest"
                 );
+                let source_network = received.source_network.clone();
+                let provenance = received.provenance.clone();
+                let opening = done.opening.route.clone();
                 received.set_response_route(done.opening.route);
-                Self::dispatch(
+                // On the heap: the loop holds this future in its own state,
+                // which this branch's notes would otherwise grow.
+                Box::pin(Self::dispatch(
                     dispatch_context,
                     source_mac,
                     Apdu::ConfirmedRequest(done.request),
                     received,
-                )
+                ))
                 .await;
+                // Pending now, unless already answered (then nothing is
+                // noted and a repeat draws an Abort, as in IDLE).
+                dispatch_context.confirmed_request_tracker.note_segmented(
+                    source_mac,
+                    source_network.as_ref(),
+                    provenance,
+                    opening,
+                    invoke_id,
+                    last_sequence,
+                    window,
+                );
             }
         }
     }

@@ -291,6 +291,22 @@ impl SegmentedRequests {
         self.saved_bytes
     }
 
+    /// Whether a transfer is open for segments from `source_mac` (and
+    /// `source_network`, behind a router) with `invoke_id`, in the trust
+    /// context `provenance`. A segment with none either opens one or draws
+    /// an Abort; the full server asks first whether it repeats a request
+    /// already whole (#2751).
+    pub fn is_open(
+        &self,
+        source_mac: &[u8],
+        source_network: Option<&NpduAddress>,
+        invoke_id: u8,
+        provenance: TransportProvenance,
+    ) -> bool {
+        let key = transfer_key(source_mac, source_network, invoke_id, provenance);
+        self.transfers.contains_key(&key)
+    }
+
     /// End every transfer, without a word.
     pub fn clear(&mut self) {
         self.transfers.clear();

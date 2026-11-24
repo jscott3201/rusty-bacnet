@@ -55,9 +55,14 @@ once. After that it acknowledges each full window, counted from its last
 acknowledgment, positive or negative (Clause 5.4.5.2), and the last segment.
 A requester that sends its whole first window without waiting still
 completes: the segments it sends again after segment zero's acknowledgment
-are duplicates and are discarded. A segment sent again after the request is
-whole draws the invalid-state Abort above, even while the request is still
-being answered (#2751). This workspace's client sends segment zero alone and
+are duplicates and are discarded. While the whole request still executes, a
+segment of it sent again by the same requester, in the same trust context
+and by a route of the same origin, is acknowledged again with the last
+sequence number and window instead (Clause 5.4.5.3, #2751). That note lives
+as long as the request is pending in the duplicate-request tracker, so a
+request the tracker doesn't follow (over 64 KiB, past 256 pending, or a
+LifeSafetyOperation) has none; once the request is answered, a segment sent
+again draws the invalid-state Abort above. This workspace's client sends segment zero alone and
 waits for its answer, so it sends nothing twice to a server that answers at
 once; a receiver that never answers segment zero alone costs it one segment
 timeout, once (see the client's segmented requests in

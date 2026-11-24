@@ -135,6 +135,59 @@ async fn r7_segment_opening_context_drives_ack_reassembly_and_retarget_abort() {
     routed.router.stop().await.unwrap();
 }
 
+/// A segment repeated while its request executes is acknowledged again only
+/// by a route of the same origin as the request's (#2751): through another
+/// local endpoint it finds no transfer and draws an Abort.
+#[tokio::test]
+async fn r7_segment_repeat_while_executing_needs_the_opening_origin() {
+    let mut routed = Routed::new().await;
+    let context = context(analog_input(), ServerConfig::default());
+    let (first, full) = first_half(8);
+    let last = second_half(&first, &full);
+    let mut table = SegmentedRequests::new(TSEG);
+    // The ReadProperty waits for this.
+    let guard = context.services.db.write().await;
+    let opening = routed
+        .receive(2000, &Apdu::ConfirmedRequest(first), None)
+        .await;
+    take(&context, &mut table, opening).await;
+    assert!(matches!(
+        routed.response(2000, 8).await.0,
+        Apdu::SegmentAck(ack) if ack.sequence_number == 0
+    ));
+    let whole = routed
+        .receive(2000, &Apdu::ConfirmedRequest(last.clone()), None)
+        .await;
+    take(&context, &mut table, whole).await;
+    assert!(matches!(
+        routed.response(2000, 8).await.0,
+        Apdu::SegmentAck(ack) if ack.sequence_number == 1
+    ));
+    let again = routed
+        .receive(2000, &Apdu::ConfirmedRequest(last.clone()), None)
+        .await;
+    take(&context, &mut table, again).await;
+    assert!(matches!(
+        routed.response(2000, 8).await.0,
+        Apdu::SegmentAck(ack) if ack.sequence_number == 1 && !ack.negative_ack
+    ));
+    let elsewhere = routed
+        .receive(3000, &Apdu::ConfirmedRequest(last), None)
+        .await;
+    take(&context, &mut table, elsewhere).await;
+    assert!(
+        matches!(routed.response(3000, 8).await.0, Apdu::Abort(x) if x.abort_reason == AbortReason::INVALID_APDU_IN_THIS_STATE)
+    );
+    drop(guard);
+    assert!(matches!(
+        routed.response(2000, 8).await.0,
+        Apdu::ComplexAck(_)
+    ));
+    settled(&context).await;
+    assert!(routed.wire.try_recv().is_err());
+    routed.router.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn r7_segment_capacity_abort_and_quiet_progress_expiry_keep_opening_route() {
     let mut routed = Routed::new().await;

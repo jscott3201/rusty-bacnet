@@ -228,8 +228,9 @@ async fn this_workspaces_client_sends_each_segment_once() {
 /// acknowledgment, segments 1 and 2 again. The request is whole on the first
 /// pass and answered; the two sent again find no transfer and each draws an
 /// Abort (INVALID_APDU_IN_THIS_STATE) after the answer, which a requester
-/// that is done ignores. A server still working on the request would owe
-/// each a repeat of its last Segment-ACK instead (Clause 5.4.5.3, #2751).
+/// that is done ignores. While the request still executes, each is
+/// acknowledged again instead (Clause 5.4.5.3, #2751; see
+/// `request_repeat_while_executing`).
 #[tokio::test]
 async fn segments_sent_again_after_the_answer_each_draw_an_abort() {
     let (mut server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
