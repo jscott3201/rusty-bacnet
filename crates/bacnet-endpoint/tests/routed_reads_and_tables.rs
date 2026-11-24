@@ -457,7 +457,7 @@ async fn a_routed_read_takes_the_first_of_two_relayed_answers() {
         .await
         .unwrap();
     eventually::eventually(WAIT, "the second answer is counted", async || {
-        session.policy_counters().await.unclaimed_terminal == 1
+        session.policy_counters().unclaimed_terminal == 1
     })
     .await;
     assert_eq!(session.active_leases(), 0);

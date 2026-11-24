@@ -94,7 +94,7 @@ async fn the_full_server_serves_the_sessions_registered_port() {
         encoded(PropertyValue::Unsigned(THIS_NETWORK.into())),
         "the learned number is in the server's database"
     );
-    let counters = endpoint.session.policy_counters().await;
+    let counters = endpoint.session.policy_counters();
     assert_eq!(counters.no_server_role, 0);
     endpoint.stop().await;
 }

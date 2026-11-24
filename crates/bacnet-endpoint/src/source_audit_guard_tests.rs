@@ -360,3 +360,6 @@ async fn a_read_the_reporter_does_not_select_stays_its_callers() {
 
 #[path = "source_audit_plan_tests.rs"]
 mod plan;
+
+#[path = "source_recipient_guard_tests.rs"]
+mod recipient_guard;

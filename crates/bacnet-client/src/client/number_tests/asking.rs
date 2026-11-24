@@ -530,3 +530,40 @@ async fn a_refused_who_is_asks_nothing() {
     assert_who_is(&frames[1]);
     site.client.stop().await.unwrap();
 }
+
+/// A Who-Is polled once while another's question is held in its send, and
+/// never again, holds the asking for nobody once that question goes
+/// (#2759): a third Who-Is, polled, goes without asking. It waited behind
+/// the parked one for good while the asking's lock was Tokio's fair mutex.
+#[tokio::test(start_paused = true)]
+async fn a_parked_who_is_holds_the_asking_for_nobody() {
+    use std::task::{Context, Waker};
+    let mut site = gated().await;
+    let (go, gone) = tokio::sync::oneshot::channel();
+    let mut parked = Box::pin(site.client.who_is(Broadcast::Global, None));
+    let driver = async {
+        site.entered.acquire().await.unwrap().forget();
+        let noop = &mut Context::from_waker(Waker::noop());
+        assert!(parked.as_mut().poll(noop).is_pending());
+        go.send(()).unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        site.gate.add_permits(10);
+    };
+    let third = async {
+        gone.await.unwrap();
+        site.client.who_is(Broadcast::Global, None).await
+    };
+    let (first, (), third) =
+        bounded(async { tokio::join!(site.client.who_is(Broadcast::Global, None), driver, third) })
+            .await;
+    first.unwrap();
+    third.unwrap();
+    let frames = site.sent.frames();
+    assert_eq!(site.asks(), 1, "{frames:?}");
+    assert_eq!(frames.len(), 3, "{frames:?}");
+    assert_ask(&frames[0]);
+    frames[1..].iter().for_each(assert_who_is);
+    bounded(parked).await.unwrap();
+    assert_eq!(site.asks(), 1, "the parked Who-Is asks nothing either");
+    site.client.stop().await.unwrap();
+}

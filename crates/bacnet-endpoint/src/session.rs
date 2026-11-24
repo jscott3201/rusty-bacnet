@@ -50,8 +50,8 @@
 //! [`EndpointSession`] is `Send` when its transport is `Send`: the dispatch
 //! task, channels, and shared counters are all `Send`-owned. Shared `&self`
 //! borrows (`client`, `server`, counters, `broadcast_i_am`) are safe because
-//! lifecycle mutation is owner-exclusive (`&mut`) or via atomics/async
-//! mutexes.
+//! lifecycle mutation is owner-exclusive (`&mut`) or via atomics and short
+//! synchronous locks.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -70,7 +70,7 @@ use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
+use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 #[path = "source_profile.rs"]
@@ -331,7 +331,19 @@ struct PolicyCounters {
 }
 
 struct SessionShared {
-    counters: Mutex<PolicyCounters>,
+    /// A short synchronous lock, never held across an await, so sampling
+    /// never waits on the dispatch task. A Tokio mutex here went to a
+    /// sampler that was not polled again, and the dispatch task then waited
+    /// for it for good (#2759).
+    counters: std::sync::Mutex<PolicyCounters>,
+}
+
+impl SessionShared {
+    fn counters(&self) -> std::sync::MutexGuard<'_, PolicyCounters> {
+        self.counters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 /// One owned single-device endpoint session.
@@ -479,7 +491,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         Ok(Self {
             local_receive_capacity,
             shared: Arc::new(SessionShared {
-                counters: Mutex::new(PolicyCounters {
+                counters: std::sync::Mutex::new(PolicyCounters {
                     ingress_policy: 0,
                     no_server_role: 0,
                     no_client_role: 0,
@@ -787,14 +799,16 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Samples policy-outcome ownership counters.
     ///
     /// Every classifier/policy outcome is counted, never silently dropped,
-    /// and so is every APDU a full queue had no room for.
-    pub async fn policy_counters(&self) -> PolicyCountersSnapshot {
+    /// and so is every APDU a full queue had no room for. A sample takes a
+    /// short synchronous lock the dispatch task also takes, never held
+    /// across an await, so it never waits on that task (#2759).
+    pub fn policy_counters(&self) -> PolicyCountersSnapshot {
         let drops = self
             .ingress
             .as_ref()
             .map(EndpointIngress::full_drop_counters)
             .unwrap_or_default();
-        let counters = self.shared.counters.lock().await;
+        let counters = self.shared.counters();
         PolicyCountersSnapshot {
             ingress_policy: counters.ingress_policy,
             no_server_role: counters.no_server_role,
@@ -1020,9 +1034,9 @@ async fn dispatch_loop(mut parts: DispatchParts, mut cancel: oneshot::Receiver<(
         };
         match event {
             DispatchEvent::Worker(joined) => NotificationTransactions::observe(Some(joined)),
-            DispatchEvent::Inbound(received) => handle_inbound(&parts.shared, received).await,
-            DispatchEvent::Terminal(received) => handle_terminal(&mut parts, received).await,
-            DispatchEvent::Policy(outcome) => handle_ingress_policy(&parts.shared, outcome).await,
+            DispatchEvent::Inbound(received) => handle_inbound(&parts.shared, received),
+            DispatchEvent::Terminal(received) => handle_terminal(&mut parts, received),
+            DispatchEvent::Policy(outcome) => handle_ingress_policy(&parts.shared, outcome),
             DispatchEvent::Closed => return SessionExit::ReceiversClosed,
         }
     }
@@ -1032,8 +1046,8 @@ async fn dispatch_loop(mut parts: DispatchParts, mut cancel: oneshot::Receiver<(
 /// session has no server role, or its server's seat is gone (#2617). It is
 /// counted (`no_server_role`), and its one-use reply sender is released
 /// without sending, as a full queue's drop releases one.
-async fn handle_inbound(shared: &SessionShared, received: ReceivedApdu) {
-    shared.counters.lock().await.no_server_role += 1;
+fn handle_inbound(shared: &SessionShared, received: ReceivedApdu) {
+    shared.counters().no_server_role += 1;
     drop(received.reply_tx);
 }
 

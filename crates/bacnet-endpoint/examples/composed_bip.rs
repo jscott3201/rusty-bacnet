@@ -145,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Narrow admin while roles run + I-Am broadcast.
     endpoint.broadcast_i_am().await?;
-    let counters = endpoint.policy_counters().await;
+    let counters = endpoint.policy_counters();
     assert_eq!(endpoint.active_leases(), 0);
     println!("counters: {counters:?}");
 

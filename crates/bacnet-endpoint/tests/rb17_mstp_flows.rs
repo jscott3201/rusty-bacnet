@@ -54,7 +54,7 @@ async fn dropped_sender_impl(mode: MstpExecutionMode, frames: Frames) {
         })
         .await;
     assert_eq!(postponed.destination, PEER_MAC);
-    let counters = h.session.policy_counters().await;
+    let counters = h.session.policy_counters();
     assert!(
         counters.no_server_role >= 1,
         "lost inbound must be policy-owned: {counters:?}"

@@ -147,7 +147,7 @@ async fn prompt_impl(mode: MstpExecutionMode, frames: Frames) {
     assert!(!postponed, "the prompt answer had a Reply Postponed first");
     expect_present_value(&reply, 9, 11.0);
     assert_eq!(h.session.server_seat_counters().apdus, 1);
-    assert_eq!(h.session.policy_counters().await.no_server_role, 0);
+    assert_eq!(h.session.policy_counters().no_server_role, 0);
     h.shutdown().await;
 }
 
@@ -369,7 +369,7 @@ async fn one_pool_impl(mode: MstpExecutionMode, frames: Frames) {
         "the notification went again: {more:?}"
     );
     assert_eq!(h.session.active_leases(), 0);
-    assert_eq!(h.session.policy_counters().await.unclaimed_terminal, 0);
+    assert_eq!(h.session.policy_counters().unclaimed_terminal, 0);
     drop(client);
     h.shutdown().await;
 }
