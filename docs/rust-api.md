@@ -13361,14 +13361,18 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   in `problems` with the device's error, and never fails the inventory: an
   object the device refuses is a record whose properties are all problems.
   A value of another datatype than the property has on the object's type
-  is a problem (`not a Real`) and the field `None`: a relinquish default
-  is a REAL on an analog output or value, an Enumerated on a binary one
-  and an Unsigned on a multi-state one, an Integer Value's COV_Increment
-  an Unsigned and its range a Signed (#2765). A setting
-  `bacnet_objects::points::build_database` would refuse (a Real that
-  isn't finite, a negative COV_Increment, Min_Pres_Value above
-  Max_Pres_Value, a state or Polarity the object can't hold) is kept as
-  the device gave it and listed in `problems` too.
+  is a problem naming what came back (`not a Real (got an Unsigned, 5)`)
+  and the field `None`: a relinquish default is a REAL on an analog output
+  or value, an Enumerated on a binary one and an Unsigned on a multi-state
+  one, an Integer Value's COV_Increment an Unsigned and its range a Signed
+  (#2765). Octets that can't be decoded are a problem saying so, naming a
+  character set the stack doesn't convert. A State_Text entry that isn't
+  a string is a problem whether or not settings were read. A value
+  `bacnet_objects::points::build_database` would refuse on its own point
+  (an empty name, Units past 65535, a state count or State_Text the
+  builder won't take, a Real that isn't finite, a negative COV_Increment,
+  Min_Pres_Value above Max_Pres_Value, a state or Polarity the object
+  can't hold) is kept as the device gave it and listed in `problems` too.
 - **The inventory.** `Inventory { address, device, cov, points, unread,
   stopped }`. `device` is the `DeviceSummary` (`describe_device`'s). `cov`
   is the device's `CovSupport` for SubscribeCOV, known from the summary at

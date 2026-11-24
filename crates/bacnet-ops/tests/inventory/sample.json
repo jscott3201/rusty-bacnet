@@ -125,7 +125,7 @@
         ]
       },
       "number_of_states": 3,
-      "commandable": false,
+      "commandable": true,
       "relinquish_default": {
         "value": "4",
         "decoded": 4
@@ -187,7 +187,7 @@
         },
         {
           "property": "relinquish-default",
-          "error": "not a Real"
+          "error": "not a Real (got a character string, \"auto\")"
         }
       ]
     },

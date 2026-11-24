@@ -2,8 +2,8 @@ device,device_instance,object,name,description,units,state_texts,number_of_state
 192.168.1.10:47808,1234,analog-input:1,Zone Temp,"Room 101, east",degrees-fahrenheit,,,false,,,,,,72.5 °F,fault,
 192.168.1.10:47808,1234,binary-value:3,"Fan ""A""","line one
 line two",,Off\|Standby|On,,true,inactive (Off|Standby),,,,,active (On),,
-192.168.1.10:47808,1234,multi-state-value:2,Mode,,,"Off|Low, slow|High\\er",3,false,4,,,,,"2 (Low, slow)",,relinquish-default: not one of the states 1 to 3
-192.168.1.10:47808,1234,analog-value:9,'=Setpoint,,,,,false,,0.5,-40,120,,,,units: PROPERTY:UNKNOWN_PROPERTY; relinquish-default: not a Real
+192.168.1.10:47808,1234,multi-state-value:2,Mode,,,"Off|Low, slow|High\\er",3,true,4,,,,,"2 (Low, slow)",,relinquish-default: not one of the states 1 to 3
+192.168.1.10:47808,1234,analog-value:9,'=Setpoint,,,,,false,,0.5,-40,120,,,,"units: PROPERTY:UNKNOWN_PROPERTY; relinquish-default: not a Real (got a character string, ""auto"")"
 192.168.1.10:47808,1234,700:1,Café 🔥,,,,,false,,,,,,,,
 192.168.1.10:47808,1234,trend-log:1,,,,,,false,,,,,,,,
 192.168.1.10:47808,1234,analog-value:10,'+SUM(A1),'-2+3,degrees-celsius,,,false,,,-40 °C,,,-12.5 °C,,

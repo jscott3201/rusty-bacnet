@@ -74,24 +74,26 @@ pub(crate) fn record(
             P::STATUS_FLAGS => keep(value, &mut record.status_flags),
             // State_Text is read from the rows above, an entry that isn't
             // a string as an empty text.
-            P::STATE_TEXT => state_text(&value),
+            P::STATE_TEXT => state_text(object_type, &value),
             _ => None,
         };
         if let Some(error) = problem {
             record.problems.push(Problem::new(property, error));
         }
     }
-    record.problems.extend(refused(&record));
-    // In the order asked, the settings' ranges among the rest.
-    record
-        .problems
-        .sort_by_key(|problem| seen.iter().position(|&asked| asked == problem.property));
     record.commandable = match Commandability::of(object_type, P::PRESENT_VALUE) {
         Commandability::Always => true,
         Commandability::Never => false,
         // Only a Priority_Array says so.
         _ => has_priorities,
     };
+    // What a point list builder would refuse; a relinquish default only
+    // where the point holds one, so after `commandable`.
+    record.problems.extend(refused(&record));
+    // In the order asked, the builder's refusals among the rest.
+    record
+        .problems
+        .sort_by_key(|problem| seen.iter().position(|&asked| asked == problem.property));
     record
 }
 

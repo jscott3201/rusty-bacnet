@@ -332,3 +332,28 @@ async fn the_csv_guards_formulas_unless_exact() {
     relay.abort();
     server.stop().await.unwrap();
 }
+
+/// An object a point list couldn't be built with, here one with an empty
+/// name: the table gains a problems column naming it, and the note counts
+/// the object (#2765).
+#[tokio::test]
+async fn a_problem_is_counted_and_named() {
+    let (mut server, device) = serving(named_database(1234, &["Zone", ""])).await;
+    let (target, _, relay) = relay(device, usize::MAX).await;
+    let args = [target.as_str(), "--types", "av", "--format", "table"];
+    let output = inventory(&args).await;
+    let text = stdout(&output);
+    assert!(text.contains("Problems"), "{text}");
+    let row = text
+        .lines()
+        .find(|line| line.contains("analog-value:2"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(row.contains("object-name: empty"), "{row}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let note = format!(
+        "Read 2 objects of device 1234 (Lab device 1234) at {target}; 1 with a problem listed."
+    );
+    assert!(stderr.contains(&note), "{stderr}");
+    relay.abort();
+    server.stop().await.unwrap();
+}

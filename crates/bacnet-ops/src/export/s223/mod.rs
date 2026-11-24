@@ -167,10 +167,12 @@ impl Model {
     /// with other than one label per state, a Real that isn't finite,
     /// Min_Pres_Value above Max_Pres_Value, a multi-state relinquish
     /// default that names no state, or a Polarity other than NORMAL and
-    /// REVERSE. The builder stops at the first refusal. The inventory's
-    /// records name each such setting among their problems
-    /// ([`PointRecord::problems`]); a setting the device gave as a value of
-    /// another datatype is a problem there and absent here.
+    /// REVERSE. The builder stops at the first refusal. Each record names
+    /// among its problems ([`PointRecord::problems`]) every refusal the
+    /// builder can give its one point; a name or identifier another point
+    /// also has is found only by the builder, across the list. A setting
+    /// the device gave as a value of another datatype is a problem there
+    /// and absent here.
     pub fn point_list(&self) -> PointList {
         PointList::new(self.device.clone(), self.points().cloned().collect())
     }

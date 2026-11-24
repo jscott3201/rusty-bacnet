@@ -11,11 +11,169 @@ use bacnet_types::primitives::PropertyValue;
 
 use super::tests::oid;
 use super::*;
+use crate::format::RawRow;
 use crate::inventory::test_lab::{
-    Answer, Answering, Faults, LAB, lab_device, refusing_rpm, serve, stop, text,
+    Answer, Answering, Faults, LAB, lab_device, refusing_rpm, row, serve, stop, text,
 };
 
 use PropertyIdentifier as P;
+use PropertyValue as V;
+
+/// The rows a point of `object_type` needs, `extra` first (the first row
+/// of a property counts, so `extra` can replace one), and a Priority_Array
+/// when `commanded`.
+fn rows(object_type: ObjectType, commanded: bool, extra: Vec<RawRow>) -> Vec<RawRow> {
+    let mut rows = extra;
+    rows.push(row(P::OBJECT_NAME, text("point")));
+    if matches!(
+        family_of(object_type),
+        Some(Family::Analog | Family::Integer)
+    ) {
+        rows.push(row(P::UNITS, V::Enumerated(62)));
+    }
+    if family_of(object_type) == Some(Family::MultiState) {
+        rows.push(row(P::NUMBER_OF_STATES, V::Unsigned(3)));
+    }
+    if commanded {
+        rows.push(row(P::PRIORITY_ARRAY, V::Null));
+    }
+    rows
+}
+
+/// The families the sweep covers, by type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Family {
+    Analog,
+    Binary,
+    MultiState,
+    Integer,
+}
+
+fn family_of(object_type: ObjectType) -> Option<Family> {
+    type O = ObjectType;
+    Some(match object_type {
+        O::ANALOG_INPUT | O::ANALOG_OUTPUT | O::ANALOG_VALUE => Family::Analog,
+        O::BINARY_INPUT | O::BINARY_OUTPUT | O::BINARY_VALUE => Family::Binary,
+        O::MULTI_STATE_INPUT | O::MULTI_STATE_OUTPUT | O::MULTI_STATE_VALUE => Family::MultiState,
+        O::INTEGER_VALUE => Family::Integer,
+        _ => return None,
+    })
+}
+
+/// One fault, or none, in each setting and each property a point list
+/// builder judges, on each of the ten types, a value commanded and not:
+/// the record names a problem exactly when `build_object` refuses the
+/// point made from it, and names the property the builder does. Non-finite
+/// Reals of both signs, -0.0, the ends of the ranges and their neighbours
+/// are among them.
+#[test]
+fn the_records_refusals_are_the_builders() {
+    let reals = [
+        0.0,
+        -0.0,
+        0.5,
+        -0.5,
+        1e30,
+        -1e30,
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    let pairs = [(1.0, 1.0), (2.0, 1.0), (1.0, 2.0), (-0.0, 0.0), (0.0, -0.0)];
+    let mut cases: Vec<(ObjectType, Vec<RawRow>)> = Vec::new();
+    for object_type in EXPORTED_TYPES {
+        let family = family_of(object_type).unwrap();
+        let mut faults: Vec<Vec<RawRow>> = vec![Vec::new(), vec![row(P::OBJECT_NAME, text(""))]];
+        match family {
+            Family::Analog => {
+                for x in reals {
+                    for property in [
+                        P::COV_INCREMENT,
+                        P::MIN_PRES_VALUE,
+                        P::MAX_PRES_VALUE,
+                        P::RELINQUISH_DEFAULT,
+                    ] {
+                        faults.push(vec![row(property, V::Real(x))]);
+                    }
+                }
+                for (min, max) in pairs {
+                    faults.push(vec![
+                        row(P::MIN_PRES_VALUE, V::Real(min)),
+                        row(P::MAX_PRES_VALUE, V::Real(max)),
+                    ]);
+                }
+            }
+            Family::Binary => {
+                for state in [0, 1, 2, 7] {
+                    faults.push(vec![row(P::RELINQUISH_DEFAULT, V::Enumerated(state))]);
+                    faults.push(vec![row(P::POLARITY, V::Enumerated(state))]);
+                }
+            }
+            Family::MultiState => {
+                for states in [0, 1, 3, 1024, 1025] {
+                    faults.push(vec![row(P::NUMBER_OF_STATES, V::Unsigned(states))]);
+                }
+                for labels in 0..=4 {
+                    let texts = (0..labels).map(|n| text(&format!("s{n}"))).collect();
+                    faults.push(vec![row(P::STATE_TEXT, V::List(texts))]);
+                }
+                for state in [0, 1, 3, 4] {
+                    faults.push(vec![row(P::RELINQUISH_DEFAULT, V::Unsigned(state))]);
+                }
+            }
+            Family::Integer => {
+                for increment in [0, u64::MAX] {
+                    faults.push(vec![row(P::COV_INCREMENT, V::Unsigned(increment))]);
+                }
+                for (min, max) in [(1, 1), (2, 1), (i32::MIN, i32::MAX), (i32::MAX, i32::MIN)] {
+                    faults.push(vec![
+                        row(P::MIN_PRES_VALUE, V::Signed(min)),
+                        row(P::MAX_PRES_VALUE, V::Signed(max)),
+                    ]);
+                }
+                for default in [-7, i32::MIN] {
+                    faults.push(vec![row(P::RELINQUISH_DEFAULT, V::Signed(default))]);
+                }
+            }
+        }
+        if matches!(family, Family::Analog | Family::Integer) {
+            for units in [0, 65_535, 65_536, u32::MAX] {
+                faults.push(vec![row(P::UNITS, V::Enumerated(units))]);
+            }
+        }
+        for extra in faults {
+            for commanded in [false, true] {
+                cases.push((object_type, rows(object_type, commanded, extra.clone())));
+            }
+        }
+    }
+    let at = crate::DeviceAddress::local(&[2]).unwrap();
+    let (mut refused, mut built) = (0, 0);
+    for (object_type, rows) in cases {
+        let record = crate::inventory::record_of(&at, LAB, oid(object_type, 1), rows);
+        let point = record.to_point().unwrap_or_else(|| panic!("{record:?}"));
+        let named: Vec<P> = record
+            .problems
+            .iter()
+            .map(|problem| problem.property)
+            .collect();
+        match build_object(point) {
+            Ok(_) => {
+                built += 1;
+                assert!(named.is_empty(), "the builder took it: {record:?}");
+            }
+            Err(error) => {
+                refused += 1;
+                let property = error.property.unwrap_or_else(|| panic!("{error:?}"));
+                assert!(named.contains(&property), "{error:?}: {record:?}");
+            }
+        }
+    }
+    assert!(
+        refused > 100 && built > 100,
+        "{refused} refused, {built} built"
+    );
+}
 
 fn identity() -> DeviceIdentity {
     DeviceIdentity::new(LAB, 42).unwrap()

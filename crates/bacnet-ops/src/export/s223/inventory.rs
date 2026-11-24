@@ -17,7 +17,7 @@
 //! said of it. An optional setting the record lacks is `None`: one the
 //! device didn't give, or gave as a value of another datatype than the
 //! property's, which the record lists among its problems (#2765); and a
-//! Binary Value's Polarity, as that type has none. A setting the record
+//! Binary Value's Polarity, as that type has none. A value the record
 //! holds is the point's as the device gave it, one the builder would
 //! refuse included, which the record lists among its problems too.
 //!

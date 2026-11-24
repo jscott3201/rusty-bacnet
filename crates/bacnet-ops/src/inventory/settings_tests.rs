@@ -166,9 +166,10 @@ fn said(record: &PointRecord, property: P) -> Option<String> {
 /// Every setting the plan reads, of every type the standard defines up to
 /// Color Temperature: one of its datatype is kept with no problem, one of
 /// another (a value of an unrelated type or of the nearest one, two
-/// values, octets that don't decode) is a problem naming the datatype and
-/// the field stays empty. A type this release doesn't know reads
-/// Relinquish_Default and takes any value there.
+/// values) is a problem naming the datatype and what came back, and
+/// octets that don't decode are a problem saying so; the field stays
+/// empty. A type this release doesn't know reads Relinquish_Default and
+/// takes any value there.
 #[test]
 fn a_setting_of_another_datatype_is_a_problem() {
     let mut judged = 0;
@@ -190,13 +191,20 @@ fn a_setting_of_another_datatype_is_a_problem() {
             let broken = (property, Ok(vec![0x44, 0x3F]));
             let other = row(property, other_than(name));
             let nearest = row(property, near(name));
-            for wrong in [other, nearest, twice, broken] {
+            let mistyped = format!("not {name} (got ");
+            let several = format!("not {name} (got several values, ");
+            let cases = [
+                (other, mistyped.as_str()),
+                (nearest, &mistyped),
+                (twice, &several),
+                (broken, "can't be decoded"),
+            ];
+            for (wrong, expected) in cases {
                 let read = of(object_type, vec![wrong]);
-                let expected = format!("not {name}");
-                assert_eq!(
-                    said(&read, property),
-                    Some(expected),
-                    "{object_type} {property}"
+                let said = said(&read, property).unwrap_or_default();
+                assert!(
+                    said.starts_with(expected),
+                    "{object_type} {property}: {said}"
                 );
                 assert!(field(&read, property).is_none(), "{object_type} {property}");
             }
@@ -212,15 +220,127 @@ fn a_setting_of_another_datatype_is_a_problem() {
     assert!(read.problems.is_empty() && read.relinquish_default.is_some());
 }
 
-/// A setting a point list builder would refuse is kept as the device gave
-/// it, with a problem that says why: an analog Real that isn't finite, a
-/// negative COV_Increment, Min_Pres_Value above Max_Pres_Value, a binary
-/// state or Polarity past 1, a multi-state relinquish default that names
-/// no state. The types a point list doesn't hold aren't judged so.
+/// A problem says what came back: its datatype and its text, device text
+/// cleaned as a name is; NULL as NULL. A character string in a character
+/// set this stack doesn't convert can't be decoded, which isn't a wrong
+/// datatype: the problem names the set.
 #[test]
-fn a_setting_a_point_list_would_refuse_is_kept_and_named() {
+fn a_problem_says_what_came_back() {
+    let cases: Vec<(ObjectType, RawRow, &str)> = vec![
+        (
+            ObjectType::ANALOG_VALUE,
+            row(P::RELINQUISH_DEFAULT, V::Unsigned(5)),
+            "not a Real (got an Unsigned, 5)",
+        ),
+        (
+            ObjectType::ANALOG_OUTPUT,
+            row(P::RELINQUISH_DEFAULT, text("auto\u{7}")),
+            "not a Real (got a character string, \"auto \")",
+        ),
+        (
+            ObjectType::BINARY_OUTPUT,
+            row(P::RELINQUISH_DEFAULT, V::Null),
+            "not an Enumerated (got NULL)",
+        ),
+        (
+            ObjectType::INTEGER_VALUE,
+            row(P::COV_INCREMENT, V::Real(0.5)),
+            "not an Unsigned (got a Real, 0.5)",
+        ),
+        (
+            ObjectType::ANALOG_INPUT,
+            (P::COV_INCREMENT, Ok(Vec::new())),
+            "not a Real (got no value)",
+        ),
+        (
+            ObjectType::CHARACTERSTRING_VALUE,
+            (P::RELINQUISH_DEFAULT, Ok(vec![0x73, 0x02, 0x30, 0x30])),
+            "can't be decoded: a character string in JIS X 0208",
+        ),
+        (
+            ObjectType::CHARACTERSTRING_VALUE,
+            (P::RELINQUISH_DEFAULT, Ok(vec![0x73, 0x01, 0x00, 0x41])),
+            "can't be decoded: a character string in IBM/Microsoft DBCS",
+        ),
+        (
+            ObjectType::ANALOG_VALUE,
+            (
+                P::RELINQUISH_DEFAULT,
+                Ok(vec![0x75, 0x05, 0x03, 0, 0, 0, 0x41]),
+            ),
+            "can't be decoded: a character string in UCS-4",
+        ),
+        (
+            ObjectType::ANALOG_VALUE,
+            (P::RELINQUISH_DEFAULT, Ok(vec![0x44, 0x3F])),
+            "can't be decoded",
+        ),
+    ];
+    for (object_type, wrong, expected) in cases {
+        let property = wrong.0;
+        let read = of(object_type, vec![wrong]);
+        assert_eq!(said(&read, property).as_deref(), Some(expected), "{read:?}");
+        assert!(field(&read, property).is_none());
+    }
+}
+
+/// The ops crate keeps the builder's largest state count as its own
+/// constant; it must be the builder's.
+#[test]
+fn the_state_cap_is_the_builders() {
+    assert_eq!(
+        super::settings::MAX_STATES,
+        bacnet_objects::multistate::MAX_NUMBER_OF_STATES
+    );
+}
+
+/// A value a point list builder would refuse is kept as the device gave
+/// it, with a problem that says why: an empty name, Units past 65535, a
+/// state count out of range or State_Text that doesn't match it, an analog
+/// Real that isn't finite, a negative COV_Increment, Min_Pres_Value above
+/// Max_Pres_Value, a binary state or Polarity past 1, a multi-state
+/// relinquish default that names no state. A relinquish default counts
+/// only where the point holds one: on an output, or a value with a
+/// Priority_Array. The types a point list doesn't hold aren't judged so.
+#[test]
+fn a_value_a_point_list_would_refuse_is_kept_and_named() {
     let real = |property, value| row(property, V::Real(value));
+    let commanded = || row(P::PRIORITY_ARRAY, V::Null);
+    let three = || row(P::NUMBER_OF_STATES, V::Unsigned(3));
     let cases: Vec<(ObjectType, Vec<RawRow>, P, &str)> = vec![
+        (
+            ObjectType::ANALOG_INPUT,
+            vec![row(P::OBJECT_NAME, text(""))],
+            P::OBJECT_NAME,
+            "empty",
+        ),
+        (
+            ObjectType::INTEGER_VALUE,
+            vec![row(P::UNITS, V::Enumerated(65_536))],
+            P::UNITS,
+            "65536 is above 65535",
+        ),
+        (
+            ObjectType::MULTI_STATE_INPUT,
+            vec![row(P::NUMBER_OF_STATES, V::Unsigned(0))],
+            P::NUMBER_OF_STATES,
+            "outside 1 to 1024",
+        ),
+        (
+            ObjectType::MULTI_STATE_OUTPUT,
+            vec![row(P::NUMBER_OF_STATES, V::Unsigned(1025))],
+            P::NUMBER_OF_STATES,
+            "outside 1 to 1024",
+        ),
+        (
+            ObjectType::MULTI_STATE_VALUE,
+            vec![
+                three(),
+                row(P::STATE_TEXT, V::List(vec![text("Off"), text("On")])),
+            ],
+            P::STATE_TEXT,
+            "2 labels for 3 states",
+        ),
         (
             ObjectType::ANALOG_OUTPUT,
             vec![real(P::RELINQUISH_DEFAULT, f32::NAN)],
@@ -290,41 +410,125 @@ fn a_setting_a_point_list_would_refuse_is_kept_and_named() {
         (
             ObjectType::MULTI_STATE_VALUE,
             vec![
+                commanded(),
                 row(P::RELINQUISH_DEFAULT, V::Unsigned(4)),
-                row(P::NUMBER_OF_STATES, V::Unsigned(3)),
+                three(),
             ],
             P::RELINQUISH_DEFAULT,
             "not one of the states 1 to 3",
         ),
         (
             ObjectType::MULTI_STATE_VALUE,
-            vec![row(P::RELINQUISH_DEFAULT, V::Unsigned(0))],
+            vec![commanded(), row(P::RELINQUISH_DEFAULT, V::Unsigned(0))],
             P::RELINQUISH_DEFAULT,
             "not a state; states start at 1",
+        ),
+        (
+            ObjectType::BINARY_VALUE,
+            vec![commanded(), row(P::RELINQUISH_DEFAULT, V::Enumerated(5))],
+            P::RELINQUISH_DEFAULT,
+            "neither inactive nor active",
+        ),
+        (
+            ObjectType::ANALOG_VALUE,
+            vec![commanded(), real(P::RELINQUISH_DEFAULT, f32::INFINITY)],
+            P::RELINQUISH_DEFAULT,
+            "not a finite number",
         ),
     ];
     for (object_type, rows, property, why) in cases {
         let read = of(object_type, rows);
         assert_eq!(read.problems.len(), 1, "{object_type}: {read:?}");
         assert_eq!(said(&read, property).as_deref(), Some(why), "{object_type}");
-        assert!(field(&read, property).is_some(), "kept: {read:?}");
+        let kept = match property {
+            P::OBJECT_NAME => read.name.is_some(),
+            P::UNITS => read.units.is_some(),
+            P::NUMBER_OF_STATES => read.number_of_states.is_some(),
+            P::STATE_TEXT => !read.state_texts.states.is_empty(),
+            setting => field(&read, setting).is_some(),
+        };
+        assert!(kept, "kept: {read:?}");
     }
 
     // Within range, nothing.
+    let wild = Date {
+        year: 0xFF,
+        month: 0xFF,
+        day: 0xFF,
+        day_of_week: 0xFF,
+    };
+    let any_time = Time {
+        hour: 0xFF,
+        minute: 0xFF,
+        second: 0xFF,
+        hundredths: 0xFF,
+    };
     let fine: Vec<(ObjectType, Vec<RawRow>)> = vec![
         (
             ObjectType::ANALOG_VALUE,
             vec![
+                commanded(),
                 real(P::COV_INCREMENT, 0.0),
                 real(P::MIN_PRES_VALUE, 5.0),
                 real(P::MAX_PRES_VALUE, 5.0),
                 real(P::RELINQUISH_DEFAULT, -40.0),
+                row(P::UNITS, V::Enumerated(65_535)),
             ],
         ),
         (
             ObjectType::BINARY_VALUE,
-            vec![row(P::RELINQUISH_DEFAULT, V::Enumerated(1))],
+            vec![commanded(), row(P::RELINQUISH_DEFAULT, V::Enumerated(1))],
         ),
+        // A value without a Priority_Array: the export leaves its
+        // relinquish default out, so the builder never sees it.
+        (
+            ObjectType::ANALOG_VALUE,
+            vec![real(P::RELINQUISH_DEFAULT, f32::NAN)],
+        ),
+        (
+            ObjectType::BINARY_VALUE,
+            vec![row(P::RELINQUISH_DEFAULT, V::Enumerated(2))],
+        ),
+        (
+            ObjectType::MULTI_STATE_VALUE,
+            vec![three(), row(P::RELINQUISH_DEFAULT, V::Unsigned(4))],
+        ),
+        (
+            ObjectType::MULTI_STATE_INPUT,
+            vec![
+                three(),
+                row(
+                    P::STATE_TEXT,
+                    V::List(vec![text("a"), text("b"), text("c")]),
+                ),
+            ],
+        ),
+        (
+            ObjectType::MULTI_STATE_INPUT,
+            vec![row(P::NUMBER_OF_STATES, V::Unsigned(1024))],
+        ),
+        // Their enumerations run past 1.
+        (
+            ObjectType::ACCESS_DOOR,
+            vec![row(P::RELINQUISH_DEFAULT, V::Enumerated(3))],
+        ),
+        (
+            ObjectType::BINARY_LIGHTING_OUTPUT,
+            vec![row(P::RELINQUISH_DEFAULT, V::Enumerated(4))],
+        ),
+        // Patterns with every field unspecified.
+        (
+            ObjectType::DATEPATTERN_VALUE,
+            vec![row(P::RELINQUISH_DEFAULT, V::Date(wild))],
+        ),
+        (
+            ObjectType::DATETIMEPATTERN_VALUE,
+            vec![row(
+                P::RELINQUISH_DEFAULT,
+                V::List(vec![V::Date(wild), V::Time(any_time)]),
+            )],
+        ),
+        (ObjectType::TREND_LOG, vec![row(P::OBJECT_NAME, text(""))]),
         (
             ObjectType::BINARY_OUTPUT,
             vec![row(P::POLARITY, V::Enumerated(1))],
@@ -392,8 +596,9 @@ fn problems_keep_the_order_asked() {
 }
 
 /// A State_Text entry that isn't a character string is a problem naming
-/// its state; the record holds it as an empty text, so the states after
-/// it keep their numbers. Octets that don't decode are a problem too.
+/// its state and what came back; the record holds it as an empty text, so
+/// the states after it keep their numbers. One that can't be decoded is a
+/// problem naming the character set, and leaves no state texts.
 #[test]
 fn a_state_text_entry_that_isnt_a_string_is_a_problem() {
     let entries = V::List(vec![text("Off"), V::Unsigned(5), text("High")]);
@@ -404,13 +609,24 @@ fn a_state_text_entry_that_isnt_a_string_is_a_problem() {
     assert_eq!(read.state_texts.states, ["Off", "", "High"]);
     assert_eq!(
         said(&read, P::STATE_TEXT).as_deref(),
-        Some("state 2 is not a character string")
+        Some("state 2 is not a character string (got an Unsigned, 5)")
+    );
+    let mut octets = row(P::STATE_TEXT, text("Off")).1.unwrap();
+    octets.extend([0x73, 0x02, 0x30, 0x30]);
+    let read = of(
+        ObjectType::MULTI_STATE_INPUT,
+        vec![(P::STATE_TEXT, Ok(octets))],
+    );
+    assert!(read.state_texts.states.is_empty(), "{read:?}");
+    assert_eq!(
+        said(&read, P::STATE_TEXT).as_deref(),
+        Some("state 2 can't be decoded: a character string in JIS X 0208")
     );
     let broken = (P::STATE_TEXT, Ok(vec![0x75, 0x05, 0x00]));
     let read = of(ObjectType::MULTI_STATE_INPUT, vec![broken]);
     assert_eq!(
         said(&read, P::STATE_TEXT).as_deref(),
-        Some("not an array of character strings")
+        Some("state 1 can't be decoded: a character string in UTF-8")
     );
     let texts = V::List(vec![text("Off"), text("")]);
     let read = of(
@@ -521,8 +737,8 @@ async fn a_device_giving_mistyped_settings_by_rpm_and_by_read_property() {
             assert_eq!(problems, asked(object_type), "{record:?}");
             for property in asked(object_type) {
                 let (name, _) = datatype(object_type, property).unwrap();
-                let expected = format!("not {name}");
-                assert_eq!(said(record, property), Some(expected), "{record:?}");
+                let said = said(record, property).unwrap_or_default();
+                assert!(said.starts_with(&format!("not {name} (got ")), "{said}");
                 assert!(field(record, property).is_none(), "{record:?}");
                 covered += 1;
             }

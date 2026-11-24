@@ -240,7 +240,8 @@ fn a_missing_required_property_skips_the_object() {
     let said = record(iv, &rows)
         .problem(P::MAX_PRES_VALUE)
         .map(ToString::to_string);
-    assert_eq!(said.as_deref(), Some("not a Signed"));
+    let said = said.unwrap_or_default();
+    assert!(said.starts_with("not a Signed (got a Real, 5"), "{said}");
     let msi = oid(ObjectType::MULTI_STATE_INPUT, 1);
     let states = [name(), row(P::NUMBER_OF_STATES, text("three"))];
     let states = entry_of(msi, &states);

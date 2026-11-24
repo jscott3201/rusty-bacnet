@@ -215,8 +215,8 @@ impl Problem {
 /// object's type has no such property, the object lacks an optional one,
 /// the options didn't ask for it, or its read failed, a value of another
 /// datatype than the property's included; only the last is listed in
-/// [`problems`](Self::problems). A setting a point list builder would
-/// refuse is kept as the device gave it and listed there too.
+/// [`problems`](Self::problems). A value a point list builder would refuse
+/// is kept as the device gave it and listed there too.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct PointRecord {
@@ -287,20 +287,26 @@ pub struct PointRecord {
     pub status_flags: Option<Value>,
     /// The properties asked for that gave no usable value, in the order
     /// asked: one the device refused, one whose value isn't of the
-    /// datatype the property has on the object's type (`not a Real`),
-    /// and each property of an object the device doesn't have or left out
-    /// of its answer. A State_Text entry that isn't a string is one too
-    /// (`state 2 is not a character string`), the entry held as an empty
-    /// text.
+    /// datatype the property has on the object's type, named with what
+    /// came back (`not a Real (got an Unsigned, 5)`), one whose octets
+    /// can't be decoded (`can't be decoded: a character string in JIS X
+    /// 0208`), and each property of an object the device doesn't have or
+    /// left out of its answer. A State_Text entry that isn't a string is
+    /// one too (`state 2 is not a character string (got an Unsigned,
+    /// 5)`), the entry held as an empty text.
     ///
-    /// So is a setting kept as the device gave it that a point list
-    /// builder (`bacnet_objects::points::build_database`) would refuse,
-    /// so the inventory says so before a rebuild does. On the types a
-    /// point list holds: an analog setting that isn't a finite number, a
-    /// negative COV_Increment, Min_Pres_Value above Max_Pres_Value, a
-    /// binary relinquish default or a Polarity past 1, and a multi-state
-    /// relinquish default that names no state (`not one of the states 1
-    /// to 3`).
+    /// So is a value kept as the device gave it that a point list builder
+    /// (`bacnet_objects::points::build_database`) would refuse, so the
+    /// inventory says so before a rebuild does: on the types a point list
+    /// holds, every refusal the builder can give the object's one point.
+    /// That is an empty Object_Name, Units past 65535, a state count
+    /// outside 1 to 1024 or State_Text with other than one label per
+    /// state, an analog setting that isn't a finite number, a negative
+    /// COV_Increment, Min_Pres_Value above Max_Pres_Value, a Polarity past
+    /// 1, and on a point that holds a relinquish default (an output, or a
+    /// value with a Priority_Array) a binary one past 1 or a multi-state
+    /// one that names no state (`not one of the states 1 to 3`). A name
+    /// another object also has is the builder's to find.
     ///
     /// An optional property the object simply lacks (the device says it
     /// is an unknown property) is not a problem.

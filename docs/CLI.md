@@ -1703,13 +1703,18 @@ included.
   have read and didn't is listed with the device's error under the object's
   problems and never fails the command; an object the device refuses is a
   row whose properties are all problems. A value of another datatype than
-  the property has on that object type is a problem too (`not a Real`) and
-  is left empty, as is a State_Text entry that isn't a string (`state 2 is
-  not a character string`). A setting a point list couldn't be built with
-  is shown as the device gave it and named under problems: an analog
-  setting that isn't a finite number, a negative COV increment, a minimum
-  above the maximum, a binary relinquish default or polarity past 1, or a
-  multi-state relinquish default that names no state.
+  the property has on that object type is a problem too, naming what came
+  back (`not a Real (got an Unsigned, 5)`), and is left empty; so is one
+  that can't be decoded, such as text in a character set this tool doesn't
+  convert. A State_Text entry that isn't a string is a problem the same
+  way, with or without `--settings`. A value a point list couldn't be
+  built with is shown as the device gave it and named under problems: an
+  empty name, units past 65535, a state count outside 1 to 1024 or state
+  texts that don't match it, an analog setting that isn't a finite number,
+  a negative COV increment, a minimum above the maximum, a polarity past
+  1, and where the object holds a relinquish default (an output, or a
+  value with a priority array) a binary one past 1 or a multi-state one
+  that names no state.
 - **What it costs.** The device summary, the Object_List, then one
   ReadPropertyMultiple for each batch, filled in Object_List order up to
   16 objects or 32 properties, whichever comes first: 10 analog inputs, 8

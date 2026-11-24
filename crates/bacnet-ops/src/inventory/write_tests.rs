@@ -69,6 +69,7 @@ fn sample() -> Inventory {
         row(P::OBJECT_NAME, text("Mode")),
         row(P::NUMBER_OF_STATES, PropertyValue::Unsigned(3)),
         row(P::STATE_TEXT, PropertyValue::List(states)),
+        row(P::PRIORITY_ARRAY, PropertyValue::Null),
         row(P::RELINQUISH_DEFAULT, PropertyValue::Unsigned(4)),
         row(P::PRESENT_VALUE, PropertyValue::Unsigned(2)),
     ];
@@ -254,7 +255,8 @@ fn the_json_holds_typed_fields() {
     let setpoint = &json["points"][3];
     let problem = serde_json::json!({"property": "units", "error": "PROPERTY:UNKNOWN_PROPERTY"});
     // A relinquish default of the wrong type is empty and named.
-    let mistyped = serde_json::json!({"property": "relinquish-default", "error": "not a Real"});
+    let error = "not a Real (got a character string, \"auto\")";
+    let mistyped = serde_json::json!({"property": "relinquish-default", "error": error});
     assert_eq!(setpoint["problems"], serde_json::json!([problem, mistyped]));
     assert!(setpoint["relinquish_default"].is_null());
     assert_eq!(setpoint["cov_increment"]["decoded"], 0.5);
@@ -304,7 +306,8 @@ fn the_csv_quotes_what_it_must() {
     assert_eq!(setpoint[9], "", "a relinquish default of the wrong type");
     assert_eq!(
         setpoint[16],
-        "units: PROPERTY:UNKNOWN_PROPERTY; relinquish-default: not a Real"
+        "units: PROPERTY:UNKNOWN_PROPERTY; relinquish-default: not a Real (got a character \
+         string, \"auto\")"
     );
     assert_eq!(rows[6][3..8], ["", "", "", "", ""], "nothing read: empty");
     assert_eq!((rows[8][13].as_str(), zone[13].as_str()), ("reverse", ""));
