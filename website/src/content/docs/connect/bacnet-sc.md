@@ -69,7 +69,7 @@ The [Python credential example](https://github.com/jscott3201/rusty-bacnet/blob/
 
 Rust builds an `ScNodeTlsConfig` from the same three PEM files with `ScNodeTlsConfig::from_pem_files(ca, cert, key)` (an error names the file at fault) and uses the transport's configured device identity. Raw `ScTransport::new(ws, vmac)` is initially unconfigured; set a valid UUID before start. Because the caller can dial `ws` first, transport validation cannot undo that earlier connection. A shared endpoint uses `ScEndpointBuilder` with a caller-dialed TLS WebSocket; see [shared endpoints](/rusty-bacnet/integrate/shared-endpoints/).
 
-Key memory: the Rust constructors clear the key file's text and every key they decode when they finish, on error paths too, and keep no key bytes in the configuration; it holds only the signing key that rustls and aws-lc-rs loaded from it. Not covered: the PEM decoder's own transient buffers, the one copy rustls makes while loading the key, bytes or text you passed to `from_pem` (clear your own buffer), and Python `str` or `bytes` objects, which the interpreter owns.
+Key memory: the Rust constructors clear the key file's text and every key they decode when they finish, on error paths too, and keep no copy of the key's PEM or DER in the configuration; it holds the parsed private key inside the TLS library, which clears that memory when the configuration drops. Not covered: the PEM decoder's own transient buffers, bytes or text you passed to `from_pem` (clear your own buffer), and Python `str` or `bytes` objects, which the interpreter owns.
 
 ## Know how idle links stay up
 

@@ -196,3 +196,64 @@ async fn hub_and_node_from_pem_files_connect_through_intermediates() {
         .expect("the PEM-built node connects to the PEM-built hub");
     hub.stop().await;
 }
+
+/// A key file that is well formed but belongs to another certificate is
+/// refused as a mismatch, for both configurations, as the in-memory
+/// constructors refuse it.
+#[test]
+fn a_key_file_that_does_not_match_the_certificate_is_refused() {
+    let site = Site::new();
+    let leaf = site.leaf();
+    let other = site.leaf();
+    let dir = Dir::new("mismatch");
+    let ca = dir.write("ca.pem", &site.root);
+    let chain = dir.write("node.pem", &leaf.chain);
+    let key = dir.write("other.key", &other.key.serialize_pem());
+    let error = ScNodeTlsConfig::from_pem_files(&ca, &chain, &key).unwrap_err();
+    assert!(matches!(error, ScTlsConfigError::KeyMismatch), "{error:?}");
+    let error = ScHubTlsConfig::from_pem_files(&ca, &chain, &key).unwrap_err();
+    assert!(matches!(error, ScTlsConfigError::KeyMismatch), "{error:?}");
+}
+
+/// A key read from a FIFO, whose length is unknown until it ends, loads for
+/// both configurations and the offline inspection (#2621: the reader grows
+/// its buffer by copying into a new clearing one).
+#[cfg(unix)]
+#[test]
+fn a_key_from_a_fifo_loads() {
+    use bacnet_transport::sc_tls::inspection::{ScKeyConsistency, inspect_sc_pem_files};
+    use std::io::Write;
+    let site = Site::new();
+    let leaf = site.leaf();
+    let dir = Dir::new("fifo");
+    let ca = dir.write("ca.pem", &site.root);
+    let chain = dir.write("node.pem", &leaf.chain);
+    let fifo = dir.0.join("node.key");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success(), "mkfifo failed");
+    let key = leaf.key.serialize_pem();
+    // One writer per read: each opens the FIFO, writes the key in pieces
+    // and closes it, which ends the reader's input.
+    let feed = || {
+        let (fifo, key) = (fifo.clone(), key.clone());
+        std::thread::spawn(move || {
+            let mut writer = std::fs::OpenOptions::new().write(true).open(fifo).unwrap();
+            for piece in key.as_bytes().chunks(64) {
+                writer.write_all(piece).unwrap();
+            }
+        })
+    };
+    let writer = feed();
+    ScNodeTlsConfig::from_pem_files(&ca, &chain, &fifo).unwrap();
+    writer.join().unwrap();
+    let writer = feed();
+    ScHubTlsConfig::from_pem_files(&ca, &chain, &fifo).unwrap();
+    writer.join().unwrap();
+    let writer = feed();
+    let report = inspect_sc_pem_files(&chain, None, Some(&fifo), Some(0)).unwrap();
+    writer.join().unwrap();
+    assert_eq!(report.key_consistency, ScKeyConsistency::Match);
+}

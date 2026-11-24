@@ -22,7 +22,6 @@ use rustls::{
 };
 use std::{
     fs::File,
-    io::Read,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -171,13 +170,10 @@ fn read(
     if metadata.len() > *remaining as u64 {
         return Err(input(role, None, ScInputErrorKind::InputTooLarge));
     }
-    // Cleared on drop (the key file's text, #2621), and sized from the
-    // file's length so a regular file is read without the buffer growing.
+    // Cleared on drop and never regrown in place (the key file's text,
+    // #2621); see `material::read_limited`.
     let hint = usize::try_from(metadata.len()).unwrap_or(0);
-    let mut bytes = Zeroizing::new(Vec::with_capacity(hint.saturating_add(1)));
-    file.take(*remaining as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(io)?;
+    let bytes = material::read_limited(file, hint, *remaining).map_err(io)?;
     if bytes.len() > *remaining {
         return Err(input(role, None, ScInputErrorKind::InputTooLarge));
     }
@@ -328,12 +324,19 @@ fn direct_issuer(
     };
     (verdict, None)
 }
+/// The key against the leaf, by the two public steps of rustls's
+/// `CertifiedKey::from_der` (checked against rustls 0.23.46): the key
+/// provider's loader, then `CertifiedKey::keys_match`. `from_der`, which
+/// the TLS configurations call, accepts a key that can't name its public
+/// key as if it matched; this advisory report keeps that apart as
+/// [`ScKeyConsistency::Unknown`], so it can't call `from_der` itself. A
+/// test pins the other verdicts to `from_der`'s.
 fn compare_key(
     certs: Vec<CertificateDer<'static>>,
     key: &PrivateKeyDer<'static>,
 ) -> ScKeyConsistency {
     let provider = rustls::crypto::aws_lc_rs::default_provider();
-    // The loader drops its copy without clearing; the caller's is cleared.
+    // The loader clears the copy it is handed; the caller clears its own.
     let Ok(key) = provider.key_provider.load_private_key(key.clone_key()) else {
         return ScKeyConsistency::Unusable;
     };

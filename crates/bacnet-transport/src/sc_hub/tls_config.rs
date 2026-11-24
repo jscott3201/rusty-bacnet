@@ -3,7 +3,6 @@
 use std::{fmt, path::Path, sync::Arc};
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::sign::SingleCertAndKey;
 use tokio_rustls::TlsAcceptor;
 
 use crate::sc_tls::ScTlsConfigError;
@@ -110,8 +109,9 @@ impl ScHubTlsConfig {
     /// certificate usable, and the key must load and belong to the leaf;
     /// [`ScTlsConfigError`] names the input that fails and why. No
     /// ambient/system trust is loaded. [`Self::from_pem`] and
-    /// [`Self::from_pem_files`] take PEM. The `key` is cleared when this
-    /// returns, on every path.
+    /// [`Self::from_pem_files`] take PEM. An owned `key` is cleared when
+    /// this returns, on every path (a `PrivateKeyDer` that borrows static
+    /// bytes cannot be).
     pub fn from_der(
         ca_certs: Vec<CertificateDer<'static>>,
         cert_chain: Vec<CertificateDer<'static>>,
@@ -146,8 +146,8 @@ impl ScHubTlsConfig {
     ///
     /// As [`ScNodeTlsConfig::from_pem_files`]: the key file's text and
     /// every decoded key are cleared on return, and the configuration keeps
-    /// no key bytes. The decoder's transient buffers and rustls's one
-    /// loading copy are not cleared.
+    /// no copy of the key's PEM or DER. The PEM decoder's transient
+    /// buffers are not cleared.
     ///
     /// [`ScNodeTlsConfig::from_pem_files`]: crate::sc_tls::ScNodeTlsConfig::from_pem_files
     pub fn from_pem_files(
@@ -165,7 +165,8 @@ impl ScHubTlsConfig {
     fn build(material: Material) -> Result<Self, ScTlsConfigError> {
         let Material {
             roots,
-            identity,
+            chain,
+            key,
             provider,
         } = material;
         let verifier =
@@ -176,7 +177,8 @@ impl ScHubTlsConfig {
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(refused)?
             .with_client_cert_verifier(verifier)
-            .with_cert_resolver(Arc::new(SingleCertAndKey::from(identity)));
+            .with_single_cert(chain, key.clone_key())
+            .map_err(refused)?;
         Ok(Self {
             inner: Arc::new(config),
             certificate_bindings: None,

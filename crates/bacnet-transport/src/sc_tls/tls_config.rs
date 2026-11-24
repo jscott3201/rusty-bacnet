@@ -3,7 +3,6 @@
 use std::{fmt, path::Path, sync::Arc};
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::sign::SingleCertAndKey;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 use super::ScTlsConfigError;
@@ -81,8 +80,9 @@ impl ScNodeTlsConfig {
     /// fails and why. No ambient trust, filesystem access, or networking is
     /// used. [`Self::from_pem`] and [`Self::from_pem_files`] take PEM.
     ///
-    /// The `key` is cleared when this returns, on every path; rustls's
-    /// loading copy is not (see [`Self::from_pem_files`], "Key memory").
+    /// An owned `key` is cleared when this returns, on every path (a
+    /// `PrivateKeyDer` that borrows static bytes cannot be). See
+    /// [`Self::from_pem_files`], "Key memory".
     pub fn from_der(
         ca_certs: Vec<CertificateDer<'static>>,
         cert_chain: Vec<CertificateDer<'static>>,
@@ -124,12 +124,14 @@ impl ScNodeTlsConfig {
     /// # Key memory
     ///
     /// The key file's text and every key decoded from it are cleared when
-    /// this returns, error paths included, and the configuration keeps no
-    /// key bytes: it holds only the signing key that rustls and aws-lc-rs
-    /// loaded. Not cleared: the PEM decoder's own transient buffers, and
-    /// the one copy rustls makes while loading the key. A key given as PEM
-    /// bytes or DER is also held by the caller, who must clear their own
-    /// copy (`zeroize`); this call clears the DER it takes by value.
+    /// this returns, error paths included; rustls's key loader clears each
+    /// copy it is handed. The configuration keeps no copy of the key's PEM
+    /// or DER: it holds the parsed private key inside the TLS library,
+    /// whose memory aws-lc clears when the configuration drops. Not
+    /// cleared: the PEM decoder's transient buffers, which hold the key's
+    /// base64 text while it decodes. A key given as PEM bytes or DER is
+    /// also held by the caller, who must clear their own copy (`zeroize`);
+    /// this call clears an owned DER key it takes.
     ///
     /// ```no_run
     /// use bacnet_transport::sc_tls::{ScNodeTlsConfig, ScTlsConfigError};
@@ -152,7 +154,8 @@ impl ScNodeTlsConfig {
     fn build(material: Material) -> Result<Self, ScTlsConfigError> {
         let Material {
             roots,
-            identity,
+            chain,
+            key,
             provider,
         } = material;
         // Same WebPKI policy as with_root_certificates, including its no-CRL
@@ -171,7 +174,8 @@ impl ScNodeTlsConfig {
             .with_custom_certificate_verifier(Arc::new(super::attempt_capture::ObservingVerifier(
                 verifier,
             )))
-            .with_client_cert_resolver(Arc::new(SingleCertAndKey::from(Arc::clone(&identity))));
+            .with_client_auth_cert(chain.clone(), key.clone_key())
+            .map_err(refused)?;
         // Server role for the opt-in direct listener: the same explicit CA
         // trust becomes the mandatory client verifier, the same node chain
         // and key become the server identity, and TLS 1.3-only stays fixed.
@@ -187,7 +191,8 @@ impl ScNodeTlsConfig {
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(refused)?
             .with_client_cert_verifier(verifier)
-            .with_cert_resolver(Arc::new(SingleCertAndKey::from(identity)));
+            .with_single_cert(chain, key.clone_key())
+            .map_err(refused)?;
         Ok(Self {
             inner: Arc::new(config),
             server_inner: Arc::new(server_config),
