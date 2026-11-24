@@ -55,6 +55,8 @@ async fn a_write_dropped_while_its_task_waits_changes_nothing_on_threads() {
     let mut node = node().await;
     let av = oid(ObjectType::ANALOG_VALUE, 1);
     let before = node.value(av, PropertyIdentifier::PRESENT_VALUE).await;
+    // The read may have waited in a task of its own, still in the set.
+    node.settled().await;
     let held = hold(&node).await;
     let mut parked: Call<'_, _> = Box::pin(node.server.write_local(
         &av,

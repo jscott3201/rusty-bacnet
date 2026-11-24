@@ -275,6 +275,24 @@ impl Node {
         self.server.request_tasks.reap_finished();
         assert_eq!(self.server.request_tasks.len(), 0, "every task ended");
     }
+
+    /// Return once the server's request task set is empty, its finished
+    /// tasks joined: an earlier local call may have waited in a task of its
+    /// own, which can still be in the set, or about to end, as its caller
+    /// goes on. A test that counts tasks starts from here.
+    async fn settled(&self) {
+        let tasks = &self.server.request_tasks;
+        tokio::time::timeout(STUCK, async {
+            while {
+                tasks.reap_finished();
+                !tasks.is_empty()
+            } {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("a request task never ended");
+    }
 }
 
 /// The database's write guard, as the application holds it.
@@ -504,6 +522,7 @@ async fn a_write_dropped_while_its_task_waits_changes_nothing() {
     let mut node = node().await;
     let av = oid(ObjectType::ANALOG_VALUE, 1);
     let before = node.value(av, PropertyIdentifier::PRESENT_VALUE).await;
+    node.settled().await;
     let held = hold(&node).await;
     let mut parked: Call<'_, _> = Box::pin(node.server.write_local(
         &av,
@@ -588,6 +607,7 @@ async fn a_burst_of_parked_calls_is_bounded() {
     const CALLS: u16 = 32;
     let mut node = node().await;
     let av = oid(ObjectType::ANALOG_VALUE, 1);
+    node.settled().await;
     let held = hold(&node).await;
     let server = &node.server;
     let mut parked: Vec<Call<'_, _>> = (0..CALLS)
