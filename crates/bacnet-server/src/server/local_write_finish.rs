@@ -153,6 +153,7 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
                 written,
                 table,
                 &mut transition,
+                &[],
             );
             Box::pin(pass).await
         } else {
