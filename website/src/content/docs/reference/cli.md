@@ -95,8 +95,8 @@ These options go before or after the command, except `--routed-path-limit`, `--n
 - `--mstp-max-info-frames <N>`: Frames this station sends per token (Max\_Info\_Frames), 1 to 255. Default: `1`. Needs the `serial` feature.
 - `--mstp-rt-priority <N>`: Run this station's MS/TP token handling under SCHED\_FIFO at this priority, 1 to 99 (Linux only). Needs CAP\_SYS\_NICE or an RLIMIT\_RTPRIO of at least N; joining fails if it can't be applied. Needs the `serial` feature.
 - `--mstp-cpus <CPUS>`: Pin this station's MS/TP token handling to these CPUs, such as 2 or 2,3 (Linux only); joining fails if the process may not use them. Needs the `serial` feature.
-- `--format <FORMAT>`: Output format (table, json; csv too for inventory).
-- `--json`: JSON output shorthand.
+- `--format <FORMAT>`: Output format: table or json, and csv for inventory alone; without it, a table at a terminal and JSON otherwise. A format the command doesn't print is refused. One of `table`, `json`, `csv`.
+- `--json`: JSON output shorthand; it outranks --format.
 - `-v, --verbose`: Verbosity (-v, -vv, -vvv). Repeat it for more.
 - `--no-tui`: With no command, print the usage instead of opening the terminal UI (as does BACNET\_NO\_TUI set to anything but "" or "0").
 - `-h, --help`: Print help.
@@ -311,7 +311,7 @@ Usage: bacnet export [OPTIONS] <COMMAND>
 
 EXPERIMENTAL: the device's analog, binary and multi-state objects and integer values as a proposed ASHRAE Standard 223 point list, in Turtle.
 
-One 223 property per object, each with a BACnet external reference (device, object, name, property), QUDT units where they map, and the states of multi-state objects. A point list only: no equipment, connections or sensors. The 223 draft and this output can change between releases. Reads the device summary, its object list, then the exported objects a few a request; a target given by address costs one more, a read of its Device object to learn the instance. Stdout carries only the Turtle; a summary goes to stderr. --format and --json don't apply.
+One 223 property per object, each with a BACnet external reference (device, object, name, property), QUDT units where they map, and the states of multi-state objects. A point list only: no equipment, connections or sensors. The 223 draft and this output can change between releases. Reads the device summary, its object list, then the exported objects a few a request; a target given by address costs one more, a read of its Device object to learn the instance. Stdout carries only the Turtle; a summary goes to stderr. --format and --json are refused.
 
 ```text
 Usage: bacnet export 223-experimental [OPTIONS] <TARGET>
@@ -348,7 +348,7 @@ Options:
 - `--values`: Also read each object's Present\_Value, Status\_Flags, Event\_State and Reliability, and the priority in control of a commandable one: four more properties an object (five on an output), so a request holds 3 to 5 objects.
 - `--settings`: Also read each object's COV\_Increment, Min\_Pres\_Value, Max\_Pres\_Value, Relinquish\_Default and Polarity, where it has them.
 - `--details`: Also read each object's Device\_Type and Profile\_Name, where it has them: two more properties an object.
-- `--csv-exact`: With --format csv: write device text exactly. Without it, a name, description, device type, profile name, state text or string value that starts with =, +, -, @, a tab or a carriage return gets an apostrophe before it, so a spreadsheet doesn't run it as a formula.
+- `--csv-exact`: Write device text exactly in the CSV; needs --format csv. Without it, a name, description, device type, profile name, state text or string value that starts with =, +, -, @, a tab or a carriage return gets an apostrophe before it, so a spreadsheet doesn't run it as a formula.
 
 ### bacnet readm
 
