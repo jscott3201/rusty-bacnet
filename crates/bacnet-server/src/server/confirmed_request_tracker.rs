@@ -182,6 +182,8 @@ impl PendingConfirmedRequest {
 impl ConfirmedRequestTracker {
     /// End pending entry `id` now, ahead of its owner. The owner's drop
     /// then finds nothing to end: `begin` never gives an id twice.
+    /// `#[inline]`: every confirmed request's guard ends its entry here.
+    #[inline]
     pub(super) fn end(&self, id: u64) {
         self.state
             .lock()

@@ -17,10 +17,10 @@
 //! loop takes its final acknowledgment, before the next frame); a
 //! requester's Abort for the invoke ID ends the note sooner. After that a
 //! repeat finds no transfer and draws the Abort it always did. A request
-//! the tracker doesn't follow (past its entry cap, or
-//! a LifeSafetyOperation, which has its own replay) gets no note. Only the
-//! segment branch and a requester's Abort touch the notes, so a request that
-//! isn't segmented pays nothing for them.
+//! the tracker doesn't follow (past its entry cap, or a LifeSafetyOperation,
+//! which has its own replay) gets no note. Only the segment branch and a
+//! requester's Abort touch the notes, so a request that isn't segmented
+//! pays nothing for them.
 
 use super::*;
 use bacnet_network::response_route::ResponseRoute;

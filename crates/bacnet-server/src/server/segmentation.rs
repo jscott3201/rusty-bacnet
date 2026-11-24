@@ -19,6 +19,37 @@ pub(super) struct ComplexAckParams {
     pub(super) client_max_segments: Option<u8>,
 }
 
+/// Whether a requester's Abort, or a newer answer under the same requester
+/// and invoke ID, has closed this send; logs which.
+fn send_closed(
+    handle: &SegmentedSendHandle,
+    control_rx: &mut watch::Receiver<Option<SegmentedSendControlEvent>>,
+    registry: &segmented_send::SegmentedSendRegistry,
+    invoke_id: u8,
+) -> bool {
+    if !handle.closed.load(Ordering::Acquire) {
+        return false;
+    }
+    match control_rx.borrow_and_update().clone() {
+        Some(SegmentedSendControlEvent::Abort(abort)) => {
+            warn_throttled!(
+                registry.warning,
+                invoke_id = abort.invoke_id,
+                reason = ?abort.abort_reason,
+                "Client aborted segmented ComplexAck send"
+            );
+        }
+        Some(SegmentedSendControlEvent::Cancel) | None => {
+            warn_throttled!(
+                registry.warning,
+                invoke_id,
+                "Segmented ComplexAck send cancelled by newer same-peer transaction"
+            );
+        }
+    }
+    true
+}
+
 #[derive(Debug)]
 enum SegmentedSendWaitResult {
     SegmentAck(SegmentAckPdu),
@@ -303,6 +334,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut retransmission_retries: u8 = 0;
 
         'send_segments: while seg_idx < total_segments {
+            // Before every send, not only while waiting: a segment sent
+            // again after a requester's Abort could reach a new request
+            // under the same invoke ID.
+            if send_closed(&send_handle, &mut control_rx, seg_ack_senders, invoke_id) {
+                break;
+            }
             let is_last = seg_idx == total_segments - 1;
 
             let pdu = Apdu::ComplexAck(ComplexAck {
@@ -340,24 +377,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
             let ack_deadline = tokio::time::Instant::now() + seg_timeout;
             loop {
-                if send_handle.closed.load(Ordering::Acquire) {
-                    match control_rx.borrow_and_update().clone() {
-                        Some(SegmentedSendControlEvent::Abort(abort)) => {
-                            warn_throttled!(
-                                seg_ack_senders.warning,
-                                invoke_id = abort.invoke_id,
-                                reason = ?abort.abort_reason,
-                                "Client aborted segmented ComplexAck send"
-                            );
-                        }
-                        Some(SegmentedSendControlEvent::Cancel) | None => {
-                            warn_throttled!(
-                                seg_ack_senders.warning,
-                                invoke_id,
-                                "Segmented ComplexAck send cancelled by newer same-peer transaction"
-                            );
-                        }
-                    }
+                if send_closed(&send_handle, &mut control_rx, seg_ack_senders, invoke_id) {
                     break 'send_segments;
                 }
 
