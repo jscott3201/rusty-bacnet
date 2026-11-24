@@ -176,6 +176,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .await;
             }
             Receipt::Complete(done) => {
+                // On a node, the client hears the whole request where it
+                // hears a copy of one that comes whole, as with a
+                // ConfirmedEventNotification (#2743). Handed on before
+                // anything is sent, so it is in the client's queue before
+                // the answer can draw the requester's next notification;
+                // it never waits.
+                if let Some(copies) = &dispatch_context.services.client_copies {
+                    copies.reassembled(&received, &done.request);
+                }
                 let (last_sequence, window) =
                     (done.ack.sequence_number, done.ack.actual_window_size);
                 Self::send_request_segment_ack(

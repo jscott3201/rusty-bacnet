@@ -49,7 +49,9 @@
 use std::any::Any;
 use std::future::Future;
 
-use bacnet_endpoint_core::seat::{NodeDevice, SeatHolds, SeatNumber, ServerDcc, ServerSeat};
+use bacnet_endpoint_core::seat::{
+    ClientCopies, NodeDevice, SeatHolds, SeatNumber, ServerDcc, ServerSeat,
+};
 use bacnet_network::layer::{ApduReceiver, ReceivedApdu, ReceivedNetworkControl};
 
 use super::audit_recipient_routes::AuditRoutes;
@@ -115,6 +117,9 @@ pub(super) struct Started<T: TransportPort, A> {
     /// On a seat, the notice that the node's Number owner published the
     /// network number.
     pub(super) number: Option<SeatNumber>,
+    /// On a seat, where a request reassembled from segments that the node's
+    /// client hears a copy of goes (#2743).
+    pub(super) client_copies: Option<ClientCopies>,
 }
 
 /// How the server comes by its network layer.
@@ -166,6 +171,7 @@ impl<T: TransportPort + 'static> Link<T> for Own<T> {
             execution: DeviceExecution::server(false, &config.time_sync_policy),
             dcc: None,
             number: None,
+            client_copies: None,
         })
     }
 
@@ -204,6 +210,7 @@ impl<T: TransportPort + 'static> Link<T> for Seat<T> {
             number,
             dcc,
             node,
+            client_copies,
             ..
         } = self.0;
         // The node's link is up already: the Audit routes take its facts
@@ -225,6 +232,7 @@ impl<T: TransportPort + 'static> Link<T> for Seat<T> {
             ),
             dcc: Some(dcc),
             number: Some(number),
+            client_copies: Some(client_copies),
         })
     }
 

@@ -120,7 +120,8 @@ bacnet-tool = { version = "0.15.0", path = "crates/bacnet-tool" }
 bacnet-mcp = { version = "0.15.0", path = "crates/bacnet-mcp", default-features = false }
 thiserror = { version = "2", default-features = false }
 bitflags = "2"
-bytes = { version = "1", default-features = false }
+# 1.10.1: Bytes::from_owner (1.9) without its to_vec owner leak (#2743).
+bytes = { version = "1.10.1", default-features = false }
 tracing = "0.1"
 tokio = "1.53.3"
 socket2 = "0.6"
