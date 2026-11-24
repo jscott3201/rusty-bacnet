@@ -65,7 +65,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::{string::String, vec::Vec};
 
-use crate::enums::{BinaryPV, EngineeringUnits};
+use crate::enums::{BinaryPV, EngineeringUnits, Polarity};
 use crate::primitives::ObjectIdentifier;
 
 /// A device and its points: what `bacnet_objects::points::build_database`
@@ -282,19 +282,37 @@ pub struct Binary {
     /// Inactive_Text, the label of an INACTIVE Present_Value; `None` keeps
     /// the object's default.
     pub inactive_text: Option<String>,
+    /// Polarity, which maps the physical state to Present_Value (#2595). A
+    /// Binary Input or Output always has one, and `None` keeps the
+    /// object's NORMAL; a Binary Value has none, so a builder refuses a
+    /// point of that type that gives one.
+    ///
+    /// Present_Value and a relinquish default stay logical whatever the
+    /// Polarity (Clause 12.6.4 for an Input, 12.7.4 for an Output): under
+    /// REVERSE, an Output relinquished to INACTIVE drives its physical
+    /// output ON from the start, and an Input reads an OFF input as ACTIVE.
+    pub polarity: Option<Polarity>,
     /// How Present_Value is written.
     pub access: Access<BinaryPV>,
 }
 
 impl Binary {
-    /// A binary point written as `access` says, with its texts left as the
-    /// object starts.
+    /// A binary point written as `access` says, with its texts and Polarity
+    /// left as the object starts.
     pub const fn new(access: Access<BinaryPV>) -> Self {
         Self {
             active_text: None,
             inactive_text: None,
+            polarity: None,
             access,
         }
+    }
+
+    /// Give the point this Polarity: only a Binary Input or Output takes
+    /// one. Its other settings stay logical; see [`Self::polarity`].
+    pub const fn with_polarity(mut self, polarity: Polarity) -> Self {
+        self.polarity = Some(polarity);
+        self
     }
 
     /// Give the point this Active_Text.
