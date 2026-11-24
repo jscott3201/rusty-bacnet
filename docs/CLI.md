@@ -131,20 +131,21 @@ stderr). Each object names its kind in `type`:
 | `subscribed` | `subscribe`'s first line, once the subscription is in place: `status` (`ok`) and `message` |
 | `cov` | A notification `subscribe` received (see [COV Subscriptions](#cov-subscriptions)) |
 | `packet` | A packet `capture` read (see [Packet Capture](#packet-capture)) |
-| `missed` | A gap: `count` notifications or packets the stream lost because the command fell behind (below) |
+| `missed` | A gap: `count` notifications or packets the stream lost because the command fell behind (below). For `subscribe` it counts every notification the client received and the command never read, for any object, device or process id, including ones `subscribe` would not have printed |
 | `error` | The last line of a stream that fails once it is running, with `message` as stderr prints it after `Error: `; the exit status is the usual 1 |
 
 A command that can't keep up, as when its reader is slow, loses what comes
 meanwhile; a `missed` line, `{"count":3,"type":"missed"}`, says so in the
 stream, stderr notes it in every format, and the stream goes on. In
 `subscribe` it comes exactly where the gap is: `count` is how many
-notifications overflowed the client's buffer of 64, whatever object they
-were about (a notification lost on the network can't be counted). A
-consumer that needs a value current should read it again (`bacnet read`)
-rather than wait for its next change. In a live `capture`, `count` is how
-many packets the operating system dropped since the command last asked; the
-line comes at the gap or before it, by up to the packets the system still
-held, never after it. Reading a file loses nothing.
+notifications overflowed the client's buffer of 64 (a notification lost on
+the network can't be counted). A consumer that needs a value current should
+read it again (`bacnet read`) rather than wait for its next change. A live
+`capture` counts the packets the operating system dropped, where libpcap
+reports drops (some platforms report none). Its line marks a count, not a
+boundary: it comes when the capture learns of the drops, so up to a
+buffer's worth of packets after it can still precede the gap, though none
+from after the gap comes before it. Reading a file loses nothing.
 
 An error before a stream starts (a subscription the device refuses, a capture
 device that won't open) leaves stdout empty, as with any command. A stream
@@ -2635,7 +2636,9 @@ signal within a second.
 **JSON output** is a stream of [JSON Lines](#json-streams), one `packet` line
 a packet (`detail` holds the decode lines with `--decode`). Packets the
 operating system dropped because the capture fell behind are noted on stderr
-and, in JSON, counted by a `missed` line ([gaps](#json-streams)). A read that
+and, in JSON, counted by a `missed` line ([gaps](#json-streams)); the
+capture asks for that count before each packet it prints, and with
+`--quiet` at most every 250 ms, for stderr's note alone. A read that
 fails part way, such as a file cut short, ends the stream with an `error`
 line:
 
