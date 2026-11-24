@@ -43,31 +43,38 @@ fn file(dir: &std::path::Path) -> std::path::PathBuf {
 /// apart from 12:34:56.789, and when `cut` a last record cut short: its
 /// header claims more bytes than the file holds.
 fn pcap(dir: &std::path::Path, name: &str, ports: &[u16], cut: bool) -> std::path::PathBuf {
-    let mut out = Vec::new();
-    for word in [0xA1B2_C3D4_u32, 0x0004_0002, 0, 0, 65_535, 1] {
-        out.extend_from_slice(&word.to_le_bytes());
+    let mut out = header();
+    for (i, port) in ports.iter().enumerate() {
+        out.extend(record(i, *port));
     }
-    let last = cut.then_some(ports.len());
-    for (i, port) in ports.iter().copied().chain(last.map(|_| 47808)).enumerate() {
-        let packet = who_is(port);
-        for word in [
-            45_296 + i as u32,
-            789_000,
-            packet.len() as u32,
-            packet.len() as u32,
-        ] {
-            out.extend_from_slice(&word.to_le_bytes());
-        }
-        let kept = if Some(i) == last {
-            packet.len() / 2
-        } else {
-            packet.len()
-        };
-        out.extend_from_slice(&packet[..kept]);
+    if cut {
+        let whole = record(ports.len(), 47808);
+        out.extend_from_slice(&whole[..16 + (whole.len() - 16) / 2]);
     }
     let path = dir.join(name);
     std::fs::write(&path, out).unwrap();
     path
+}
+
+/// A pcap file's header: Ethernet frames, up to 65,535 bytes each.
+fn header() -> Vec<u8> {
+    [0xA1B2_C3D4_u32, 0x0004_0002, 0, 0, 65_535, 1]
+        .iter()
+        .flat_map(|word| word.to_le_bytes())
+        .collect()
+}
+
+/// Record `i` of a pcap file: a Who-Is on `port`, `i` seconds after
+/// 12:34:56.789.
+fn record(i: usize, port: u16) -> Vec<u8> {
+    let packet = who_is(port);
+    let length = packet.len() as u32;
+    let mut out: Vec<u8> = [45_296 + i as u32, 789_000, length, length]
+        .iter()
+        .flat_map(|word| word.to_le_bytes())
+        .collect();
+    out.extend(packet);
+    out
 }
 
 /// With JSON, a line a packet, each one compact object of type `packet`,
@@ -175,5 +182,111 @@ async fn capture_with_p_filters_on_that_port() {
         assert_eq!(text.lines().count(), 1, "{text}");
         assert!(text.contains(r#""src":"10.0.0.1:47809""#), "{text}");
         assert!(text.contains(r#""timestamp":"12:34:57.789""#), "{text}");
+    }
+}
+
+/// `capture --read` from a FIFO the test feeds a packet at a time, so the
+/// capture is still running when the test stops it: Unix only.
+#[cfg(unix)]
+mod running {
+    use std::fs::File;
+    use std::io::{BufRead, BufReader, Write};
+    use std::path::Path;
+    use std::process::{ChildStdout, Stdio};
+
+    use super::support::stream::{KillOnDrop, Lines};
+    use super::{header, record, support};
+
+    /// A capture in `format` reading a FIFO in `dir`, with the file header
+    /// and its first packet written: the child, its stdout and the FIFO's
+    /// writing end.
+    async fn capture(dir: &Path, format: &str) -> (KillOnDrop, ChildStdout, File) {
+        let path = dir.join("live.pcap");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let mut child = support::command()
+            .args([
+                "capture",
+                "--read",
+                path.to_str().unwrap(),
+                "--format",
+                format,
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let child = KillOnDrop(child);
+        // Opening the writing end waits for the capture to open the other.
+        let mut fifo = support::bounded(tokio::task::spawn_blocking(move || {
+            File::options().write(true).open(&path)
+        }))
+        .await
+        .unwrap()
+        .unwrap();
+        fifo.write_all(&header()).unwrap();
+        fifo.write_all(&record(0, 47808)).unwrap();
+        (child, stdout, fifo)
+    }
+
+    /// SIGTERM stops a running capture as Ctrl-C does: it reads on until it
+    /// sees the signal's flag, then prints its summary and exits 0, every
+    /// line JSON. Killed by the signal instead, it would print neither.
+    #[tokio::test]
+    async fn sigterm_stops_a_capture_with_its_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut child, stdout, mut fifo) = capture(dir.path(), "json").await;
+        let mut lines = Lines::read(stdout);
+        assert_eq!(lines.next().await["type"], "packet");
+        let killed = std::process::Command::new("kill")
+            .args(["-TERM", &child.0.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(killed.success());
+        // A packet at a time until the capture stops reading.
+        let mut printed = 1;
+        for i in 1..=50 {
+            if fifo.write_all(&record(i, 47808)).is_err() {
+                break;
+            }
+            match lines.next_or_end().await {
+                Some(line) => {
+                    assert_eq!(line["type"], "packet", "{line}");
+                    printed += 1;
+                }
+                None => break,
+            }
+        }
+        let status = child.exited().await;
+        assert!(status.success(), "{status:?}");
+        assert_eq!(child.stderr(), format!("\nCaptured {printed} packets\n"));
+    }
+
+    /// A reader that goes away stops the capture quietly in either format:
+    /// the next packet finds stdout closed, the summary counts it, and the
+    /// status is 0 (#2783).
+    #[tokio::test]
+    async fn a_closed_stdout_stops_a_capture_quietly() {
+        for format in ["json", "table"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut child, stdout, mut fifo) = capture(dir.path(), format).await;
+            let line = support::bounded(tokio::task::spawn_blocking(move || {
+                let mut line = String::new();
+                BufReader::new(stdout).read_line(&mut line).unwrap();
+                line
+            }))
+            .await
+            .unwrap();
+            assert!(line.contains("WHO_IS"), "{format}: {line}");
+            fifo.write_all(&record(1, 47808)).unwrap();
+            let status = child.exited().await;
+            let stderr = child.stderr();
+            assert_eq!(status.code(), Some(0), "{format}: {stderr}");
+            assert_eq!(stderr, "\nCaptured 2 packets\n", "{format}");
+        }
     }
 }

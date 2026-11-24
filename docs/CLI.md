@@ -136,8 +136,13 @@ stderr). Each object names its kind in `type`:
 An error before a stream starts (a subscription the device refuses, a capture
 device that won't open) leaves stdout empty, as with any command. A stream
 stopped by Ctrl+C, SIGTERM, `--count` or the end of a capture file ends with
-no closing line. When stdout closes because its reader has gone, the command
-stops with status 1, and `subscribe` cancels a finite subscription first. A
+no closing line. So does one whose reader goes away (`| head -1`): the
+command stops quietly with status 0, as at Ctrl+C, and `subscribe` cancels a
+finite subscription first. It notices only when it next writes a line, so a
+subscription whose value doesn't change keeps running until a notification
+arrives, and the cancel can take as long as the request timeout and its
+retries (`--timeout`, 6 seconds by default, tried four times). Any other
+failed write to stdout, such as a full disk, is an error (status 1). A
 consumer can read the stream a line at a time:
 
 ```bash
@@ -2155,6 +2160,12 @@ its lifetime.
 
 Each notification's values are decoded for the monitored object, as `read`
 decodes them; JSON adds their typed forms under `decoded`, keyed by property.
+Its sender, the link peer it came from (the router, for a routed device),
+prints in the link's own form, as other commands print a peer: `source=` in
+the text and `source_mac` in JSON, `192.168.1.100:47808` on BACnet/IP, a
+`bip6:` VMAC on BACnet/IPv6, `mstp:5` on MS/TP and hex octets on BACnet/SC.
+A routed device's station is `routed_source` (`2:0x05`); each reads back as a
+target.
 
 With `--json` (or through a pipe) the watch is a stream of
 [JSON Lines](#json-streams): the `subscribed` line, then a `cov` line a
@@ -2164,7 +2175,7 @@ example, the opening line and the device's first notification:
 
 ```json
 {"message":"Subscribed to ANALOG_INPUT:1 (process_id=4242; lifetime 300s, renewed while watching, cancelled on exit). Watching... (Ctrl+C to stop)","status":"ok","type":"subscribed"}
-{"decoded":{"PRESENT_VALUE":72.5,"STATUS_FLAGS":{"bits":"0000","names":[]}},"delivery":"unconfirmed","device":"device:1234","object":"ANALOG_INPUT:1","routed_source":null,"source_mac":"c0:a8:01:64:ba:c0","source_network":null,"time_remaining":300,"type":"cov","values":{"PRESENT_VALUE":"72.5","STATUS_FLAGS":"none"}}
+{"decoded":{"PRESENT_VALUE":72.5,"STATUS_FLAGS":{"bits":"0000","names":[]}},"delivery":"unconfirmed","device":"device:1234","object":"ANALOG_INPUT:1","routed_source":null,"source_mac":"192.168.1.100:47808","source_network":null,"time_remaining":300,"type":"cov","values":{"PRESENT_VALUE":"72.5","STATUS_FLAGS":"none"}}
 ```
 
 **Alias:** `cov` = subscribe
@@ -2583,6 +2594,11 @@ bacnet capture --device eth0 --filter "host 10.0.0.1" --decode --save filtered.p
 | `--snaplen <N>` | Max bytes per packet (default: 65535) |
 
 Note: `--read` and `--device` are mutually exclusive; `--quiet` requires `--save`.
+
+A capture runs until Ctrl+C, SIGTERM or SIGHUP (on Unix), `--count`, the end
+of the file, or its reader going away; each ends it cleanly, with the summary
+(`Captured N packets`) on stderr and status 0. A live capture notices the
+signal within a second.
 
 **Output example (summary):**
 ```

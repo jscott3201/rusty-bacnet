@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::Serialize;
 
 use crate::decode;
-use crate::output::{self, OutputFormat};
+use crate::output::{self, OutputFormat, Printed};
 
 // ---------------------------------------------------------------------------
 // Options
@@ -285,7 +285,11 @@ pub(crate) fn udp_datagram(
     Some((address(12, 0), address(16, 2), payload))
 }
 
-/// Install a Ctrl-C handler that clears the running flag.
+/// Install a handler that clears the running flag on Ctrl-C and, on Unix
+/// with `ctrlc`'s `termination` feature, on SIGTERM and SIGHUP too (#2783),
+/// so `kill` stops a capture as Ctrl-C does, with its summary, rather than
+/// killing it. A live capture sees the flag within its one-second read
+/// timeout.
 fn ctrlc_flag(flag: &Arc<AtomicBool>) {
     let f = flag.clone();
     let _ = ctrlc::set_handler(move || {
@@ -343,7 +347,7 @@ pub fn run_capture(opts: CaptureOpts) -> Result<(), Box<dyn std::error::Error>> 
         Ok(count) => count,
         Err(error) => {
             if !opts.quiet {
-                output::end_stream(&crate::error_text(&*error), opts.format);
+                output::end_stream(&*error, opts.format);
             }
             return Err(error);
         }
@@ -361,8 +365,9 @@ pub fn run_capture(opts: CaptureOpts) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
-/// Read packets until Ctrl-C, `--count` or the end of the file, saving and
-/// printing each as it comes; how many were read.
+/// Read packets until Ctrl-C (or SIGTERM or SIGHUP on Unix), `--count`, the
+/// end of the file or stdout's reader going, saving and printing each as it
+/// comes; how many were read.
 fn packets(
     source: &mut dyn CaptureSource,
     savefile: &mut Option<pcap::Savefile>,
@@ -401,9 +406,11 @@ fn packets(
             sf.write(&packet_ref);
         }
 
-        if !opts.quiet {
-            output::print_line(&packet_text(&pkt, datalink, opts))
-                .map_err(output::stdout_failed)?;
+        // A reader that has gone ends the capture as Ctrl-C does.
+        if !opts.quiet
+            && output::print_line(&packet_text(&pkt, datalink, opts))? == Printed::ReaderGone
+        {
+            return Ok(packet_count);
         }
     }
 }

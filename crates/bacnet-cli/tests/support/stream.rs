@@ -34,6 +34,43 @@ pub fn kinds(values: &[Value]) -> Vec<&str> {
         .collect()
 }
 
+/// A child process killed and reaped when dropped, unless it has exited.
+pub struct KillOnDrop(pub std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if !matches!(self.0.try_wait(), Ok(Some(_))) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
+impl KillOnDrop {
+    /// The exit status, within the suite's bound.
+    pub async fn exited(&mut self) -> std::process::ExitStatus {
+        super::bounded(async {
+            loop {
+                if let Some(status) = self.0.try_wait().unwrap() {
+                    return status;
+                }
+                // Process-exit polling only.
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+    }
+
+    /// All of stderr, once the process has exited.
+    pub fn stderr(&mut self) -> String {
+        let mut text = String::new();
+        if let Some(mut pipe) = self.0.stderr.take() {
+            pipe.read_to_string(&mut text).unwrap();
+        }
+        text
+    }
+}
+
 /// A child's stdout read a line at a time as it arrives, by a thread of
 /// its own, so a test can wait for each line with a bound while the
 /// command runs. The thread ends when stdout does.
@@ -58,8 +95,14 @@ impl Lines {
 
     /// The next line as [`json_line`], within the suite's bound.
     pub async fn next(&mut self) -> Value {
+        self.next_or_end().await.expect("stdout ended")
+    }
+
+    /// The next line as [`json_line`], or `None` at the end of stdout,
+    /// within the suite's bound.
+    pub async fn next_or_end(&mut self) -> Option<Value> {
         let line = super::bounded(self.0.recv()).await;
-        json_line(&line.expect("stdout ended"))
+        line.map(|line| json_line(&line))
     }
 
     /// The lines left, to the end of stdout, within the suite's bound.

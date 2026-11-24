@@ -3,28 +3,42 @@
 //! opening line on, each flushed as it is written, and nothing else on
 //! stdout. A failure once the stream runs ends it with an error line beside
 //! the usual stderr message and exit status; a refused subscription prints
-//! nothing. `capture`'s stream is checked in `cli_capture`, the one-document
+//! nothing; a reader that goes away stops the watch quietly, a success.
+//! `capture`'s stream is checked in `cli_capture`, the one-document
 //! commands' JSON in `cli_format` and the commands' own tests.
 #[allow(dead_code)]
 mod support;
 
-use support::relay::{relay, server};
-use support::stream::{json_lines, kinds};
+use std::io::{BufRead, BufReader};
+use std::process::Stdio;
 
-/// The command line for `subscribe --json` to AI:2 at `target`, then `rest`.
-fn subscribe<'a>(target: &'a str, rest: &[&'a str]) -> Vec<&'a str> {
+use bacnet_types::enums::ObjectType;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use serde_json::Value;
+use support::relay::{relay, server};
+use support::stream::{KillOnDrop, json_lines, kinds};
+
+/// The command line for `subscribe` to AI:2 at `target` printing `format`,
+/// then `rest`.
+fn subscribe_as<'a>(format: &'a str, target: &'a str, rest: &[&'a str]) -> Vec<&'a str> {
     let mut args = vec![
         "--interface",
         "127.0.0.1",
         "--port",
         "0",
-        "--json",
+        "--format",
+        format,
         "subscribe",
         target,
         "ai:2",
     ];
     args.extend_from_slice(rest);
     args
+}
+
+/// [`subscribe_as`] JSON.
+fn subscribe<'a>(target: &'a str, rest: &[&'a str]) -> Vec<&'a str> {
+    subscribe_as("json", target, rest)
 }
 
 /// The stderr line `main` prints for a failure, after `Error: `.
@@ -35,6 +49,30 @@ fn stderr_error(stderr: &[u8]) -> String {
         .find_map(|line| line.strip_prefix("Error: "))
         .unwrap_or_else(|| panic!("no error on stderr: {stderr}"))
         .to_owned()
+}
+
+/// The lab device's AI:2.
+fn ai2() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap()
+}
+
+/// The lab device's Active_COV_Subscriptions as `read` prints it.
+async fn active_subscriptions(target: &str) -> String {
+    let output = support::run([
+        "--interface",
+        "127.0.0.1",
+        "--port",
+        "0",
+        "--json",
+        "read",
+        target,
+        "device:1234",
+        "active-cov-subscriptions",
+    ])
+    .await;
+    assert!(output.status.success(), "{output:?}");
+    let read: Value = serde_json::from_slice(&output.stdout).unwrap();
+    read["value"].as_str().unwrap().to_owned()
 }
 
 /// A device that goes silent mid-stream: the renewal and then the cancel
@@ -86,25 +124,81 @@ async fn a_refused_subscription_prints_nothing() {
     device.stop().await.unwrap();
 }
 
-/// The streams a test stops, by SIGTERM or by closing its end of stdout:
-/// Unix only.
+/// A reader that goes away (`| head`) stops the watch quietly in either
+/// format: the next notification finds stdout closed, the subscription is
+/// cancelled, nothing is said on stderr, and the status is 0. A closed pipe
+/// is a broken-pipe error on each OS: EPIPE on Unix, and on Windows
+/// ERROR_NO_DATA or ERROR_BROKEN_PIPE, both of which std reports as
+/// `ErrorKind::BrokenPipe`.
+#[tokio::test]
+async fn a_closed_stdout_stops_the_watch_quietly_and_cancels() {
+    let (mut device, address) = server().await;
+    let target = address.to_string();
+    let empty = active_subscriptions(&target).await;
+    for (format, first, value) in [
+        ("json", "\"type\":\"cov\"", 60.5),
+        ("table", "[COV] ", 70.5),
+    ] {
+        let mut child = support::command()
+            .args(subscribe_as(format, &target, &[]))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut child = KillOnDrop(child);
+        // Up to the initial notification; then the reader goes, closing
+        // the pipe.
+        support::bounded(tokio::task::spawn_blocking(move || {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                let mut line = String::new();
+                assert_ne!(reader.read_line(&mut line).unwrap(), 0, "stdout ended");
+                if line.contains(first) {
+                    return;
+                }
+            }
+        }))
+        .await
+        .unwrap();
+        assert_ne!(active_subscriptions(&target).await, empty, "{format}");
+
+        device
+            .set_present_value_local(&ai2(), PropertyValue::Real(value))
+            .await
+            .unwrap();
+        let status = child.exited().await;
+        let stderr = child.stderr();
+        assert_eq!(status.code(), Some(0), "{format}: {stderr}");
+        let said = stderr.to_lowercase();
+        assert!(
+            !said.contains("error") && !said.contains("panicked"),
+            "{format}: {stderr}"
+        );
+        // Unix at least says nothing at all.
+        if cfg!(unix) {
+            assert_eq!(stderr, "", "{format}");
+        }
+        assert_eq!(
+            active_subscriptions(&target).await,
+            empty,
+            "{format}: not cancelled"
+        );
+    }
+    device.stop().await.unwrap();
+}
+
+/// Stopped by SIGTERM: Unix only.
 #[cfg(unix)]
 mod stopped {
-    use std::io::{BufRead, BufReader};
     use std::process::Stdio;
 
-    use bacnet_types::enums::ObjectType;
-    use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+    use bacnet_types::primitives::PropertyValue;
     use serde_json::Value;
 
     use super::support::relay::server;
-    use super::support::stream::{Lines, json_lines, kinds};
-    use super::{stderr_error, subscribe, support};
-
-    /// The lab device's AI:2.
-    fn ai2() -> ObjectIdentifier {
-        ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap()
-    }
+    use super::support::stream::{KillOnDrop, Lines};
+    use super::{ai2, subscribe, support};
 
     /// A notification's line for AI:2 with its typed value.
     fn assert_cov(line: &Value, value: f64) {
@@ -115,57 +209,10 @@ mod stopped {
         assert!(line["values"]["PRESENT_VALUE"].is_string(), "{line}");
     }
 
-    /// A child process killed and reaped when dropped, unless it has exited.
-    struct KillOnDrop(std::process::Child);
-
-    impl Drop for KillOnDrop {
-        fn drop(&mut self) {
-            if !matches!(self.0.try_wait(), Ok(Some(_))) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
-            }
-        }
-    }
-
-    impl KillOnDrop {
-        /// The exit status, within the suite's bound.
-        async fn exited(&mut self) -> std::process::ExitStatus {
-            support::bounded(async {
-                loop {
-                    if let Some(status) = self.0.try_wait().unwrap() {
-                        return status;
-                    }
-                    // Process-exit polling only.
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                }
-            })
-            .await
-        }
-    }
-
-    /// The lab device's Active_COV_Subscriptions as `read` prints it.
-    async fn active_subscriptions(target: &str) -> String {
-        let output = support::run([
-            "--interface",
-            "127.0.0.1",
-            "--port",
-            "0",
-            "--json",
-            "read",
-            target,
-            "device:1234",
-            "active-cov-subscriptions",
-        ])
-        .await;
-        assert!(output.status.success(), "{output:?}");
-        let read: Value = serde_json::from_slice(&output.stdout).unwrap();
-        read["value"].as_str().unwrap().to_owned()
-    }
-
     /// Each line is one JSON value, written when it happens: the opening
     /// line while the command runs, then the initial notification and one
-    /// for a change. Stopped by SIGTERM, it ends with no closing line and
-    /// status 0.
+    /// for a change, its sender in the link's form. Stopped by SIGTERM, it
+    /// ends with no closing line and status 0.
     #[tokio::test]
     async fn subscribe_prints_one_json_value_a_line_as_it_happens() {
         let (mut device, address) = server().await;
@@ -188,7 +235,12 @@ mod stopped {
             message.starts_with("Subscribed to ANALOG_INPUT:2"),
             "{message}"
         );
-        assert_cov(&lines.next().await, 51.0);
+        let initial = lines.next().await;
+        assert_cov(&initial, 51.0);
+        assert_eq!(
+            initial["source_mac"], target,
+            "the sender, as B/IP writes it"
+        );
 
         device
             .set_present_value_local(&ai2(), PropertyValue::Real(60.5))
@@ -203,55 +255,6 @@ mod stopped {
         assert!(killed.success());
         assert!(child.exited().await.success());
         assert_eq!(lines.rest().await, Vec::<Value>::new(), "after the stop");
-        device.stop().await.unwrap();
-    }
-
-    /// A reader that goes away ends the watch: the next notification's
-    /// write fails, the subscription is cancelled, and stderr says why
-    /// (status 1). On Unix a write to a pipe with no reader fails at once
-    /// (EPIPE: Rust ignores SIGPIPE).
-    #[tokio::test]
-    async fn a_closed_stdout_ends_the_watch_and_cancels_the_subscription() {
-        let (mut device, address) = server().await;
-        let target = address.to_string();
-        let empty = active_subscriptions(&target).await;
-        let mut child = support::command()
-            .args(subscribe(&target, &[]))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let mut child = KillOnDrop(child);
-        // The opening line and the initial notification; then the reader
-        // goes, closing the pipe.
-        let read = support::bounded(tokio::task::spawn_blocking(move || {
-            let mut reader = BufReader::new(stdout);
-            let mut text = String::new();
-            for _ in 0..2 {
-                assert_ne!(reader.read_line(&mut text).unwrap(), 0, "stdout ended");
-            }
-            text
-        }))
-        .await
-        .unwrap();
-        assert_eq!(kinds(&json_lines(read.as_bytes())), ["subscribed", "cov"]);
-        assert_ne!(active_subscriptions(&target).await, empty);
-
-        device
-            .set_present_value_local(&ai2(), PropertyValue::Real(60.5))
-            .await
-            .unwrap();
-        assert_eq!(child.exited().await.code(), Some(1));
-        let mut stderr = Vec::new();
-        let mut pipe = child.0.stderr.take().unwrap();
-        std::io::Read::read_to_end(&mut pipe, &mut stderr).unwrap();
-        assert!(
-            stderr_error(&stderr).starts_with("writing to stdout failed: "),
-            "{}",
-            String::from_utf8_lossy(&stderr)
-        );
-        assert_eq!(active_subscriptions(&target).await, empty, "not cancelled");
         device.stop().await.unwrap();
     }
 }
