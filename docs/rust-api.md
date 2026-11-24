@@ -6541,7 +6541,8 @@ anything else); Polarity stays read-only on the network. A point list gives
 it as `bacnet_types::points::Binary::with_polarity` (#2595), which
 `points::build_database` sets on an Input or Output and refuses on a Binary
 Value, a type with no Polarity, as `Refusal::PropertyNotInType`. On a
-running server the routes are:
+running server, an endpoint session's included (`EndpointSession::server`,
+a full server since #2617; #2594), the routes are:
 
 | Route | Object | What it does |
 | --- | --- | --- |

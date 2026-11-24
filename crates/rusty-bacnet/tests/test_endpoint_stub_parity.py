@@ -262,15 +262,17 @@ class EndpointStubParityTests(unittest.TestCase):
                 self.assertEqual(runtime_arg_kinds(getattr(BACnetClient, name)),
                                  stub_arg_kinds(node))
         # The server role is the standalone class, whose runtime calls the
-        # endpoint's server has.
+        # endpoint's server has: the binary physical side and Polarity among
+        # them (#2594).
+        binary_io = ("set_physical_input_local", "set_polarity_local", "physical_output_local")
         for name in ("read_property", "write_property_local", "set_present_value_local",
-                     "set_reliability_local", "comm_state", "start", "stop"):
+                     "set_reliability_local", *binary_io, "comm_state", "start", "stop"):
             with self.subTest(method=name):
                 self.assertTrue(callable(getattr(BACnetServer, name)))
                 stub_method(classes["BACnetServer"], name)
         # The local changes are the server's, not the endpoint's (#2617).
         for cls in (BipEndpoint, ScEndpoint, MstpEndpoint):
-            for gone in ("set_present_value_local", "set_reliability_local"):
+            for gone in ("set_present_value_local", "set_reliability_local", *binary_io):
                 with self.subTest(cls=cls.__name__, gone=gone):
                     self.assertFalse(hasattr(cls, gone))
 
