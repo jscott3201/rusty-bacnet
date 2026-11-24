@@ -81,8 +81,8 @@ macOS and Windows ones don't yet (see [MS/TP](#mstp)).
 | `--mstp-max-info-frames <N>` | `1` | Frames this station sends each time it holds the token (Max_Info_Frames), 1 to 255 |
 | `--mstp-rt-priority <N>` | | Linux only: run the station's token handling under `SCHED_FIFO` at priority N, 1 to 99. See [MS/TP](#mstp) |
 | `--mstp-cpus <CPUS>` | | Linux only: pin the station's token handling to these CPUs, such as `2,3` |
-| `--format <FMT>` | auto | Output format: `table` or `json`; `csv` too for [`inventory`](#device-inventory) |
-| `--json` | | JSON output shorthand |
+| `--format <FMT>` | auto | Output format: `table` or `json`, and `csv` for [`inventory`](#device-inventory) alone; a format the command doesn't print is refused. See [Output formats](#output-formats) |
+| `--json` | | JSON output shorthand; it outranks `--format` |
 | `-v` | | Verbosity (`-v`, `-vv`, `-vvv`) |
 | `--allow-write` | | Let a command that changes a device run; see [Write guard](#write-guard) |
 | `--no-tui` | | With no command, print the usage instead of opening the terminal UI; see [Plain `bacnet`](#plain-bacnet) |
@@ -100,6 +100,24 @@ and Windows.
 Output auto-detects: tables in TTY, JSON when piped. Log lines (warnings, and
 more with `-v`) go to stderr in every mode, so stdout carries only the
 command's output and a warning can't corrupt its JSON.
+
+<a id="output-formats"></a>**Output formats:** `--format table|json|csv` or
+`--json` picks the output, and `--json` outranks `--format`. Every one-shot
+command prints `table` and `json`, except these:
+
+| Command | Formats |
+|---|---|
+| `inventory` | `table`, `json` and `csv` |
+| `export 223-experimental` | none: it writes Turtle |
+| `tui`, `mcp` | none |
+
+A command that changes a device prints a status line as its `table`, and
+`{"status": "ok", "message": ...}` as its `json`. An unknown `--format`, or
+one the command doesn't print (`csv` outside `inventory`, either flag on a
+command with none), is a usage error: the CLI exits with status 2 before
+anything is sent, and stderr names the formats the command prints, as in
+`bacnet read: --format csv is not available; this command supports table and
+json`. `--format` is checked even when `--json` outranks it.
 
 **Device text:** strings a device supplies (values, object names, state
 texts, event messages) are cleaned in table and text output, as the terminal
@@ -361,9 +379,12 @@ JSON in this shape, which scripts can rely on:
 |---|---|
 | 0 | The command completed |
 | 1 | It failed while running: a timeout, an error or reject from the device, a bad value, a transport that wouldn't start |
-| 2 | Usage error from the argument parser (an unknown flag, a missing argument, or no command where the terminal UI can't open); nothing is sent |
+| 2 | Usage error from the argument parser (an unknown flag, a missing argument, a [format](#output-formats) the command doesn't print, or no command where the terminal UI can't open); nothing is sent |
 | 3 | `sc-check` could not complete (see [the SC check guide](sc-check.md)) |
 | 4 | The write guard refused the command; nothing is sent |
+
+A usage error (2) is decided before the write guard (4): `write` with a
+format it doesn't print exits 2 whether or not `--allow-write` is given.
 
 ## Commands
 
@@ -1691,7 +1712,7 @@ included.
 | `--settings` | Also read each object's COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default and Polarity, where its type has them |
 | `--details` | Also read each object's Device_Type and Profile_Name: two more properties an object |
 | `--format table\|json\|csv`, `--json` | How to print; a table at a terminal and JSON through a pipe unless given |
-| `--csv-exact` | With `--format csv`: write device text exactly, without the formula guard |
+| `--csv-exact` | Write device text exactly in the CSV, without the formula guard; needs `--format csv`, and is refused with any other output (status 2) |
 
 - **What is read.** Object_Name and Description of every object; Units of
   the analog and integer types, Accumulator and Pulse Converter; a binary
@@ -1904,7 +1925,7 @@ types.
   different devices with the same node.
 - Stdout carries only the Turtle, or nothing with `-o FILE`, which writes a
   new file and refuses one that exists. A summary goes to stderr either
-  way; `--format` and `--json` don't apply. When the device has no object
+  way; `--format` and `--json` are refused. When the device has no object
   of the selected types, the model is empty, the header and stderr say so,
   and the exit status is 0.
 - It reads as [`inventory`](#device-inventory) does, the ten exported

@@ -127,6 +127,29 @@ fn plain_bacnet_on_a_terminal_opens_the_tui() {
     }
 }
 
+/// `--json` or `--format` with plain `bacnet` on a terminal: the TUI
+/// prints in no format, so a usage error (status 2) that names plain
+/// `bacnet`, not `bacnet tui` (#2778).
+#[test]
+fn plain_bacnet_with_a_format_on_a_terminal_exits_2() {
+    for args in [&["--json"][..], &["--format", "table"]] {
+        let mut pty = OnPty::spawn(args, None);
+        assert!(
+            pty.wait_for(b"plain bacnet opens the terminal UI, which takes no output format"),
+            "{args:?}: {}",
+            pty.text()
+        );
+        let status = pty.child.wait().unwrap();
+        assert_eq!(status.code(), Some(2), "{args:?}");
+        assert!(
+            !pty.wait_for(ALTERNATE_SCREEN),
+            "{args:?} opened the TUI: {}",
+            pty.text()
+        );
+        assert!(!pty.text().contains("bacnet tui"), "{}", pty.text());
+    }
+}
+
 #[test]
 fn no_tui_on_a_terminal_prints_the_usage_and_exits_2() {
     for (args, no_tui_env) in [(&["--no-tui"][..], None), (&[][..], Some("1"))] {

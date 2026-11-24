@@ -20,7 +20,7 @@ pub(crate) enum ExportFormat {
     /// the exported objects a few a request; a target given by address
     /// costs one more, a read of its Device object to learn the instance. Stdout
     /// carries only the Turtle; a summary goes to stderr. --format and
-    /// --json don't apply.
+    /// --json are refused.
     #[command(name = "223-experimental")]
     S223 {
         /// Target device (address, instance, or routed dnet:instance).

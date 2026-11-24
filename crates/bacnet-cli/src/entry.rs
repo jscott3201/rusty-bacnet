@@ -72,7 +72,8 @@ pub(crate) fn tui_allowed_here(no_tui: bool) -> Result<(), &'static str> {
 }
 
 /// Give a command line without a command the `tui` subcommand at its
-/// defaults, or the usage error when `allowed` says the TUI can't open.
+/// defaults, or the usage error when `allowed` says the TUI can't open, or
+/// when it names `--format` or `--json`, which the TUI doesn't print in.
 /// A command line with a command is left as it is.
 ///
 /// Builds clap's whole command tree: call it on the parser's thread (see
@@ -83,6 +84,10 @@ pub(crate) fn resolve(cli: &mut Cli, allowed: Result<(), &'static str>) -> Resul
     }
     match allowed {
         Ok(()) => {
+            // The TUI prints in no format: say so for what was typed.
+            if let Some(refusal) = crate::formats::plain_refusal(cli) {
+                return Err(refusal);
+            }
             cli.command = Cli::try_parse_from(["bacnet", "tui"])
                 .expect("`bacnet tui` parses")
                 .command;
@@ -224,6 +229,29 @@ mod tests {
             cli
         });
         assert_eq!(format!("{cli:?}"), before);
+    }
+
+    /// Plain `bacnet` with an output format, where it would open the TUI:
+    /// a usage error naming what was typed, not `bacnet tui` (#2778).
+    #[test]
+    fn plain_bacnet_with_a_format_is_refused_as_typed() {
+        for (args, flag) in [
+            (&["bacnet", "--json"][..], "--json"),
+            (&["bacnet", "--format", "table"], "--format table"),
+            (&["bacnet", "--format", "csv", "--json"], "--format csv"),
+        ] {
+            let mut cli = parse(args);
+            let error = crate::parse_on_large_stack(move || resolve(&mut cli, Ok(())).unwrap_err());
+            assert_eq!(error.exit_code(), 2, "{args:?}");
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "error: bacnet: {flag} is not available; plain bacnet opens the \
+                     terminal UI, which takes no output format\n"
+                ),
+                "{args:?}"
+            );
+        }
     }
 
     #[test]

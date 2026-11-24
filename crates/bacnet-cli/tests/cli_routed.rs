@@ -187,7 +187,7 @@ async fn whois_router_lists_the_router_and_its_network() {
 #[tokio::test]
 async fn routing_table_lists_the_routers_networks_and_silence_is_an_error() {
     let (mut router, mut server, port) = site().await;
-    let routing_table = |target: String, wait: &'static str| async move {
+    let routing_table_as = |format: &'static str, target: String, wait: &'static str| async move {
         let bbmd = format!("127.0.0.1:{port}");
         run([
             "--interface",
@@ -196,7 +196,8 @@ async fn routing_table_lists_the_routers_networks_and_silence_is_an_error() {
             "0",
             "--foreign-bbmd",
             &bbmd,
-            "--json",
+            "--format",
+            format,
             "routing-table",
             &target,
             "--wait",
@@ -204,6 +205,19 @@ async fn routing_table_lists_the_routers_networks_and_silence_is_an_error() {
         ])
         .await
     };
+    let routing_table = |target, wait| routing_table_as("json", target, wait);
+    // The table form: a row a network, not JSON (#2778).
+    let output = routing_table_as("table", format!("127.0.0.1:{port}"), "2").await;
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{text}");
+    assert!(
+        serde_json::from_slice::<Value>(&output.stdout).is_err(),
+        "{text}"
+    );
+    assert!(
+        text.contains("Network") && text.contains(&DNET.to_string()),
+        "{text}"
+    );
     let output = routing_table(format!("127.0.0.1:{port}"), "2").await;
     assert!(
         output.status.success(),

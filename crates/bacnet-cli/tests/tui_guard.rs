@@ -33,7 +33,7 @@ async fn plain_bacnet_without_a_terminal_prints_the_usage_and_exits_2() {
 async fn tui_without_a_terminal_fails_with_a_hint_and_writes_nothing() {
     for args in [
         vec!["tui"],
-        vec!["--json", "tui", "--fps", "5"],
+        vec!["-v", "tui", "--fps", "5"],
         vec!["--sc", "tui"],
         vec!["tui", "--profile", "site"],
         vec!["tui", "--no-profile"],

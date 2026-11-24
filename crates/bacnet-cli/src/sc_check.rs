@@ -40,14 +40,6 @@ pub(super) fn validate(matches: &ArgMatches) -> Result<(), clap::Error> {
             "sc-check requires --sc-cert <FILE>; --sc-ca and --sc-key are optional",
         ));
     }
-    if let Some(format) = matches.get_one::<String>("format")
-        && !matches!(format.as_str(), "table" | "json")
-    {
-        return Err(Cli::command().error(
-            ErrorKind::InvalidValue,
-            "sc-check --format must be table or json, including when --json is supplied",
-        ));
-    }
     for (id, flag) in [
         ("interface", "--interface"),
         ("port", "--port"),
