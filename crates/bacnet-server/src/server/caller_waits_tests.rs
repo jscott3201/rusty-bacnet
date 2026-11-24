@@ -645,3 +645,6 @@ async fn a_burst_of_parked_calls_is_bounded() {
 
 #[path = "caller_waits_edge_tests.rs"]
 mod edge;
+
+#[path = "tick_waits_tests.rs"]
+mod ticks;

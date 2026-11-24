@@ -121,6 +121,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 task.abort();
             }
             {
+                // Held across the timer's join, and waited for here, which
+                // holds up nothing the server serves, a stop left unpolled
+                // included (#2781): the set closed above admits no DCC or
+                // ReinitializeDevice request, the only requests that take
+                // the slot, and aborted those it held; dispatch never takes
+                // it; and the timer, aborted before the join, gives up its
+                // own wait for the slot without the guard.
                 let mut timer = self.dcc_timer.lock().await;
                 super::dcc_timer::cancel(&mut timer).await;
             }
@@ -152,6 +159,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // stopped below finds them sealed.
         self.notification_transactions.shut_lanes().await;
         {
+            // Every request is joined: only the timer, which the join
+            // aborts, can want the slot held across it (#2781).
             let mut timer = self.dcc_timer.lock().await;
             super::dcc_timer::cancel(&mut timer).await;
         }
@@ -382,7 +391,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         while let Some(result) = self.request_tasks.join_next().await {
             super::request_tasks::RequestTasks::observe(Some(result));
         }
-        // No request is left to hold the slot, as in a drop's join.
+        // No request is left to hold the slot, as in a drop's join: only the
+        // timer, which the join aborts, can want it across the join (#2781).
         {
             let mut timer = self.dcc_timer.lock().await;
             super::dcc_timer::cancel(&mut timer).await;

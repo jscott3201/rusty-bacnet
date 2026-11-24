@@ -135,7 +135,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     let database = database
                         .as_ref()
                         .and_then(std::sync::Weak::upgrade)
-                        .map(crate::held_database::HeldDatabase::new);
+                        .map(bacnet_server::caller_waits::HeldDatabase::new);
                     if let (true, Some(source), Some(database)) = (
                         egress.local_network_number().get() != before,
                         source,

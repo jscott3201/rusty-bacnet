@@ -170,6 +170,9 @@ async fn tick_schedules_dropped_with_a_run_queued_but_not_started_ends_it() {
         ],
     );
     assert!(tick_schedules(&db).now_or_never().is_none());
+    // A task on the runtime took the runs over at that poll: it ends them
+    // when it next runs (#2781).
+    tokio::task::yield_now().await;
     assert_eq!(
         read(&db, ch(2), PropertyIdentifier::PRESENT_VALUE).await,
         PropertyValue::Real(1.0)

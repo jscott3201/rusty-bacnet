@@ -56,6 +56,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::command_lists::TakenRuns;
 use crate::committed_cov::{BackgroundCommit, CommitTransition, CommittedCov};
 use crate::cov::CovSubscriptionTable;
 use bacnet_device_core::write::local;
@@ -101,18 +102,50 @@ pub(crate) fn schedule_instant(frame: ClockFrame) -> Option<(SpecificDate, Time)
 /// than started. Dropping the future first ends each unfinished run as
 /// unsuccessful, so no Command is left in process and no Channel IN_PROGRESS.
 ///
-/// It takes the database in its caller's task, as a guard the application
-/// takes on it does: a call left unpolled part way can hold the database,
-/// and with it whatever else uses it, a running server's requests included
-/// (#2772). Await it to the end, or drop it.
+/// # Cancellation
+///
+/// It never waits for the database in its caller's task (#2781). The pass
+/// takes the database as a local call does: with the database busy, a task
+/// on the runtime it is polled on waits for the guard, keeping the call's
+/// place in the queue, and makes the whole pass under it. The runs it
+/// starts go on in the caller's poll until one has to wait, for the
+/// database or a delay, and from then on in a task on the runtime too. So
+/// a call left unpolled holds up nothing else that uses the database, a
+/// running server's requests included. A call dropped part way is as
+/// [`write_local`](crate::server::BACnetServer::write_local)'s Cancellation
+/// section describes for a local call (#2772): dropped before that task
+/// holds the guard, it makes no pass; dropped after, it may still make the
+/// whole pass, never part of it, and the runs end unsuccessful. Runs a task
+/// was making end when that task next runs, not inside the drop, so a
+/// tick made at once after the drop may find a Command still in process.
+/// Outside a runtime it waits in its caller's task.
 pub async fn tick_schedules(db: &Arc<RwLock<ObjectDatabase>>) {
-    let runs = {
-        let mut db_w = db.write().await;
-        let schedules = db_w.find_by_type(ObjectType::SCHEDULE);
-        let commit = pass(&mut db_w, schedules);
-        commit.take_command_runs(db, &mut db_w)
+    use crate::caller_waits::{HeldDatabase, for_caller, on_runtime};
+    let take = HeldDatabase::new(Arc::clone(db)).write_owned();
+    let make = |mut held: crate::caller_waits::HeldWrite| {
+        let (database, db_w) = held.split();
+        pass_all(database, db_w)
     };
-    crate::command_lists::run_unattached(db, runs).await;
+    let runs = match for_caller(on_runtime, take, make).await {
+        Some(runs) => runs,
+        // Its runtime dropped the task before it took the guard: no pass
+        // was made, so make it here.
+        None => pass_all(db, &mut *db.write().await),
+    };
+    if runs.is_empty() {
+        return;
+    }
+    let held = HeldDatabase::new(Arc::clone(db));
+    let run = async move { crate::command_lists::run_unattached(&held, runs).await };
+    // `None`: its runtime dropped the task, which ended the runs it held.
+    let _ = for_caller(on_runtime, run, |()| ()).await;
+}
+
+/// Every Schedule's pass under `db_w`, the guard on `db`, and the Command
+/// and Channel runs its writes started.
+fn pass_all(db: &Arc<RwLock<ObjectDatabase>>, db_w: &mut ObjectDatabase) -> TakenRuns {
+    let schedules = db_w.find_by_type(ObjectType::SCHEDULE);
+    pass(db_w, schedules).take_command_runs(db, db_w)
 }
 
 /// Evaluate schedules for the live server, returning the COV fanout owed for

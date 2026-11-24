@@ -7,9 +7,11 @@
 //! is no network here, so a command or Channel member naming another device
 //! fails unsent, which a Channel reports as PROCESS_ERROR. There is no
 //! COV table, notification path or task set either, so nothing is reported
-//! and the runs go on inside the caller's future: a run that writes another
+//! and the runs go on inside one future: a run that writes another
 //! Command's or Channel's Present_Value starts that run beside it, and the
-//! call returns once every run has ended.
+//! future ends once every run has. `tick_schedules` polls it in its
+//! caller's task until it has to wait, then in a task on the runtime
+//! (#2781).
 
 use std::future::Future;
 use std::sync::Arc;

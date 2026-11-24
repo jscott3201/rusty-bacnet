@@ -268,3 +268,6 @@ async fn interval_fifty_is_half_a_second() {
 
 #[path = "trend_poll_lifecycle_tests.rs"]
 mod lifecycle;
+
+#[path = "trend_log_waits_tests.rs"]
+mod waits;
