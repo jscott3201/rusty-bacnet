@@ -96,7 +96,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// a ConfirmedEventNotification, and the client still publishes it to
     /// its `event_notifications()`. One that comes in segments the server
     /// reassembles and answers, and then hands the client whole (#2743), so
-    /// the client publishes it once either way. A session with no server
+    /// the client publishes it once per transmission either way. A session with no server
     /// role leaves the client to answer as a standalone one does,
     /// acknowledgment included.
     ///

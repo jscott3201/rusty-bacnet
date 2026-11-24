@@ -43,11 +43,11 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use bacnet_encoding::apdu::{ConfirmedRequest, encode_apdu};
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 
 use super::*;
 use crate::coordinator::LeaseHolder;
-use crate::seat::{Attached, SeatSlot};
+use crate::seat::{Attached, CopyBudget, SeatSlot};
 
 /// ConfirmedCOVNotification, as a confirmed service choice octet.
 const CONFIRMED_COV_NOTIFICATION: u8 = 1;
@@ -404,10 +404,11 @@ fn lease_holder(
     })
 }
 
-/// The client seat's share of a Confirmed-Request for `service`, whole or
-/// `segmented` (see [`crate::seat`]).
-fn confirmed_share(attached: &Attached, segmented: bool, service: Option<u8>) -> SeatShare {
-    if !attached.roles.server {
+/// The share of a Confirmed-Request for `service`, whole or `segmented`, of
+/// a client seat beside a server role (`server_role`) or not (see
+/// [`crate::seat`]).
+fn confirmed_share(server_role: bool, segmented: bool, service: Option<u8>) -> SeatShare {
+    if !server_role {
         return SeatShare::Whole;
     }
     match service {
@@ -423,34 +424,75 @@ fn confirmed_share(attached: &Attached, segmented: bool, service: Option<u8>) ->
     }
 }
 
+/// Whether a client may hear a copy of `request` once the server has
+/// reassembled it: only beside a server role, by [`confirmed_share`], so a
+/// request of any other service needs no look at the seats.
+pub(crate) fn copied_when_reassembled(request: &ConfirmedRequest) -> bool {
+    let service = Some(request.service_choice.to_raw());
+    matches!(confirmed_share(true, false, service), SeatShare::Copy)
+}
+
+/// A reassembled request's copy, with its share of the octets such copies
+/// may hold on the client seat. The share goes back when the last view of
+/// the octets drops, once the client is done with the copy.
+struct BudgetedCopy {
+    octets: BytesMut,
+    _budget: CopyBudget,
+}
+
+impl AsRef<[u8]> for BudgetedCopy {
+    fn as_ref(&self) -> &[u8] {
+        &self.octets
+    }
+}
+
 /// Offer the client seat a copy of `request`, which the server role
 /// reassembled from segments, the last of them in `last`, as ingress offers
 /// it a copy of a request that comes whole (#2743): under the same rule
 /// ([`confirmed_share`]), in the same tier of its queue, as one APDU with no
-/// reply authority. It never waits: a seat with no room drops and counts it.
-/// The copy is made only for a client that hears it.
+/// reply authority, and within the octets such copies may hold
+/// ([`MAX_REASSEMBLED_COPY_OCTETS`](crate::seat::MAX_REASSEMBLED_COPY_OCTETS)).
+/// It never waits.
+///
+/// Whether the client hears it and has room for it is decided under the
+/// seats' lock before anything is made, and a refusal is counted there. The
+/// copy is made outside the lock, which is taken again only to offer it: a
+/// seat that filled in between drops and counts it, as it does any copy.
 pub(crate) fn share_reassembled(seats: &SeatSlot, last: &ReceivedApdu, request: &ConfirmedRequest) {
     let service = Some(request.service_choice.to_raw());
-    seats.with(|client, _| {
+    // A whole Confirmed-Request's header is 4 octets.
+    let octets = 4 + request.service_request.len();
+    let budget = seats.with(|client, _| {
         let client = client?;
-        if !matches!(confirmed_share(client, false, service), SeatShare::Copy) {
+        let share = confirmed_share(client.roles.server, false, service);
+        if !matches!(share, SeatShare::Copy) {
             return None;
         }
-        let whole = ConfirmedRequest {
-            segmented: false,
-            more_follows: false,
-            sequence_number: None,
-            proposed_window_size: None,
-            ..request.clone()
-        };
-        let mut apdu = BytesMut::with_capacity(4 + request.service_request.len());
-        encode_apdu(&mut apdu, &Apdu::ConfirmedRequest(whole)).ok()?;
-        let mut copy = seat_copy(last);
-        copy.apdu = apdu.freeze();
-        if seats.takes(client, &copy) {
+        seats.reserve_reassembled(client, octets)
+    });
+    let Some(budget) = budget.flatten() else {
+        return;
+    };
+    let whole = ConfirmedRequest {
+        segmented: false,
+        more_follows: false,
+        sequence_number: None,
+        proposed_window_size: None,
+        ..request.clone()
+    };
+    let mut apdu = BytesMut::with_capacity(octets);
+    if encode_apdu(&mut apdu, &Apdu::ConfirmedRequest(whole)).is_err() {
+        return;
+    }
+    let mut copy = seat_copy(last);
+    copy.apdu = Bytes::from_owner(BudgetedCopy {
+        octets: apdu,
+        _budget: budget,
+    });
+    seats.with(|client, _| {
+        if let Some(client) = client {
             let _ = seats.offer(client, copy);
         }
-        Some(())
     });
 }
 
@@ -471,7 +513,7 @@ fn client_share(
             // size when the request is segmented.
             let segmented = first & 0x08 != 0;
             let service = apdu.get(if segmented { 5 } else { 3 }).copied();
-            confirmed_share(attached, segmented, service)
+            confirmed_share(attached.roles.server, segmented, service)
         }
         (IngressRoute::TerminalOrSegment, _) if holder == Some(LeaseHolder::Client) => {
             SeatShare::Whole

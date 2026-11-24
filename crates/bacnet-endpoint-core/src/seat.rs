@@ -103,7 +103,7 @@
 //! hold: it has a graceful stop of its own, best run before the endpoint's.
 
 use std::any::Any;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use bacnet_network::layer::{NetworkLayer, ReceivedApdu, ReceivedNetworkControl};
@@ -112,6 +112,11 @@ use bacnet_types::error::Error;
 use tokio::sync::{Notify, mpsc};
 
 use crate::coordinator::OutboundTransactionCoordinator;
+
+#[path = "seat_copies.rs"]
+mod copies;
+pub(crate) use copies::CopyBudget;
+pub use copies::{ClientCopies, MAX_REASSEMBLED_COPY_OCTETS};
 
 /// APDUs a client seat queues by default before ingress drops for it. A
 /// Who-Is can bring hundreds of I-Ams at once, and the seat's queue is the
@@ -477,47 +482,6 @@ pub struct ServerSeat<T: TransportPort> {
     pub client_copies: ClientCopies,
 }
 
-/// The line from a node's server to its client for a request that comes in
-/// segments (#2743). Ingress hands the client a copy of a
-/// ConfirmedEventNotification that comes whole, but it can't hand over one
-/// that comes in segments: the server alone reassembles it. Once the server
-/// has it whole, it hands it on through this, and the client hears it as it
-/// hears one that came whole. It holds the node's seats weakly: once the
-/// node is gone it hands nothing on.
-#[doc(hidden)]
-#[derive(Clone)]
-pub struct ClientCopies(Weak<SeatSlot>);
-
-impl ClientCopies {
-    /// Offer the node's client a copy of `request`, which the server
-    /// reassembled from segments, the last of them in `last`. The client
-    /// gets it when it would get a copy of the request whole (a
-    /// ConfirmedEventNotification, beside the server role), as one APDU
-    /// with no reply authority, in that copy's tier of its queue. It never
-    /// waits: a seat with no room drops and counts it, as it does any copy.
-    ///
-    /// Called only from the server's branch for a completed segmented
-    /// request, which is cold: `#[cold]` keeps it out of the plain path's
-    /// layout, `#[inline]` lets that branch take it where it is compiled.
-    #[cold]
-    #[inline]
-    pub fn reassembled(
-        &self,
-        last: &ReceivedApdu,
-        request: &bacnet_encoding::apdu::ConfirmedRequest,
-    ) {
-        if let Some(seats) = self.0.upgrade() {
-            crate::endpoint_ingress::share_reassembled(&seats, last, request);
-        }
-    }
-}
-
-impl std::fmt::Debug for ClientCopies {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClientCopies").finish_non_exhaustive()
-    }
-}
-
 impl<T: TransportPort> std::fmt::Debug for ServerSeat<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerSeat").finish_non_exhaustive()
@@ -631,6 +595,9 @@ pub(crate) struct SeatSlot {
     /// By [`Role`].
     counts: [Counts; 2],
     control_full_drops: AtomicU64,
+    /// The octets of the reassembled requests' copies the client seat holds
+    /// (see [`ClientCopies`]).
+    reassembled_octets: Arc<AtomicUsize>,
 }
 
 /// The free slots of a seat of `capacity` that Unconfirmed-Requests leave:
@@ -668,6 +635,7 @@ impl SeatSlot {
             dcc: NodeDcc::default(),
             counts: Default::default(),
             control_full_drops: AtomicU64::new(0),
+            reassembled_octets: Arc::default(),
         });
         (slot, held)
     }
@@ -855,8 +823,13 @@ impl SeatSlot {
     /// [module docs](self)). One that isn't is dropped and counted here,
     /// before any copy is made. An answer is offered as it is.
     pub(crate) fn takes(&self, attached: &Attached, received: &ReceivedApdu) -> bool {
+        self.has_room(attached, received.apdu.first().map(|first| first >> 4))
+    }
+
+    /// [`Self::takes`], for an APDU of `pdu_type`.
+    fn has_room(&self, attached: &Attached, pdu_type: Option<u8>) -> bool {
         let capacity = attached.apdus.max_capacity();
-        let floor = match received.apdu.first().map(|first| first >> 4) {
+        let floor = match pdu_type {
             Some(1) => copy_floor(capacity),
             // Too small for three tiers: the server seat's confirmed
             // requests keep the request queue's rule (#2635) and may take

@@ -46,6 +46,11 @@ mod segmented_notifications;
 #[path = "full_server/segmented_events.rs"]
 mod segmented_events;
 
+/// Its edges: a routed source, one segment, no segmentation, a transfer
+/// sent again, a client made again, unreadable event values (#2743).
+#[path = "full_server/segmented_event_edges.rs"]
+mod segmented_event_edges;
+
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, Broadcast, COVNotificationDelivery};

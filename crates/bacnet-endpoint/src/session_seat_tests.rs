@@ -3,11 +3,13 @@
 //! that never reads, still gets its COV notification and the answer to its
 //! own request; the burst's overflow is dropped and counted. Nor does such a
 //! client hold up the server's answer to a segmented event notification,
-//! whose whole request the server hands it (#2743).
+//! whose whole request the server hands it, whatever room its copies take
+//! (#2743).
 use super::*;
 use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_endpoint_core::coordinator::{CanonicalPeer, LeaseMetadata, TerminalPolicy};
+use bacnet_endpoint_core::seat::MAX_REASSEMBLED_COPY_OCTETS;
 use bacnet_transport::bvll::encode_bip_mac;
 use bacnet_transport::test_transport::SendLog;
 use bacnet_types::enums::ConfirmedServiceChoice;
@@ -92,6 +94,11 @@ async fn a_seat_nobody_reads_keeps_room_for_the_answer_to_its_clients_request() 
 
 /// A ConfirmedEventNotification's parameters, from Device 7.
 fn event_parameters() -> Bytes {
+    event_parameters_with("too hot".into())
+}
+
+/// [`event_parameters`] with `text` for its message.
+fn event_parameters_with(text: String) -> Bytes {
     use bacnet_services::alarm_event::EventNotificationRequest;
     use bacnet_types::enums::{EventState, EventType, NotifyType, ObjectType};
     use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
@@ -103,7 +110,7 @@ fn event_parameters() -> Bytes {
         notification_class: 0,
         priority: 100,
         event_type: EventType::OUT_OF_RANGE,
-        message_text: Some("too hot".into()),
+        message_text: Some(text),
         notify_type: NotifyType::ALARM,
         ack_required: false,
         from_state: EventState::NORMAL,
@@ -115,25 +122,29 @@ fn event_parameters() -> Bytes {
     parameters.freeze()
 }
 
-/// [`event_parameters`] under `invoke_id`, in 3 segments, each in an NPDU
-/// that expects a reply.
-fn event_segments(invoke_id: u8) -> Vec<Bytes> {
-    let parameters = event_parameters();
-    let size = parameters.len().div_ceil(3);
-    (0..3u8)
-        .map(|seq| {
-            let start = usize::from(seq) * size;
+/// `parameters` of an event notification under `invoke_id`, in segments
+/// of `size` octets proposing `window`, each in an NPDU that expects a
+/// reply.
+fn event_segments(invoke_id: u8, parameters: &Bytes, size: usize, window: u8) -> Vec<Bytes> {
+    let chunks: Vec<Bytes> = (0..parameters.len().div_ceil(size))
+        .map(|n| parameters.slice(n * size..parameters.len().min((n + 1) * size)))
+        .collect();
+    let last = chunks.len() - 1;
+    chunks
+        .into_iter()
+        .enumerate()
+        .map(|(seq, chunk)| {
             let segment = Apdu::ConfirmedRequest(ConfirmedRequest {
                 segmented: true,
-                more_follows: seq < 2,
+                more_follows: seq < last,
                 segmented_response_accepted: false,
                 max_segments: None,
                 max_apdu_length: 1476,
                 invoke_id,
-                sequence_number: Some(seq),
-                proposed_window_size: Some(1),
+                sequence_number: Some(seq as u8),
+                proposed_window_size: Some(window),
                 service_choice: ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
-                service_request: parameters.slice(start..parameters.len().min(start + size)),
+                service_request: chunk,
             });
             let mut payload = BytesMut::new();
             encode_apdu(&mut payload, &segment).unwrap();
@@ -157,21 +168,42 @@ fn has_sent(log: &SendLog, want: impl Fn(&Apdu) -> bool) -> bool {
         .any(|apdu| want(&apdu))
 }
 
-/// Send [`event_segments`] under `invoke_id` from the peer to the node, each
-/// once the node has acknowledged the one before, and wait for the server's
-/// Simple-ACK.
+/// Send [`event_parameters`] under `invoke_id` from the peer to the node in
+/// 3 segments, each once the node has acknowledged the one before, and wait
+/// for the server's Simple-ACK.
 async fn notify(wire: &Wire, log: &SendLog, invoke_id: u8) {
+    let parameters = event_parameters();
+    let size = parameters.len().div_ceil(3);
+    notify_with(wire, log, invoke_id, &parameters, size, 1).await;
+}
+
+/// [`notify`], with `parameters` in segments of `size` octets, a `window`
+/// of them at a time.
+async fn notify_with(
+    wire: &Wire,
+    log: &SendLog,
+    invoke_id: u8,
+    parameters: &Bytes,
+    size: usize,
+    window: u8,
+) {
     let (node, peer) = (Wire::mac(NODE), Wire::mac(PEER));
-    for (seq, segment) in event_segments(invoke_id).into_iter().enumerate() {
+    let segments = event_segments(invoke_id, parameters, size, window);
+    let (last, mut acknowledged) = (segments.len() - 1, 0);
+    for (seq, segment) in segments.into_iter().enumerate() {
         wire.deliver(&node, wire::frame(&peer, segment, false));
-        let acknowledged = |apdu: &Apdu| {
+        if seq != 0 && seq != acknowledged + usize::from(window) && seq != last {
+            continue;
+        }
+        let ack = |apdu: &Apdu| {
             matches!(apdu, Apdu::SegmentAck(ack)
                 if ack.invoke_id == invoke_id && usize::from(ack.sequence_number) == seq)
         };
         eventually(WAIT, "the segment acknowledged", async || {
-            has_sent(log, acknowledged)
+            has_sent(log, ack)
         })
         .await;
+        acknowledged = seq;
     }
     eventually(WAIT, "the server's Simple-ACK", async || {
         has_sent(
@@ -233,6 +265,53 @@ async fn a_full_seat_holds_up_no_answer_to_a_segmented_event_notification() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(seat.apdus.try_recv().is_err(), "once, and no segment");
     assert_eq!(session.client_seat_counters().full_drops, 1);
+
+    drop(seat);
+    session.stop().await.unwrap();
+}
+
+/// A client seat nobody reads holds at most
+/// [`MAX_REASSEMBLED_COPY_OCTETS`] in copies of reassembled requests
+/// (#2743): past it the server still answers, and the copy is dropped and
+/// counted; once the client has taken and let go of its copies, the next
+/// one fits.
+#[tokio::test(start_paused = true)]
+async fn copies_past_their_octets_are_dropped_and_the_server_still_answers() {
+    let wire = Wire::new();
+    let port = wire.port_with_queue(NODE, 1_024);
+    let log = port.sent();
+    let mut session =
+        EndpointSession::new(port.build(), SessionRole::Both, SessionConfig::default())
+            .unwrap()
+            .device(crate::DeviceIdentity::new(123, 42).unwrap());
+    session.start().await.unwrap();
+    let mut seat = session.client_seat().unwrap();
+    // About as long as a request in segments gets: 255 segments of 1476
+    // octets, 127 at a time. So many of their copies fit in the bound, and
+    // one more doesn't.
+    let large = event_parameters_with("x".repeat(376_000));
+    let fits = MAX_REASSEMBLED_COPY_OCTETS / (large.len() + 4);
+    assert!(fits < 192, "the bound, not the seat's slots, refuses it");
+    for invoke_id in 11..=11 + fits as u8 {
+        notify_with(&wire, &log, invoke_id, &large, 1476, 127).await;
+    }
+    let counters = session.client_seat_counters();
+    assert_eq!((counters.apdus, counters.full_drops), (fits as u64, 1));
+
+    let taken: Vec<ReceivedApdu> = std::iter::from_fn(|| seat.apdus.try_recv().ok()).collect();
+    assert_eq!(taken.len(), fits);
+    drop(taken);
+    notify_with(&wire, &log, 40, &large, 1476, 127).await;
+    let copy = tokio::time::timeout(WAIT, seat.apdus.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let Ok(Apdu::ConfirmedRequest(whole)) = decode_apdu(copy.apdu.clone()) else {
+        panic!("not a request");
+    };
+    assert_eq!((whole.invoke_id, whole.service_request), (40, large));
+    let counters = session.client_seat_counters();
+    assert_eq!((counters.apdus, counters.full_drops), (fits as u64 + 1, 1));
 
     drop(seat);
     session.stop().await.unwrap();

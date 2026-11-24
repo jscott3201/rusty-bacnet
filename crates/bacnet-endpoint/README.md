@@ -136,31 +136,31 @@ async fn main() -> Result<(), bacnet_types::error::Error> {
 
 ## The client on the session
 
-[`EndpointSession::client`](session::EndpointSession::client) gives
-a full `bacnet-client` `BACnetClient` on the session's one transport, beside
-the server role: discovery in every scope,
-segmented reads, files, COV, router discovery, and the link's own calls and
-frame tap through its `transport()`. A running session of any role gives one,
-one at a time: it is owned, so keep it and share it by reference or in an
-`Arc`. It shares the session's invoke-ID pool,
-so its requests and the server role's notifications never collide, and
+[`EndpointSession::client`](session::EndpointSession::client) gives a full
+`bacnet-client` `BACnetClient` on the session's one transport, beside the
+server role: discovery in every scope, segmented reads, files, COV, router
+discovery, and the link's own calls and frame tap through its `transport()`. A
+running session of any role gives one, one at a time: it is owned, so keep it
+and share it by reference or in an `Arc`. It shares the session's invoke-ID
+pool, so its requests and the server role's notifications never collide, and
 `bacnet_ops::Client::over` takes it as it is. Beside a server role the client
 answers only the COV notifications of its own subscriptions; the server
 answers everything else, a ConfirmedEventNotification among them, which the
 client hears a copy of. Of one that comes in segments the server hands the
 client the whole notification once it has reassembled it (#2743), so the
-client publishes it once either way. The session has the one owner of the
-local network number. With a source Audit Reporter the session audits the
-client's reads and writes, each owned by the session once admitted (#2617);
-an audited write whose value isn't whole application data is refused before it is sent, where an
-unaudited one sends its value as given. One stop stops the session with the client
-still alive (#2617): its tasks end, its open requests fail and the link stops.
-From then on the client sends nothing more: its requests and unconfirmed sends
-fail at once, and a call made directly on its `transport()`, such as a BVLC
-query, fails with the transport's stopped error. Dropping the client afterwards
-changes nothing. Dropping the session without a stop ends the client the same
-way and aborts the link the client still holds: nothing graceful is sent, and
-the link's sockets close as the runtime drops its aborted tasks.
+client publishes it once per transmission either way. The session has the one
+owner of the local network number. With a source Audit Reporter the session
+audits the client's reads and writes, each owned by the session once admitted
+(#2617); an audited write whose value isn't whole application data is refused
+before it is sent, where an unaudited one sends its value as given. One stop
+stops the session with the client still alive (#2617): its tasks end, its open
+requests fail and the link stops. From then on the client sends nothing more:
+its requests and unconfirmed sends fail at once, and a call made directly on
+its `transport()`, such as a BVLC query, fails with the transport's stopped
+error. Dropping the client afterwards changes nothing. Dropping the session
+without a stop ends the client the same way and aborts the link the client
+still holds: nothing graceful is sent, and the link's sockets close as the
+runtime drops its aborted tasks.
 
 ## The server role
 

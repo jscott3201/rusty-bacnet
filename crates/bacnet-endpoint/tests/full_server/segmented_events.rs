@@ -1,24 +1,26 @@
 //! A ConfirmedEventNotification that comes in segments to a node with both
 //! roles (#2743): the server reassembles and answers it, as it always did,
 //! and hands the whole notification to the node's client, which publishes it
-//! once, as it publishes one that comes whole.
+//! once per transmission, as it publishes one that comes whole.
 use super::segmentation::{identity, node};
 use super::segmentation_wire::{abort, ack, count, from_peer, peer, sent};
 use super::*;
 use bacnet_client::client::{
     COVEvent, ClientOptions, EventNotificationDelivery, ReceivedEventNotification,
 };
+use bacnet_encoding::npdu::NpduAddress;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_types::enums::{AbortReason, Segmentation};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
-const EVENT: ConfirmedServiceChoice = ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION;
+pub(super) const EVENT: ConfirmedServiceChoice =
+    ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION;
 
 /// The peer's notification for `process`, with a message long enough to
 /// split into several segments.
-fn notification(process: u32) -> EventNotificationRequest {
+pub(super) fn notification(process: u32) -> EventNotificationRequest {
     EventNotificationRequest {
         process_identifier: process,
         initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, PEER_DEVICE)
@@ -38,7 +40,7 @@ fn notification(process: u32) -> EventNotificationRequest {
 }
 
 /// [`notification`]'s service parameters.
-fn parameters(process: u32) -> Bytes {
+pub(super) fn parameters(process: u32) -> Bytes {
     let mut encoded = BytesMut::new();
     encode_event_notification(&notification(process), &mut encoded).unwrap();
     encoded.freeze()
@@ -46,7 +48,7 @@ fn parameters(process: u32) -> Bytes {
 
 /// `body` for `service` in `parts` segments under `invoke_id`, each
 /// proposing `window`.
-fn segments(
+pub(super) fn segments(
     service: ConfirmedServiceChoice,
     invoke_id: u8,
     body: &Bytes,
@@ -73,12 +75,12 @@ fn segments(
 }
 
 /// The event notification for `process` in `parts` segments.
-fn event_segments(invoke_id: u8, process: u32, parts: usize, window: u8) -> Vec<Apdu> {
+pub(super) fn event_segments(invoke_id: u8, process: u32, parts: usize, window: u8) -> Vec<Apdu> {
     segments(EVENT, invoke_id, &parameters(process), parts, window)
 }
 
 /// The same notification, whole.
-fn whole(invoke_id: u8, process: u32) -> Apdu {
+pub(super) fn whole(invoke_id: u8, process: u32) -> Apdu {
     Apdu::ConfirmedRequest(ConfirmedRequest {
         segmented: false,
         more_follows: false,
@@ -93,26 +95,64 @@ fn whole(invoke_id: u8, process: u32) -> Apdu {
     })
 }
 
+/// Put `apdu` in front of the node, from the peer itself, or, with
+/// `source`, from a device behind the peer acting as its router.
+pub(super) fn deliver(wire: &Wire, apdu: &Apdu, source: Option<&NpduAddress>) {
+    let Some(source) = source else {
+        return from_peer(wire, apdu);
+    };
+    let mut payload = BytesMut::new();
+    encode_apdu(&mut payload, apdu).unwrap();
+    let npdu = Npdu {
+        expecting_reply: matches!(apdu, Apdu::ConfirmedRequest(_)),
+        source: Some(source.clone()),
+        payload: payload.freeze(),
+        ..Npdu::default()
+    };
+    let mut encoded = BytesMut::new();
+    encode_npdu(&mut encoded, &npdu).unwrap();
+    wire.deliver(
+        &Wire::mac(NODE),
+        wire::frame(&peer(), encoded.freeze(), false),
+    );
+}
+
 /// Send `parts` as a requester does: segment zero alone, then a window at
 /// a time, each once the node has acknowledged the window before it.
-async fn send(wire: &Wire, log: &SendLog, parts: &[Apdu]) {
+pub(super) async fn send(wire: &Wire, log: &SendLog, parts: &[Apdu]) {
+    send_from(wire, log, parts, None).await;
+}
+
+/// [`send`], from `source` behind the peer when there is one. Each
+/// acknowledgment waited for is a new one, so a transfer sent again waits
+/// for its own.
+pub(super) async fn send_from(
+    wire: &Wire,
+    log: &SendLog,
+    parts: &[Apdu],
+    source: Option<&NpduAddress>,
+) {
     let mut acknowledged = 0;
     for (seq, part) in parts.iter().enumerate() {
         let Apdu::ConfirmedRequest(segment) = part else {
             unreachable!()
         };
         let window = usize::from(segment.proposed_window_size.unwrap());
-        from_peer(wire, part);
+        let want = ack(true, segment.invoke_id, seq as u8);
+        let before = count(log, &want);
+        deliver(wire, part, source);
         if seq == 0 || seq == acknowledged + window || seq + 1 == parts.len() {
-            let id = segment.invoke_id;
-            sent(log, "the node's Segment-ACK", ack(true, id, seq as u8)).await;
+            eventually(WAIT, "the node's Segment-ACK", async || {
+                count(log, &want) > before
+            })
+            .await;
             acknowledged = seq;
         }
     }
 }
 
 /// The node's Simple-ACK of an event notification under `invoke_id`.
-fn acknowledged(invoke_id: u8) -> impl Fn(&Apdu) -> bool {
+pub(super) fn acknowledged(invoke_id: u8) -> impl Fn(&Apdu) -> bool {
     move |apdu| {
         matches!(apdu, Apdu::SimpleAck(ack)
             if ack.invoke_id == invoke_id && ack.service_choice == EVENT)
@@ -120,7 +160,9 @@ fn acknowledged(invoke_id: u8) -> impl Fn(&Apdu) -> bool {
 }
 
 /// The next notification `events` publishes, failing rather than hanging.
-async fn heard(events: &mut Receiver<ReceivedEventNotification>) -> ReceivedEventNotification {
+pub(super) async fn heard(
+    events: &mut Receiver<ReceivedEventNotification>,
+) -> ReceivedEventNotification {
     tokio::time::timeout(WAIT, events.recv())
         .await
         .expect("no event notification published")
@@ -128,20 +170,20 @@ async fn heard(events: &mut Receiver<ReceivedEventNotification>) -> ReceivedEven
 }
 
 /// `events` publishes nothing more, a second later.
-async fn nothing_more(events: &mut Receiver<ReceivedEventNotification>) {
+pub(super) async fn nothing_more(events: &mut Receiver<ReceivedEventNotification>) {
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
 }
 
 /// Every Abort, Reject and Error the node sent the peer.
-fn refusals(log: &SendLog) -> usize {
+pub(super) fn refusals(log: &SendLog) -> usize {
     count(log, |apdu| {
         matches!(apdu, Apdu::Abort(_) | Apdu::Reject(_) | Apdu::Error(_))
     })
 }
 
 /// A node with both roles that segments both ways.
-async fn both(wire: &Wire) -> (EndpointSession<TestTransport>, SendLog) {
+pub(super) async fn both(wire: &Wire) -> (EndpointSession<TestTransport>, SendLog) {
     let mode = Segmentation::SEGMENTED_BOTH;
     let (session, log, _link) = node(wire, SessionRole::Both, identity(NODE_DEVICE, mode)).await;
     (session, log)
@@ -238,6 +280,13 @@ async fn a_notification_that_does_not_decode_is_rejected_and_not_published() {
     assert_eq!(first.reject_reason, second.reject_reason);
     nothing_more(&mut events).await;
     assert_eq!(count(&log, |apdu| matches!(apdu, Apdu::SimpleAck(_))), 0);
+    // One Reject each, and a Segment-ACK for each of the two segments.
+    assert_eq!(
+        (count(&log, rejected(0x71)), count(&log, rejected(0x72))),
+        (1, 1)
+    );
+    let segment_acks = count(&log, |apdu| matches!(apdu, Apdu::SegmentAck(_)));
+    assert_eq!((segment_acks, refusals(&log)), (2, 2));
 
     drop(client);
     session.stop().await.unwrap();

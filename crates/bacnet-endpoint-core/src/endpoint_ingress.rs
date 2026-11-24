@@ -43,7 +43,7 @@ tokio::task_local! {
 }
 use routing::{ControlTee, IngressDrops, IngressQueues, next_apdu, route_received};
 pub use routing::{DROP_LOG_INTERVAL, IngressDropCounters};
-pub(crate) use routing::{reserve, share_reassembled};
+pub(crate) use routing::{copied_when_reassembled, reserve, share_reassembled};
 
 /// What [`EndpointIngress::observe_sources`] calls with each APDU from
 /// another network that it shows.

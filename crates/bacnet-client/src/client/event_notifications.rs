@@ -77,7 +77,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// client receives segments, and then published and acknowledged once
     /// (#2646). Beside a server role the server reassembles and answers it,
     /// and hands the client the whole notification, which it publishes once
-    /// and doesn't answer (#2743). Stopping the client ends
+    /// per transmission and doesn't answer (#2743). Stopping the client ends
     /// dispatch; dropping it closes the channel after queued messages.
     pub fn event_notifications(&self) -> broadcast::Receiver<ReceivedEventNotification> {
         self.event_tx.subscribe()

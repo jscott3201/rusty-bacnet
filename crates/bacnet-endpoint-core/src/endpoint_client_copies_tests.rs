@@ -1,11 +1,14 @@
 //! The line from a node's server to its client (#2743): a
 //! ConfirmedEventNotification that came in segments reaches the client seat
 //! only once the server has it whole, as one APDU with no reply authority,
-//! by the rule and in the tier of a copy of one that came whole. Its
-//! segments never reach the client seat.
+//! by the rule and in the tier of a copy of one that came whole, within a
+//! bound on the octets such copies hold. Its segments never reach the client
+//! seat.
 use super::*;
 use crate::coordinator::OutboundTransactionCoordinator;
-use crate::seat::{ClientSeat, SeatRoles, ServerSeat};
+use crate::seat::{
+    CLIENT_SEAT_QUEUE, ClientSeat, MAX_REASSEMBLED_COPY_OCTETS, SeatRoles, ServerSeat,
+};
 use bacnet_encoding::apdu::{ConfirmedRequest, encode_apdu};
 use bacnet_types::enums::ConfirmedServiceChoice;
 
@@ -205,4 +208,44 @@ async fn with_no_client_nothing_is_handed_on() {
     timeout(WAIT, endpoint.stop()).await.unwrap().unwrap();
     drop((endpoint, server));
     copies.reassembled(&last, &event);
+}
+
+/// Copies of reassembled requests hold at most
+/// [`MAX_REASSEMBLED_COPY_OCTETS`] on the client seat: one past it is
+/// dropped and counted before it is made, and each copy's octets come back
+/// once the client lets go of it. A copy of a request that came whole is
+/// not counted there.
+#[tokio::test]
+async fn reassembled_copies_hold_a_bounded_number_of_octets() {
+    let mut node = node(true, CLIENT_SEAT_QUEUE).await;
+    let last = last_segment(&mut node).await;
+    let large = MAX_REASSEMBLED_COPY_OCTETS / 4;
+    let event = ConfirmedRequest {
+        service_request: Bytes::from(vec![0x09; large]),
+        ..whole(ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION, &[])
+    };
+    let octets = large + 4;
+    let seats = Arc::clone(node.endpoint.seats.as_ref().unwrap());
+    for _ in 0..4 {
+        node.server.client_copies.reassembled(&last, &event);
+    }
+    // Three fit; a fourth would pass the bound.
+    let counters = node.endpoint.client_seat_counters();
+    assert_eq!((counters.apdus, counters.full_drops), (3, 1));
+    assert_eq!(seats.reassembled_octets(), 3 * octets);
+    inject(&node.link, EVENT_NOTIFICATION).await;
+    receive(&mut node.server.apdus).await;
+    assert_eq!(node.endpoint.client_seat_counters().apdus, 4);
+    assert_eq!(seats.reassembled_octets(), 3 * octets, "a whole one's copy");
+
+    // Held while the client holds the copy, given back once it lets go.
+    let taken = node.client.apdus.try_recv().unwrap();
+    assert_eq!(taken.apdu.len(), octets);
+    assert_eq!(seats.reassembled_octets(), 3 * octets);
+    drop(taken);
+    assert_eq!(seats.reassembled_octets(), 2 * octets);
+    node.server.client_copies.reassembled(&last, &event);
+    assert_eq!(node.endpoint.client_seat_counters().apdus, 5);
+    while node.client.apdus.try_recv().is_ok() {}
+    assert_eq!(seats.reassembled_octets(), 0);
 }
