@@ -7,9 +7,9 @@
 #![forbid(unsafe_code)]
 
 use std::future::Future;
+use std::net::Ipv4Addr;
 use std::pin::Pin;
 use std::time::Duration;
-use std::{io::IsTerminal, net::Ipv4Addr};
 
 use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
@@ -28,6 +28,7 @@ mod decode;
 mod destination;
 mod entry;
 mod foreign;
+mod formats;
 mod heap;
 #[cfg(feature = "mcp")]
 mod mcp;
@@ -50,23 +51,6 @@ use args::{Cli, Command};
 use bip_commands::execute_bip_command;
 use heap::boxed;
 use output::OutputFormat;
-
-fn resolve_format(cli: &Cli) -> OutputFormat {
-    if cli.json {
-        return OutputFormat::Json;
-    }
-    match cli.format.as_deref() {
-        Some("json") => OutputFormat::Json,
-        Some("table") => OutputFormat::Table,
-        _ => {
-            if std::io::stdout().is_terminal() {
-                OutputFormat::Table
-            } else {
-                OutputFormat::Json
-            }
-        }
-    }
-}
 
 /// A boxed future, as the one-shot dispatch's helpers return them (see
 /// [`heap`]).
@@ -118,9 +102,6 @@ async fn execute_command<T: TransportPort + 'static>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Plain `bacnet` became `tui` while parsing (see `entry`).
     let cmd = cli.command.as_ref().expect("a command after parsing");
-    // `--format csv` is the inventory's alone; `--json` outranks it, as it
-    // does `--format table`.
-    let csv = !cli.json && cli.format.as_deref() == Some("csv");
     match cmd {
         Command::Tui { .. }
         | Command::Mcp { .. }
@@ -190,8 +171,7 @@ async fn execute_command<T: TransportPort + 'static>(
             boxed(|| commands::export::export_cmd(client, format)).await?
         }
         Command::Inventory { .. } => {
-            let layout = commands::inventory::Layout::of(csv, format);
-            let args = commands::inventory::InventoryArgs::of(cmd, layout);
+            let args = commands::inventory::InventoryArgs::of(cmd, formats::layout(cli));
             boxed(|| commands::inventory::inventory_cmd(client, args)).await?;
         }
         Command::Readm { target, specs } => {
@@ -568,11 +548,16 @@ fn dispatch(
     confirm: &mut dyn guard::Confirm,
     network: impl FnOnce(Cli) -> CliResult,
 ) -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
+    // A format the command doesn't print is a usage error, before anything
+    // else runs (#2778).
+    if let Some(status) = formats::refuse(&cli) {
+        return Ok(status);
+    }
     if let Some(Command::ScCheck { at_unix }) = cli.command {
         let status = sc_check::execute(
             &cli,
             at_unix,
-            resolve_format(&cli),
+            formats::output(&cli),
             &mut std::io::stdout().lock(),
             &mut std::io::stderr().lock(),
         );
@@ -581,7 +566,7 @@ fn dispatch(
     if let Some(Command::MstpPorts) = cli.command {
         let status = mstp::ports_cmd(
             mstp::list_ports(),
-            resolve_format(&cli),
+            formats::output(&cli),
             &mut std::io::stdout().lock(),
             &mut std::io::stderr().lock(),
         );
@@ -589,7 +574,7 @@ fn dispatch(
     }
     if let Err(refusal) = guard_one_shot(&cli, confirm) {
         // Errors go to stderr and leave stdout empty, in either format.
-        match resolve_format(&cli) {
+        match formats::output(&cli) {
             OutputFormat::Json => eprintln!("{}", refusal.to_json()),
             OutputFormat::Table => output::print_error(&refusal.message),
         }
@@ -655,7 +640,7 @@ async fn cli_main(cli: Box<Cli>) -> CliResult {
         return boxed(|| run_mcp(*cli)).await;
     }
     output::setup_tracing(cli.verbose);
-    let format = resolve_format(&cli);
+    let format = formats::output(&cli);
 
     // A one-shot binds --interface, or every interface without it.
     let interface = cli.interface.unwrap_or(Ipv4Addr::UNSPECIFIED);

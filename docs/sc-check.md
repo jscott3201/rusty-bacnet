@@ -36,7 +36,8 @@ leaf signed directly by a configured CA.
 values. Omission samples the clock once. This is the only local command option.
 `--format table` forces human output through a pipe; `--format json` forces JSON.
 Otherwise the terminal gets human output and a pipe gets JSON. `--json` takes
-precedence over `--format table`, but an invalid format is always a usage error.
+precedence over `--format table`, but an unknown format, or `csv`, is always a
+usage error.
 Verbosity flags are accepted without initializing logging.
 
 Explicit transport options are usage errors, even when their value equals the

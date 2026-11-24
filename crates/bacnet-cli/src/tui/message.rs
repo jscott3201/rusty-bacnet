@@ -231,6 +231,10 @@ pub(crate) struct Failure {
     pub(crate) summary: String,
     /// The whole error.
     pub(crate) detail: String,
+    /// The code of the OS error under the failure, if one caused it. The
+    /// tests judge by it whether another socket held a port the session
+    /// tried to bind (#2776).
+    pub(crate) os_code: Option<i32>,
 }
 
 impl Failure {
@@ -238,23 +242,39 @@ impl Failure {
     /// as such, anything else as its message.
     pub(crate) fn of(error: &bacnet_types::error::Error) -> Self {
         use bacnet_types::error::Error;
-        let summary = match error {
-            Error::Transport(io) => io_summary(io),
-            Error::Timeout(_) => "timed out".to_string(),
-            other => other.to_string(),
+        let (summary, os_code) = match error {
+            Error::Transport(io) => (io_summary(io), os_code(io)),
+            Error::Timeout(_) => ("timed out".to_string(), None),
+            other => (other.to_string(), None),
         };
         Self {
             summary,
             detail: error.to_string(),
+            os_code,
         }
     }
 
     /// `error` with `context` (a serial port, say) in front of both parts.
     pub(crate) fn within(context: &str, error: &bacnet_types::error::Error) -> Self {
-        let Self { summary, detail } = Self::of(error);
+        let Self {
+            summary,
+            detail,
+            os_code,
+        } = Self::of(error);
         Self {
             summary: format!("{context}: {summary}"),
             detail: format!("{context}: {detail}"),
+            os_code,
+        }
+    }
+
+    /// An I/O error that `context` (the passive listener, say) hit: worded
+    /// as [`Self::text`] words `context: error`, and keeping the code of the
+    /// OS error under it.
+    pub(crate) fn io(context: &str, error: &std::io::Error) -> Self {
+        Self {
+            os_code: os_code(error),
+            ..Self::text(format!("{context}: {error}"))
         }
     }
 
@@ -267,6 +287,7 @@ impl Failure {
         Self {
             summary: strip_os_error(&detail).to_string(),
             detail,
+            os_code: None,
         }
     }
 }
@@ -291,6 +312,11 @@ fn io_summary(error: &std::io::Error) -> String {
         Some(os) => os.kind().to_string(),
         None => strip_os_error(&error.to_string()).to_string(),
     }
+}
+
+/// The code of the OS error in `error`'s source chain, if there is one.
+fn os_code(error: &std::io::Error) -> Option<i32> {
+    os_error(error).and_then(std::io::Error::raw_os_error)
 }
 
 /// The first error in `error`'s source chain, `error` included, that
@@ -529,12 +555,18 @@ mod tests {
             "{}",
             failure.detail
         );
+        // The OS error's code stays under the advice (#2776).
+        let code = failure.os_code.expect("the OS error's code");
+        let kind = std::io::Error::from_raw_os_error(code).kind();
+        assert_eq!(kind, std::io::ErrorKind::AddrInUse);
         // An `io::Error` that wraps the OS error directly, whose `source()`
         // skips it.
         let os = std::net::UdpSocket::bind(holder.local_addr().unwrap()).unwrap_err();
+        let code = os.raw_os_error();
         let direct = std::io::Error::new(os.kind(), os);
         assert_eq!(direct.raw_os_error(), None);
         let failure = Failure::of(&bacnet_types::error::Error::Transport(direct));
         assert_eq!(failure.summary, "address in use");
+        assert_eq!(failure.os_code, code);
     }
 }

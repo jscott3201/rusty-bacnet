@@ -75,6 +75,22 @@ async fn capture_read_output_is_unchanged() {
         String::from_utf8(output.stderr).unwrap(),
         "\nCaptured 1 packets\n"
     );
+    // `--format table`: the same packet as a line, not JSON (#2778).
+    let output = run([
+        "capture",
+        "--read",
+        path.to_str().unwrap(),
+        "--format",
+        "table",
+    ])
+    .await;
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(output.status.success(), "{text}");
+    assert_eq!(text.lines().count(), 1, "{text}");
+    assert!(
+        text.starts_with("12:34:56.789") && text.contains("WHO_IS"),
+        "{text}"
+    );
 }
 
 #[tokio::test]

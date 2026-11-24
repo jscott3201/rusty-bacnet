@@ -134,11 +134,11 @@ impl Net {
         net
     }
 
-    /// [`Self::start`] for a session bound to `port`, a port the test picked
-    /// and freed (#2718). A failed start probes it, so a port another socket
-    /// took comes back as the probe's bind error for `rerun_on_lost_port`;
-    /// a failure on a free port panics.
-    pub(super) async fn start_on(plan: ConnectPlan, port: u16) -> std::io::Result<Self> {
+    /// [`Self::start`] for a session bound to a port the test picked and
+    /// freed (#2718). A failed start comes back for `rerun_on_lost_port` when
+    /// the session's own bind found another socket on the port, and panics
+    /// otherwise (`lost_port`, #2776).
+    pub(super) async fn start_on(plan: ConnectPlan) -> std::io::Result<Self> {
         let (sink, events) = EventSink::channel(EVENT_CHANNEL_CAPACITY);
         let (commands, rx) = mpsc::channel(16);
         let task = coordinator::spawn(Some(plan), None, sink, rx, Default::default());
@@ -153,13 +153,10 @@ impl Net {
                 .await
                 .expect("timed out waiting for the connection")
                 .expect("the worker is running");
-            if let WorkerEvent::Session { event: inner, .. } = &event
-                && let WorkerEvent::ConnectFailed { error } = inner.as_ref()
-            {
+            if let Some(error) = super::connect_failure(&event) {
                 let error = error.clone();
                 net.stop().await;
-                std::net::UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))?;
-                panic!("connection failed on a free port: {error}");
+                return Err(super::lost_port(&error));
             }
             let commands = worker(&mut net.app, event);
             net.send(commands).await;

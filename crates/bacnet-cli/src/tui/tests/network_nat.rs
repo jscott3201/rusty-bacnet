@@ -236,7 +236,7 @@ async fn translated_registration() -> std::io::Result<()> {
         args: profile.transport_args().unwrap(),
         await_interface: false,
     };
-    let mut net = match Net::start_on(plan, client.port()).await {
+    let mut net = match Net::start_on(plan).await {
         Ok(net) => net,
         Err(lost) => {
             relay.abort();
