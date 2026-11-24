@@ -5,13 +5,15 @@
 //!
 //! A page takes the device's Object_List from `bacnet_list_objects`' cache
 //! (read whole, or element by element and resumed across calls), reads the
-//! device's name, then reads the objects of the selected types one at a
-//! time from the cursor's place, each as the inventory's point record
-//! ([`Device::point_record`](bacnet_ops::Device::point_record)).
-//! Its Turtle stays under [`MAX_TURTLE`] bytes: it ends before an object
-//! likely to pass that, and an object that passes it anyway goes back to
-//! the next page, to be read again there; a point too large for any page
-//! goes out alone. It ends too at the call's budget or at [`PAGE`]
+//! device's name, then reads the objects of the selected types from the
+//! cursor's place as the inventory's point records, in batches, each one
+//! call of [`Device::point_records`](bacnet_ops::Device::point_records)
+//! (one ReadPropertyMultiple while the device answers).
+//! Its Turtle stays under [`MAX_TURTLE`] bytes: a batch holds no more
+//! objects than are likely to fit, and an object that passes it anyway
+//! goes back to the next page with those after it, to be read again there;
+//! a point too large for any page goes out alone. It ends too at the
+//! call's budget, checked between batches, or at [`PAGE`]
 //! objects. The cursor points at the first object not on the page, and is
 //! bound to the list it was cut from ([`Position`]): a list that changed
 //! between pages is refused rather than paged wrong. Each page is a Turtle
@@ -28,7 +30,7 @@ use bacnet_ops::export::s223::{
 };
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::parse::parse_object_type;
-use bacnet_ops::{InventoryOptions, Priority};
+use bacnet_ops::{InventoryOptions, OpsError, Priority};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
@@ -56,10 +58,11 @@ pub(super) const SPEC: Spec = Spec {
                   its own in the second text block, under 24,000 bytes (a point larger than \
                   that alone gets a page of its own, flagged oversized); call again with \
                   next_cursor for the next. Costs the Object_List read once (cached, element by \
-                  element across calls when it must be), the device name each page, and one \
-                  request per object (several per object from a device that refuses \
-                  ReadPropertyMultiple). The structured content summarises the page. \
-                  Read-only.",
+                  element across calls when it must be), the device name each page, and the \
+                  objects in batches, one ReadPropertyMultiple for up to 16 objects or 32 \
+                  properties (one ReadProperty a property from a device that refuses it): a \
+                  200-object controller takes about 36 requests. The structured content \
+                  summarises the page. Read-only.",
     input,
     output,
     idempotent: true,
@@ -283,32 +286,45 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let cap = ctx.policy.caps.objects.min(PAGE);
     let mut page = Page::new(device_info, &turtle_options);
     let mut resume = None;
-    for (at, &object) in matching.iter().enumerate().skip(first) {
+    let mut at = first;
+    // A batch a call: one ReadPropertyMultiple while the device answers,
+    // and no more objects than the page can still take.
+    'page: while at < matching.len() {
         let read = page.inventory.entries.len();
         if page.full(cap) || (read > 0 && call.out_of_time()) {
             resume = Some(at);
             break;
         }
-        match device.handle.point_record(object, &options).await {
-            Ok(record) => {
-                if !page.push(exported(&record)) {
-                    // Past the cap with others: it heads the next page.
-                    resume = Some(at);
-                    break;
-                }
-            }
+        let batch = &matching[at..at + page.room(cap).min(matching.len() - at)];
+        let batch = &batch[..device.handle.point_batch(batch, &options)];
+        let records = match device.handle.point_records(batch, &options).await {
+            Ok(records) => records,
             Err(error) if read == 0 => return Err(ToolError::device(instance, &error)),
+            // Refused before its request went (the route gone, say).
             Err(error) => {
-                // Later objects would fail the same way: stop here, say
-                // why, and let the cursor try this one again.
-                if error.timed_out() {
-                    call.timed_out();
-                }
-                page.inventory.stopped = Some(format!("{}: {error}", object_label(object)));
-                body["stopped"] = ToolError::device(instance, &error).json();
+                stop(&mut page, &mut body, (instance, batch[0]), &error, call);
                 resume = Some(at);
                 break;
             }
+        };
+        for record in &records.points {
+            if !page.push(exported(record)) {
+                // Past the cap with others: it heads the next page.
+                resume = Some(at);
+                break 'page;
+            }
+            at += 1;
+        }
+        if let Some(error) = &records.stopped {
+            if page.inventory.entries.is_empty() {
+                return Err(ToolError::device(instance, error));
+            }
+            // Later objects would fail the same way: stop here, say why,
+            // and let the cursor try the first one not read again.
+            let next = records.unread.first().copied().unwrap_or(batch[0]);
+            stop(&mut page, &mut body, (instance, next), error, call);
+            resume = Some(at);
+            break;
         }
     }
     let (text, counts) = page.render();
@@ -330,6 +346,23 @@ pub(super) async fn run<T: TransportPort + 'static>(
     }));
     *out = Some(turtle);
     Ok(body)
+}
+
+/// End a page because the device stopped answering at `object`, or the
+/// way to it failed there, with `error`: the page's Turtle header and the
+/// summary's `stopped` say so.
+fn stop(
+    page: &mut Page<'_>,
+    body: &mut Value,
+    (device, object): (u32, ObjectIdentifier),
+    error: &OpsError,
+    call: &Call,
+) {
+    if error.timed_out() {
+        call.timed_out();
+    }
+    page.inventory.stopped = Some(format!("{}: {error}", object_label(object)));
+    body["stopped"] = ToolError::device(device, error).json();
 }
 
 /// Copy `from`'s fields into `into`.
@@ -410,6 +443,21 @@ impl<'a> Page<'a> {
     pub(super) fn full(&self, cap: usize) -> bool {
         let read = self.inventory.entries.len();
         read > 0 && (read >= cap || self.size + self.largest + NOTE_ROOM > MAX_TURTLE)
+    }
+
+    /// How many more objects the page can take: up to `cap` in all, and,
+    /// once it holds one, as many as fit under [`MAX_TURTLE`] with the
+    /// comment lines if each added as much as its largest so far. A
+    /// page's first batch has no such guess, and takes at least one
+    /// object, as every page reads one.
+    pub(super) fn room(&self, cap: usize) -> usize {
+        let read = self.inventory.entries.len();
+        let left = cap.saturating_sub(read);
+        if read == 0 {
+            return left.max(1);
+        }
+        let bytes = MAX_TURTLE.saturating_sub(self.size + NOTE_ROOM);
+        left.min(bytes / self.largest.max(1))
     }
 }
 

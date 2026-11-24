@@ -177,6 +177,10 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// Addresses whose device refused ReadPropertyMultiple, read by
     /// ReadProperty from then on.
     no_rpm: Mutex<HashSet<DeviceAddress>>,
+    /// The most objects a batch of point records asks for at each address
+    /// whose device couldn't send a larger batch's answer
+    /// ([`Device::point_records`]), never more than it was.
+    batches: Mutex<HashMap<DeviceAddress, usize>>,
     /// Watch hubs made on this client, so each takes its own range of
     /// subscriber process identifiers (#2185).
     hubs: AtomicU32,
@@ -232,6 +236,7 @@ impl<T: TransportPort + 'static> Client<T> {
                 client,
                 limits,
                 no_rpm: Mutex::new(HashSet::new()),
+                batches: Mutex::new(HashMap::new()),
                 hubs: AtomicU32::new(0),
                 hub: Mutex::new(crate::watch::OwnHub::new()),
                 cov: Mutex::new(HashMap::new()),
@@ -402,6 +407,26 @@ impl<T: TransportPort + 'static> Client<T> {
     /// Remember that the device at `address` refused ReadPropertyMultiple.
     pub(crate) fn refuse_rpm(&self, address: &DeviceAddress) {
         lock(&self.shared.no_rpm).insert(address.clone());
+    }
+
+    /// The most objects a batch of point records asks for at `device`:
+    /// [`batch::MAX_BATCH`] until its device couldn't send a batch's answer
+    /// for its size.
+    pub(crate) fn batch_most(&self, device: &DeviceAddress) -> usize {
+        lock(&self.shared.batches)
+            .get(device)
+            .copied()
+            .unwrap_or(batch::MAX_BATCH)
+    }
+
+    /// Remember that batches of point records at `device` hold at most
+    /// `most` objects, when that is fewer than before.
+    pub(crate) fn settle_batch(&self, device: &DeviceAddress, most: usize) {
+        if most < batch::MAX_BATCH {
+            let mut batches = lock(&self.shared.batches);
+            let known = batches.entry(device.clone()).or_insert(most);
+            *known = (*known).min(most);
+        }
     }
 }
 

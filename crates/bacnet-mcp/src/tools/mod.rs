@@ -112,6 +112,17 @@ fn listed(policy: &Policy) -> impl Iterator<Item = (&'static Spec, bool)> + '_ {
         )
 }
 
+/// The tool `name`'s description, for the tests that tie the numbers it
+/// quotes to measured ones.
+#[cfg(test)]
+pub(crate) fn description(name: &str) -> &'static str {
+    let spec = SPECS
+        .iter()
+        .chain(WRITE_SPECS)
+        .find(|spec| spec.name == name);
+    spec.expect("a tool of this server").description
+}
+
 /// Every tool's name, in list order, for the given policy.
 pub(crate) fn names(policy: &Policy) -> Vec<&'static str> {
     listed(policy).map(|(spec, _)| spec.name).collect()

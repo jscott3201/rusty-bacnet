@@ -1,7 +1,7 @@
 //! `bacnet_inventory` (#2779) at its limits: the policy's object page, a
 //! device without ReadPropertyMultiple (one ReadProperty a property), a
-//! page the call's budget ends at the default rates, and an object still
-//! being read well past the budget.
+//! page the call's budget ends at the default rates, a later batch still
+//! being read well past the budget, and a first one stuck past the grace.
 
 use std::time::Duration;
 
@@ -124,13 +124,15 @@ async fn the_budget_ends_a_page_at_the_default_rates() {
     lab.stop().await;
 }
 
-/// An object still being read 7 s past the budget (half the call's
-/// grace) is let go, so the records before it come back as `budget`
-/// rather than the call timing out: here a token a second, an analog
-/// input of 12 ReadProperty requests, and a 14 s budget that the second
-/// object straddles.
+/// A later batch still being read 7 s past the budget (half the call's
+/// grace) is let go, so the batches before it come back as `budget`
+/// rather than the call timing out: here a token a second and analog
+/// inputs of 12 ReadProperty requests each. The first batch, two inputs
+/// (24 properties fit a request's 32 before the refusal is known), is
+/// read whole; the device's refusal then makes a batch one object, and the
+/// third input straddles the 28 s budget.
 #[tokio::test(start_paused = true)]
-async fn an_object_well_past_the_budget_is_let_go() {
+async fn a_batch_well_past_the_budget_is_let_go() {
     let policy = Policy {
         rates: Rates {
             principal: 1,
@@ -138,33 +140,40 @@ async fn an_object_well_past_the_budget_is_let_go() {
             ..Rates::default()
         },
         caps: Caps {
-            budget: Duration::from_secs(14),
+            budget: Duration::from_secs(28),
             ..Caps::default()
         },
         ..Policy::default()
     };
-    let mut lab = inventory_lab(policy, Duration::ZERO, 0, false).await;
+    let mut lab = inventory_lab(policy, Duration::ZERO, 2, false).await;
     lab.refuse_rpm();
     lab.agent.initialize().await;
     let args = json!({ "device": LAB, "types": ["ai"], "values": true, "settings": true,
                        "details": true });
-    let result = lab.agent.call(TOOL, args).await;
+    let result = lab.agent.call(TOOL, args.clone()).await;
     let body = ok(&result);
-    // The list at 0 s, AI:1 from 1 s to 13 s, AI:3 from 14 s, let go at 21 s.
-    assert_eq!(body["read"], json!(1), "{body}");
+    // The list at 0 s; the refused RPM at 1 s, AI:1 from 2 s to 13 s and
+    // AI:3 from 14 s to 25 s; AI:10 from 26 s, let go at 35 s.
+    assert_eq!(body["read"], json!(2), "{body}");
     assert_eq!(body["ended"], json!("budget"));
-    assert_eq!(body["next_object"], json!("analog-input:3"));
-    assert_eq!(body["cost"]["timeouts"], json!(1), "the object let go");
+    assert_eq!(body["next_object"], json!("analog-input:10"));
+    assert_eq!(body["cost"]["timeouts"], json!(1), "the batch let go");
     let elapsed = body["cost"]["elapsed_ms"].as_u64().unwrap();
-    assert!((21_000..22_000).contains(&elapsed), "{elapsed}");
+    assert!((35_000..36_000).contains(&elapsed), "{elapsed}");
+    // The next page starts at the input let go.
+    let mut again = args;
+    again["cursor"] = body["next_cursor"].clone();
+    let rest = lab.agent.call(TOOL, again).await;
+    assert_eq!(object(&points(&rest)[0]), "analog-input:10");
     lab.stop().await;
 }
 
-/// A page's first object still being read the call's grace less a second
+/// A page's first batch still being read the call's grace less a second
 /// past the budget fails the call as a timeout, before the call's own
-/// timeout would, naming the object and the ways past it: here another
-/// caller takes the device's gate between the object's ReadProperty
-/// requests (a token a second) and keeps it.
+/// timeout would, naming the batch's first object, how many the batch
+/// held and the ways past it: here another caller takes the device's gate
+/// between the ReadProperty requests (a token a second) of a batch of two
+/// inputs and keeps it.
 #[tokio::test(start_paused = true)]
 async fn a_stuck_first_object_is_named() {
     let policy = Policy {
@@ -201,6 +210,10 @@ async fn a_stuck_first_object_is_named() {
     let hint = body["hint"].as_str().unwrap();
     assert!(
         hint.contains("bacnet_read") && hint.contains("analog-input, out"),
+        "{hint}"
+    );
+    assert!(
+        hint.starts_with("it and the object after it, read together, outlasted"),
         "{hint}"
     );
     assert_eq!(body["cost"]["timeouts"], json!(1));

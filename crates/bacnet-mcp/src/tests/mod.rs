@@ -19,6 +19,7 @@ mod discovery;
 mod export;
 mod handoff;
 mod inventory;
+mod inventory_cost;
 mod inventory_limits;
 mod known;
 mod legacy;
