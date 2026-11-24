@@ -236,6 +236,12 @@ fn start_read(
     })
 }
 
+/// Station `n` on the link, with no node behind it: nothing it is sent
+/// is answered. Each is a source Audit lane of its own (#2652).
+fn silent(n: usize) -> [u8; 6] {
+    encode_bip_mac([127, 0, 0, 1], u16::try_from(n + 1).unwrap())
+}
+
 #[tokio::test(start_paused = true)]
 async fn source_read_wire_fields_both_roles_modes_and_result_before_delivery() {
     let (peer, mut requests) = network().await;

@@ -20,7 +20,10 @@
 //!
 //! The endpoint client paces through this same type (#1542), before it
 //! reserves an invoke ID, so a request waiting for its turn holds nothing
-//! from the device's shared pool.
+//! from the device's shared pool. On a node that audits the client's
+//! requests, the node takes the turn ([`Turn`]) once it has admitted the
+//! request (#2652): a request that waited for admission still gets the
+//! whole interval after the one before it.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -172,6 +175,36 @@ impl Drop for PaceGuard {
     }
 }
 
+/// A request's turn at its destination, not yet taken: an audited client's,
+/// which its node takes once it has admitted the request (#2652).
+pub(crate) struct Turn {
+    pacer: Arc<RequestPacer>,
+    key: PaceKey,
+    /// The client's tasks, as [`RequestPacer::wait`] watches them.
+    ended: watch::Receiver<()>,
+}
+
+impl Turn {
+    pub(crate) fn new(
+        pacer: &Arc<RequestPacer>,
+        key: PaceKey,
+        ended: &watch::Receiver<()>,
+    ) -> Self {
+        Self {
+            pacer: Arc::clone(pacer),
+            key,
+            ended: ended.clone(),
+        }
+    }
+
+    /// Wait for the turn and take it, as [`RequestPacer::wait`] does:
+    /// `None` once the client's tasks end first. Dropping the wait takes
+    /// nothing.
+    pub(crate) async fn take(&self) -> Option<PaceGuard> {
+        self.pacer.wait(self.key.clone(), &self.ended).await
+    }
+}
+
 impl RequestPacer {
     pub(crate) fn new(interval: Duration) -> Self {
         Self::with_capacity(interval, MAX_PACED_DESTINATIONS)
@@ -191,6 +224,20 @@ impl RequestPacer {
     #[inline]
     pub(crate) fn paces(&self) -> bool {
         !self.interval.is_zero()
+    }
+
+    /// Whether a request waits for its turn in its client's request path:
+    /// one of a client this pacer spaces, unless the client's node audits
+    /// its requests. That node takes the turn once it has admitted the
+    /// request (#2652), so a request that waits there for its admission
+    /// takes its turn after that wait, not before it.
+    #[inline]
+    pub(crate) fn paces_in_request_path(&self) -> bool {
+        self.paces()
+            && !matches!(
+                self.audit.get(),
+                Some(super::source_audit::Role::Audited(_))
+            )
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Lanes> {

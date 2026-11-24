@@ -15,10 +15,11 @@
 //! shares its transaction state, link and discovery table, owns no task,
 //! and registers its one transaction through the coordinator itself. A
 //! runner starts the request over from the top, so every request goes out
-//! through the one request path, segmented ones included. The caller's
-//! turn at the destination travels with it, so the runner's own pacer lets
-//! it straight through; a routed path the caller held is let go and taken
-//! again.
+//! through the one request path, segmented ones included. An audited
+//! client takes no turn at the destination in its request path: the node
+//! takes it once it has admitted the request (#2652), and the turn then
+//! travels with the request, so the runner's own pacer lets it straight
+//! through. A routed path the caller held is let go and taken again.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -28,7 +29,8 @@ use bacnet_endpoint_core::seat::ClientSeat;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::AuditOperation;
 
-use super::pacing::PaceGuard;
+use super::pacing::{PaceGuard, PaceKey, Turn};
+use super::requests::request_cut_off;
 use super::segmentation_context::SegmentedRequestLimits;
 use super::source_audit_targets::{self, AuditTarget, AuditedOutcome, Decoded};
 use super::*;
@@ -89,8 +91,8 @@ pub(super) type Diverted = Pin<Box<dyn Future<Output = Result<Bytes, Error>> + S
 
 /// A confirmed request a seated client hands its node's source Audit
 /// (#2617): what it asks for, where it goes, and the request itself, which
-/// nothing has sent yet. Its caller's turn at the destination goes with it
-/// and ends when it does.
+/// nothing has sent yet. Its turn at the destination, once taken, goes
+/// with it and ends when it does.
 #[doc(hidden)]
 pub struct AuditedRequest {
     operation: AuditOperation,
@@ -101,6 +103,10 @@ pub struct AuditedRequest {
     /// The client's transaction state, for the node's
     /// DeviceCommunicationControl state at admission.
     tsm: Arc<SyncMutex<Tsm>>,
+    /// Its turn at the destination, once taken.
+    pace: PaceGuard,
+    /// The turn still to take, when the client paces its requests.
+    turn: Option<Turn>,
 }
 
 impl AuditedRequest {
@@ -127,17 +133,48 @@ impl AuditedRequest {
         self.tsm.lock().initiation_restricted()
     }
 
+    /// Wait for the request's turn at its destination
+    /// (`min_request_interval_ms`) and take it. A node takes it once it has
+    /// admitted the request (#2652), so the interval holds between requests
+    /// as they are admitted, however long each waited. At once when the
+    /// client doesn't pace or the turn is taken; dropping the wait takes
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// The error of a request cut off in flight, when the client's tasks end
+    /// first: its stop, or its node's stop or drop (#2720).
+    pub async fn take_turn(&mut self) -> Result<(), Error> {
+        if let Some(turn) = &self.turn {
+            self.pace = turn.take().await.ok_or_else(request_cut_off)?;
+            self.turn = None;
+        }
+        Ok(())
+    }
+
     /// Send the request, through the one request path every request takes,
-    /// and wait for its end. Dropping the future before that cancels it as
-    /// dropping a request does.
-    pub async fn execute(self) -> AuditedOutcome {
+    /// and wait for its end: first for its turn at the destination, if
+    /// [`Self::take_turn`] hasn't taken it. Dropping the future before the
+    /// end cancels the request as dropping a request does.
+    pub async fn execute(mut self) -> AuditedOutcome {
+        if let Err(error) = self.take_turn().await {
+            return AuditedOutcome {
+                result: Err(error),
+                invoke_id: None,
+                attempted: false,
+                records: Vec::new(),
+                target_device: None,
+            };
+        }
         let Self {
             targets,
             decoded,
             run,
+            pace,
             ..
         } = self;
         let (result, invoke_id) = run.await;
+        drop(pace);
         let attempted = invoke_id.is_some() && source_audit_targets::attempted(&result);
         let (records, target_device) = if attempted {
             decoded.records(targets, &result)
@@ -215,10 +252,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// Hand a request whose registration was diverted to the node's source
     /// Audit (#2617). `named` is the target as the caller named it, which
-    /// the runner starts from again. `pace` is the caller's turn at the
-    /// destination, which the request keeps until it ends. A routed path the
-    /// caller took is the caller's to let go first, and the runner takes it
-    /// again. The runner's frames carry `attributes`, the caller's (#2723).
+    /// the runner starts from again. `pace` is what the caller holds of a
+    /// turn at the destination: none, since an audited client's turn is
+    /// taken once its node has admitted the request (#2652); the request
+    /// keeps it until it ends. A routed path the caller took is the caller's
+    /// to let go first, and the runner takes it again. The runner's frames
+    /// carry `attributes`, the caller's (#2723).
     ///
     /// The future awaits the request's end, owns everything it needs, and
     /// is boxed and type-erased: the request path it runs ends here again.
@@ -261,11 +300,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             let result = runner
                 .confirmed_request_with(&station, service_choice, &data, attributes.as_ref())
                 .await;
-            drop(pace);
             (result, invoke_id.get().copied())
         });
+        // The turn it takes on admission (#2652): on the caller's pacer, by
+        // the key the request path would have used.
+        let turn = (self.pacer.paces())
+            .then(|| Turn::new(&self.pacer, PaceKey::of(to), &self.routing_query.ended));
         let Some((operation, targets, decoded)) = audited else {
-            return Box::pin(async move { run.await.0 });
+            // Not the node's to audit: it runs as it is, in the caller's
+            // task, once it has its turn.
+            return Box::pin(async move {
+                let _pace = match &turn {
+                    Some(turn) => turn.take().await.ok_or_else(request_cut_off)?,
+                    None => pace,
+                };
+                run.await.0
+            });
         };
         let (network_number, mac) = to.station();
         let station = BACnetAddress {
@@ -279,6 +329,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             decoded,
             run,
             tsm: Arc::clone(&self.tsm),
+            pace,
+            turn,
         })
     }
 

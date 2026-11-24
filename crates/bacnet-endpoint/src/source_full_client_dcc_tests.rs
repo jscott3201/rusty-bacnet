@@ -165,7 +165,8 @@ async fn a_slot_waiter_does_not_go_out_once_initiation_is_disabled() {
     session.start().await.unwrap();
     let client = client_of(&session);
     let seat = node_dcc(&session);
-    let reads: Vec<_> = (0..65)
+    // One more than the peer's lane holds (#2652).
+    let reads: Vec<_> = (0..=LANE_SHARE)
         .map(|_| {
             start_read(
                 &client,
@@ -176,12 +177,12 @@ async fn a_slot_waiter_does_not_go_out_once_initiation_is_disabled() {
         })
         .collect();
     let mut sent = Vec::new();
-    for _ in 0..64 {
+    for _ in 0..LANE_SHARE {
         sent.push(receive(&mut requests).await);
     }
     seat.dcc.set(true);
-    // A request made now is refused at once, while every slot is held: at
-    // its registration, before it would wait for one.
+    // A request made now is refused at once, while its lane's slots are
+    // held: at its registration, before it would wait for one.
     let late = start_read(
         &client,
         peer.local_mac(),
@@ -223,13 +224,13 @@ async fn a_slot_waiter_does_not_go_out_once_initiation_is_disabled() {
     tokio::time::sleep(Duration::from_millis(30)).await;
     assert!(requests.try_recv().is_err(), "the waiter never went out");
     assert!(records.try_recv().is_err());
-    // The 64 admitted took sequence numbers 0 to 63 and the waiter none:
-    // once the node enables initiation, the next record is 64.
+    // The admitted took sequence numbers 0 up and the waiter none: once
+    // the node enables initiation, the next record has the next number.
     seat.dcc.set(false);
     let next = read_and_record(&client, &peer, &mut requests, &mut records).await;
     assert_eq!(
         next.source_timestamp,
-        Some(BACnetTimeStamp::SequenceNumber(64))
+        Some(BACnetTimeStamp::SequenceNumber(LANE_SHARE as u16))
     );
     drop(client);
     drop(seat);

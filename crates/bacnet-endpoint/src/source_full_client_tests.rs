@@ -1,7 +1,9 @@
 //! Source Audit of the session's client (#2617): the services it covers,
 //! what a stop or a caller that goes away does to an audited request, the
-//! 64 slots, and the node's DeviceCommunicationControl.
+//! 64 slots and each lane's share of them, and the node's
+//! DeviceCommunicationControl.
 use super::*;
+use crate::source_audit::slots::{LANE_SHARE, SLOTS};
 
 #[path = "source_full_client_services_tests.rs"]
 mod services;
