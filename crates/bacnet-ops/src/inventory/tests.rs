@@ -218,10 +218,10 @@ async fn values_and_settings_are_read_when_asked() {
 
     let settings = InventoryOptions::new().with_settings(true);
     let inventory = device.inventory(&settings).await.unwrap();
-    // The summary, then three batches, as many as without Polarity: the
-    // Binary Input's and Output's ride in the second, which they fill to
-    // the 32 properties a batch holds (the Binary Input to the
-    // Multi-state Value).
+    // Here the summary and three batches, as many as without Polarity,
+    // only because the second batch (the Binary Input to the Multi-state
+    // Value) comes to exactly the 32 properties a batch holds; a device
+    // with more binary objects takes more requests for it.
     assert_eq!(count(&log, RPM), 7 + 1 + 3, "{inventory:?}");
     let av = inventory.point(oid(ObjectType::ANALOG_VALUE, 1)).unwrap();
     assert_eq!(av.relinquish_default.as_ref().unwrap().as_f64(), Some(0.0));

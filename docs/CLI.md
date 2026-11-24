@@ -1712,9 +1712,11 @@ included.
   up, where the size is the smaller of 16 and 32/p rounded down: 31 analog
   inputs, at three properties each, take 4 requests. That is about N/8 + 2
   requests for a typical controller, N/5 + 2 with `--values`, one at a
-  time. A target
-  given by address costs one more, a read of the Device object by the
-  wildcard instance. A device that can't send a batch's answer for its
+  time. `--settings` adds up to four properties an object, so fewer
+  objects fit a batch and a device with many of them takes more requests:
+  a binary input then reads five (its Polarity among them) and goes six a
+  batch, a binary output six and goes five. A target given by address
+  costs one more, a read of the Device object by the wildcard instance. A device that can't send a batch's answer for its
   size is asked for that batch an object at a time, and for at most half
   as many objects a batch from then on, down to one: at most four such
   refused batches. A device that

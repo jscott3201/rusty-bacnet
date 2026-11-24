@@ -13338,7 +13338,8 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   object's Present_Value and Status_Flags, and `.with_settings(true)` its
   COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default and a
   Binary Input's or Output's Polarity (a required property there, so one
-  the device doesn't give is a problem; a Binary Value has none).
+  the device doesn't give, or gives as other than an Enumerated, is a
+  problem; a Binary Value has none).
   `bacnet_ops::inventory::properties(object_type, &options)` is the one
   list of what each object type reads: Object_Name and Description of every
   type, a vendor's included; Units of the analog and integer types,
@@ -13349,8 +13350,9 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
 - **A record.** `PointRecord { device, device_instance, object, name,
   description, units, state_texts, number_of_states, commandable,
   relinquish_default, cov_increment, min_present_value, max_present_value,
-  polarity, present_value, status_flags, problems }`. Text is exactly as the device
-  sent it. `units` is the `EngineeringUnits` value, and the values are
+  polarity, present_value, status_flags, problems }`. Text is exactly as
+  the device sent it. `units` is the `EngineeringUnits` value, and the
+  values are
   `Value`s, so their text names the units and the state (`72.5 °F`,
   `2 (Low)`). `commandable` is what `Commandability::of` says of the type,
   settled by the Priority_Array where the type alone can't. A property the
@@ -13372,8 +13374,12 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   size is the smaller of 16 and 32/p rounded down (31 analog inputs, at
   three properties each, go ten a batch and take 4 requests), and a mix
   one or two more than its types would apart: about N/8 + 2 requests for a
-  typical controller, N/5 + 2 with values. A handle made from an address whose instance isn't
-  known yet costs one more. A batch whose answer the device can't send for
+  typical controller, N/5 + 2 with values. Settings add up to four
+  properties an object, so fewer objects fit a batch and a device with
+  many of them takes more requests: a Binary Input then reads five (its
+  Polarity among them) and goes six a batch, a Binary Output six and goes
+  five. A handle made from an address whose instance isn't known yet
+  costs one more. A batch whose answer the device can't send for
   its size is asked again an object at a time, and the batches after it
   hold at most half as many objects as it did, down to one: at most four
   such refused batches an inventory (a device that answers one object at
@@ -13428,8 +13434,9 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   inside a text escaped with `\`), `number_of_states`, `commandable`,
   `relinquish_default`, `cov_increment`, `min_present_value`,
   `max_present_value`, `polarity`, `present_value`, `status_flags` (each
-  value's text) and `problems`. A field holding a comma, a double quote or a line break
-  is quoted, its quotes doubled; rows end with a line feed. The JSON keeps
+  value's text) and `problems`. A field holding a comma, a double quote or
+  a line break is quoted, its quotes doubled; rows end with a line feed.
+  The JSON keeps
   device text exactly. The CSV guards it by default: a `name`,
   `description` or `state_texts` cell that starts with `=`, `+`, `-`, `@`,
   a tab or a carriage return, which a spreadsheet would run as a formula,

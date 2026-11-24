@@ -20,7 +20,11 @@
 //! reads ([`properties`]): 16 objects of a type that reads two, 10 analog
 //! inputs, 8 binary inputs or analog values, 6 multi-state values. With
 //! values each object reads two more, and a batch holds 4 to 8; with
-//! settings as well, 3 to 8. N objects of one type that each read p
+//! settings as well, 3 to 8. Settings alone add up to four properties an
+//! object, so fewer objects fit a batch and a device with many of them
+//! takes more requests: a Binary Input then reads five (its Polarity among
+//! them) and goes six a batch, a Binary Output six and goes five, against
+//! eight of either without. N objects of one type that each read p
 //! properties take N divided by the batch's size, rounded up, where the
 //! size is the smaller of 16 and 32/p rounded down: 31 analog inputs, at
 //! three properties each, go ten a batch and take 4 requests. A mix of
@@ -141,7 +145,8 @@ pub struct InventoryOptions {
     pub values: bool,
     /// Also read each object's settings, where its type has them:
     /// COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default
-    /// and Polarity ([`properties`]). Off by default.
+    /// and Polarity ([`properties`]): up to four more properties an object
+    /// in the same requests, so fewer objects fit a batch. Off by default.
     pub settings: bool,
 }
 
@@ -257,8 +262,9 @@ pub struct PointRecord {
     /// Its Max_Pres_Value, read with settings.
     #[serde(serialize_with = "write::value")]
     pub max_present_value: Option<Value>,
-    /// A Binary Input's or Output's Polarity, read with settings. JSON:
-    /// `{"value": "reverse", "decoded": {"value": 1, "name": "reverse"}}`.
+    /// A Binary Input's or Output's Polarity, read with settings; one
+    /// that isn't an Enumerated is a problem instead. JSON: `{"value":
+    /// "reverse", "decoded": {"value": 1, "name": "reverse"}}`.
     #[serde(serialize_with = "write::value")]
     pub polarity: Option<Value>,
     /// Its Present_Value, read with [`values`](InventoryOptions::values);

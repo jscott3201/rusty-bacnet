@@ -16,8 +16,8 @@
 //! Number_Of_States, the reason naming that property and what the device
 //! said of it. An optional setting the record lacks, or whose value isn't
 //! of the property's type, is `None`; so is a Polarity the device didn't
-//! give, which the record lists among its problems, and a Binary Value's,
-//! as that type has none.
+//! give, or gave as other than an Enumerated, which the record lists among
+//! its problems, and a Binary Value's, as that type has none.
 //!
 //! An input is [`Access::ReadOnly`] and an output
 //! [`Access::Commandable`]. A value is commandable when it has a

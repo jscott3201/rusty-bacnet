@@ -33,13 +33,12 @@ use crate::write::Commandability;
 /// and the Present_Value and Status_Flags of the types whose tables
 /// require them: the analog, binary and multi-state inputs, outputs and
 /// values, the twelve value types from CharacterString Value to Date
-/// Pattern Value, Access Door,
-/// both lighting outputs, Accumulator, Pulse Converter, Loop, the life
-/// safety types, Channel, Schedule, Load Control, Timer, Staging, Global
-/// Group and Credential Data Input (Present_Value alone for Group, Color
-/// and Color Temperature). Any other is optional: an object that lacks it (the
-/// device answers that the property is unknown) reads as `None` with no
-/// problem.
+/// Pattern Value, Access Door, both lighting outputs, Accumulator, Pulse
+/// Converter, Loop, the life safety types, Channel, Schedule, Load
+/// Control, Timer, Staging, Global Group and Credential Data Input
+/// (Present_Value alone for Group, Color and Color Temperature). Any other
+/// is optional: an object that lacks it (the device answers that the
+/// property is unknown) reads as `None` with no problem.
 ///
 /// ```
 /// use bacnet_ops::inventory::{InventoryOptions, properties};

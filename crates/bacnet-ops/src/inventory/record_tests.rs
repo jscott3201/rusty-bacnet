@@ -147,8 +147,8 @@ fn texts_are_exact_and_values_are_named() {
 }
 
 /// Polarity is a problem when a Binary Input or Output lacks it, whatever
-/// the error, and the field stays empty; a value of another type is kept,
-/// as the other settings are, for the export to judge.
+/// the error, or gives a value that isn't an Enumerated, and the field
+/// stays empty.
 #[test]
 fn a_missing_polarity_is_a_problem_where_the_type_has_one() {
     for object_type in [ObjectType::BINARY_INPUT, ObjectType::BINARY_OUTPUT] {
@@ -169,7 +169,9 @@ fn a_missing_polarity_is_a_problem_where_the_type_has_one() {
             object_type,
             vec![row(P::POLARITY, PropertyValue::Real(1.0))],
         );
-        assert!(read.problems.is_empty() && read.polarity.is_some());
+        assert!(read.polarity.is_none(), "{read:?}");
+        let said = read.problem(P::POLARITY).map(ToString::to_string);
+        assert_eq!(said.as_deref(), Some("not an Enumerated"));
     }
     // A Binary Value has no Polarity: one it calls unknown is no problem.
     let read = of(ObjectType::BINARY_VALUE, vec![refused(P::POLARITY)]);

@@ -1,7 +1,7 @@
 //! A [`PointRecord`] from one object's rows as read.
 
 use bacnet_types::enums::PropertyIdentifier as P;
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::plan::required;
 use super::{PointRecord, Problem};
@@ -63,7 +63,12 @@ pub(crate) fn record(
             P::COV_INCREMENT => keep(value, &mut record.cov_increment),
             P::MIN_PRES_VALUE => keep(value, &mut record.min_present_value),
             P::MAX_PRES_VALUE => keep(value, &mut record.max_present_value),
-            P::POLARITY => keep(value, &mut record.polarity),
+            P::POLARITY => {
+                // One Enumerated, as the export decodes it.
+                let enumerated = matches!(value.decode(), Ok(PropertyValue::Enumerated(_)));
+                record.polarity = enumerated.then_some(value);
+                record.polarity.is_none().then(|| wrong("an Enumerated"))
+            }
             P::PRESENT_VALUE => keep(value, &mut record.present_value),
             P::STATUS_FLAGS => keep(value, &mut record.status_flags),
             // State_Text is read from the rows above.
