@@ -493,10 +493,11 @@ impl NodeHandle {
         self.link.read_locked().socket.clone()
     }
 
-    /// The error for a send the link refused, counted.
-    pub(super) fn refuse_send(&self, refusal: SendRefusal) -> Error {
+    /// The error for a send of an NPDU of `length` octets the link
+    /// refused, counted.
+    pub(super) fn refuse_send(&self, refusal: SendRefusal, length: usize) -> Error {
         self.refusals.count(refusal);
-        send_refusal(refusal)
+        send_refusal(refusal, length)
     }
 
     fn lock(&self) -> MutexGuard<'_, NodeState> {
@@ -571,7 +572,7 @@ impl NodeHandle {
             let admission = state
                 .node
                 .admit_broadcast(now)
-                .map_err(|refusal| self.refuse_send(refusal))?;
+                .map_err(|refusal| self.refuse_send(refusal, npdu.len()))?;
             let copy = || Bytes::copy_from_slice(npdu);
             let waiting = state.releasing || !state.release.is_empty() || !state.queued.is_empty();
             match admission {
@@ -581,7 +582,7 @@ impl NodeHandle {
                         let mut counters = NodeCounters::default();
                         counters.broadcasts_hold_full = 1;
                         self.record.absorb(&counters);
-                        return Err(self.refuse_send(SendRefusal::HoldFull));
+                        return Err(self.refuse_send(SendRefusal::HoldFull, npdu.len()));
                     }
                     state.queued.push(copy());
                 }
@@ -822,16 +823,20 @@ pub(super) fn config_error(error: ConfigError) -> Error {
     }
 }
 
-/// A send the node engine refused, in the engine's words, which a test
-/// holds these labels to: a group address given as a unicast's destination
-/// is [`Error::InvalidArgument`], no room to hold a broadcast is
-/// [`Error::LimitReached`], and a foreign device's BBMD not known yet is
-/// [`Error::State`] with [`Lifecycle::NotConnected`]. An NPDU too long for
-/// B/IP, a socket that can't take the datagram now and a socket's own
-/// failure stay [`Error::Encoding`] until #1833 gives them the forms whose
-/// handling differs ([`Error::SendTooLong`], and [`Error::Transport`] as a
-/// full MS/TP queue already is).
-pub(super) fn send_refusal(refusal: SendRefusal) -> Error {
+/// A send of an NPDU of `length` octets the node engine refused, in the
+/// engine's words, which a test holds these labels to (#1833): a group
+/// address given as a unicast's destination is [`Error::InvalidArgument`],
+/// no room to hold a broadcast is [`Error::LimitReached`], and a foreign
+/// device's BBMD not known yet is [`Error::State`] with
+/// [`Lifecycle::NotConnected`]. An NPDU too long for B/IP is
+/// [`Error::SendTooLong`] with the engine's limit, as on MS/TP and
+/// Ethernet: a router answers it with reject reason 4, and a client may
+/// try a smaller request. A socket that can't take the datagram now is an
+/// [`Error::Transport`] of kind `WouldBlock`, as a full MS/TP queue is, and
+/// a socket's own failure one of kind `Other`; the transport's own sends
+/// report their socket's error itself, so only a refusal the engine
+/// reports for its glue comes here as either.
+pub(super) fn send_refusal(refusal: SendRefusal, length: usize) -> Error {
     match refusal {
         SendRefusal::GroupDestination => Error::invalid_argument(
             "a unicast can't go to a group address; send a broadcast instead",
@@ -843,6 +848,11 @@ pub(super) fn send_refusal(refusal: SendRefusal) -> Error {
             Lifecycle::NotConnected,
             "the foreign device's BBMD isn't known yet",
         ),
-        _ => Error::Encoding(refusal.to_string()),
+        SendRefusal::TooLong { max } => Error::SendTooLong { length, limit: max },
+        SendRefusal::SocketFull => Error::Transport(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            refusal.to_string(),
+        )),
+        _ => Error::Transport(std::io::Error::other(refusal.to_string())),
     }
 }

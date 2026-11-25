@@ -207,5 +207,5 @@ impl Comm for Native {
 mod tests;
 
 fn phase(error: io::Error, phase: &str) -> io::Error {
-    crate::mstp::monitor::context(error, phase.into())
+    crate::mstp::monitor::context(error, phase)
 }

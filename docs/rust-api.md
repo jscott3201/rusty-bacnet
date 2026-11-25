@@ -380,12 +380,14 @@ alone; `Error::with_context` puts context in front and keeps the variant.
 `Error::state`, `Error::invalid_config`, `Error::invalid_argument`,
 `Error::unsupported` and `Error::limit_reached` build one from a static
 label. `bacnet-transport`, `bacnet-network`, `bacnet-endpoint-core` and
-`bacnet-endpoint` report their refusals this way; the other hosted crates
-still report theirs as `Error::Encoding` or `Error::OutOfRange` text until
-#1833 reaches them. An endpoint session or ingress that is not running says
-why with its `Lifecycle`: `NotRunning` before its start, `Stopping` while a
-stop runs, and `Closed` once stopped or shut, since each starts once. A
-stopped transport's send still fails with
+`bacnet-endpoint` report their refusals this way, and `bacnet-transport` its
+I/O failures as `Error::Transport` with the OS error kept as the source and
+an NPDU too long for the link as `Error::SendTooLong`; the other hosted
+crates still report theirs as `Error::Encoding` or `Error::OutOfRange` text
+until #1833 reaches them. An endpoint session or ingress that is not running
+says why with its `Lifecycle`: `NotRunning` before its start, `Stopping`
+while a stop runs, and `Closed` once stopped or shut, since each starts once.
+A stopped transport's send still fails with
 `Error::Transport` of kind `NotConnected`, which the client and the bindings
 treat as a link that is down; it moves to `State(NotRunning)` in a change of
 its own.
@@ -1174,7 +1176,8 @@ no bytes were queued or written. The router counts that refusal in
 `counters().egress_too_long` and `refused`, then returns reason 4 to an eligible
 origin, naming the original DNET and preserving the arrival's data attributes
 (#1716). BACnet/SC uses this error for its NPDU and encoded-frame bounds,
-including forwarded attributes and direct-peer limits. Forwarded rejects,
+including forwarded attributes and direct-peer limits, and B/IP, MS/TP and
+Ethernet for an NPDU too long for their frames (#1833). Forwarded rejects,
 global broadcasts and control fan-outs never draw a reply. The reply enters
 the existing bounded priority queue; refusing that reply cannot start a loop.
 Other failures do not imply a length refusal, even if the port's limit changed.
@@ -13972,9 +13975,9 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::InvalidArgument(Refusal)` | A value for one call, or text parsed once, refused before anything was sent, such as a MAC of the wrong form for the link |
 | `Error::Unsupported(Refusal)` | Not offered on this platform, in this build, or by this kind of component |
 | `Error::LimitReached(Refusal)` | A resource cap reached: a full table, a counter run out, a one-holder resource another holds |
-| `Error::SendTooLong { length, limit }` | A send refused for its length before anything was written |
-| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (client, server, objects), and, until their own change, the transport's I/O failures as text, the MS/TP and Ethernet NPDU-length refusals, B/IP's refusals of an NPDU too long, a socket that can't take the datagram now and a socket's own failure, and an endpoint's send that waited past its deadline |
-| `Error::Transport(io_error)` | Transport I/O failure, and a stopped transport's send (`NotConnected`) |
+| `Error::SendTooLong { length, limit }` | A send refused for its length before anything was written: an NPDU too long for B/IP, MS/TP or Ethernet, and BACnet/SC's NPDU and frame bounds (#1833). A router answers it with reject reason 4; the high-level client asks again with smaller requests |
+| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (client, server, objects), and, until its own change, an endpoint's send that waited past its deadline |
+| `Error::Transport(io_error)` | Transport I/O failure, with the OS error as its source where one caused it: a socket's, a serial port's open, read or write, GPIO, the RS-485 ioctl, entropy (#1833), an SC dial's TLS handshake; and a stopped transport's send (`NotConnected`) |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
 | `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles) |
 

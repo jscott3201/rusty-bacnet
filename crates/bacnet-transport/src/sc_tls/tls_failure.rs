@@ -1,19 +1,44 @@
 //! Sort a failed TLS exchange by the TLS library's typed error, never by its
-//! text: the reason travels on [`ScConnectError`](crate::sc::ScConnectError)
-//! so a caller can explain a refusal without matching on a message.
+//! text: the reason travels on [`ScConnectError`] so a caller can explain a
+//! refusal without matching on a message.
 
 use std::io;
 use std::time::Duration;
 
+use bacnet_types::error::Error;
 use rustls::{AlertDescription, CertificateError};
 
-use crate::sc::{ScCertificateRejection, ScTlsAlert, ScTlsFailure};
+use crate::sc::{
+    ScCertificateRejection, ScConnectError, ScTlsAlert, ScTlsFailure, ScWebSocketErrorKind,
+};
 
 /// The reason a TLS stream's I/O error carries, or `None` when the error is
 /// not a TLS one (a reset or an end of stream, say).
 pub(crate) fn classify(error: &io::Error) -> Option<ScTlsFailure> {
     let tls = error.get_ref()?.downcast_ref::<rustls::Error>()?;
     Some(from_rustls(tls))
+}
+
+/// A dial to `addr` whose TLS session finished verified but holds no peer
+/// certificate (#1833). rustls verifies the peer's chain before it finishes
+/// a handshake, so this shouldn't happen; if it does, it is a failure of
+/// the TLS handshake, reported as the handshake's other failures are: the
+/// TLS library's own error for a peer that sent no certificate, wrapped as
+/// the TLS stream wraps its errors.
+pub(crate) fn no_peer_certificate(addr: &str) -> Error {
+    let error = io::Error::new(
+        io::ErrorKind::InvalidData,
+        rustls::Error::NoCertificatesPresented,
+    );
+    ScConnectError::WebSocket {
+        http_status: None,
+        close_status: None,
+        untrusted_peer: None,
+        tls: classify(&error),
+        kind: ScWebSocketErrorKind::TlsHandshake,
+        message: format!("WebSocket TLS handshake with {addr} failed: {error}"),
+    }
+    .into_bacnet_error()
 }
 
 fn from_rustls(error: &rustls::Error) -> ScTlsFailure {
@@ -136,6 +161,34 @@ mod tests {
                 Some(ScTlsFailure::PeerCertificate(expected))
             );
         }
+    }
+
+    /// A verified session with no peer certificate fails the dial as a TLS
+    /// handshake failure: a transport error, the TLS kind of disconnect.
+    #[test]
+    fn a_session_with_no_peer_certificate_is_a_tls_failure() {
+        let error = no_peer_certificate("hub.example:443");
+        let Error::Transport(io) = &error else {
+            panic!("a session with no peer certificate must be a transport error");
+        };
+        assert_eq!(io.kind(), io::ErrorKind::InvalidData);
+        assert!(matches!(
+            ScConnectError::from_error(&error),
+            Some(ScConnectError::WebSocket {
+                kind: ScWebSocketErrorKind::TlsHandshake,
+                tls: Some(ScTlsFailure::Other),
+                ..
+            })
+        ));
+        assert_eq!(
+            crate::sc::ScDisconnectCause::from_error(&error),
+            crate::sc::ScDisconnectCause::Tls(ScTlsFailure::Other)
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("WebSocket TLS handshake with hub.example:443 failed")
+        );
     }
 
     #[test]

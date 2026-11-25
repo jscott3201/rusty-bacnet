@@ -119,32 +119,48 @@ async fn a_wildcard_socket_cannot_limited_broadcast_as_loopback() {
     }
 }
 
-/// The node's send refusals that have a type read as the engine words them,
-/// and the ones whose type waits for #1833's next step stay encoding
-/// errors.
+/// The node's send refusals read as the engine words them, each with its
+/// type (#1833): an NPDU too long for B/IP is [`Error::SendTooLong`] with
+/// the NPDU's length and the engine's limit, as on MS/TP and Ethernet, so
+/// a router answers it with reject reason 4 and a client falls back to a
+/// smaller request; a socket that can't take the datagram now, or failed,
+/// is an [`Error::Transport`], a full one of kind `WouldBlock` as a full
+/// MS/TP queue is.
 #[test]
 fn send_refusals_keep_the_engines_words() {
     use bacnet_bip_core::node::SendRefusal;
     use bacnet_types::error::Lifecycle;
+    use std::io::ErrorKind;
     for (refusal, typed) in [
         (SendRefusal::GroupDestination, "argument"),
         (SendRefusal::HoldFull, "limit"),
         (SendRefusal::NoBbmd, "not connected"),
-        (SendRefusal::SocketFull, "encoding"),
-        (SendRefusal::SocketError, "encoding"),
-        (SendRefusal::TooLong { max: 1497 }, "encoding"),
+        (SendRefusal::SocketFull, "would block"),
+        (SendRefusal::SocketError, "socket"),
     ] {
-        let error = super::node::send_refusal(refusal);
+        let error = super::node::send_refusal(refusal, 20);
         let kind = match &error {
             Error::InvalidArgument(_) => "argument",
             Error::LimitReached(_) => "limit",
             Error::State(Lifecycle::NotConnected, _) => "not connected",
-            Error::Encoding(_) => "encoding",
+            Error::Transport(io) if io.kind() == ErrorKind::WouldBlock => "would block",
+            Error::Transport(io) if io.kind() == ErrorKind::Other => "socket",
             other => panic!("{refusal:?}: {other:?}"),
         };
         assert_eq!(kind, typed, "{refusal:?}");
         let text = error.to_string();
-        let text = text.strip_prefix("encoding error: ").unwrap_or(&text);
+        let text = text.strip_prefix("transport error: ").unwrap_or(&text);
         assert_eq!(text, refusal.to_string());
     }
+    let too_long = super::node::send_refusal(SendRefusal::TooLong { max: 1497 }, 1498);
+    assert!(
+        matches!(
+            too_long,
+            Error::SendTooLong {
+                length: 1498,
+                limit: 1497
+            }
+        ),
+        "{too_long:?}"
+    );
 }

@@ -4902,7 +4902,8 @@ class BacnetTransportError(BacnetError, OSError):
     """Raised when a transport socket or I/O operation fails.
 
     Covers a failed bind or listen (B/IP, B/IPv6, ``ScHub.start``), a refused
-    or failed dial, and other socket errors. It is also an ``OSError``:
+    or failed dial, other socket errors, and an MS/TP serial port that
+    doesn't open, whose message names the port. It is also an ``OSError``:
     ``errno`` is the operating system's code when it reported one, else the
     code for the failure's kind (for example ``errno.EADDRINUSE``), else
     ``None``; ``strerror`` is the message. ``except OSError`` and
@@ -6654,7 +6655,11 @@ class BACnetClient:
         acknowledgement raises BacnetNetworkRejectError; rejects with
         reasons 1, 2 and 4 are ignored for local queries. Each bound is 0 to
         3600 seconds and ``wait`` may not exceed ``total`` (ValueError
-        otherwise). A client stopped mid-call raises RuntimeError. A
+        otherwise). A client stopped mid-call raises RuntimeError. A link
+        that can't send the query for its own state or kind, such as a
+        BACnet/SC link not connected to its hub, or a router-application
+        client's link, which carries APDUs only, raises what that send's
+        error raises (BacnetError for both), not ValueError. A
         RoutedTarget selects the remote router, using its explicit or cached
         next hop. Without either, one router-discovery window of up to
         ``wait`` seconds must identify a single local next hop for its network.

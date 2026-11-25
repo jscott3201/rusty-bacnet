@@ -31,6 +31,7 @@ use bacnet_types::error::Error;
 #[cfg(feature = "serial-gpio")]
 use bacnet_types::sync::MutexExt;
 
+use crate::io_context::context;
 use crate::mstp::{Echo, SerialPort};
 
 #[cfg(any(target_os = "linux", test))]
@@ -168,10 +169,19 @@ pub struct TokioSerialPort {
 
 impl TokioSerialPort {
     /// Open a serial port with the given configuration.
+    ///
+    /// A port that can't be opened is an [`Error::Transport`] of the
+    /// failure's kind, whose text names the port and gives the operating
+    /// system's reason. `NotFound` is a port that isn't there, or one another
+    /// program holds (on Windows also one this user may not open): the
+    /// serial library reports each as no device, so the text tells which.
     pub fn open(config: &SerialConfig) -> Result<Self, Error> {
         let builder = tokio_serial::new(&config.port_name, config.baud_rate);
-        let stream = SerialStream::open(&builder)
-            .map_err(|e| Error::Encoding(format!("Serial open failed: {e}")))?;
+        let stream = SerialStream::open(&builder).map_err(|e| {
+            // The serial library's own conversion keeps the kind (#1833).
+            let what = format!("Serial open failed for {}", config.port_name);
+            Error::Transport(context(e.into(), what))
+        })?;
         Ok(Self {
             inner: Arc::new(Mutex::new(stream)),
             echo: Echo::None,
@@ -236,7 +246,7 @@ impl SerialPort for TokioSerialPort {
         stream
             .write_all(data)
             .await
-            .map_err(|e| Error::Encoding(format!("Serial write failed: {e}")))
+            .map_err(|e| Error::Transport(context(e, "Serial write failed")))
     }
 
     #[cfg(unix)]
@@ -245,11 +255,14 @@ impl SerialPort for TokioSerialPort {
         // propagates its result. Do not run this blocking wait on a Tokio worker.
         // The owned guard keeps the stream alive and exclusive even if the
         // awaiting future is cancelled while the blocking task is running.
+        // The failure keeps its kind (#1833): one the OS reports as
+        // `Unsupported` reads as a port without a drain, as the trait's
+        // default does, so the frame is held to its wire time and the pad.
         let mut stream = self.inner.clone().lock_owned().await;
         tokio::task::spawn_blocking(move || std::io::Write::flush(&mut *stream))
             .await
-            .map_err(|e| Error::Encoding(format!("Serial drain task failed: {e}")))?
-            .map_err(|e| Error::Encoding(format!("Serial drain failed: {e}")))
+            .map_err(|e| Error::Transport(context(e.into(), "Serial drain task failed")))?
+            .map_err(|e| Error::Transport(context(e, "Serial drain failed")))
     }
 
     async fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
@@ -257,7 +270,7 @@ impl SerialPort for TokioSerialPort {
         stream
             .read(buf)
             .await
-            .map_err(|e| Error::Encoding(format!("Serial read failed: {e}")))
+            .map_err(|e| Error::Transport(context(e, "Serial read failed")))
     }
 
     fn echo(&self) -> Echo {
@@ -379,6 +392,21 @@ pub struct GpioDirectionPort<S: SerialPort> {
     direction: SoftwareDirection,
 }
 
+/// A GPIO failure as a transport error (#1833), of the OS error's kind where
+/// the GPIO library keeps its code at the surface (opening the chip), and
+/// `Other` where the code sits inside a uAPI call's error, whose type this
+/// crate can't name.
+#[cfg(feature = "serial-gpio")]
+fn gpio_error(error: gpiocdev::Error, what: impl Into<String>) -> Error {
+    let kind = match &error {
+        gpiocdev::Error::Os(errno) if errno.0 != 0 => {
+            std::io::Error::from_raw_os_error(errno.0).kind()
+        }
+        _ => std::io::ErrorKind::Other,
+    };
+    Error::Transport(context(std::io::Error::new(kind, error), what))
+}
+
 #[cfg(feature = "serial-gpio")]
 impl<S: SerialPort> GpioDirectionPort<S> {
     /// Create a new GPIO direction-controlled serial port.
@@ -422,9 +450,10 @@ impl<S: SerialPort> GpioDirectionPort<S> {
             .with_consumer("bacnet-mstp")
             .request()
             .map_err(|e| {
-                Error::Encoding(format!(
-                    "GPIO request failed for {gpio_chip} line {line}: {e}"
-                ))
+                gpio_error(
+                    e,
+                    format!("GPIO request failed for {gpio_chip} line {line}"),
+                )
             })?;
 
         tracing::info!(
@@ -454,7 +483,7 @@ impl<S: SerialPort> DirectionControl for GpioDirectionPort<S> {
         self.gpio
             .locked()
             .set_value(self.line, value)
-            .map_err(|e| Error::Encoding(format!("GPIO set TX mode failed: {e}")))
+            .map_err(|e| gpio_error(e, "GPIO set TX mode failed"))
     }
 
     /// Set the transceiver to receive mode (DE deasserted).
@@ -468,7 +497,7 @@ impl<S: SerialPort> DirectionControl for GpioDirectionPort<S> {
         self.gpio
             .locked()
             .set_value(self.line, value)
-            .map_err(|e| Error::Encoding(format!("GPIO set RX mode failed: {e}")))
+            .map_err(|e| gpio_error(e, "GPIO set RX mode failed"))
     }
 }
 

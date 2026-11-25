@@ -716,3 +716,39 @@ fn local_refusals_fail_locally_and_a_stopped_link_is_unreachable() {
     assert!(!super::failed_locally(&stopped), "{stopped}");
     assert!(super::unreachable(&stopped), "{stopped}");
 }
+
+/// The links' own refusals of an NPDU too long for them (MS/TP's standard
+/// frames, B/IP's 1,497 octets) are a request too large, which a batch
+/// asks again a row at a time, as for an answer too large: neither the
+/// client's own failure, which ends a read, nor a device gone (#1833).
+#[tokio::test]
+async fn a_links_length_refusal_is_a_request_too_large() {
+    use bacnet_transport::bip::BipTransport;
+    use bacnet_transport::mstp::{LoopbackSerial, MstpConfig, MstpTransport};
+    use bacnet_transport::port::TransportPort;
+    use std::net::Ipv4Addr;
+
+    let (serial, _peer) = LoopbackSerial::pair();
+    let config = MstpConfig {
+        this_station: 1,
+        max_master: 2,
+        ..MstpConfig::default()
+    };
+    let mut mstp = MstpTransport::new(serial, config);
+    let _from_mstp = mstp.start().await.unwrap();
+    let mut bip = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+    let _from_bip = bip.start().await.unwrap();
+    let refusals = [
+        mstp.send_unicast(&[0x01; 502], &[2]).await.unwrap_err(),
+        bip.send_unicast(&[0x01; 1498], &[127, 0, 0, 1, 0xBA, 0xC0])
+            .await
+            .unwrap_err(),
+    ];
+    mstp.stop().await.unwrap();
+    bip.stop().await.unwrap();
+    for error in refusals {
+        assert_eq!(rpm_failure(&error), RpmFailure::TooLarge, "{error}");
+        assert!(!failed_locally(&error), "{error}");
+        assert!(!unreachable(&error), "{error}");
+    }
+}

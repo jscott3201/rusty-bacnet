@@ -125,15 +125,14 @@ impl MstpEndpointConfig {
             port_name: self.serial_port.clone(),
             baud_rate: self.baud,
         };
+        // A port that doesn't open is BacnetTransportError (#1833).
         #[cfg(not(test))]
-        let serial = TokioSerialPort::open(&serial_config)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let serial = TokioSerialPort::open(&serial_config).map_err(crate::errors::to_py_err)?;
         #[cfg(test)]
         let serial = match &self.serial_opener {
             Some(open) => open(&serial_config)?,
             None => lifecycle_tests::TestSerial::Real(
-                TokioSerialPort::open(&serial_config)
-                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
+                TokioSerialPort::open(&serial_config).map_err(crate::errors::to_py_err)?,
             ),
         };
         Ok(serial.with_echo(self.echo))

@@ -43,10 +43,7 @@ impl MonitorAdmissionError {
                             Error::Transport(error) => error,
                             error => io::Error::other(error),
                         }),
-                        Err(super::context(
-                            close,
-                            "closing rejected input failed".into(),
-                        )),
+                        Err(super::context(close, "closing rejected input failed")),
                     )
                     .unwrap_err(),
                 ),

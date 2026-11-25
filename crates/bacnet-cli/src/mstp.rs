@@ -332,7 +332,8 @@ pub(crate) async fn build_client_on<S: SerialPort>(
 #[cfg(feature = "serial")]
 pub(crate) type Serial = bacnet_transport::mstp_serial::TokioSerialPort;
 
-/// Check `mstp`'s settings, then open its serial port.
+/// Check `mstp`'s settings, then open its serial port. A port that
+/// doesn't open is the transport's error, which names the port (#1833).
 #[cfg(feature = "serial")]
 pub(crate) fn open_serial(mstp: &MstpArgs) -> Result<Serial, Error> {
     use bacnet_transport::mstp_serial::SerialConfig;
@@ -341,10 +342,6 @@ pub(crate) fn open_serial(mstp: &MstpArgs) -> Result<Serial, Error> {
     Serial::open(&SerialConfig {
         port_name: mstp.port.clone(),
         baud_rate: mstp.baud,
-    })
-    .map_err(|error| match error {
-        Error::Encoding(message) => Error::Encoding(format!("{}: {message}", mstp.port)),
-        other => other,
     })
 }
 

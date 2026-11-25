@@ -184,5 +184,5 @@ pub(super) fn check(result: libc::c_int) -> io::Result<()> {
 }
 
 fn phase(error: io::Error, phase: &str) -> io::Error {
-    crate::mstp::monitor::context(error, phase.into())
+    crate::mstp::monitor::context(error, phase)
 }

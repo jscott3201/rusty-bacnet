@@ -154,6 +154,27 @@ fn padded_frame_decodes_correctly() {
     assert_eq!(decoded.source, src);
 }
 
+/// An NPDU longer than a frame carries is refused as too long for the
+/// link, with its length and the limit (#1833), as MS/TP and B/IP refuse
+/// theirs; the longest goes.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_npdu_past_1497_octets_is_too_long_for_the_link() {
+    use transport::{MAX_ETHERNET_NPDU, fits};
+    fits(&[0; MAX_ETHERNET_NPDU]).unwrap();
+    let refused = fits(&[0; MAX_ETHERNET_NPDU + 1]).unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            Error::SendTooLong {
+                length: 1498,
+                limit: 1497
+            }
+        ),
+        "{refused:?}"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn ethernet_transport_new() {

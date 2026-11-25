@@ -39,7 +39,8 @@ aws-lc-rs = { version = "1.17", default-features = false, optional = true }
 tokio-serial = { version = "5", optional = true }
 gpiocdev = { version = "0.8", optional = true }
 libc = { workspace = true }
-getrandom = { workspace = true }
+# `std` for the library's own conversion of its error to an I/O error.
+getrandom = { workspace = true, features = ["std"] }
 x509-parser = { version = "0.18.1", default-features = false, features = ["verify-aws"], optional = true }
 
 # Safe recvmsg, sendmsg and socket options for UDP packet info and receive

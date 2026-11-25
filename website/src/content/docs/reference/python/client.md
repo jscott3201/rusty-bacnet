@@ -730,7 +730,11 @@ empty table. A Reject-Message-To-Network from the router before any
 acknowledgement raises BacnetNetworkRejectError; rejects with
 reasons 1, 2 and 4 are ignored for local queries. Each bound is 0 to
 3600 seconds and `wait` may not exceed `total` (ValueError
-otherwise). A client stopped mid-call raises RuntimeError. A
+otherwise). A client stopped mid-call raises RuntimeError. A link
+that can't send the query for its own state or kind, such as a
+BACnet/SC link not connected to its hub, or a router-application
+client's link, which carries APDUs only, raises what that send's
+error raises (BacnetError for both), not ValueError. A
 RoutedTarget selects the remote router, using its explicit or cached
 next hop. Without either, one router-discovery window of up to
 `wait` seconds must identify a single local next hop for its network.
