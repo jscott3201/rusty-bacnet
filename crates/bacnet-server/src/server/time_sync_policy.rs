@@ -7,6 +7,7 @@ use bacnet_network::layer::ReceivedApdu;
 use bacnet_objects::clock::ClockFrame;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -401,10 +402,9 @@ impl TimeSyncLimiter {
         let key = track_source
             .then(|| TimeSyncSource::from_received(received, local_network))
             .transpose()?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| denied("limiter lock poisoned"))?;
+        // Taken poisoned or not: a panic in `apply` leaves the buckets as
+        // they were, and the rest are single updates that refill (#2559).
+        let mut state = self.state.locked();
         if state
             .last_accepted
             .is_some_and(|last| now.saturating_duration_since(last) < policy.global_coalesce_window)

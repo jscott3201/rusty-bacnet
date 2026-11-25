@@ -14,13 +14,14 @@
 //! needs the database. The notification runs later, on the event loop that
 //! started the server, with no lock held.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_server::server::ReinitializeContext;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ReinitializedState};
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -175,10 +176,7 @@ impl PyReinitialize {
             event_loop: event_loop.unbind(),
             tasks: self.tasks.clone_ref(py),
         };
-        *self
-            .after_reply
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(after));
+        *self.after_reply.locked() = Some(Arc::new(after));
     }
 
     /// The Rust handler that runs the callable.
@@ -216,11 +214,7 @@ impl PyReinitialize {
         .unwrap_or(Answer::Failed);
         match answer {
             Answer::Accept => {
-                let after = self
-                    .after_reply
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .clone();
+                let after = self.after_reply.locked().clone();
                 if let (Some(callback), Some(after)) = (self.after_reinitialize.clone(), after) {
                     context.after_reply(move || after.schedule(callback, request));
                 }

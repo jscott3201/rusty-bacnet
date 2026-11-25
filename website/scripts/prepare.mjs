@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { frontmatter, plainBody, isGuideFile } from './content.mjs';
 import legacyRoutes from '../src/data/legacy-routes.json' with { type: 'json' };
 import { release } from '../src/lib/site.mjs';
+import { samples } from '../src/lib/samples.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const docs = join(root, 'src/content/docs');
 const output = join(root, 'public/raw');
@@ -16,12 +17,15 @@ async function walk(path) {
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await mkdir(join(root, 'public/examples'), { recursive: true });
-for (const script of ['loopback_lab.py', 'server_device.py', 'bip_router.py']) {
-  await copyFile(join(root, 'examples/python', script), join(root, 'public/examples', script));
-}
-for (const example of ['shared-endpoint', 'sc-operator-policy', 'server-device', 'bip-router']) {
+// The samples' downloads: a Python program at examples/<file>, a Rust
+// sample's files at their own path.
+for (const { path, language } of Object.values(samples)) {
+  if (language === 'python') {
+    await copyFile(join(root, 'examples', path), join(root, 'public/examples', path.slice('python/'.length)));
+    continue;
+  }
   for (const file of ['Cargo.toml', 'src/main.rs']) {
-    const relative = `examples/rust/${example}/${file}`;
+    const relative = `examples/${path}/${file}`;
     const target = join(root, 'public', relative);
     await mkdir(dirname(target), { recursive: true });
     await copyFile(join(root, relative), target);

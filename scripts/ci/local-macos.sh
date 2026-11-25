@@ -41,6 +41,7 @@ step "no-secret scan";   bash scripts/ci/test-check-no-secrets.sh && bash script
 step "MSRV script regressions"; python3 scripts/ci/test-check-msrv.py
 step "firmware size script regressions"; python3 scripts/ci/test-firmware-size.py
 step "named_codes! copies match"; python3 scripts/ci/check-named-codes.py
+step "lock-poison policy"; python3 scripts/ci/check-lock-poison.py --self-test && python3 scripts/ci/check-lock-poison.py
 step "changelog fragments"; python3 -m unittest discover -s scripts -p 'test_changelog.py' && python3 scripts/changelog.py check
 features=bacnet-types/serde,bacnet-encoding/heapless,bacnet-mstp-codec/bytes,bacnet-mstp-codec/heapless,bacnet-mstp-core/alloc,bacnet-bip-codec/bytes,bacnet-bip-codec/heapless,bacnet-router-core/bip,bacnet-router-core/mstp,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/sc-tls,bacnet-ops/serial,bacnet-cli/sc-tls,bacnet-cli/pcap,bacnet-cli/serial,bacnet-cli/mcp,firmware-link/reporting-multiple
 step "clippy (every macOS feature)"

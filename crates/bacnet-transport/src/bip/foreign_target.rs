@@ -25,7 +25,7 @@ mod name_tests;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use bacnet_bip_core::node::Foreign;
@@ -33,6 +33,7 @@ use bacnet_types::bip_port::{ForeignDeviceChanges, ForeignRegistration};
 use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use tokio::task::AbortHandle;
 
 use super::BipTransport;
@@ -132,7 +133,7 @@ impl ForeignTarget {
     }
 
     fn lock(&self) -> MutexGuard<'_, TargetState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.locked()
     }
 
     /// The registration in effect.

@@ -13,6 +13,7 @@ use bacnet_types::constructed::{
     BACnetBDTEntry, BACnetFDTEntry, BACnetHostAddress, BACnetHostNPort,
 };
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 
 use super::BbmdState;
 use super::persist::BdtFile;
@@ -22,9 +23,7 @@ use super::persist::BdtFile;
 /// one leaves the tables as consistent as each method keeps them, so a
 /// poisoned lock is taken over rather than taking the BBMD down.
 pub(crate) fn lock(state: &Mutex<BbmdState>) -> MutexGuard<'_, BbmdState> {
-    state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    state.locked()
 }
 
 impl BbmdState {

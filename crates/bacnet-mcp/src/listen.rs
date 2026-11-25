@@ -31,12 +31,13 @@
 //! holds live here too, so every way of watching shares the caps.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use bacnet_ops::watch::hub::{Changes, Lease};
 use bacnet_ops::watch::{Point, WatchError};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::sync::MutexExt;
 use rmcp::ErrorData;
 use rmcp::service::SubscriptionContext;
 use tokio::sync::watch;
@@ -224,16 +225,13 @@ impl SubsState {
 
 impl Subs {
     fn lock(&self) -> MutexGuard<'_, SubsState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.locked()
     }
 
     /// Points the principal watches now, in all its sessions.
     pub(crate) fn held(&self) -> usize {
         let state = self.lock();
-        let points = state
-            .principal
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let points = state.principal.locked();
         points.len()
     }
 
@@ -255,7 +253,7 @@ impl Subs {
         }
         let new = !state.held.contains_key(&point);
         let principal = Arc::clone(&state.principal);
-        let mut points = principal.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut points = principal.locked();
         if new && !points.contains_key(&point) && points.len() >= ctx.policy.caps.watches {
             return Err("principal-cap");
         }

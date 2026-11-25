@@ -5,6 +5,7 @@ description: "Run requester and server roles through one B/IP, SC or MS/TP trans
 
 import { Code } from '@astrojs/starlight/components';
 import { release, repository } from '../../../lib/site.mjs';
+import SampleNote from '../../../components/SampleNote.astro';
 import endpointSource from '../../../../examples/rust/shared-endpoint/src/main.rs?raw';
 import endpointManifest from '../../../../examples/rust/shared-endpoint/Cargo.toml?raw';
 
@@ -22,7 +23,9 @@ The announced interface and configured broadcast destination are `127.0.0.1`. Th
 
 ### Save the program and manifest
 
-These files target **v{release}**, whose minimum Rust version is **1.95**. Put [Cargo.toml](/rusty-bacnet/examples/rust/shared-endpoint/Cargo.toml) in a new directory and [main.rs](/rusty-bacnet/examples/rust/shared-endpoint/src/main.rs) in its `src` subdirectory. The exact direct BACnet version is pinned; the empty workspace table makes this a standalone Cargo project.
+<SampleNote sample="shared-endpoint" />
+
+Put [Cargo.toml](/rusty-bacnet/examples/rust/shared-endpoint/Cargo.toml) in a new directory and [main.rs](/rusty-bacnet/examples/rust/shared-endpoint/src/main.rs) in its `src` subdirectory. The empty workspace table makes this a standalone Cargo project.
 
 ```text
 shared-endpoint-guide/
@@ -55,7 +58,7 @@ Rebound endpoint: 127.0.0.1:<assigned-port>; owner running=false
 
 The role and address observations come from the session APIs. After awaited stop, the program checks the released port by binding a temporary UDP socket and observes the still-live owner again. It then drops that temporary socket. Printing a start address alone does not establish stop or role availability, and role availability does not establish requester/server traffic. A failure exits unsuccessfully; reporting and stdin errors after startup pass through the awaited-stop path.
 
-The exact source and manifest displayed here are checked with the development integration harness. They are also independently compiled against the published direct dependency and run through the same lifecycle checks. That evidence uses Rust 1.99.0 and a development test harness; it does not establish the release's minimum compiler, hardware behavior or protocol-service interoperability.
+CI compiles the exact source displayed here in the workspace and runs it through these lifecycle checks in the `shared_endpoint` integration tests. At each release, the release checklist also builds it with the displayed manifest outside the workspace, against the published crates. Neither establishes the release's minimum compiler, hardware behavior or protocol-service interoperability.
 
 The declared Network Port in the program is not automatically registered. Explicit registration is a separate [receiving-port contract](/rusty-bacnet/integrate/network-ports/). A successful start exposes the actual B/IP address, including the ephemeral port; after stop it is unavailable.
 

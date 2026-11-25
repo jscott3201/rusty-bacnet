@@ -447,6 +447,44 @@ async fn a_list_that_fails_part_way_is_an_error() {
     stop(client, server).await;
 }
 
+/// `Device::list_objects_whole` gives the whole list, or fails as the
+/// inventory does where `list_objects` keeps part of it: naming the
+/// element, a timeout still a timeout.
+#[tokio::test(start_paused = true)]
+async fn a_whole_list_or_the_element_that_failed() {
+    let (client, server, _) = lab_logged(Faults::default()).await;
+    let device = lab_device(&client).await;
+    let whole = device.list_objects_whole().await.unwrap();
+    assert_eq!(whole, lab_objects());
+    drop(device);
+    stop(client, server).await;
+
+    // The refused whole list, element 0, elements 1 and 2; then element 3
+    // goes unanswered.
+    let faults = Faults {
+        pass: 4,
+        reject_whole_list: true,
+        ..Faults::default()
+    };
+    let (client, server, _) = lab_logged(faults).await;
+    let device = lab_device(&client).await;
+    let error = device.list_objects_whole().await.unwrap_err();
+    assert!(error.timed_out(), "{error}");
+    let text = error.to_string();
+    assert!(text.starts_with("Object_List element 3 of 13: "), "{text}");
+    let named = matches!(
+        error,
+        OpsError::ObjectList {
+            index: 3,
+            total: 13,
+            ..
+        }
+    );
+    assert!(named, "{error:?}");
+    drop(device);
+    stop(client, server).await;
+}
+
 /// An Object_List that names an object twice gives it one record, at its
 /// first place.
 #[tokio::test(start_paused = true)]
@@ -581,47 +619,6 @@ async fn a_stop_flag_cancels_the_reading() {
     assert_eq!(read(&partial), objects[..1]);
     assert_eq!(partial.unread, objects[1..]);
     assert_eq!(sent.len(), last, "none of the batch's other 30");
-}
-
-/// One object's record costs one request and is the inventory's own; an
-/// object the device doesn't have is a record of problems, and a silent
-/// device an error.
-#[tokio::test(start_paused = true)]
-async fn one_record_reads_as_the_inventory_does() {
-    let (client, server, log) = lab_logged(Faults::default()).await;
-    let device = lab_device(&client).await;
-    let options = InventoryOptions::new().with_values(true);
-    let inventory = device.inventory(&options).await.unwrap();
-    let before = services(&log).len();
-    for expected in &inventory.points {
-        let read = device.point_record(expected.object, &options).await;
-        assert_eq!(&read.unwrap(), expected);
-    }
-    assert_eq!(services(&log).len() - before, inventory.points.len());
-    let by_text = device.point_record("msv:1", &options).await.unwrap();
-    assert_eq!(by_text.object, oid(ObjectType::MULTI_STATE_VALUE, 1));
-
-    let missing = device.point_record("ai:99", &options).await.unwrap();
-    assert!(missing.name.is_none());
-    assert_eq!(
-        missing.problems.len(),
-        7,
-        "every property asked: {missing:?}"
-    );
-    // A record read on its own asks for everything, the Device's name too.
-    let own = device.point_record(oid(ObjectType::DEVICE, LAB), &options);
-    assert_eq!(own.await.unwrap().name.as_deref(), Some("Lab \"AHU\""));
-    let parse = device.point_record("nothing", &options).await.unwrap_err();
-    assert!(matches!(parse, OpsError::Parse { .. }), "{parse}");
-    drop(device);
-    stop(client, server).await;
-
-    let (client, server) = lab(passing(0)).await;
-    let device = lab_device(&client).await;
-    let error = device.point_record("ai:1", &options).await.unwrap_err();
-    assert!(error.unreachable(), "{error}");
-    drop(device);
-    stop(client, server).await;
 }
 
 /// `count` analog inputs, each `name` a few characters.

@@ -13,7 +13,7 @@ Start a guide with the intended outcome, prerequisites, and whether it sends tra
 
 Check command help and implementation for CLI syntax; check published APIs, type stubs, and tests for language examples. Do not infer a server capability from an enum constant or a CLI feature from a Rust transport module.
 
-Keep examples tied to the release the site describes, and mark anything that needs an unreleased source build. Use relative repository links for maintainer-only material and correctly based website links for public routes. Test the GitHub Pages project subpath rather than only a local root URL.
+Keep examples tied to the release the site describes, and mark anything that needs an unreleased source build. The programs under `website/examples` are the exception: one changed since the release follows the `dev` branch (`scripts/release/website_samples.py --follow-dev <sample>`), and a page that shows one gives its note with `<SampleNote sample="…" />`, which says which release or branch the program needs and where the release's copy is. Use relative repository links for maintainer-only material and correctly based website links for public routes. Test the GitHub Pages project subpath rather than only a local root URL.
 
 ## Make visuals useful
 

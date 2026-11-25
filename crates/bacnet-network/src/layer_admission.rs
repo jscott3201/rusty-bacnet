@@ -1,5 +1,6 @@
 use super::ingress::{ApduReceiver, Ingress};
 use super::*;
+use bacnet_types::sync::MutexExt;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::task::Poll;
@@ -120,10 +121,7 @@ impl QueueAdmissionCounters {
     /// dropped; a snapshot need not be final while dispatch can still attempt
     /// admission. A default handle has zero counts and is not attached to a queue.
     pub fn snapshot(&self) -> QueueAdmissionSnapshot {
-        self.0
-            .lock()
-            .expect("queue admission counters poisoned")
-            .snapshot
+        self.0.locked().snapshot
     }
 }
 
@@ -203,11 +201,7 @@ impl<T> AdmissionReceiver<T> {
     /// or alter its accounting. No counter lock is held while waiting.
     pub async fn recv(&mut self) -> Option<T> {
         std::future::poll_fn(|cx| {
-            let mut state = self
-                .counters
-                .0
-                .lock()
-                .expect("queue admission counters poisoned");
+            let mut state = self.counters.0.locked();
             let result = self.rx.poll_recv(cx);
             if let Poll::Ready(Some(item)) = &result {
                 state.dequeued(self.source_key.map(|source_key| source_key(item)));
@@ -224,11 +218,7 @@ impl<T> AdmissionReceiver<T> {
     /// closed and drained. Errors do not change counts. See the
     /// [receive-queue contract](crate::layer#receive-queue-admission).
     pub fn try_recv(&mut self) -> Result<T, mpsc::error::TryRecvError> {
-        let mut state = self
-            .counters
-            .0
-            .lock()
-            .expect("queue admission counters poisoned");
+        let mut state = self.counters.0.locked();
         let result = self.rx.try_recv();
         if let Ok(item) = &result {
             state.dequeued(self.source_key.map(|source_key| source_key(item)));
@@ -249,11 +239,7 @@ impl<T> AdmissionReceiver<T> {
     /// These match closing the corresponding raw receiver. See the
     /// [receive-queue contract](crate::layer#close-drop-stop-and-observation).
     pub fn close(&mut self) {
-        let _snapshot = self
-            .counters
-            .0
-            .lock()
-            .expect("queue admission counters poisoned");
+        let _snapshot = self.counters.0.locked();
         self.rx.close();
     }
 }
@@ -273,11 +259,7 @@ impl AdmissionReceiver<ReceivedApdu> {
 
 impl<T> Drop for AdmissionReceiver<T> {
     fn drop(&mut self) {
-        let mut state = self
-            .counters
-            .0
-            .lock()
-            .expect("queue admission counters poisoned");
+        let mut state = self.counters.0.locked();
         self.rx.close();
         state.snapshot.current_depth = 0;
         state.queued_by_source = HashMap::new();
@@ -339,11 +321,7 @@ impl<T> AdmissionSender<T> {
             // admitted item costs the channel alone (#1713).
             let result = self.tx.try_send(item);
             if let Err(error) = &result {
-                let mut state = self
-                    .counters
-                    .0
-                    .lock()
-                    .expect("queue admission counters poisoned");
+                let mut state = self.counters.0.locked();
                 let drops = match error {
                     mpsc::error::TrySendError::Full(_) => &mut state.snapshot.full_drops,
                     mpsc::error::TrySendError::Closed(_) => &mut state.snapshot.closed_drops,
@@ -356,11 +334,7 @@ impl<T> AdmissionSender<T> {
         // waiting. Each queue has its own short critical section, and no lock
         // survives a poll/try operation. Closed keeps its lifecycle semantics;
         // otherwise a source over quota takes precedence over global Full.
-        let mut state = self
-            .counters
-            .0
-            .lock()
-            .expect("queue admission counters poisoned");
+        let mut state = self.counters.0.locked();
         if !self.tx.is_closed()
             && source.as_ref().is_some_and(|source| {
                 state.queued_by_source.get(source).copied().unwrap_or(0) >= APDU_SOURCE_CAPACITY

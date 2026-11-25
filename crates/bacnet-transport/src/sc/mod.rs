@@ -24,6 +24,7 @@ use crate::sc_frame::{ScMessage, decode_sc_bvlc_result};
 use bacnet_npdu::NpduLimits;
 use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 
 mod address_resolution;
 mod advertisement;
@@ -220,20 +221,15 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
 
         let primary_ws = self
             .ws
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut_locked()
             .take()
             .ok_or_else(|| Error::Encoding("BACnet/SC transport already started".into()))?;
 
         // Every hub socket goes through the frame tap (tap.rs).
         let tap = &self.frame_tap;
         let primary_ws = Arc::new(TappedSocket::new(primary_ws, tap, self.initial_hub));
-        let mut failover_ws = (self
-            .failover_ws
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take())
-        .map(|ws| Arc::new(TappedSocket::new(ws, tap, ScActiveHub::Failover)));
+        let mut failover_ws = (self.failover_ws.get_mut_locked().take())
+            .map(|ws| Arc::new(TappedSocket::new(ws, tap, ScActiveHub::Failover)));
         let primary_connector = (self.primary_connector.as_ref())
             .map(|dial| tapped_connector(dial, tap, ScActiveHub::Primary));
         let failover_connector = (self.failover_connector.as_ref())
@@ -717,10 +713,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             }
         });
 
-        *self
-            .recv_task
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(task);
+        *self.recv_task.get_mut_locked() = Some(task);
         self.stop_gate.open();
         Ok(npdu_rx)
     }

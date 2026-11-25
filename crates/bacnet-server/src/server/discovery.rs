@@ -22,6 +22,7 @@ use bacnet_types::MacAddr;
 use bacnet_types::enums::{ErrorClass, ErrorCode, UnconfirmedServiceChoice};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::RwLock;
 
 use super::{BACnetServer, CommState, ServerConfig};
@@ -505,7 +506,7 @@ impl DiscoveryLimiter {
 
         let is_broadcast = received.is_group || received.link_layer_group;
         let source_key = SourceKey::from_received(received);
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
 
         // 1. Coalescing check
         if !self.policy.coalesce_window.is_zero() {
@@ -562,7 +563,7 @@ impl DiscoveryLimiter {
 
         const ESTIMATED_I_AM_BYTES: usize = 64;
         let delta = (actual_bytes as f64) - (ESTIMATED_I_AM_BYTES as f64);
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         if delta != 0.0 {
             if self.policy.max_bytes_per_sec_global != usize::MAX {
                 state.global_byte_tokens = (state.global_byte_tokens - delta).max(0.0);
@@ -608,7 +609,7 @@ impl DiscoveryLimiter {
 
         let is_broadcast = received.is_group || received.link_layer_group;
         let source_key = SourceKey::from_received(received);
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
 
         if state.is_coalesced_who_has(&self.policy, &target, &source_key, is_broadcast, now) {
             self.counters.inc(&self.counters.requests_coalesced);
@@ -638,7 +639,7 @@ impl DiscoveryLimiter {
         if self.policy.coalesce_window.is_zero() {
             return false;
         }
-        let state = self.state.lock().unwrap();
+        let state = self.state.locked();
         if let Some(ts) = state.negative_who_has.get(target) {
             now.saturating_duration_since(*ts) < self.policy.coalesce_window
         } else {
@@ -648,7 +649,7 @@ impl DiscoveryLimiter {
 
     pub(crate) fn record_negative_who_has(&self, target: WhoHasTarget, now: Instant) {
         const MAX_NEGATIVE_WHO_HAS: usize = 512;
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         if state.negative_who_has.len() >= MAX_NEGATIVE_WHO_HAS {
             let window = self.policy.coalesce_window;
             state
@@ -677,7 +678,7 @@ impl DiscoveryLimiter {
         now: Instant,
     ) -> bool {
         let source_key = SourceKey::from_received(received);
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         let is_broadcast = received.is_group || received.link_layer_group;
 
         if state.is_coalesced_who_has(&self.policy, target, &source_key, is_broadcast, now) {
@@ -722,7 +723,7 @@ impl DiscoveryLimiter {
         self.counters.record_sent(actual_bytes, directed, false);
 
         if !directed {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.locked();
             state.last_broadcast_who_has.insert(target.clone(), now);
         }
     }

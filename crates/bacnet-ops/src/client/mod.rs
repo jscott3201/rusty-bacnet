@@ -40,7 +40,7 @@ pub(crate) mod routed_paths;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, DeviceEvent};
@@ -48,6 +48,7 @@ use bacnet_transport::any::AnyTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::broadcast;
 
 #[cfg(feature = "serial")]
@@ -154,6 +155,23 @@ impl DeviceSummary {
 /// priorities its handles may write at
 /// ([`with_write_policy`](Self::with_write_policy)).
 ///
+/// What the client learns of a device it keeps by the device's address,
+/// for every handle and clone: that it refused ReadPropertyMultiple
+/// ([`refused_rpm`](Self::refused_rpm)), which it then reads by
+/// ReadProperty for the client's life; the instance the device last named
+/// itself, read by a handle made from the address or in answer to a watch
+/// hub's own reads (#2603); the most properties one ReadPropertyMultiple of
+/// [`Device::point_records`] can ask it for, once it couldn't send a larger
+/// batch's answer ([`rpm_limit`](Self::rpm_limit)); and what a watch hub
+/// learned there: that the device refused a COV service, or a read by the
+/// wildcard instance. All but the first go when the discovery table loses
+/// its row at that address or a device there announces another instance,
+/// since another device may answer there now, and when more of the table's
+/// changes came at once than the client's channel holds, as it then can't
+/// tell which addresses changed: each device's next point records cost one
+/// refused request to learn the limit again. Each is kept for at most 4,096
+/// addresses.
+///
 /// The transport type defaults to [`AnyTransport`], which the connect
 /// builders ([`bip`](Client::bip) and the others) make, so an application
 /// that connects with one never names it.
@@ -177,6 +195,12 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// Addresses whose device refused ReadPropertyMultiple, read by
     /// ReadProperty from then on.
     no_rpm: Mutex<HashSet<DeviceAddress>>,
+    /// The most properties one ReadPropertyMultiple of point records asks
+    /// for at each address whose device couldn't send a larger batch's
+    /// answer ([`Client::rpm_limit`]), with the instance that device had:
+    /// it only ever shrinks, and goes with the address's other learned
+    /// facts (`Client::sweep`); at most `device::follow::REMEMBERED`.
+    pub(crate) rpm_limits: Mutex<HashMap<DeviceAddress, (u32, usize)>>,
     /// Watch hubs made on this client, so each takes its own range of
     /// subscriber process identifiers (#2185).
     hubs: AtomicU32,
@@ -219,7 +243,7 @@ impl<T: TransportPort + 'static> Clone for Client<T> {
 
 /// Lock `mutex`, past a panic elsewhere.
 pub(crate) fn lock<V>(mutex: &Mutex<V>) -> MutexGuard<'_, V> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    mutex.locked()
 }
 
 impl<T: TransportPort + 'static> Client<T> {
@@ -232,6 +256,7 @@ impl<T: TransportPort + 'static> Client<T> {
                 client,
                 limits,
                 no_rpm: Mutex::new(HashSet::new()),
+                rpm_limits: Mutex::new(HashMap::new()),
                 hubs: AtomicU32::new(0),
                 hub: Mutex::new(crate::watch::OwnHub::new()),
                 cov: Mutex::new(HashMap::new()),
@@ -402,6 +427,57 @@ impl<T: TransportPort + 'static> Client<T> {
     /// Remember that the device at `address` refused ReadPropertyMultiple.
     pub(crate) fn refuse_rpm(&self, address: &DeviceAddress) {
         lock(&self.shared.no_rpm).insert(address.clone());
+    }
+
+    /// The most properties one ReadPropertyMultiple of
+    /// [`Device::point_records`] asks the device at `device` for, once it
+    /// couldn't send the answer to a larger batch of several objects (an
+    /// abort or reject for the answer's size, or a request too long for
+    /// the link or a router's path): half that batch's properties, so it
+    /// holds for any [`InventoryOptions`](crate::InventoryOptions), whose
+    /// objects ask for more or fewer each. `None` while no batch was
+    /// refused for its size, and 32 properties apply.
+    ///
+    /// It only shrinks: a device whose buffer was full once keeps the
+    /// smaller batches, which cost more requests but are never refused for
+    /// their size again. It goes, with the instance read for the address,
+    /// when the discovery table loses its row at that address or a device
+    /// there announces another instance, and then starts again from 32;
+    /// every device's goes when a burst of the table's changes overran the
+    /// client's channel, and its next point records cost one refused
+    /// request to learn it again. A timeout, a silent device or any other
+    /// error leaves it as it was. An
+    /// [`inventory`](crate::Device::inventory) keeps its own count, which
+    /// starts at 16 objects for each inventory and never reads or sets
+    /// this.
+    pub fn rpm_limit(&self, device: &DeviceAddress) -> Option<usize> {
+        self.sweep();
+        lock(&self.shared.rpm_limits)
+            .get(device)
+            .map(|&(_, properties)| properties)
+    }
+
+    /// Remember that the device at `device`, instance `instance`, takes
+    /// at most `properties` properties a ReadPropertyMultiple of point
+    /// records, when that is fewer than before.
+    pub(crate) fn settle_rpm_limit(
+        &self,
+        device: &DeviceAddress,
+        instance: u32,
+        properties: usize,
+    ) {
+        if properties >= batch::MAX_BATCH_PROPERTIES {
+            return;
+        }
+        self.sweep();
+        let mut limits = lock(&self.shared.rpm_limits);
+        match limits.get_mut(device) {
+            Some((known, limit)) if *known == instance => *limit = (*limit).min(properties),
+            _ => {
+                crate::device::keep_room(&mut limits, |_| true);
+                limits.insert(device.clone(), (instance, properties));
+            }
+        }
     }
 }
 

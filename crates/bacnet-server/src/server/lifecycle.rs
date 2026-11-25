@@ -520,6 +520,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             seated,
             execution,
         };
+        // The one wait since the database was shared, with dispatch running:
+        // its work runs in a task of the server's (#2781).
         boxed(|| server.execute_initial_staging_plans()).await;
         outputs.complete();
         Ok(server)

@@ -306,6 +306,18 @@ async fn a_value_written_twice_and_its_transition_are_one_row() {
     );
 }
 
+/// Two values over the limit keep a row each, the transition folded into
+/// the second's, so the first carries the Status_Flags from before it. A
+/// Schedule's pass that moves the value the same request wrote gives these
+/// rows too (`cov_timed_schedule_pass_tests`, #2582).
+#[tokio::test(start_paused = true)]
+async fn two_values_over_the_limit_keep_a_row_each() {
+    assert_eq!(
+        wpm_report(&[90.0, 95.0]).await,
+        [(PV, real(90.0)), flags(0), (PV, real(95.0)), flags(0x80)]
+    );
+}
+
 /// AV-1 alarms above 80 and reports through Notification Class 0, whose
 /// local-broadcast recipient makes the event notification observable.
 

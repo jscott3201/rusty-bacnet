@@ -1,11 +1,20 @@
 //! Signed pagination cursors (design §5.1).
 //!
-//! A cursor is opaque to the client, as MCP requires. Ours carries the
-//! position to resume from, the tool, a digest of the principal and of the
-//! call's other arguments and an expiry, and is signed with HMAC-SHA256
-//! under a key drawn for this process. A forged cursor, or one presented
-//! by another principal, for another tool or other arguments, or after it
-//! expired, fails closed.
+//! A cursor is opaque to the client, as MCP requires. Ours carries where
+//! to resume, the tool, a digest of the principal and of the call's other
+//! arguments and an expiry, and is signed with HMAC-SHA256 under a key
+//! drawn for this process. A forged cursor, or one presented by another
+//! principal, for another tool or other arguments, or after it expired,
+//! fails closed.
+//!
+//! Where to resume is a position (a `u64` each tool gives its own
+//! meaning), or the key of the row a page of a live table ended on
+//! (#2606), so the next page starts after that row wherever the table has
+//! moved it. A position cursor is 430 to 480 characters. A row cursor of
+//! `bacnet_discover`, the one tool that pages by row, is at most 519: its
+//! longest key is 24 octets (an instance, a network and an 18-octet MAC).
+//! No cursor outlives its process's key, so none from an earlier build is
+//! ever opened by a later one.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -23,14 +32,20 @@ pub(crate) struct Cursors {
     key: [u8; 32],
 }
 
-/// What a cursor binds, and where it resumes.
+/// What a cursor binds, and where it resumes: a `position` or, for a row
+/// cursor, the key it resumes `after`, in hex; never both. Each is left
+/// out when unset, so a position cursor's body is what it was before row
+/// cursors.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Sealed {
     tool: String,
     principal: String,
     args: String,
     expires: u64,
-    position: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    position: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    after: Option<String>,
 }
 
 impl Cursors {
@@ -55,12 +70,36 @@ impl Cursors {
         args: &Map<String, Value>,
         position: u64,
     ) -> String {
+        self.sign(tool, principal, args, Some(position), None)
+    }
+
+    /// A cursor resuming `tool` after the row whose key is `key`, for this
+    /// principal and these arguments.
+    pub(crate) fn seal_after(
+        &self,
+        tool: &str,
+        principal: &str,
+        args: &Map<String, Value>,
+        key: &[u8],
+    ) -> String {
+        self.sign(tool, principal, args, None, Some(hex(key)))
+    }
+
+    fn sign(
+        &self,
+        tool: &str,
+        principal: &str,
+        args: &Map<String, Value>,
+        position: Option<u64>,
+        after: Option<String>,
+    ) -> String {
         let sealed = Sealed {
             tool: tool.into(),
             principal: who(principal),
             args: digest(args),
             expires: now().saturating_add(LIFETIME.as_secs()),
             position,
+            after,
         };
         let body = serde_json::to_vec(&sealed).expect("a cursor serializes");
         let mut mac = self.mac();
@@ -70,7 +109,7 @@ impl Cursors {
     }
 
     /// The position `token` resumes at, if it is one of ours, unexpired,
-    /// and for this tool, principal and arguments.
+    /// for this tool, principal and arguments, and a position cursor.
     pub(crate) fn open(
         &self,
         token: &str,
@@ -78,6 +117,45 @@ impl Cursors {
         principal: &str,
         args: &Map<String, Value>,
     ) -> Result<u64, &'static str> {
+        match self.unseal(token, tool, principal, args)? {
+            Sealed {
+                position: Some(position),
+                after: None,
+                ..
+            } => Ok(position),
+            _ => Err("malformed"),
+        }
+    }
+
+    /// The key of the row `token` resumes after, if it is one of ours,
+    /// unexpired, for this tool, principal and arguments, and a row
+    /// cursor.
+    pub(crate) fn open_after(
+        &self,
+        token: &str,
+        tool: &str,
+        principal: &str,
+        args: &Map<String, Value>,
+    ) -> Result<Vec<u8>, &'static str> {
+        match self.unseal(token, tool, principal, args)? {
+            Sealed {
+                position: None,
+                after: Some(key),
+                ..
+            } => unhex(&key).ok_or("malformed"),
+            _ => Err("malformed"),
+        }
+    }
+
+    /// The body of `token`, checked: signed by this server's key,
+    /// unexpired, and for this tool, principal and arguments.
+    fn unseal(
+        &self,
+        token: &str,
+        tool: &str,
+        principal: &str,
+        args: &Map<String, Value>,
+    ) -> Result<Sealed, &'static str> {
         let (body, tag) = token.split_once('.').ok_or("malformed")?;
         let (body, tag) = (
             unhex(body).ok_or("malformed")?,
@@ -95,7 +173,7 @@ impl Cursors {
         {
             return Err("issued for another call");
         }
-        Ok(sealed.position)
+        Ok(sealed)
     }
 }
 
@@ -198,7 +276,7 @@ mod tests {
         // A body edited to skip ahead, with the old tag.
         let (body, tag) = token.split_once('.').unwrap();
         let mut sealed: Sealed = serde_json::from_slice(&unhex(body).unwrap()).unwrap();
-        sealed.position = 1_000;
+        sealed.position = Some(1_000);
         let forged = format!("{}.{tag}", hex(&serde_json::to_vec(&sealed).unwrap()));
         assert!(
             cursors
@@ -227,12 +305,118 @@ mod tests {
             principal: who("p"),
             args: digest(&call),
             expires: now() - 1,
-            position: 0,
+            position: Some(0),
+            after: None,
         };
         let body = serde_json::to_vec(&sealed).unwrap();
         let mut mac = cursors.mac();
         mac.update(&body);
         let token = format!("{}.{}", hex(&body), hex(&mac.finalize().into_bytes()));
         assert_eq!(cursors.open(&token, "t", "p", &call), Err("expired"));
+    }
+
+    /// A position cursor's body is what it was before row cursors (#2606):
+    /// the same fields in the same order, with no `after`.
+    #[test]
+    fn a_position_cursor_is_written_as_before() {
+        #[derive(Serialize)]
+        struct Before<'a> {
+            tool: &'a str,
+            principal: &'a str,
+            args: &'a str,
+            expires: u64,
+            position: u64,
+        }
+        let sealed = Sealed {
+            tool: "bacnet_list_objects".into(),
+            principal: who("alice"),
+            args: digest(&Map::new()),
+            expires: 1_800_000_000,
+            position: Some(200),
+            after: None,
+        };
+        let before = Before {
+            tool: &sealed.tool,
+            principal: &sealed.principal,
+            args: &sealed.args,
+            expires: sealed.expires,
+            position: 200,
+        };
+        assert_eq!(
+            serde_json::to_vec(&sealed).unwrap(),
+            serde_json::to_vec(&before).unwrap()
+        );
+    }
+
+    /// A row cursor gives back its key, only to its own call and only as a
+    /// row cursor; the key is signed with the rest (#2606).
+    #[test]
+    fn a_row_cursor_resumes_after_its_key_alone() {
+        let cursors = Cursors::new();
+        let call = args(json!({ "send": false, "cursor": "old" }));
+        let key = [0, 0, 4, 177, 0, 0, 10, 0, 0, 2, 0xBA, 0xC0];
+        let token = cursors.seal_after("bacnet_discover", "alice", &call, &key);
+        assert_eq!(
+            cursors.open_after(&token, "bacnet_discover", "alice", &call),
+            Ok(key.to_vec())
+        );
+        // Not a position, and a position cursor is no row cursor.
+        assert_eq!(
+            cursors.open(&token, "bacnet_discover", "alice", &call),
+            Err("malformed")
+        );
+        let position = cursors.seal("bacnet_discover", "alice", &call, 3);
+        assert_eq!(
+            cursors.open_after(&position, "bacnet_discover", "alice", &call),
+            Err("malformed")
+        );
+        // Another tool's, principal's or process's.
+        let foreign = cursors.seal_after("bacnet_list_objects", "alice", &call, &key);
+        assert_eq!(
+            cursors.open_after(&foreign, "bacnet_discover", "alice", &call),
+            Err("issued for another call")
+        );
+        assert_eq!(
+            cursors.open_after(&token, "bacnet_discover", "bob", &call),
+            Err("issued for another call")
+        );
+        assert_eq!(
+            Cursors::new().open_after(&token, "bacnet_discover", "alice", &call),
+            Err("not signed by this server")
+        );
+        // The key edited to name an earlier row, with the old tag.
+        let (body, tag) = token.split_once('.').unwrap();
+        let mut sealed: Sealed = serde_json::from_slice(&unhex(body).unwrap()).unwrap();
+        sealed.after = Some(hex(&[0, 0, 0, 1, 0, 0, 1]));
+        let forged = format!("{}.{tag}", hex(&serde_json::to_vec(&sealed).unwrap()));
+        assert_eq!(
+            cursors.open_after(&forged, "bacnet_discover", "alice", &call),
+            Err("not signed by this server")
+        );
+        // Cut short, in the body or the tag.
+        for cut in [token.len() / 2, token.len() - 2] {
+            assert!(
+                cursors
+                    .open_after(&token[..cut], "bacnet_discover", "alice", &call)
+                    .is_err(),
+                "cut at {cut}"
+            );
+        }
+    }
+
+    /// `bacnet_discover`'s longest row cursor, for the largest instance and
+    /// network and an 18-octet MAC, stays within 519 characters.
+    #[test]
+    fn the_longest_row_cursor_is_bounded() {
+        let cursors = Cursors::new();
+        let call = args(json!({}));
+        let mut key = vec![0, 0x3F, 0xFF, 0xFF, 0xFF, 0xFF];
+        key.extend([0xAB; 18]);
+        let token = cursors.seal_after("bacnet_discover", "alice", &call, &key);
+        assert!(token.len() <= 519, "{}", token.len());
+        assert_eq!(
+            cursors.open_after(&token, "bacnet_discover", "alice", &call),
+            Ok(key)
+        );
     }
 }

@@ -391,6 +391,15 @@ async fn a_parked_i_am_holds_up_no_database_writer() {
     endpoint.stop().await;
 }
 
+/// The I-Am's future is still `Send` and `Sync`, as the server's local
+/// calls' are, though it may now hold a boxed task across an await (#2781):
+/// checked when this compiles.
+#[allow(dead_code)]
+fn the_i_am_is_send_and_sync<T: TransportPort + 'static>(session: &EndpointSession<T>) {
+    fn check(_: impl Send + Sync) {}
+    check(session.broadcast_i_am());
+}
+
 #[path = "source_audit_plan_tests.rs"]
 mod plan;
 

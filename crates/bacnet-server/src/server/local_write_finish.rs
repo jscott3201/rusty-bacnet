@@ -46,7 +46,9 @@ impl RequestTasks {
     /// tasks, and a closed set drops it unrun; either way the change was
     /// made, so the future is `Ok(())` then too. A panic in `work` is raised
     /// again in the caller, as it would be were the work done in place; with
-    /// the caller gone, it is logged and goes no further.
+    /// the caller gone, it is logged and goes no further. `start()` makes
+    /// its start-up Staging plans through it too, so none of their waits is
+    /// in its caller's task (#2781).
     pub(in crate::server) fn finish_in_task<F: Future<Output = ()> + Send + 'static>(
         &self,
         runtime: &tokio::runtime::Handle,
@@ -151,6 +153,7 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
                 written,
                 table,
                 &mut transition,
+                &[],
             );
             Box::pin(pass).await
         } else {

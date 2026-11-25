@@ -8,9 +8,10 @@
 //! would for any such name, created yet or not: a logger's effective level is
 //! the first level set on it or on an ancestor, else the root's.
 
+use bacnet_types::sync::RwLockExt;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, PoisonError, RwLock};
+use std::sync::{LazyLock, RwLock};
 
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -183,7 +184,7 @@ pub(crate) fn next_generation() -> u64 {
 
 /// Run `f` on the current snapshot.
 pub(crate) fn with_current<R>(f: impl FnOnce(&Levels) -> R) -> R {
-    f(&CURRENT.read().unwrap_or_else(PoisonError::into_inner).1)
+    f(&CURRENT.read_locked().1)
 }
 
 /// Replace the snapshot with `levels`, read as `generation`, unless a read
@@ -192,7 +193,7 @@ pub(crate) fn with_current<R>(f: impl FnOnce(&Levels) -> R) -> R {
 /// the later read's levels. Callsites keep their cached answer until the
 /// caller rebuilds the interest cache.
 pub(crate) fn store(generation: u64, levels: Levels) {
-    let mut current = CURRENT.write().unwrap_or_else(PoisonError::into_inner);
+    let mut current = CURRENT.write_locked();
     if generation > current.0 {
         *current = (generation, levels);
     }

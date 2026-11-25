@@ -5,6 +5,7 @@ use super::notification_transactions::AuditFailureTicket;
 use super::*;
 use bacnet_objects::audit::{AuditReporterStatus, AuditSendDelay};
 use bacnet_types::primitives::BACnetTimeStamp;
+use bacnet_types::sync::MutexExt;
 use std::collections::VecDeque;
 
 pub(super) struct QueuedAudit {
@@ -102,7 +103,7 @@ impl AuditBatchQueue {
     }
     /// Refuse known local resource pressure; the caller retains the captured loss ticket.
     pub(super) fn enqueue(&self, mut record: QueuedAudit) -> Result<(), ()> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         let Some(index) = state
             .lanes
             .iter()
@@ -148,7 +149,7 @@ impl AuditBatchQueue {
         captured: bool,
         prepare: impl FnOnce() -> Result<R, Error>,
     ) -> Result<R, Error> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         if state.closed || state.stop.is_some() {
             return Err(super::audit_recipient::denied());
         }
@@ -180,7 +181,7 @@ impl AuditBatchQueue {
     }
     /// A smaller live delay may accelerate, never postpone, already retained records.
     pub(super) fn delay_changed(&self, status: &Arc<AuditReporterStatus>, delay: AuditSendDelay) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         let lane = state
             .lanes
             .iter_mut()
@@ -195,7 +196,7 @@ impl AuditBatchQueue {
         self.changed.notify_one();
     }
     pub(super) fn begin_stop(&self) -> tokio::time::Instant {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         let now = tokio::time::Instant::now();
         let deadline = *state.stop.get_or_insert(now + Duration::from_secs(3));
         for lane in &mut state.lanes {
@@ -208,13 +209,13 @@ impl AuditBatchQueue {
         deadline
     }
     pub(super) fn stopped(&self) -> bool {
-        self.state.lock().unwrap().closed
+        self.state.locked().closed
     }
     pub(super) fn stop_deadline(&self) -> Option<tokio::time::Instant> {
-        self.state.lock().unwrap().stop
+        self.state.locked().stop
     }
     pub(super) fn next_deadline(&self) -> Option<tokio::time::Instant> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.locked();
         state
             .lanes
             .iter()
@@ -224,7 +225,7 @@ impl AuditBatchQueue {
             .min()
     }
     pub(super) fn take_due(&self) -> Option<Vec<QueuedAudit>> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         let now = tokio::time::Instant::now();
         let lane = state.lanes.iter_mut().find(|lane| {
             lane.inflight.is_empty() && lane.records.front().is_some_and(|r| r.deadline <= now)
@@ -245,7 +246,7 @@ impl AuditBatchQueue {
         Some(records)
     }
     pub(super) fn retire_local(&self, status: &Arc<AuditReporterStatus>, ids: &[u64]) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         let lane = state
             .lanes
             .iter_mut()
@@ -277,7 +278,7 @@ impl AuditBatchQueue {
         self.changed.notify_one();
     }
     pub(super) fn close(&self) -> Vec<QueuedAudit> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         state.closed = true;
         let records = state
             .lanes
@@ -308,7 +309,7 @@ impl AuditBatchQueue {
         (state.count, state.bytes, state.canceled)
     }
     pub(super) fn empty(&self) -> bool {
-        self.state.lock().unwrap().count == 0
+        self.state.locked().count == 0
     }
 }
 

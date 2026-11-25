@@ -1,6 +1,4 @@
 //! `bacnet_discover`: Who-Is, then the discovery table, paged.
-
-use std::sync::PoisonError;
 use std::time::Duration;
 
 use bacnet_client::discovery::DiscoveredDevice;
@@ -10,13 +8,15 @@ use bacnet_ops::{DeviceAddress, OpsError};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::sync::MutexExt;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
 
-use super::{Spec, next, schema, start};
+use super::{Spec, next_after, schema, start_after, unusable};
 use crate::context::{Call, Ctx};
 use crate::errors::ToolError;
+use crate::resources::uri::DeviceCursor;
 use crate::untrusted::envelope;
 use crate::value::reading_text;
 
@@ -35,8 +35,14 @@ pub(super) const SPEC: Spec = Spec {
                   a device already discovered (an unknown address may be a subnet broadcast). \
                   When the policy names the devices it may reach, the range must lie inside \
                   them. names: true also reads each listed device's \
-                  name. send: false only lists what is known; pages index a live table. \
-                  Read-only.",
+                  name. send: false only lists what is known. A later page (next_cursor) sends \
+                  nothing and starts after the last device listed, by instance then address, \
+                  so a device heard or lost between pages makes no other repeat or go missing. \
+                  A device first heard behind the cursor (a late answer to the first page's \
+                  Who-Is) isn't on this walk, and one that changes address on the cursor's \
+                  instance may come once per address or not at all. A total that differs \
+                  between pages means the table changed: list again from the first page with \
+                  send false to pick up the rest. Read-only.",
     input,
     output,
     idempotent: true,
@@ -173,7 +179,10 @@ pub(super) async fn run<T: TransportPort + 'static>(
                 .ok_or_else(|| ToolError::invalid("network", "a network is 1 to 65534"))
         })
         .transpose()?;
-    let first = start(ctx, NAME, args.cursor.as_deref(), raw)? as usize;
+    // The row a later page starts after, named by its key (#2606).
+    let after = start_after(ctx, NAME, args.cursor.as_deref(), raw)?
+        .map(|key| DeviceCursor::from_bytes(&key).ok_or_else(|| unusable("malformed")))
+        .transpose()?;
     // A later page lists what the first one found; it sends nothing. A
     // passive server sends nothing either, so it only lists.
     let send = args.send.unwrap_or(ctx.client.is_some()) && args.cursor.is_none();
@@ -224,14 +233,25 @@ pub(super) async fn run<T: TransportPort + 'static>(
             && ctx.policy.allows_network(on)
             && ctx.policy.allows_device(instance)
     });
-    devices.sort_by_key(|found| found.object_identifier.instance_number());
+    // In row order, as bacnet://devices lists them: by instance, then
+    // address. A page starts after the cursor's row, so a row found or
+    // lost in between moves no other row onto or off this page.
+    devices.sort_by_cached_key(DeviceCursor::of);
+    let first = after.map_or(0, |after| {
+        devices.partition_point(|found| DeviceCursor::of(found) <= after)
+    });
     let page = ctx.policy.caps.devices;
     let cap = ctx.policy.caps.text;
     let mut rows = Vec::new();
     let mut resume = None;
-    for (at, found) in devices.iter().enumerate().skip(first) {
-        if at >= first + page || (args.names && at > first && call.out_of_time()) {
-            resume = Some(at);
+    // The row this page last listed: a page lists at least one before it
+    // can end, so it always ends on a row, and the next starts after it.
+    let mut last = None;
+    for found in &devices[first..] {
+        if let Some(shown) = last
+            && (rows.len() >= page || (args.names && call.out_of_time()))
+        {
+            resume = Some(DeviceCursor::of(shown));
             break;
         }
         let instance = found.object_identifier.instance_number();
@@ -255,6 +275,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
             row["name"] = name.map_or(Value::Null, |name| envelope(&name, source, cap));
         }
         rows.push(row);
+        last = Some(found);
     }
     let mut body = json!({
         "devices": rows,
@@ -262,7 +283,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         "sent": send,
         "scope": scope_text,
         "truncated": resume.is_some(),
-        "next_cursor": resume.map(|at| next(ctx, NAME, raw, at as u64)),
+        "next_cursor": resume.map(|row| next_after(ctx, NAME, raw, &row.to_bytes())),
         "limits": ctx.limits(Some(page)),
     });
     if ctx.client.is_none() {
@@ -412,7 +433,7 @@ fn broad_allowed<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Result<(), ToolErr
              1000-1999, instead",
         ));
     }
-    let mut last = ctx.broad.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut last = ctx.broad.locked();
     let now = Instant::now();
     if let Some(at) = *last
         && now.duration_since(at) < BROAD_INTERVAL

@@ -98,12 +98,6 @@ impl<T: TransportPort + 'static> Client<T> {
         }
     }
 
-    /// Forget what the discovery table's changes made stale, before what
-    /// is learned of an address is read or noted (`Client::sweep`).
-    pub(crate) fn forget_stale(&self) {
-        self.sweep();
-    }
-
     /// The instance the device at `address` last named itself in an answer
     /// to this client (a read by the wildcard instance, or the watch hub's
     /// question of which device answers): what it said, not what the

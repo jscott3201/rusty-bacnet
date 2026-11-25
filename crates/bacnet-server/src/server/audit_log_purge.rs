@@ -84,7 +84,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.request_tasks
             .for_caller(take, purge)
             .await
-            // `None`: no change; its runtime dropped the task before it took its locks.
+            // `None`: no change; its runtime dropped the task before it committed.
             .unwrap_or_else(|| Err(broadcaster::stopped()))
     }
 }

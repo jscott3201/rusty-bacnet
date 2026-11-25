@@ -72,6 +72,7 @@ use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::sync::MutexExt;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -351,9 +352,7 @@ struct SessionShared {
 
 impl SessionShared {
     fn counters(&self) -> std::sync::MutexGuard<'_, PolicyCounters> {
-        self.counters
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.counters.locked()
     }
 }
 
@@ -1041,7 +1040,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         // The guard covers only this check, never the send below (#2199),
         // and is never waited for in the caller's task (#2772): with the
         // database busy, a task of the session's waits and checks.
-        let held = crate::held_database::HeldDatabase::new(Arc::clone(database));
+        let held = bacnet_server::caller_waits::HeldDatabase::new(Arc::clone(database));
         let device = identity.device_oid();
         let is_present = move |db: &ObjectDatabase| {
             db.get(&device)
@@ -1068,7 +1067,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let checked = bacnet_server::caller_waits::for_caller(host, check, |present| present).await;
         let present = match checked {
             Some(present) => present,
-            // Its runtime dropped the task before it checked: check here.
+            // Its runtime, or the pool a stop closed, dropped the task
+            // before it checked: check here.
             None => is_present(&*database.read().await),
         };
         if !present {

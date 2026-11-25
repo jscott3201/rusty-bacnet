@@ -87,12 +87,13 @@
 use std::fmt;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use bacnet_bip_core::LocalSubnet;
 use bacnet_types::bip_port::IpMulticast;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::Notify;
 use tracing::{info, warn};
 
@@ -268,7 +269,7 @@ impl GroupSwap {
     /// the one it reads; `None` closes it.
     #[cfg_attr(windows, allow(dead_code))]
     fn offer(&self, listener: Option<Listener>) {
-        *self.next.lock().unwrap_or_else(PoisonError::into_inner) = Some(listener);
+        *self.next.locked() = Some(listener);
         self.ready.notify_one();
     }
 
@@ -277,12 +278,7 @@ impl GroupSwap {
     pub(super) async fn next(&self) -> Option<Listener> {
         loop {
             self.ready.notified().await;
-            if let Some(listener) = self
-                .next
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take()
-            {
+            if let Some(listener) = self.next.locked().take() {
                 return listener;
             }
         }
@@ -492,7 +488,7 @@ impl MulticastControl {
     }
 
     fn lock(&self) -> MutexGuard<'_, ControlState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.locked()
     }
 
     /// The group in effect.
@@ -989,11 +985,7 @@ impl super::BipTransport {
             subnet,
             swap: swap.clone(),
             bbmd,
-            lease: self
-                .network_port_lease
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone(),
+            lease: self.network_port_lease.locked().clone(),
             tap: self.frame_tap.clone(),
         });
         swap

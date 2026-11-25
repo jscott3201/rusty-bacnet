@@ -390,19 +390,11 @@ impl<'a, Q: CaptureQueue> TimedWriteCapture<'a, Q> {
         }
     }
 
-    /// The references any of the request's attempts on `oid` queued a
-    /// change for, each once: what the capture after the object's transition
-    /// replaces (#2535). An attempt that queued nothing, writing a value
-    /// again or a property no reference conveys, leaves them as they were.
-    pub fn queued(&self, oid: ObjectIdentifier) -> &[CovSubscriptionKey] {
-        self.queued
-            .iter()
-            .find(|(object, _)| *object == oid)
-            .map_or(&[], |(_, keys)| keys.as_slice())
-    }
-
-    /// Take [`Self::queued`] for every object, for a host that captures the
-    /// transitions once the write is done.
+    /// Take, for each object, the references any of the request's attempts
+    /// on it queued a change for, each once, for a host that captures the
+    /// transitions once the write is done: what the capture after the
+    /// object's transition replaces (#2535). An attempt that queued nothing,
+    /// writing a value again or a property no reference conveys, adds none.
     pub fn take_queued(&mut self) -> Vec<(ObjectIdentifier, Vec<CovSubscriptionKey>)> {
         core::mem::take(&mut self.queued)
     }

@@ -79,6 +79,7 @@ impl Request<'_> {
                 created.as_slice(),
                 cov_table,
                 &mut transition,
+                &[],
             )
             .await;
             (result, [membership, schedule])

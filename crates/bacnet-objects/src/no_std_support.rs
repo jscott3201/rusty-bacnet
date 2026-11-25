@@ -40,6 +40,9 @@ pub(crate) mod collections {
 
 /// A mutex whose [`lock`](sync::Mutex::lock) hands back the guard.
 pub(crate) mod sync {
+    #[cfg(feature = "std")]
+    use bacnet_types::sync::MutexExt;
+
     /// A mutual-exclusion lock: std's with std, a spin lock without.
     ///
     /// A poisoned std mutex still hands back its guard. Every value these
@@ -70,9 +73,7 @@ pub(crate) mod sync {
         pub(crate) fn lock(&self) -> MutexGuard<'_, T> {
             #[cfg(feature = "std")]
             {
-                self.0
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                self.0.locked()
             }
             #[cfg(not(feature = "std"))]
             {

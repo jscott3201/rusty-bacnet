@@ -6,25 +6,30 @@
 //! Object_List from `bacnet_list_objects`' cache (read whole, or element
 //! by element and resumed across calls; while that read is incomplete a
 //! page holds no record and its cursor goes on reading the list), then
-//! reads the objects of the selected types in Object_List order, one at a
-//! time from the cursor's place, each by
-//! [`Device::point_record`](bacnet_ops::Device::point_record): no page
-//! reads an object another page reads, but, now and then, the one a page
-//! hands back.
+//! reads the objects of the selected types in Object_List order from the
+//! cursor's place, in batches, each one call of
+//! [`Device::point_records`](bacnet_ops::Device::point_records): one
+//! ReadPropertyMultiple while the device answers, as the CLI's inventory
+//! reads them. No page reads an object another page reads, but, now and
+//! then, the ones a page hands back.
 //!
 //! A page ends at [`PAGE`] objects (or the policy's object page), once
 //! the call's budget is spent, or before its result would pass
-//! [`MAX_TEXT`] bytes, so that the text rendering holds it whole: it stops
-//! before an object likely to pass that (judged by its largest record so
-//! far), and a record that passes it anyway goes back to the next page, to
-//! be read again there. A record that passes it with the page's other
-//! fields goes out alone, flagged `oversized`, and the text block then
-//! leaves it out ([`oversized_text`]). A page's later object still being
-//! read [`OBJECT_GRACE`] past the budget is let go and read again on the
-//! next page, so the records before it come back before the call's own
-//! timeout; a first object still being read [`FIRST_GRACE`] past it fails
-//! the call, naming the object and the ways past it ([`stuck`]). `ended`
-//! says which of these ended the page. The cursor holds
+//! [`MAX_TEXT`] bytes, so that the text rendering holds it whole: a batch
+//! holds no more objects than are likely to fit (judged by the page's
+//! largest record so far), and a record that passes it anyway goes back
+//! to the next page with those after it, to be read again there. A record
+//! that passes it with the page's other fields goes out alone, flagged
+//! `oversized`, and the text block then leaves it out ([`oversized_text`]).
+//! A page's later batch still being read
+//! [`OBJECT_GRACE`](super::batches::OBJECT_GRACE) past the budget is let
+//! go and read again on the next page, so the records before it come back
+//! before the call's own timeout; a first batch still being read
+//! [`FIRST_GRACE`](super::batches::FIRST_GRACE) past it fails the call,
+//! naming it and the ways past it ([`stuck`](super::batches::stuck)).
+//! Either way the next attempt asks the device for fewer objects, down to
+//! one ([`super::batches`]). `ended` says which of these ended the page.
+//! The cursor holds
 //! the next object's place and a fingerprint of the matching objects (the
 //! export's [`Position`]), so a list changed between pages is refused
 //! rather than paged wrong.
@@ -35,11 +40,10 @@
 //! tries that object again.
 
 use std::collections::{BTreeMap, HashSet};
-use std::time::Duration;
 
-use bacnet_ops::InventoryOptions;
 use bacnet_ops::label::kebab;
 use bacnet_ops::parse::parse_object_type;
+use bacnet_ops::{InventoryOptions, OpsError};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -47,10 +51,11 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use super::batches::{Batch, next_batch};
 use super::export::{Position, fingerprint};
 use super::inventory_data::{point, problem_schema, problems_of, record_json};
 use super::list::listing;
-use super::{GRACE, MAX_TEXT, Spec, next, out_of_budget, render, schema, start};
+use super::{MAX_TEXT, Spec, next, render, schema, start};
 use crate::context::{Call, Ctx, Device, DeviceArg};
 use crate::errors::ToolError;
 use crate::value::object_text;
@@ -67,15 +72,14 @@ pub(super) const SPEC: Spec = Spec {
                   properties an object, 5 on an output); settings: true adds COV_Increment, \
                   Min_Pres_Value, Max_Pres_Value, Relinquish_Default and Polarity where the \
                   type has them (up to 4 more); details: true adds Device_Type and Profile_Name \
-                  (2 more). Cost: one ReadPropertyMultiple an object, and the Object_List once \
-                  (cached 5 minutes): about N + 1 requests for N objects, up to 50 a page; a \
-                  200-object device is about 200 requests, about 40 s at the default 5 a \
-                  second. The options add no request there but make records larger, so fewer \
-                  fit a page. A device that refuses ReadPropertyMultiple costs one \
-                  ReadProperty a property: 2 to 5 an object, up to 14 with every option. For \
-                  a whole large device the CLI's `bacnet inventory` is cheaper: it batches, \
-                  about N/8 + 2 requests (N/4 + 2 with values). types filters before anything \
-                  is read. Paged: up to 50 objects and 24,000 bytes a page, or what the call's \
+                  (2 more). Cost: the Object_List once (cached 5 minutes), then the objects \
+                  in batches as the CLI's `bacnet inventory` reads them, one \
+                  ReadPropertyMultiple for up to 16 objects or 32 properties, so the options \
+                  add requests: a 200-object controller takes about 28 requests (58 with \
+                  values, 104 with every option), about what the CLI takes. A device that \
+                  refuses ReadPropertyMultiple costs one ReadProperty a property: 2 to 5 an \
+                  object, up to 14 with every option. types filters before anything is \
+                  read. Paged: up to 50 objects and 24,000 bytes a page, or what the call's \
                   budget allows; `ended` says why a page ended; call again with next_cursor. \
                   A property the device can't give is a problem on its record and in the \
                   page's problems summary, never a failed call. Read-only.",
@@ -328,6 +332,30 @@ impl Page {
         self.end(first + self.points.len(), why);
     }
 
+    /// End the page before the matching object at `at` because the device
+    /// stopped answering, or the way to it failed, with `error`.
+    fn stop(&mut self, at: usize, device: u32, error: &OpsError, call: &Call) {
+        if error.timed_out() {
+            call.timed_out();
+        }
+        self.stopped = Some(ToolError::device(device, error).json());
+        self.end(at, Ended::Device);
+    }
+
+    /// How many more records the page can take: up to `cap` in all, and,
+    /// once it holds one, as many as fit under [`MAX_TEXT`] if each were
+    /// as large as its largest so far. A page's first batch has no such
+    /// guess, and takes at least one object, as [`full`](Self::full) has
+    /// every page read one.
+    fn room(&self, cap: usize) -> usize {
+        let left = cap.saturating_sub(self.points.len());
+        if self.points.is_empty() {
+            return left.max(1);
+        }
+        let bytes = MAX_TEXT.saturating_sub(self.size + ROOM);
+        left.min(bytes / self.largest.max(1))
+    }
+
     /// Why the page ends before its next object, if it does: it holds
     /// `cap`, another as large as its largest wouldn't fit under
     /// [`MAX_TEXT`], or the call's budget is spent. A page's first object
@@ -338,7 +366,7 @@ impl Page {
             None
         } else if read >= cap {
             Some(Ended::PageFull)
-        } else if self.size + self.largest + ROOM > MAX_TEXT {
+        } else if self.room(cap) == 0 {
             Some(Ended::Size)
         } else {
             call.out_of_time().then_some(Ended::Budget)
@@ -346,45 +374,13 @@ impl Page {
     }
 }
 
-/// How long past the call's budget a page's later object may take: half
-/// the grace the call has, so the records read before it come back before
-/// the call's own timeout drops them.
-const OBJECT_GRACE: Duration = Duration::from_secs(GRACE.as_secs() / 2);
-
-/// How long past the budget a page's first object may take: the call's
-/// grace, less a second, so it is this tool that names the object rather
-/// than the call's own timeout saying nothing of it.
-const FIRST_GRACE: Duration = GRACE.saturating_sub(Duration::from_secs(1));
-
-/// The error for a page's first object, `object`, still being read
-/// [`FIRST_GRACE`] past the budget: the call's own (a timeout once it has
-/// sent requests), naming the object and the ways past it that exist.
-fn stuck(call: &Call, budget: Duration, device: u32, object: ObjectIdentifier) -> ToolError {
-    let error = match out_of_budget(call, budget) {
-        ToolError::Timeout { busy, .. } => {
-            call.timed_out();
-            let after = call.started.elapsed().as_millis();
-            ToolError::Timeout {
-                device: Some(device),
-                after_ms: u64::try_from(after).unwrap_or(u64::MAX),
-                busy,
-            }
-        }
-        refused => refused,
-    };
-    let kind = kebab(object.object_type());
-    ToolError::At {
-        error: Box::new(error),
-        object: object_text(object.object_type(), object.instance_number()),
-        hint: format!(
-            "it alone outlasted the call's budget. Read it with bacnet_read, a property at a \
-             time; or leave its type, {kind}, out: give types the device's other types \
-             (bacnet_describe_device lists them) and start again without a cursor"
-        ),
-    }
-}
-
-/// Read a page of `matching` from `first`, one object a request.
+/// Read a page of `matching` from `first`, a batch a call of
+/// [`point_records`](bacnet_ops::Device::point_records): as many objects
+/// as one ReadPropertyMultiple holds
+/// ([`point_batch`](bacnet_ops::Device::point_batch); one a call once the
+/// device has refused RPM), and no more than the page can still take.
+/// Each call's records go on the page before the next call starts, so a
+/// page the budget or the device ends keeps every batch read whole.
 async fn read_page<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
     call: &Call,
@@ -395,45 +391,45 @@ async fn read_page<T: TransportPort + 'static>(
 ) -> Result<Page, ToolError> {
     let cap = ctx.policy.caps.objects.min(PAGE);
     let mut page = Page::default();
-    for (at, &object) in matching.iter().enumerate().skip(first) {
+    let mut at = first;
+    while at < matching.len() {
         if let Some(why) = page.full(cap, call) {
             page.end(at, why);
             break;
         }
-        let read = device.handle.point_record(object, options);
-        // A later object is let go once well past the budget, its requests
-        // wasted, and read again on the next page; the first one, which
-        // every page reads, gets the call's grace, and then fails the call
-        // naming it.
-        let first = page.points.is_empty();
-        let grace = if first { FIRST_GRACE } else { OBJECT_GRACE };
-        let read = tokio::time::timeout_at(call.deadline + grace, read)
-            .await
-            .ok();
-        match read {
-            None if first => {
-                let budget = ctx.policy.caps.budget;
-                return Err(stuck(call, budget, device.instance, object));
-            }
-            None => {
-                call.timed_out();
+        let rest = &matching[at..at + page.room(cap).min(matching.len() - at)];
+        let opening = page.points.is_empty();
+        let (_, batch) = next_batch(ctx, call, device, rest, options, opening).await?;
+        let read = match batch {
+            Batch::Read(read) => read,
+            // A later batch let go well past the budget: read again on the
+            // next page.
+            Batch::LetGo => {
                 page.end(at, Ended::Budget);
                 break;
             }
-            Some(Ok(record)) => page.push(record_json(&record, ctx.policy.caps.text)),
-            Some(Err(error)) if first => {
+            Batch::Failed(error) if opening => {
                 return Err(ToolError::device(device.instance, &error));
             }
-            Some(Err(error)) => {
-                // Later objects would fail the same way: stop here, say
-                // why, and let the cursor try this one again.
-                if error.timed_out() {
-                    call.timed_out();
-                }
-                page.stopped = Some(ToolError::device(device.instance, &error).json());
-                page.end(at, Ended::Device);
+            // Refused before its request went (the route gone, say):
+            // later batches would fail the same way.
+            Batch::Failed(error) => {
+                page.stop(at, device.instance, &error, call);
                 break;
             }
+        };
+        for record in &read.points {
+            page.push(record_json(record, ctx.policy.caps.text));
+            at += 1;
+        }
+        if let Some(error) = &read.stopped {
+            if page.points.is_empty() {
+                return Err(ToolError::device(device.instance, error));
+            }
+            // Later objects would fail the same way: stop here, say why,
+            // and let the cursor try the first one not read again.
+            page.stop(at, device.instance, error, call);
+            break;
         }
     }
     Ok(page)

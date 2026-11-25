@@ -27,9 +27,10 @@
 //! conversion, a closed exit gate or a closed loop that dropped the queued
 //! callback).
 
+use bacnet_types::sync::MutexExt;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::time::Duration;
 
 use pyo3::IntoPyObjectExt;
@@ -110,7 +111,7 @@ pub(crate) struct Trace {
 
 impl Redelivery {
     fn item(&self) -> MutexGuard<'_, Option<Py<PyAny>>> {
-        self.item.lock().unwrap_or_else(PoisonError::into_inner)
+        self.item.locked()
     }
 
     fn take(&self) -> Option<Py<PyAny>> {
@@ -313,6 +314,13 @@ impl<T: Send + 'static, R: EventSource<T> + 'static> LossyReceiver<T, R> {
     /// own close must also wake a read currently waiting on its receiver.
     pub(crate) fn close(&self) {
         self.slot.close();
+    }
+
+    /// The delivery paths taken so far, for another module's tests of an
+    /// iterator built on this receiver.
+    #[cfg(test)]
+    pub(crate) fn trace(&self) -> &Trace {
+        &self.slot.trace
     }
 
     /// Items lost so far: to lag, or dropped on the way to a read.

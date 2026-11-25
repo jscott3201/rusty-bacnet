@@ -8,13 +8,14 @@
 //! holder of the workspace's lock settles its `sending` entries as
 //! unknown. A task that panics has them settled at once.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use bacnet_ops::limits::{Account, charged};
 use bacnet_tool::safety::desk::{Desk, STALE, Sent};
 use bacnet_tool::safety::ledger::Origin;
 use bacnet_tool::safety::{Gate, Outcome, Preview, WriteSpec};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::sync::MutexExt;
 use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
 
@@ -36,11 +37,7 @@ impl Handoff {
     /// The answer for a call that stopped waiting: the write may or may
     /// not have gone, so no retry is suggested; the ledger will say.
     pub(crate) fn pending(&self) -> ToolError {
-        let ids = self
-            .sending
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
+        let ids = self.sending.locked().clone();
         if ids.is_empty() {
             // Not in the ledger yet, so not sent yet; it may still go.
             return ToolError::Write(json!({

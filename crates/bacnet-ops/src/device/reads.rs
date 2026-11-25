@@ -225,6 +225,44 @@ impl<T: TransportPort + 'static> Device<T> {
         })
     }
 
+    /// The device's whole Object_List, read as [`list_objects`](Self::list_objects)
+    /// reads it, for a caller that needs every object or none, as an
+    /// [`inventory`](Self::inventory) does: a list read element by element
+    /// that fails at one element is [`OpsError::ObjectList`], which names
+    /// the element and holds why it failed (a timeout stays one,
+    /// [`OpsError::timed_out`]), where `list_objects` keeps the elements
+    /// before it and says why as text.
+    ///
+    /// # Errors
+    ///
+    /// What `list_objects` fails with, and [`OpsError::ObjectList`].
+    pub async fn list_objects_whole(&self) -> Result<Vec<ObjectIdentifier>, OpsError> {
+        // Which element of a list read element by element failed, for the
+        // error to name.
+        let mut element;
+        let read = sent!(self, |at| {
+            element = None;
+            let reader = self.client.reader(at, self.instance());
+            match reader.object_list_until(|_, _| {}).await {
+                Ok((list, None)) => Ok(list.objects),
+                Ok((_, Some(stop))) => {
+                    element = Some((stop.index, stop.total));
+                    Err(stop.error)
+                }
+                Err(halt) => Err(device_error(halt)),
+            }
+        });
+        match (read, element) {
+            (Ok(objects), _) => Ok(objects),
+            (Err(source), Some((index, total))) => Err(OpsError::ObjectList {
+                index,
+                total,
+                source: Box::new(source),
+            }),
+            (Err(error), None) => Err(error),
+        }
+    }
+
     /// The device's [`DEVICE_PROPERTIES`]. A handle that doesn't know the
     /// instance reads it first ([`resolve_instance`](Self::resolve_instance)).
     /// The client notes which COV services its Protocol_Services_Supported

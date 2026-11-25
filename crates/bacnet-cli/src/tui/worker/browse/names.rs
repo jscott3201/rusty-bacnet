@@ -24,7 +24,7 @@
 //! [`RequestLimits`]: bacnet_ops::limits::RequestLimits
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 use bacnet_ops::format::{MAX_NAME_CHARS, name_text};
 use bacnet_ops::raw::{Halt, Reader, RpmFailure, rpm_failure, unreachable};
@@ -32,6 +32,7 @@ use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::sync::MutexExt;
 
 use crate::tui::point::{ReadName, ReqId};
 
@@ -269,7 +270,7 @@ impl NameQueue {
 }
 
 fn lock(queue: &Mutex<NameQueue>) -> std::sync::MutexGuard<'_, NameQueue> {
-    queue.lock().unwrap_or_else(PoisonError::into_inner)
+    queue.locked()
 }
 
 /// Read names from `queue` until it is empty or the job is stopped,

@@ -25,7 +25,11 @@ impl SourceAudit {
     /// Run `op` under the database's write guard, never waiting for the
     /// guard in the caller's task (see the module documentation). `None`
     /// when the operation was not run: the session's pool is gone or
-    /// closed.
+    /// closed, or `op` panicked in the task.
+    ///
+    /// It stays apart from `bacnet_server::caller_waits::for_caller`
+    /// (#2781): that helper raises a panic again in the caller where this
+    /// answers `None`, and would bound `op` by `Sync` too.
     pub(crate) async fn under_write_guard<R: Send + 'static>(
         self: &Arc<Self>,
         op: impl FnOnce(&Arc<Self>, &mut ObjectDatabase) -> R + Send + 'static,

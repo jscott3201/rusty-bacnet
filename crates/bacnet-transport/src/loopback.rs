@@ -19,11 +19,12 @@
 //! the peer's [`LoopbackTransport::receive_drops`] (#1713).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use bacnet_types::MacAddr;
 use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
@@ -202,10 +203,7 @@ impl LoopbackTransport {
             permit.send(msg);
             return Ok(());
         };
-        let _order = self
-            .record_order
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let _order = self.record_order.locked();
         // A dropped record receiver only stops the record.
         let _ = destinations.send(MacAddr::from_slice(mac));
         permit.send(msg);

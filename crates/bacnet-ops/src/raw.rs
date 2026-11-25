@@ -7,10 +7,9 @@
 //! failing with [`OpsError`] instead, which answers the
 //! same questions with its own methods.
 //!
-//! [`read_inventory`] and [`read_point_record`] are the layer under
-//! [`Device::inventory`](crate::Device::inventory) and
-//! [`Device::point_record`](crate::Device::point_record): the same reads
-//! over a [`Reader`], for a caller that owns a low-level client.
+//! [`read_inventory`] is the layer under
+//! [`Device::inventory`](crate::Device::inventory): the same reads over a
+//! [`Reader`], for a caller that owns a low-level client.
 //!
 //! [`who_is`] sends a discovery's Who-Is straight from a low-level client,
 //! for a front end that holds one and no [`Client`](crate::Client), and
@@ -36,7 +35,7 @@ use crate::client::{Ask, Scope, find};
 use crate::error::OpsError;
 
 pub use crate::client::read::ListStop;
-pub use crate::inventory::read::{InventoryHalt, read_inventory, read_point_record};
+pub use crate::inventory::read::{InventoryHalt, read_inventory};
 
 pub use crate::client::read::{
     Halt, Reader, RpmFailure, rpm_failure, rpm_rows, timed_out, unreachable,

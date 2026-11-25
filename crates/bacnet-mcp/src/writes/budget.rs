@@ -24,10 +24,10 @@
 //! authorized.
 
 use std::path::Path;
-use std::sync::PoisonError;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use bacnet_ops::octets::hex;
+use bacnet_types::sync::MutexExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -187,10 +187,7 @@ impl Writes {
     }
 
     fn set_count_error(&self, why: Option<String>) {
-        let mut error = self
-            .count_error
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut error = self.count_error.locked();
         if *error != why {
             *error = why;
             self.signals.session_changed();
@@ -204,10 +201,7 @@ impl Writes {
 
     /// Why the plan's count can't be trusted now, if it can't.
     pub(crate) fn count_error(&self) -> Option<String> {
-        self.count_error
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.count_error.locked().clone()
     }
 }
 

@@ -48,7 +48,7 @@ pub(crate) use seated::SeatAuditor;
 pub(crate) struct SourceAudit {
     /// Released off the runtime by whichever caller, worker or session
     /// drops the source last (#1561).
-    db: crate::held_database::HeldDatabase,
+    db: bacnet_server::caller_waits::HeldDatabase,
     selected: ObjectIdentifier,
     device: ObjectIdentifier,
     runtime: Weak<SourceRecipient>,
@@ -115,7 +115,7 @@ impl SourceAudit {
             failures: Arc::clone(&failures),
         });
         let source = Arc::new(Self {
-            db: crate::held_database::HeldDatabase::new(Arc::clone(&db)),
+            db: bacnet_server::caller_waits::HeldDatabase::new(Arc::clone(&db)),
             selected,
             device,
             runtime: Arc::downgrade(&runtime),

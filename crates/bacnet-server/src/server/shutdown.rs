@@ -121,6 +121,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 task.abort();
             }
             {
+                // Held across the timer's join, and waited for here, which
+                // holds up nothing the server serves, a stop left unpolled
+                // included (#2781): the set closed above admits no DCC or
+                // ReinitializeDevice request, the only requests that take
+                // the slot, and aborted those it held; dispatch never takes
+                // it. The timer, aborted once stop holds the slot, gives up
+                // its own wait for it without the guard. One queued ahead of
+                // stop, as an aborted request lets go, takes the slot first
+                // and makes its expiry, as it would have a moment before;
+                // stop then joins a timer that has ended. A drop's join
+                // (`join_released`, below) meets the same order.
                 let mut timer = self.dcc_timer.lock().await;
                 super::dcc_timer::cancel(&mut timer).await;
             }
@@ -152,6 +163,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // stopped below finds them sealed.
         self.notification_transactions.shut_lanes().await;
         {
+            // Every request is joined: only the timer, which the join
+            // aborts, can want the slot held across it (#2781).
             let mut timer = self.dcc_timer.lock().await;
             super::dcc_timer::cancel(&mut timer).await;
         }
@@ -382,7 +395,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         while let Some(result) = self.request_tasks.join_next().await {
             super::request_tasks::RequestTasks::observe(Some(result));
         }
-        // No request is left to hold the slot, as in a drop's join.
+        // No request is left to hold the slot, as in a drop's join: only the
+        // timer, which the join aborts, can want it across the join (#2781).
         {
             let mut timer = self.dcc_timer.lock().await;
             super::dcc_timer::cancel(&mut timer).await;
@@ -410,7 +424,9 @@ async fn join_released(
         super::request_tasks::RequestTasks::observe(Some(result));
     }
     // No request is left to hold the slot. The guard goes before the join,
-    // as the timer may be queued for the slot itself.
+    // as the timer may be queued for the slot itself. A timer queued ahead of
+    // this wait, as an aborted request let go, makes its expiry first, and
+    // the join finds it ended (#2781).
     let timer = dcc_timer.lock().await.take();
     if let Some(timer) = timer {
         timer.abort();

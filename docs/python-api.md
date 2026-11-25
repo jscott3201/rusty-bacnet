@@ -120,6 +120,8 @@ of the Rust `bacnet-ops` client that the `bacnet` tool is built on.
 | Read the priorities | `await ahu.priority_array("av:1")` |
 | List the objects | `await ahu.objects()` |
 | Describe the device | `await ahu.summary()` |
+| Inventory the points | `await ahu.inventory(types=None, values=False, settings=False, details=False)` (keywords only) |
+| Walk the points as they are read | `async for point in await ahu.points(): ...` |
 
 Everything a device is asked goes through its handle. There is one way to
 spell each call, on the handle; the client itself has no `read(target, ...)`
@@ -349,8 +351,138 @@ is the typed form.
 | `.get(object, property=None, *, index=None)` | `Reading \| None` | The first reading of that property |
 
 `Reading`, `Readings`, `ObjectList`, `DeviceSummary`, `Written`,
-`WritePreview`, `PriorityView` and `Discovered` are frozen results that
-refuse `copy` and `pickle`; the `Value`s inside them copy and pickle.
+`WritePreview`, `PriorityView`, `Discovered`, `Inventory`, `Point` and
+`PointIterator` are frozen results that refuse `copy` and `pickle`; the
+`Value`s inside them copy and pickle.
+
+### Inventory
+
+A device's points as records (#2561): each object's name, description,
+units or state texts and whether it takes commands, read in as few requests
+as the device allows. They are the records `bacnet inventory` prints and
+the MCP server's `bacnet_inventory` pages. There are two calls:
+`inventory()` reads the whole device into one result, and `points()` hands
+the records out as they are read, for a large device or a screen that fills
+as it goes.
+
+#### `inventory(*, types=None, values=False, settings=False, details=False) -> Inventory`
+
+Reads the device's summary, its Object_List, then the objects in batches of
+ReadPropertyMultiple, up to 16 objects or 32 properties a request. The read
+is one call: it holds the client throughout, so `stop()` waits for it, and
+nothing comes back until every object is read; for a large device,
+`points()` (below) hands the records out as they come.
+
+```python
+inventory = await ahu.inventory()
+for point in inventory:
+    print(point.object_id, point.name, point.units_text or "", point.commandable)
+if inventory.stopped is not None:
+    print("the device stopped answering:", inventory.stopped, len(inventory.unread), "not read")
+```
+
+| Keyword | Reads |
+|---------|-------|
+| `types` | Only objects of these types: `ObjectType`s or text (`["ai", "analog-output"]`). None, the default, reads every object, a vendor's included |
+| `values=True` | Each object's Present_Value, Status_Flags, Event_State, Reliability and priority in control: 4 more properties an object, 5 on an output |
+| `settings=True` | COV_Increment, Min_Pres_Value, Max_Pres_Value, Relinquish_Default and Polarity where the type has them: up to 4 more |
+| `details=True` | Device_Type and Profile_Name: 2 more |
+
+More properties an object means fewer objects a request: a typical
+controller of N objects takes about N/8 + 2 requests, N/4 + 2 with
+`values`. A device that refuses
+ReadPropertyMultiple costs that one refused request, remembered by the
+client, then a ReadProperty a property. An Object_List the device can't
+send whole is read element by element.
+
+Failures are data, as in `read_many`:
+
+- A property the device can't give is a problem on its record
+  (`Point.problems`), never raised. An optional property the object lacks
+  is no problem: the field is None.
+- A device that goes silent, or whose route is lost, while its objects are
+  read ends the read with the records read so far. `Inventory.stopped`
+  holds the `BacnetTimeoutError` or other error a single read would have
+  raised, and `Inventory.unread` the objects not read.
+- It raises only when nothing could be kept: a bad argument (`TypeError`
+  or `ValueError` when the call is made, `types` given as one str or empty
+  among them), a device that can't be placed (`BacnetLookupError`), and a
+  device that doesn't answer the summary or the Object_List, or refuses the
+  list (what a single read raises; a list read element by element that
+  fails at one element says which).
+
+| `Inventory` | Type | Description |
+|-------------|------|-------------|
+| `.points` | `tuple[Point, ...]` | In Object_List order; iterating, `len` and an index work on the `Inventory` itself |
+| `.point(object)` | `Point \| None` | The record of that object |
+| `.summary` | `DeviceSummary` | As `summary()` reads it; its `name` is cleaned for display, where the Device object's `Point.name` is exact |
+| `.address` | `str` | Where the device answers |
+| `.cov_support` | `str` | What is known of the device's COV support, as `Device.cov_support()` says it |
+| `.unread` | `tuple[ObjectIdentifier, ...]` | The objects not read because the device stopped answering |
+| `.stopped` | `BacnetError \| None` | Why, unraised |
+
+#### `points(objects=None, *, types=None, values=False, settings=False, details=False) -> PointIterator`
+
+The same records as `inventory()` reads, handed out as they are read, for a
+large device or a screen that fills as it goes; `inventory()` reads the
+whole device, with its summary, in one call. The await reads the
+Object_List and keeps the objects of `types`, each once; with `objects`
+(`ObjectIdentifier`s or text) it takes those of `types` instead, each once,
+in order, and reads nothing. Each step of the iteration reads the next batch of
+objects, one ReadPropertyMultiple, whenever the last batch's points are
+out:
+
+```python
+walk = await ahu.points(types=["ai", "ao"], values=True)
+print(len(walk), "points")
+async for point in walk:
+    print(point.name, point.present_value)
+```
+
+- A large device's first points come after two requests (the list, then one
+  batch), and an `async for` broken off reads nothing more.
+- A device that stops answering raises from the iteration (a
+  `BacnetTimeoutError`, say) once the points read before it are out.
+  Iterating the same `PointIterator` again tries the first object not read
+  again.
+- Cancelling a step (`asyncio.wait_for` timing out, a cancelled task)
+  stops its request. The next step reads that batch again, and a point
+  that was on its way when the cancel landed comes first, so no point is
+  lost or repeated.
+- Concurrent steps (`asyncio.gather(anext(walk), anext(walk))`) complete
+  one at a time, each with the next point.
+- Each batch holds the client for its read alone. After the client's
+  `stop()`, the points already read come out first, then a step raises
+  `RuntimeError`.
+- `.objects` is the tuple of objects it reads, and `len()` their count.
+- The await raises what `inventory()` raises for the Object_List. Part of
+  a list is not the device's objects: a list read element by element that
+  fails at one element raises that element's error (a
+  `BacnetTimeoutError` for a silent device), naming the element, where
+  `objects()` keeps what it got.
+
+#### `Point`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `.object_id` | `ObjectIdentifier` | The object |
+| `.address`, `.device_instance` | `str`, `int` | The device |
+| `.name`, `.description` | `str \| None` | Object_Name and Description |
+| `.units` | `EngineeringUnits \| None` | Units, for the types that have them |
+| `.units_text` | `str \| None` | The same as the `bacnet` tool writes it: `"degrees-celsius"` |
+| `.active_text`, `.inactive_text` | `str \| None` | A binary object's state texts |
+| `.state_texts` | `tuple[str, ...]` | A multi-state object's State_Text, state 1 first |
+| `.number_of_states` | `int \| None` | A multi-state object's Number_Of_States |
+| `.commandable` | `bool` | Whether Present_Value takes command priorities: always on an output, and on a value object that has a Priority_Array |
+| `.present_value`, `.status_flags`, `.event_state`, `.reliability`, `.command_priority` | `Value \| None` | Read with `values`; `.present_value.text` names the units or the state (`"72.5 °F"`) |
+| `.relinquish_default`, `.cov_increment`, `.min_present_value`, `.max_present_value`, `.polarity` | `Value \| None` | Read with `settings` |
+| `.device_type`, `.profile_name` | `str \| None` | Read with `details` |
+| `.problems` | `tuple[tuple[PropertyIdentifier, BacnetError], ...]` | The properties that gave no usable value, each with the exception a typed read of it would raise, unraised |
+| `.problem(property)` | `BacnetError \| None` | The problem with that property |
+
+**Device text.** `name`, `description`, `device_type`, `profile_name` and
+the state texts are exactly as the device sent them: clean them before
+showing them, since a device can put control characters in its names.
 
 ### Writing
 
@@ -3207,6 +3339,8 @@ await client.who_is(scope="192.168.1.100:47808")
 Manually add a device to the discovery table. The table holds one device
 per address: adding an instance at an address that holds another replaces
 it, so `get_device()` no longer finds the instance that was there (#2560).
+An address longer than 18 octets, which the hex form can spell, raises
+`BacnetError` and adds nothing: no link's MAC is longer (#2606).
 
 ```python
 await client.add_device(1234, "192.168.1.100:47808")

@@ -5,12 +5,13 @@ use crate::errors::to_py_err;
 use crate::high_level::{OpsClient, OpsDevice};
 use bacnet_transport::sc::ScEvent;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use pyo3::PyResult;
 use pyo3::exceptions::PyRuntimeError;
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, PoisonError};
 use tokio::sync::{Mutex, Notify, RwLock, RwLockReadGuard, RwLockWriteGuard, broadcast};
 use tokio::task::JoinHandle;
 
@@ -162,21 +163,14 @@ impl ClientState {
 
     /// Record why the last stop failed, or that a new stop is under way.
     fn set_stop_failure(&self, failure: Option<String>) {
-        *self
-            .stop_failure
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = failure;
+        *self.stop_failure.locked() = failure;
     }
 
     /// Where this client stands; see [`Liveness`]. Sends nothing and waits
     /// for nothing.
     pub(crate) fn liveness(&self) -> Liveness {
         if self.closing.load(Ordering::Acquire) {
-            let failure = self
-                .stop_failure
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone();
+            let failure = self.stop_failure.locked().clone();
             return failure.map_or(Liveness::Stopping, Liveness::Failed);
         }
         match self.client.try_read() {
@@ -214,14 +208,14 @@ impl ClientState {
         id: HandleId,
         read: impl FnOnce(&OpsDevice) -> R,
     ) -> Option<R> {
-        let handles = self.handles.lock().unwrap_or_else(PoisonError::into_inner);
+        let handles = self.handles.locked();
         handles.get(&id).map(read)
     }
 
     /// Forget the handle `id` names: its Python `Device` is gone.
     pub(crate) fn drop_handle(&self, id: HandleId) {
         let dropped = {
-            let mut handles = self.handles.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut handles = self.handles.locked();
             handles.remove(&id)
         };
         drop(dropped);
@@ -230,7 +224,7 @@ impl ClientState {
     /// Drop every handle, outside the mutex: a stop's first step.
     fn drop_handles(&self) {
         let dropped = {
-            let mut handles = self.handles.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut handles = self.handles.locked();
             std::mem::take(&mut *handles)
         };
         drop(dropped);
@@ -259,7 +253,7 @@ where
         Some(device) => device,
         None => {
             let made = make(lease.clone()).await?;
-            let mut handles = inner.handles.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut handles = inner.handles.locked();
             handles.entry(id).or_insert(made).clone()
         }
     };

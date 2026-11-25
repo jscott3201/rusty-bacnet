@@ -8,7 +8,7 @@ test('the PICS task page leads to the sample, which opens with its banner on the
   await expect(page).toHaveURL(base + 'integrate/pics/');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Generate a PICS for your device');
   const main = page.locator('.sl-markdown-content');
-  // One program, examples/rust/generate_pics.rs: the PICS takes the product
+  // One program, website/examples/rust/pics: the PICS takes the product
   // and protocol details from the Device (#2125, #2137), so the program sets
   // no protocol property itself.
   const programs = main.locator('pre').filter({ hasText: 'server.generate_pics(&pics_config).await' });

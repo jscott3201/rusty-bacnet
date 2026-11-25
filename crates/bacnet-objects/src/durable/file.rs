@@ -103,7 +103,7 @@ impl ObjectFile {
 
     /// The file's octets, header and all, up to one past the size cap, or
     /// `None` when there is no file.
-    pub(crate) fn read(&self) -> Result<Option<Vec<u8>>, Error> {
+    pub(crate) fn read_octets(&self) -> Result<Option<Vec<u8>>, Error> {
         #[cfg(feature = "test-support")]
         if let Some(memory) = &self.memory {
             return Ok(memory.read(0, (self.max_bytes + 1) as usize));

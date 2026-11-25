@@ -15,6 +15,7 @@ use bacnet_transport::warn_throttle::WarnThrottle;
 use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
+use bacnet_types::sync::MutexExt;
 use tokio::sync::oneshot;
 use tokio::task::{JoinError, JoinSet};
 
@@ -128,6 +129,10 @@ struct NotificationCore {
     /// node's seat the node's, whose reserves decide how much of it the
     /// server may hold (#2617).
     coordinator: Arc<OutboundTransactionCoordinator>,
+    /// Pending answers, waiters and the closed flag. It fails closed when a
+    /// panic poisoned it (#2559): every user then treats the adapter as
+    /// closed, as the coordinator it leases from does, so nothing acts on
+    /// an answer, lease or waiter a half-done update left.
     state: Mutex<NotificationState>,
 }
 
@@ -253,21 +258,20 @@ impl NotificationTransactions {
 
     #[doc(hidden)]
     pub fn set_audit_owner(&self, owner: &Arc<bacnet_objects::database::AuditOwnership>) {
-        self.workers.lock().unwrap().audit_owner = Some(Arc::downgrade(owner));
+        self.workers.locked().audit_owner = Some(Arc::downgrade(owner));
     }
     pub(super) fn audit_owner_lease(
         &self,
     ) -> Option<Arc<bacnet_objects::database::AuditOwnership>> {
         self.workers
-            .lock()
-            .unwrap()
+            .locked()
             .audit_owner
             .as_ref()
             .and_then(std::sync::Weak::upgrade)
     }
     #[doc(hidden)]
     pub fn seal_audit_owner(&self, owner: &bacnet_objects::database::AuditOwnership) {
-        let _workers = self.workers.lock().unwrap();
+        let _workers = self.workers.locked();
         owner.seal();
     }
     // Silent changes still serialize with sealing/close, but have no runtime or
@@ -276,7 +280,7 @@ impl NotificationTransactions {
         &self,
         commit: impl FnOnce() -> Result<(), Error>,
     ) -> Result<(), Error> {
-        let workers = self.workers.lock().unwrap();
+        let workers = self.workers.locked();
         if workers.closed {
             return Err(Error::Encoding("Audit delivery owner is closed".into()));
         }
@@ -290,7 +294,7 @@ impl NotificationTransactions {
     ) -> Result<(), Error> {
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|_| Error::Encoding("Audit changes require a Tokio runtime".into()))?;
-        let mut workers = self.workers.lock().unwrap();
+        let mut workers = self.workers.locked();
         if workers.closed {
             return Err(Error::Encoding("Audit delivery owner is closed".into()));
         }
@@ -318,7 +322,7 @@ impl NotificationTransactions {
 
     #[doc(hidden)]
     pub fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
-        let mut workers = self.workers.lock().unwrap();
+        let mut workers = self.workers.locked();
         if workers.closed {
             // A rejected future may own an operation and resource guards.
             drop(workers);
@@ -363,7 +367,7 @@ impl NotificationTransactions {
         if let Some(queue) = self.audit_batch.get().and_then(std::sync::Weak::upgrade) {
             drop(queue.close());
         }
-        let mut workers = self.workers.lock().unwrap();
+        let mut workers = self.workers.locked();
         // Serialize worker registration with transaction sealing. Reservation
         // uses only the core; no future can bypass closed worker admission.
         self.core.close();
@@ -382,7 +386,7 @@ impl NotificationTransactions {
     #[doc(hidden)]
     pub async fn join_next(&self) -> Option<Result<(), JoinError>> {
         poll_fn(|cx| {
-            let mut workers = self.workers.lock().unwrap();
+            let mut workers = self.workers.locked();
             match workers.tasks.poll_join_next(cx) {
                 Poll::Ready(None) if !workers.closed => {
                     workers.waiter = Some(cx.waker().clone());
@@ -603,6 +607,7 @@ impl NotificationCore {
             }
             _ => return false,
         };
+        // lock-poison: fail-closed (poisoned acts closed; the request times out)
         let sender = match self.state.lock() {
             Ok(mut state) => state.pending.remove(&token),
             Err(_) => None,
@@ -617,6 +622,7 @@ impl NotificationCore {
     }
 
     pub(super) fn close(&self) {
+        // lock-poison: fail-closed (poisoned: returns without waking parked waiters)
         let (pending, waiters) = match self.state.lock() {
             Ok(mut state) => {
                 if state.closed {
@@ -638,6 +644,7 @@ impl NotificationCore {
 
     fn rearm(&self, token: LeaseToken) -> Result<oneshot::Receiver<CovAckResult>, Rearm> {
         let (sender, receiver) = oneshot::channel();
+        // lock-poison: fail-closed (poisoned acts closed)
         let Ok(mut state) = self.state.lock() else {
             return Err(Rearm::Closed);
         };
@@ -655,12 +662,14 @@ impl NotificationCore {
     /// Take the sender back from the pending answers: whether it was still
     /// there, rather than taken by an answer or by closing.
     fn withdraw(&self, token: LeaseToken) -> bool {
+        // lock-poison: fail-closed (poisoned acts closed; sender kept)
         self.state
             .lock()
             .map_or(true, |mut state| state.pending.remove(&token).is_some())
     }
 
     fn release(&self, token: LeaseToken) {
+        // lock-poison: fail-closed (poisoned acts closed; lease still released)
         if let Ok(mut state) = self.state.lock() {
             state.pending.remove(&token);
         }
@@ -668,6 +677,7 @@ impl NotificationCore {
     }
 
     fn cancel(&self, token: LeaseToken) {
+        // lock-poison: fail-closed (poisoned acts closed; lease still cancelled)
         if let Ok(mut state) = self.state.lock() {
             state.pending.remove(&token);
         }

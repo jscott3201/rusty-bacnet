@@ -128,7 +128,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// What this client knows of the COV service `watched` sends at
     /// `device`. Sends nothing.
     pub(crate) fn cov_known(&self, device: &DeviceAddress, watched: &Watched) -> CovSupport {
-        self.forget_stale();
+        self.sweep();
         lock(&self.shared.cov)
             .get_mut(device)
             .map_or(CovSupport::Unknown, |memory| memory.of(watched).support())
@@ -168,7 +168,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// Whether the device at `device` answered a read by the wildcard
     /// instance with an error before. Sends nothing.
     pub(crate) fn wildcard_refused(&self, device: &DeviceAddress) -> bool {
-        self.forget_stale();
+        self.sweep();
         lock(&self.shared.cov)
             .get(device)
             .is_some_and(|memory| memory.no_wildcard)
@@ -209,7 +209,7 @@ impl<T: TransportPort + 'static> Client<T> {
     }
 
     fn cov_remember(&self, device: &DeviceAddress, note: impl FnOnce(&mut CovMemory)) {
-        self.forget_stale();
+        self.sweep();
         let mut known = lock(&self.shared.cov);
         if known.len() >= REMEMBERED
             && !known.contains_key(device)

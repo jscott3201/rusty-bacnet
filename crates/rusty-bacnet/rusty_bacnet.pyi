@@ -3144,6 +3144,253 @@ class DeviceSummary:
     def __repr__(self) -> str: ...
 
 
+class Point:
+    """One object of a device as ``Device.inventory`` and ``Device.points``
+    read it (#2561): where it is, what it is called, its units or state
+    texts, whether it takes commands, and what else the options read.
+
+    A field is None when the object's type has no such property, the
+    object lacks an optional one, the options didn't ask for it, or its
+    read failed, which ``problems`` then lists. Text the device supplied
+    (``name``, ``description``, ``device_type``, ``profile_name``,
+    ``active_text``, ``inactive_text``, ``state_texts``) is exactly as it
+    sent it: clean it before showing it. Frozen; compares by identity and
+    refuses ``copy`` and ``pickle``, as the other read results do; its
+    ``Value``s copy and pickle."""
+
+    @property
+    def address(self) -> str:
+        """Where the device answers, as text ``BACnetClient.device`` reads
+        back."""
+        ...
+
+    @property
+    def device_instance(self) -> int:
+        """The device's instance."""
+        ...
+
+    @property
+    def object_id(self) -> ObjectIdentifier:
+        """The object."""
+        ...
+
+    @property
+    def name(self) -> Optional[str]:
+        """Its Object_Name. Text the device supplied, exactly as sent."""
+        ...
+
+    @property
+    def description(self) -> Optional[str]:
+        """Its Description. Text the device supplied, exactly as sent."""
+        ...
+
+    @property
+    def device_type(self) -> Optional[str]:
+        """Its Device_Type, read with ``details``. Text the device
+        supplied."""
+        ...
+
+    @property
+    def profile_name(self) -> Optional[str]:
+        """Its Profile_Name, read with ``details``. Text the device
+        supplied."""
+        ...
+
+    @property
+    def units(self) -> Optional[EngineeringUnits]:
+        """Its Units, for the types that have them."""
+        ...
+
+    @property
+    def units_text(self) -> Optional[str]:
+        """Its Units as the ``bacnet`` tool writes them
+        (``"degrees-celsius"``); a unit without a name as its number."""
+        ...
+
+    @property
+    def active_text(self) -> Optional[str]:
+        """A binary object's Active_Text. Text the device supplied."""
+        ...
+
+    @property
+    def inactive_text(self) -> Optional[str]:
+        """A binary object's Inactive_Text. Text the device supplied."""
+        ...
+
+    @property
+    def state_texts(self) -> tuple[str, ...]:
+        """A multi-state object's State_Text, state 1 first; empty for
+        other types. Text the device supplied; an entry that wasn't a
+        string is ``""`` and a problem."""
+        ...
+
+    @property
+    def number_of_states(self) -> Optional[int]:
+        """A multi-state object's Number_Of_States."""
+        ...
+
+    @property
+    def commandable(self) -> bool:
+        """Whether its Present_Value takes command priorities: always for
+        an output, and for a value object when it has a Priority_Array.
+        False beside a Priority_Array problem means the device wouldn't
+        say."""
+        ...
+
+    @property
+    def relinquish_default(self) -> Optional[Value]:
+        """Its Relinquish_Default, read with ``settings``."""
+        ...
+
+    @property
+    def cov_increment(self) -> Optional[Value]:
+        """Its COV_Increment, read with ``settings``."""
+        ...
+
+    @property
+    def min_present_value(self) -> Optional[Value]:
+        """Its Min_Pres_Value, read with ``settings``."""
+        ...
+
+    @property
+    def max_present_value(self) -> Optional[Value]:
+        """Its Max_Pres_Value, read with ``settings``."""
+        ...
+
+    @property
+    def polarity(self) -> Optional[Value]:
+        """A Binary Input's or Output's Polarity, read with ``settings``."""
+        ...
+
+    @property
+    def present_value(self) -> Optional[Value]:
+        """Its Present_Value, read with ``values``; its text names the
+        units or the state (``"72.5 °F"``)."""
+        ...
+
+    @property
+    def command_priority(self) -> Optional[Value]:
+        """The priority in control of a commandable object's
+        Present_Value, read with ``values``: 1 to 16, or NULL when
+        Relinquish_Default applies."""
+        ...
+
+    @property
+    def status_flags(self) -> Optional[Value]:
+        """Its Status_Flags, read with ``values``."""
+        ...
+
+    @property
+    def event_state(self) -> Optional[Value]:
+        """Its Event_State, read with ``values``."""
+        ...
+
+    @property
+    def reliability(self) -> Optional[Value]:
+        """Its Reliability, read with ``values``."""
+        ...
+
+    @property
+    def problems(self) -> tuple[tuple[PropertyIdentifier, BacnetError], ...]:
+        """The properties asked for that gave no usable value, in the order
+        asked, as ``(property, error)`` pairs: the exception a typed read of
+        it would raise (a ``BacnetProtocolError`` with ``error_code``), or
+        a ``BacnetError`` saying what was wrong with the value the device
+        gave; never raised. An optional property the object lacks is no
+        problem."""
+        ...
+
+    def problem(self, property: PropertyIdentifier | str) -> Optional[BacnetError]:
+        """The problem with ``property``, None when it had none."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class Inventory:
+    """What ``Device.inventory`` read (#2561): the device's summary and a
+    ``Point`` for each object of the types asked for, in Object_List
+    order; when the device went silent part way, why (``stopped``) and
+    which objects weren't read (``unread``). Iterating it gives the
+    points; ``len`` and an index work on it. Frozen; compares by identity
+    and refuses ``copy`` and ``pickle``, as a ``Point`` does."""
+
+    @property
+    def address(self) -> str:
+        """Where the device answers, as text ``BACnetClient.device`` reads
+        back."""
+        ...
+
+    @property
+    def summary(self) -> DeviceSummary:
+        """The device's summary, as ``Device.summary()`` reads it. Its
+        ``name`` is cleaned for display, where the Device object's
+        ``Point.name`` is the device's text exactly as sent."""
+        ...
+
+    @property
+    def cov_support(self) -> Literal["unknown", "not-offered", "offered", "accepted", "refused"]:
+        """What is known of the device's COV support, as
+        ``Device.cov_support()`` says it: from the services the summary
+        lists, or from what this client's subscriptions met."""
+        ...
+
+    @property
+    def points(self) -> tuple[Point, ...]:
+        """The points read, in Object_List order."""
+        ...
+
+    @property
+    def unread(self) -> tuple[ObjectIdentifier, ...]:
+        """The objects of the types asked for that weren't read because the
+        device stopped answering, in Object_List order; empty when it
+        didn't."""
+        ...
+
+    @property
+    def stopped(self) -> Optional[BacnetError]:
+        """Set when the device went silent, or the way to it failed, while
+        its objects were being read: the ``BacnetTimeoutError`` or other
+        error a single read would have raised, unraised. ``points`` holds
+        what was read before it."""
+        ...
+
+    def point(self, object: ObjectIdentifier | str) -> Optional[Point]:
+        """The point of ``object``, None when it wasn't read."""
+        ...
+
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[Point]: ...
+    def __getitem__(self, index: int) -> Point: ...
+    def __repr__(self) -> str: ...
+
+
+class PointIterator:
+    """A device's points, read as they are iterated: what ``await
+    device.points(...)`` returns (#2561). Each ``__anext__`` gives the
+    next ``Point``, reading the next batch of objects (one request while
+    the device takes ReadPropertyMultiple) once the last batch's points
+    are out. A device that stops answering raises from ``__anext__`` once
+    the points read before it are out, and iterating again tries the first
+    object not read again. A cancel that lands while a point is on its way
+    puts it back: the next ``__anext__`` returns it first. Concurrent
+    ``__anext__`` calls complete one at a time, each with the next point.
+    After the client's ``stop()``, the points already read come out first,
+    then ``__anext__`` raises ``RuntimeError``. Frozen; compares by
+    identity and refuses ``copy`` and ``pickle``, as a ``Point`` does."""
+
+    @property
+    def objects(self) -> tuple[ObjectIdentifier, ...]:
+        """The objects it reads, in order: the Object_List's of the types
+        asked for, or those named, each once."""
+        ...
+
+    def __len__(self) -> int: ...
+    def __aiter__(self) -> PointIterator: ...
+    def __anext__(self) -> Awaitable[Point]: ...
+    def __repr__(self) -> str: ...
+
+
 class Discovered:
     """One device that answered a ``BACnetClient.discover()`` (#2561). A
     ``BACnetClient.device()`` target, which pins the handle to ``address``.
@@ -3585,6 +3832,75 @@ class Device:
         """The device's summary: its name, vendor, model, firmware,
         protocol revision and what it supports, in one request. A handle
         that doesn't know its instance reads that first."""
+        ...
+
+    def inventory(
+        self,
+        *,
+        types: Optional[Iterable[ObjectType | str]] = None,
+        values: bool = False,
+        settings: bool = False,
+        details: bool = False,
+    ) -> Awaitable[Inventory]:
+        """The device's objects as point records, as an ``Inventory``: the
+        device's summary, its Object_List, then the objects of ``types``
+        (all by default; ``ObjectType`` or text such as ``"ai"``) in
+        batches of ReadPropertyMultiple, up to 16 objects or 32 properties
+        a request (ReadProperty each once the device has refused that).
+        Each ``Point`` holds the object's name, description, units or state
+        texts and whether it takes commands; ``values`` adds its
+        Present_Value, Status_Flags, Event_State, Reliability and priority
+        in control, ``settings`` its COV_Increment, range,
+        Relinquish_Default and Polarity, ``details`` its Device_Type and
+        Profile_Name.
+
+        The whole read is one call: it holds the client throughout, so a
+        ``stop()`` waits for it, and nothing comes back until every object
+        is read. For a large device, ``points`` hands the same records out
+        a batch at a time.
+
+        A property the device can't give is a problem on its record, never
+        raised. A device that goes silent while its objects are read ends
+        the read with the records read so far: ``Inventory.stopped`` says
+        why and ``Inventory.unread`` lists the rest. Raised: TypeError or
+        ValueError for a bad argument when the call is made (``types`` as
+        one str, an empty ``types``, a flag that isn't a bool); on await
+        ``BacnetLookupError`` for a device that can't be placed, and what a
+        single read raises for a device that doesn't answer the summary or
+        the Object_List, or refuses the list (a list read element by
+        element that fails at one element names it)."""
+        ...
+
+    def points(
+        self,
+        objects: Optional[Iterable[ObjectIdentifier | str]] = None,
+        *,
+        types: Optional[Iterable[ObjectType | str]] = None,
+        values: bool = False,
+        settings: bool = False,
+        details: bool = False,
+    ) -> Awaitable[PointIterator]:
+        """The device's points as an async iterator, read as they are
+        iterated: a ``PointIterator`` of the ``Point`` records ``inventory``
+        reads, for a large device or a screen that fills as it goes. The
+        await reads the Object_List (whole, or element by element) and
+        keeps the objects of ``types``, each once; with ``objects`` it takes
+        those of ``types``, each once, in order, and reads nothing.
+        Iterating reads the next batch of objects whenever the last batch's
+        points are out, one ReadPropertyMultiple while the device takes
+        them: a large device's first points come at once, and an ``async
+        for`` broken off reads no more. Each batch holds the client for its
+        read alone; ``inventory`` reads the whole device in one call.
+
+        A device that stops answering raises from ``__anext__`` (a
+        ``BacnetTimeoutError``, say) once the points read before it are
+        out; iterating again tries the first object not read again. A
+        cancelled ``__anext__`` stops its request, and the next reads that
+        batch again: no point is lost or repeated. After the client's
+        ``stop()``, the points already read come out first, then
+        ``__anext__`` raises ``RuntimeError``. Raised: TypeError or
+        ValueError for a bad argument when the call is made; on await what
+        ``inventory`` raises for the Object_List."""
         ...
 
     def resolve_instance(self) -> Awaitable[int]:

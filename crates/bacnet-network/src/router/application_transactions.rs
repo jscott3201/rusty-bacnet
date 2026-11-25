@@ -20,10 +20,11 @@
 //! segment or answer, still go by its IDs.
 
 use std::collections::VecDeque;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 use bacnet_npdu::Address;
 use bacnet_types::MacAddr;
+use bacnet_types::sync::MutexExt;
 use tokio::time::{Duration, Instant};
 
 /// The most requests tracked at once, open or recently closed; a new one
@@ -96,7 +97,7 @@ pub(super) struct Transactions {
 
 impl Transactions {
     fn requests(&self) -> MutexGuard<'_, VecDeque<Request>> {
-        let mut requests = self.requests.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut requests = self.requests.locked();
         let now = Instant::now();
         requests.retain(|request| request.live(now));
         requests

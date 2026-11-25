@@ -2,7 +2,6 @@
 //! discovered devices, paged.
 
 use std::collections::HashMap;
-use std::sync::PoisonError;
 
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::client::Wanted;
@@ -10,6 +9,7 @@ use bacnet_ops::parse::{parse_object_specifier, parse_object_type};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::sync::MutexExt;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -258,6 +258,16 @@ const INDEX: u64 = MATCHED - 1;
 /// Where a page resumes: a device instance and an index into its
 /// candidates, and whether any page so far matched, packed into the
 /// cursor's position, which the cursor seals as it is.
+///
+/// The instance is the whole row key here, where `bacnet_discover` needs
+/// the address too (#2606): every row is searched through
+/// [`pinned`](crate::context::pinned), which refuses an instance two
+/// addresses claim, so such an instance is skipped whole and at most one
+/// row of an instance is ever searched. The index thus always counts that
+/// one device's candidates. A device that moves address between pages is
+/// then that instance's one row, and the search goes on at the index in
+/// its list as read there; one that gains a second claimant is skipped
+/// from then on.
 fn pack(device: u32, index: usize, matched: bool) -> u64 {
     let index = u64::try_from(index).unwrap_or(INDEX).min(INDEX);
     (u64::from(device) << 32) | index | if matched { MATCHED } else { 0 }
@@ -277,7 +287,7 @@ fn cached<T: TransportPort + 'static>(
     object: &ObjectIdentifier,
     description: bool,
 ) -> Option<Names> {
-    let names = ctx.names.lock().unwrap_or_else(PoisonError::into_inner);
+    let names = ctx.names.locked();
     let kept = names
         .get(device)
         .filter(|kept| kept.at.elapsed() < crate::context::LIST_TTL)?
@@ -319,7 +329,7 @@ fn remember<T: TransportPort + 'static>(
     object: ObjectIdentifier,
     read: Names,
 ) {
-    let mut names = ctx.names.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut names = ctx.names.locked();
     let entry = names.entry(device.clone()).or_insert_with(|| CachedNames {
         at: Instant::now(),
         objects: HashMap::new(),
@@ -418,8 +428,9 @@ pub(super) async fn run<T: TransportPort + 'static>(
         }
         page.searched.push(instance);
         // By its instance, as the other tools name it: one claimed twice is
-        // skipped, naming both addresses. Pinned to the row the policy let
-        // through above.
+        // skipped, naming both addresses, which keeps the cursor's instance
+        // a row key (see `pack`). Pinned to the row the policy let through
+        // above.
         let handle = match crate::context::pinned(client, &entry).await {
             Ok(handle) => handle,
             Err(error) => {

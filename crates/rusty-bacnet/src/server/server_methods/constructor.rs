@@ -339,6 +339,6 @@ impl BACnetServer {
     /// Test seam for verifying that fallible startup leaves registrations intact.
     #[doc(hidden)]
     fn _pending_registration_count(&self) -> PyResult<usize> {
-        Ok(self.lock_pending()?.len())
+        Ok(self.lock_pending().len())
     }
 }

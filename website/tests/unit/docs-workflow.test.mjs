@@ -74,7 +74,7 @@ test('native Ubuntu validation installs the lockfile, Chromium and runs the comp
     'node-version': '24', cache: 'npm', 'cache-dependency-path': 'website/package-lock.json',
   });
   assert.deepEqual(validate.steps.map((entry) => entry.id), [
-    'checkout', 'publication-request', 'node', 'dependencies', 'browser', 'verify', 'reports', 'pages', 'provenance',
+    'checkout', 'publication-request', 'release-tag', 'node', 'dependencies', 'browser', 'verify', 'reports', 'pages', 'provenance',
   ]);
   for (const [id, command] of [
     ['dependencies', 'npm ci'],
@@ -90,7 +90,36 @@ test('native Ubuntu validation installs the lockfile, Chromium and runs the comp
     for (const entry of job.steps) assert.equal(entry['continue-on-error'], undefined);
   }
   assert.deepEqual(validate.steps.filter((entry) => entry.run).map((entry) => entry.id),
-    ['publication-request', 'dependencies', 'browser', 'verify', 'provenance']);
+    ['publication-request', 'release-tag', 'dependencies', 'browser', 'verify', 'provenance']);
+});
+
+// The sample notes link the release's tag (#2648); the test that checks the
+// linked paths needs the tag, which the shallow checkout lacks.
+// Run the real step with `git` stubbed (ls-remote's output goes to /dev/null):
+// ls-remote answers as the remote
+// would (0 the tag exists, 2 it doesn't, 128 the remote failed) and fetch
+// succeeds or fails.
+const fetchTag = (lsRemote, fetchStatus) => spawnSync('bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c',
+  `git() { echo "git $*"; case "$1" in ls-remote) return ${lsRemote} ;; fetch) return ${fetchStatus} ;; esac; }\n${step('release-tag').run}`], {
+  cwd: new URL('../../', import.meta.url), encoding: 'utf8', timeout: 5_000,
+});
+
+test('validation fetches the site release\'s tag, fails when it exists but the fetch fails, and passes only a missing tag', () => {
+  const fetch = step('release-tag');
+  assert.equal(fetch.if, undefined);
+  assert.equal(fetch.env, undefined);
+  const release = readFileSync(new URL('../../src/lib/site.mjs', import.meta.url), 'utf8').match(/^export const release = '([0-9.]+)';$/m)[1];
+  const tag = `refs/tags/v${release}`;
+  let result = fetchTag(0, 0);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, `git fetch --no-tags --depth=1 origin ${tag}:${tag}\n`);
+  // The release PR: no tag yet, and the sample test knows every sample is pinned.
+  result = fetchTag(2, 0);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, `No tag v${release} yet.\n`);
+  for (const [lsRemote, fetchStatus] of [[0, 1], [128, 0]]) {
+    assert.notEqual(fetchTag(lsRemote, fetchStatus).status, 0, `ls-remote ${lsRemote}, fetch ${fetchStatus}`);
+  }
 });
 
 test('only a successful manual canonical dev publication uploads dist and deploys the same named artifact', () => {

@@ -88,10 +88,7 @@ impl BACnetServer {
             || Ok(()),
             || Ok(Box::new(nf)),
             || {
-                self.pending_forwarder_save_counters
-                    .lock()
-                    .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?
-                    .push(counters);
+                self.pending_forwarder_save_counters.locked().push(counters);
                 Ok(())
             },
         )
@@ -110,8 +107,7 @@ impl BACnetServer {
             let guard = inner.read().await;
             guard.server()?;
             let entries = counters
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?
+                .locked()
                 .iter()
                 .map(|(instance, counters)| {
                     (

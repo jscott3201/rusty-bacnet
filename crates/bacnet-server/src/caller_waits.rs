@@ -25,15 +25,24 @@
 //! say which happened. There is one task per call that found its way
 //! blocked, and none for a call that did not. The task runs in the
 //! caller's tracing span.
+//!
+//! A call with no server to host its task, such as the application's
+//! Schedule and trend ticks (#2781), runs it on the runtime it is polled on
+//! (`on_runtime`) and holds the database there through a
+//! [`HeldDatabase`]: once its caller has gone, that task may hold the last
+//! handle, which then goes off the runtime (#1513).
 
 use std::any::Any;
 use std::future::{Future, poll_fn};
+use std::ops::{Deref, DerefMut};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use bacnet_objects::database::ObjectDatabase;
 use futures_util::FutureExt;
-use tokio::sync::oneshot;
+use tokio::sync::{OwnedRwLockWriteGuard, RwLock, oneshot};
 use tracing::Instrument;
 
 /// The task that waits for a call (see the [module](self) documentation),
@@ -123,6 +132,92 @@ fn message(panic: &(dyn Any + Send)) -> &str {
         .copied()
         .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
         .unwrap_or("a non-text payload")
+}
+
+/// The host for a call with no server: the runtime the call is polled on,
+/// which runs the task detached. The task ends once its caller has its
+/// answer or has gone, and a runtime that shuts down drops it. Outside a
+/// runtime the call waits in its own task, as before.
+pub(crate) fn on_runtime(task: CallerTask) -> Result<(), CallerTask> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => {
+            drop(runtime.spawn(task));
+            Ok(())
+        }
+        Err(_) => Err(task),
+    }
+}
+
+/// A strong handle on the object database that lets go through
+/// [`drop_database_off_runtime`](crate::server::drop_database_off_runtime)
+/// however it goes, a task dropped mid-await included (#1513, #1561).
+///
+/// The last handle to go drops every object, and a durable object then
+/// waits for the saves it has queued: dropped on a runtime worker, that
+/// wait would hold the worker for as long as storage takes. A holder that
+/// can outlive every other handle, such as a call's task whose caller has
+/// gone or an endpoint worker, holds the database through this.
+#[doc(hidden)]
+pub struct HeldDatabase(Option<Arc<RwLock<ObjectDatabase>>>);
+
+impl HeldDatabase {
+    /// Hold `db` until this is dropped.
+    pub fn new(db: Arc<RwLock<ObjectDatabase>>) -> Self {
+        Self(Some(db))
+    }
+
+    /// Wait for the database's write guard, which comes back with this
+    /// handle. Dropped while it waits, the wait lets go of its own handle
+    /// before this one goes.
+    pub(crate) async fn write_owned(self) -> HeldWrite {
+        let guard = Arc::clone(&*self).write_owned().await;
+        HeldWrite { guard, held: self }
+    }
+}
+
+impl Deref for HeldDatabase {
+    type Target = Arc<RwLock<ObjectDatabase>>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("held until dropped")
+    }
+}
+
+impl Drop for HeldDatabase {
+    fn drop(&mut self) {
+        if let Some(db) = self.0.take() {
+            drop(crate::server::drop_database_off_runtime(db));
+        }
+    }
+}
+
+/// The database's write guard, taken through a [`HeldDatabase`], which
+/// goes after the guard.
+pub(crate) struct HeldWrite {
+    // First: a field drops before the ones declared after it.
+    guard: OwnedRwLockWriteGuard<ObjectDatabase>,
+    held: HeldDatabase,
+}
+
+impl HeldWrite {
+    /// The handle the guard is on, beside the guarded database.
+    pub(crate) fn split(&mut self) -> (&Arc<RwLock<ObjectDatabase>>, &mut ObjectDatabase) {
+        (&self.held, &mut self.guard)
+    }
+}
+
+impl Deref for HeldWrite {
+    type Target = ObjectDatabase;
+
+    fn deref(&self) -> &ObjectDatabase {
+        &self.guard
+    }
+}
+
+impl DerefMut for HeldWrite {
+    fn deref_mut(&mut self) -> &mut ObjectDatabase {
+        &mut self.guard
+    }
 }
 
 #[cfg(test)]

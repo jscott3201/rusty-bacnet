@@ -8,6 +8,7 @@ use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::primitives::{Date, Time};
+use bacnet_types::sync::MutexExt;
 
 use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
 
@@ -71,7 +72,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// recipient for them, a silent one included. Their COV fanout has run
     /// by then only when they made no event notification; otherwise it
     /// follows the notifications, waiting for them at most the APDU timeout
-    /// (#2573).
+    /// (#2573). The server serves requests by then, so a task of its own
+    /// makes those writes while `start` waits for it: a start left unpolled
+    /// holds up none of those requests (#2781). So a request the server
+    /// already has may be answered before those writes are made: on a
+    /// multi-thread runtime, as before, and now on a current-thread one too.
+    /// Dropped part way, the start drops the server, and that task with it
+    /// once it next yields, after the write it is making at most.
     ///
     /// A refusal, a transport that won't start among them, hands back the
     /// database ([`StartError`]).
@@ -105,12 +112,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// The zone the Device clock keeps local time in: the Device's
-    /// UTC_Offset and Daylight_Savings_Status. `None` on a clockless server,
-    /// and when the clock can't be read because a thread panicked while
-    /// holding its lock, which also leaves the Device without its four
-    /// clock properties.
+    /// UTC_Offset and Daylight_Savings_Status. `None` on a clockless server.
     pub fn clock_zone(&self) -> Option<ClockConfig> {
-        self.clock.as_ref().and_then(|clock| clock.zone())
+        self.clock.as_ref().map(|clock| clock.zone())
     }
 
     /// Change the Device clock's zone while the server runs: daylight saving
@@ -189,7 +193,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.request_tasks
             .for_caller(take, change)
             .await
-            // `None`: no change; its runtime dropped the task before it took its locks.
+            // `None`: no change; its runtime dropped the task before it committed.
             .unwrap_or_else(|| Err(broadcaster::stopped()))
     }
 }
@@ -348,18 +352,19 @@ impl ServerClock {
         self
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, ClockState>, Error> {
+    /// The state, poisoned or not (#2559): of its two fields, a zone change
+    /// assigns `config` and a synchronization `synchronized_utc`, each as
+    /// the writer's last step, so a panic leaves no half-written value.
+    fn lock(&self) -> MutexGuard<'_, ClockState> {
         #[cfg(test)]
         self.holds
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.state
-            .lock()
-            .map_err(|_| Error::Encoding("Device clock lock poisoned".into()))
+        self.state.locked()
     }
 
-    /// The zone local time is kept in; `None` if the lock is poisoned.
-    pub(super) fn zone(&self) -> Option<ClockConfig> {
-        Some(self.lock().ok()?.config)
+    /// The zone local time is kept in.
+    pub(super) fn zone(&self) -> ClockConfig {
+        self.lock().config
     }
 
     /// Apply a fully specified local or UTC synchronization value, unless
@@ -379,14 +384,24 @@ impl ServerClock {
         step: &mut Option<u128>,
     ) -> Result<(), Error> {
         let supplied_hundredths = date_time_to_hundredths(date, time)?;
-        self.lock()?
+        self.lock()
             .synchronize(supplied_hundredths, is_utc, max_step, step)
     }
 
     /// The UTC instant a synchronization anchored, if one did.
     #[cfg(test)]
     pub(super) fn synchronized_at(&self) -> Option<(i128, Instant)> {
-        self.state.lock().unwrap().synchronized_utc
+        self.state.locked().synchronized_utc
+    }
+
+    /// Poison the state, as a panic under its lock would.
+    #[cfg(test)]
+    pub(super) fn poison_for_test(&self) {
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = self.state.locked();
+            panic!("poison the clock");
+        }));
+        assert!(unwound.is_err() && self.state.is_poisoned());
     }
 
     /// [`synchronize_within`](Self::synchronize_within) any step.
@@ -399,7 +414,7 @@ impl ServerClock {
     /// [`set_zone`](Self::set_zone) refuses it, when its local date falls
     /// outside the BACnet Date range.
     pub(super) fn check(&self, config: ClockConfig) -> Result<(), Error> {
-        self.lock()?.frame_in(config).map(drop).ok_or_else(|| {
+        self.lock().frame_in(config).map(drop).ok_or_else(|| {
             Error::Encoding("local time in that zone is outside the BACnet Date range".into())
         })
     }
@@ -411,7 +426,7 @@ impl ServerClock {
     /// date falls outside the BACnet Date range now is refused, and changes
     /// nothing.
     pub(super) fn set_zone(&self, config: ClockConfig) -> Result<(), Error> {
-        let mut state = self.lock()?;
+        let mut state = self.lock();
         state.frame_in(config).ok_or_else(|| {
             Error::Encoding("local time in that zone is outside the BACnet Date range".into())
         })?;
@@ -479,7 +494,7 @@ impl ClockReader for ServerClock {
     /// lock, so a frame's UTC_Offset and Daylight_Savings_Status, and the
     /// local time worked out from them, always come from one zone.
     fn read_clock(&self) -> Option<ClockFrame> {
-        let state = *self.lock().ok()?;
+        let state = *self.lock();
         state.frame_in(state.config)
     }
 
@@ -489,8 +504,7 @@ impl ClockReader for ServerClock {
 
     /// Whether a peer's write leaves a zone the clock takes now: an offset
     /// off the 15-minute grid, or a zone whose local date falls outside the
-    /// BACnet Date range, is VALUE_OUT_OF_RANGE; a poisoned lock DEVICE /
-    /// OPERATIONAL_PROBLEM.
+    /// BACnet Date range, is VALUE_OUT_OF_RANGE.
     fn check_zone(&self, utc_offset: i16, daylight_savings_status: bool) -> Result<(), Error> {
         let range = || {
             Error::protocol(
@@ -499,11 +513,7 @@ impl ClockReader for ServerClock {
             )
         };
         let zone = ClockConfig::new(utc_offset, daylight_savings_status).map_err(|_| range())?;
-        self.lock()
-            .map_err(|_| unreachable_clock())?
-            .frame_in(zone)
-            .map(drop)
-            .ok_or_else(range)
+        self.lock().frame_in(zone).map(drop).ok_or_else(range)
     }
 
     /// A peer's write, made as [`set_zone`](ServerClock::set_zone) makes
@@ -520,17 +530,9 @@ impl ClockReader for ServerClock {
                 bacnet_types::enums::ErrorCode::VALUE_OUT_OF_RANGE,
             )
         })?;
-        self.lock().map_err(|_| unreachable_clock())?.config = zone;
+        self.lock().config = zone;
         Ok(())
     }
-}
-
-/// DEVICE / OPERATIONAL_PROBLEM: the clock's lock is poisoned.
-fn unreachable_clock() -> Error {
-    Error::protocol(
-        bacnet_types::enums::ErrorClass::DEVICE,
-        bacnet_types::enums::ErrorCode::OPERATIONAL_PROBLEM,
-    )
 }
 
 #[cfg(test)]

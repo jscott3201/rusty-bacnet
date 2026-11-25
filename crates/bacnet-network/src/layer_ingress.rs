@@ -14,7 +14,8 @@ use std::task::{Context, Poll, ready};
 use bacnet_router_core::node::Node;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::warn_throttle::WarnThrottle;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use bacnet_types::sync::MutexExt;
+use std::sync::{Mutex, MutexGuard};
 
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -143,7 +144,7 @@ impl ApduReceiver {
     }
 
     fn queue(&self) -> MutexGuard<'_, mpsc::Receiver<ReceivedNpdu>> {
-        self.npdu_rx.lock().unwrap_or_else(PoisonError::into_inner)
+        self.npdu_rx.locked()
     }
 
     /// Receive the next APDU, or `None` once the transport's queue is closed,
@@ -159,7 +160,7 @@ impl ApduReceiver {
 
     /// Poll for the next APDU, as [`Self::recv`] does.
     pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<ReceivedApdu>> {
-        let mut queue = self.npdu_rx.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut queue = self.npdu_rx.locked();
         loop {
             let Some(received) = ready!(queue.poll_recv(cx)) else {
                 return Poll::Ready(None);
@@ -174,7 +175,7 @@ impl ApduReceiver {
     /// `Empty` means none is queued now; `Disconnected`, that the queue is
     /// closed and drained.
     pub fn try_recv(&mut self) -> Result<ReceivedApdu, mpsc::error::TryRecvError> {
-        let mut queue = self.npdu_rx.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut queue = self.npdu_rx.locked();
         loop {
             let received = queue.try_recv()?;
             if let Some(apdu) = self.ingress.take(received) {
@@ -200,6 +201,6 @@ impl ApduReceiver {
 /// drained. Run by the layer's stop and drop.
 pub(crate) fn close_queue(queue: &std::sync::Weak<Mutex<mpsc::Receiver<ReceivedNpdu>>>) {
     if let Some(queue) = queue.upgrade() {
-        queue.lock().unwrap_or_else(PoisonError::into_inner).close();
+        queue.locked().close();
     }
 }

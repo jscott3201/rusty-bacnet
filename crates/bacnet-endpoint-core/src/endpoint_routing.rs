@@ -38,11 +38,12 @@
 //!   Unconfirmed-Requests do.
 //! - An APDU the classifier refuses goes to the policy queue, and is dropped
 //!   when that is full.
+use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
-use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use bacnet_encoding::apdu::{ConfirmedRequest, encode_apdu};
+use bacnet_types::sync::MutexExt;
 use bytes::{Bytes, BytesMut};
 
 use super::*;
@@ -232,7 +233,7 @@ impl IngressDrops {
 
     fn report(&self, force: bool) -> Option<DropReport> {
         let now = tokio::time::Instant::now();
-        let mut log = self.logged.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut log = self.logged.locked();
         let counters = self.counters();
         let since = counters.since(&log.reported);
         let dropped = since.total();

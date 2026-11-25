@@ -8,12 +8,13 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::Waker;
 use std::time::{Duration, SystemTime};
 
 use bacnet_client::client::{COVEvent, Station};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::sync::MutexExt;
 use tokio::sync::{Notify, broadcast, watch};
 use tokio::time::Instant;
 
@@ -132,7 +133,7 @@ impl Shared {
     }
 
     pub(super) fn lock(&self) -> MutexGuard<'_, EntryState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.locked()
     }
 
     pub(super) fn snapshot(&self) -> Snapshot {
@@ -564,11 +565,11 @@ impl DeviceSlot {
     }
 
     pub(super) fn inbox(&self) -> MutexGuard<'_, Vec<Arrival>> {
-        self.inbox.lock().unwrap_or_else(PoisonError::into_inner)
+        self.inbox.locked()
     }
 
     fn heard(&self) -> MutexGuard<'_, Heard> {
-        self.heard.lock().unwrap_or_else(PoisonError::into_inner)
+        self.heard.locked()
     }
 
     /// A device at the address announced itself as `instance`, by an I-Am
@@ -645,10 +646,7 @@ impl DeviceSlot {
     /// The instance a following handle moved from the device's address,
     /// and where to, once.
     pub(super) fn take_moved(&self) -> Option<(u32, DeviceAddress)> {
-        self.moved
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
+        self.moved.locked().take()
     }
 }
 
@@ -735,7 +733,7 @@ impl Registry {
     }
 
     pub(super) fn table(&self) -> MutexGuard<'_, Table> {
-        self.table.lock().unwrap_or_else(PoisonError::into_inner)
+        self.table.locked()
     }
 
     /// One lease on `shared` ends: the last one stops the entry and wakes
@@ -766,7 +764,7 @@ impl Registry {
     pub(super) fn moved(&self, instance: u32, from: &DeviceAddress, to: DeviceAddress) {
         let device = self.table().devices.get(from).cloned();
         if let Some(device) = device {
-            *device.moved.lock().unwrap_or_else(PoisonError::into_inner) = Some((instance, to));
+            *device.moved.locked() = Some((instance, to));
             device.wake.notify_one();
         }
     }

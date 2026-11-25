@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { frontmatter, plainBody } from '../../scripts/content.mjs';
 import { release } from '../../src/lib/site.mjs';
 import { repo, splitDevSection } from './dev-section.mjs';
+import { assertManifestSource, assertSampleNotes } from './sample-notes.mjs';
 import { checkCliLine, cliDefinitions } from './cli-args.mjs';
 
 const root = new URL('../../', import.meta.url);
@@ -29,7 +30,7 @@ function assertImports(source, imports) {
   }
 }
 
-test('server page shows the exact release-pinned programs and no dev section', async () => {
+test('server page shows the exact programs and says they follow dev', async () => {
   const { source, title, description, body } = await page('integrate/server');
   assert.ok(title && description);
   assertImports(source, [
@@ -43,15 +44,13 @@ test('server page shows the exact release-pinned programs and no dev section', a
   assert.deepEqual(fences(body, 'rust'), [program], 'raw source bytes, including the final newline');
   assert.deepEqual(fences(body, 'toml'), [manifest]);
   assert.deepEqual(fences(body, 'python'), [python]);
-  for (const crate of ['bacnet-objects', 'bacnet-server', 'bacnet-transport', 'bacnet-types']) {
-    assert.ok(manifest.includes(`${crate} = "=${release}"`), `${crate} follows the site release`);
-  }
-  assert.ok(manifest.includes('rust-version = "1.95"') && body.includes('minimum Rust version is **1.95**'));
+  // The manifest shown takes the BACnet crates from dev (or pins the release),
+  // and the page says so for each program (#2648).
+  assertManifestSource(manifest, 'server-device');
+  await assertSampleNotes(body, ['server-device', 'server_device.py'], 'integrate/server');
+  assert.ok(manifest.includes('rust-version = "1.95"') && body.includes('**1.95**'));
   assert.ok(body.includes(`This page builds one on BACnet/IP in Rust and in Python and describes **v${release}**.`));
-  assert.ok(body.includes(`These files target **v${release}**`));
-  assert.ok(body.includes(`with the v${release} \`rusty-bacnet\` package`));
-  const { onDev } = splitDevSection(body, 'integrate/server');
-  assert.equal(onDev, '', 'everything on the page is in the release');
+  splitDevSection(body, 'integrate/server');
   for (const path of ['examples/rust/server-device/Cargo.toml', 'examples/rust/server-device/src/main.rs', 'examples/server_device.py']) {
     assert.ok(body.includes(`${site}${path}`), path);
   }
@@ -110,11 +109,10 @@ test('the server page states the limits the source defines', async () => {
   ]) assert.ok(body.includes(row), row);
 });
 
-test('router page shows the release-pinned programs, the Python router and no dev section', async () => {
+test('router page shows the exact programs, says they follow dev, and the Python router', async () => {
   const { source, title, description, body } = await page('integrate/router');
   assert.ok(title && description);
   assert.ok(body.includes(`The page describes **v${release}**.`));
-  assert.ok(!body.includes('on-dev-after-the-release'));
   assertImports(source, [
     ['routerSource', 'rust/bip-router/src/main.rs'],
     ['routerManifest', 'rust/bip-router/Cargo.toml'],
@@ -123,19 +121,15 @@ test('router page shows the release-pinned programs, the Python router and no de
   const program = await read('examples/rust/bip-router/src/main.rs');
   const manifest = await read('examples/rust/bip-router/Cargo.toml');
   const python = await read('examples/python/bip_router.py');
-  const { onDev } = splitDevSection(body, 'integrate/router');
-  assert.equal(onDev, '', 'everything on the page is in the release');
+  splitDevSection(body, 'integrate/router');
   assert.deepEqual(fences(body, 'rust'), [program]);
   assert.deepEqual(fences(body, 'toml'), [manifest]);
   assert.deepEqual(fences(body, 'python'), [python]);
-  // The manifest pins the site release, and the page says so.
-  for (const crate of ['bacnet-client', 'bacnet-network', 'bacnet-server', 'bacnet-transport', 'bacnet-types']) {
-    assert.ok(manifest.includes(`${crate} = "=${release}"`), `${crate} follows the site release`);
-  }
-  assert.ok(!manifest.includes('branch = '));
-  assert.ok(manifest.includes('rust-version = "1.95"'));
-  assert.ok(body.includes(`The Rust manifest pins **v${release}**, whose minimum Rust version is **1.95**.`));
-  assert.ok(body.includes(`The Python program runs with the v${release} \`rusty-bacnet\` package`));
+  // The manifest shown takes the BACnet crates from dev (or pins the release),
+  // and the page says so for each program (#2648).
+  assertManifestSource(manifest, 'bip-router');
+  await assertSampleNotes(body, ['bip-router', 'bip_router.py'], 'integrate/router');
+  assert.ok(manifest.includes('rust-version = "1.95"') && body.includes('**1.95**'));
   assert.ok(program.includes('.ports()') && program.includes('stopped?;'));
   for (const path of ['examples/rust/bip-router/Cargo.toml', 'examples/rust/bip-router/src/main.rs', 'examples/bip_router.py']) {
     assert.ok(body.includes(`${site}${path}`), path);

@@ -168,3 +168,6 @@ async fn tick_schedules_dropped_mid_run_ends_the_command_run_unsuccessful() {
         PropertyValue::Unsigned(0)
     );
 }
+
+#[path = "schedule_waits_tests.rs"]
+mod waits;

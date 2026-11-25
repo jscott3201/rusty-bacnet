@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { expectSampleNote } from './helpers';
 const base = '/rusty-bacnet/';
 
 test('integration journey exposes the exact runnable shared-endpoint source and downloads', async ({ page, request }) => {
@@ -12,6 +13,7 @@ test('integration journey exposes the exact runnable shared-endpoint source and 
   const main = page.locator('.sl-markdown-content');
   await expect(main.locator('pre code').filter({ hasText: 'async fn main()' })).toHaveText(source.trimEnd(), { useInnerText: true });
   await expect(main.locator('pre code').filter({ hasText: '[package]' })).toHaveText(manifest.trimEnd(), { useInnerText: true });
+  await expectSampleNote(main, 'shared-endpoint');
   for (const [label, path, expected] of [
     ['Cargo.toml', 'Cargo.toml', manifest],
     ['main.rs', 'src/main.rs', source],

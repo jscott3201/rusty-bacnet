@@ -11,6 +11,7 @@ mod session;
 mod tests;
 
 use application::Application;
+use bacnet_types::sync::MutexExt;
 use config::{PortConfig, PyBipRouterPort, RouterSettings};
 use lifecycle::Lifecycle;
 use publication::Publication;
@@ -45,7 +46,7 @@ impl PyBACnetRouter {
     }
     fn bind_loop(&self, py: Python<'_>) -> PyResult<()> {
         let current = py.import("asyncio")?.call_method0("get_running_loop")?;
-        let mut owner = self.event_loop.lock().unwrap_or_else(|e| e.into_inner());
+        let mut owner = self.event_loop.locked();
         match owner.as_ref() {
             Some(expected) if !expected.bind(py).is(&current) => Err(PyRuntimeError::new_err(
                 "router belongs to a different asyncio event loop",
@@ -282,12 +283,7 @@ impl PyBACnetRouter {
 impl Drop for PyBACnetRouter {
     fn drop(&mut self) {
         self.lifecycle.dispose();
-        if self
-            .event_loop
-            .get_mut()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some()
-        {
+        if self.event_loop.get_mut_locked().is_some() {
             let owner = self.lifecycle.clone();
             crate::py_async::spawn_cleanup(async move {
                 let _ = owner.close().await;

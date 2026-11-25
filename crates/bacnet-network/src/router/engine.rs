@@ -20,7 +20,7 @@
 //! drive the transports'.
 
 use std::ops::{Deref, DerefMut};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 use bacnet_npdu::NpduLimits;
 use bacnet_router_core::router::{
@@ -28,6 +28,7 @@ use bacnet_router_core::router::{
 };
 use bacnet_router_core::{Instant, Router, Storage};
 use bacnet_time::HostClock;
+use bacnet_types::sync::MutexExt;
 
 use super::Counters;
 use super::port_groups::PortGroups;
@@ -147,7 +148,7 @@ impl Engine {
     /// Under the guard, the engine's own `counters()` are the counts since
     /// the lock was taken: the last guard took the rest.
     pub(super) fn lock(&self) -> EngineGuard<'_> {
-        let router = self.router.lock().unwrap_or_else(PoisonError::into_inner);
+        let router = self.router.locked();
         EngineGuard {
             router,
             published: &self.published,

@@ -3,11 +3,11 @@
 //! B/IP network and a consistency verdict ([`super::bbmd`]).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::PoisonError;
 use std::time::Duration;
 
 use bacnet_ops::RouterDiscovery;
 use bacnet_transport::port::TransportPort;
+use bacnet_types::sync::MutexExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time::Instant;
@@ -171,7 +171,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let style = client.address_style();
     let address = |mac: &[u8]| style.locate(mac, None).0;
     let (heard, known) = {
-        let routers = ctx.routers.lock().unwrap_or_else(PoisonError::into_inner);
+        let routers = ctx.routers.locked();
         match &routers.heard {
             Some((at, found)) => (Some(at.elapsed().as_secs()), found.clone()),
             None => (None, Vec::new()),
@@ -281,7 +281,7 @@ async fn ask_routers<T: TransportPort + 'static>(
     let wanted = Duration::from_secs(wait_s.unwrap_or(3).clamp(1, 30));
     // Checked and claimed under one lock, so parallel calls can't both go.
     let previous_claim = {
-        let mut routers = ctx.routers.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut routers = ctx.routers.locked();
         if let Some(at) = routers.asked
             && at.elapsed() < ROUTER_INTERVAL
         {
@@ -302,7 +302,7 @@ async fn ask_routers<T: TransportPort + 'static>(
     }
     match client.discover_routers(request).await {
         Ok(found) => {
-            let mut routers = ctx.routers.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut routers = ctx.routers.locked();
             // Asking about one network hears only its routers: keep the
             // others known before, after the ones just heard, so the cap
             // drops old routers first.
@@ -328,10 +328,7 @@ async fn ask_routers<T: TransportPort + 'static>(
         }
         Err(error) => {
             // It never left: drop the claim, and let the next try go.
-            ctx.routers
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .asked = previous_claim;
+            ctx.routers.locked().asked = previous_claim;
             Err(ToolError::Failed(error.to_string()))
         }
     }

@@ -117,7 +117,7 @@ impl FileAccessRightsPersistence {
 #[cfg(feature = "std")]
 impl AccessRightsPersistence for FileAccessRightsPersistence {
     fn load(&self, rights: ObjectIdentifier) -> Result<Option<AccessRightsSnapshot>, Error> {
-        let Some(octets) = self.file.read()? else {
+        let Some(octets) = self.file.read_octets()? else {
             return Ok(None);
         };
         Ok(Some(format::decode(rights, &octets)?))

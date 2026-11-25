@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { expectSampleNote } from './helpers';
 const base = '/rusty-bacnet/';
 
 test('security page shows the exact policy program and serves its downloads', async ({ page, request }) => {
@@ -12,6 +13,7 @@ test('security page shows the exact policy program and serves its downloads', as
   const main = page.locator('.sl-markdown-content');
   await expect(main.locator('pre code').filter({ hasText: 'impl ServerPolicy for OperatorOnly' })).toHaveText(source.trimEnd(), { useInnerText: true });
   await expect(main.locator('pre code').filter({ hasText: '[package]' })).toHaveText(manifest.trimEnd(), { useInnerText: true });
+  await expectSampleNote(main, 'sc-operator-policy');
   for (const [label, path, expected] of [
     ['Cargo.toml', 'Cargo.toml', manifest],
     ['main.rs', 'src/main.rs', source],

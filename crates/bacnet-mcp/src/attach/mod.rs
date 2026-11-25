@@ -68,6 +68,7 @@ use std::time::Duration;
 
 use bacnet_ops::Client;
 use bacnet_transport::port::TransportPort;
+use bacnet_types::sync::MutexExt;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -509,12 +510,7 @@ fn finish<T: TransportPort + 'static>(
         (shared.hub.clone(), workspace.clone(), principal.to_string());
     let refusals = Arc::clone(refusals);
     Box::pin(async move {
-        let left_out = std::mem::take(
-            &mut refusals
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .suppressed,
-        );
+        let left_out = std::mem::take(&mut refusals.locked().suppressed);
         if left_out > 0 {
             sessions::record_left_out(&workspace, &principal, left_out).await;
         }

@@ -5,6 +5,7 @@
 //! uncommitted reservation is rollback. Generations never repeat in this process.
 use super::direct_egress::{DirectEgress, DirectWrite};
 use crate::sc_frame::Vmac;
+use bacnet_types::sync::MutexExt;
 use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex,
@@ -62,7 +63,7 @@ impl DirectMembership {
         role: DirectRole,
         cap: usize,
     ) -> Result<Reservation, Refusal> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         if state.sealed {
             return Err(Refusal::Resources);
         }
@@ -121,15 +122,14 @@ impl DirectMembership {
 
     pub(crate) fn route(&self, vmac: &Vmac) -> Option<DirectEgress> {
         self.state
-            .lock()
-            .unwrap()
+            .locked()
             .established
             .values()
             .find(|entry| &entry.vmac == vmac)
             .and_then(|entry| entry.route.clone())
     }
     pub(crate) fn retire_all(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         state.sealed = true;
         for (_, entry) in state.established.drain() {
             entry.retired.send_replace(true);
@@ -172,7 +172,7 @@ impl Reservation {
         self.commit_with_limits((1476, 1476), Duration::from_secs(1))
     }
     pub(crate) fn commit_with_limits(self, limits: (u16, u16), wait: Duration) -> Arc<Membership> {
-        let mut state = self.owner.state.lock().unwrap();
+        let mut state = self.owner.state.locked();
         let mut entry = state
             .reserved
             .remove(&self.generation)
@@ -210,12 +210,7 @@ impl Reservation {
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        self.owner
-            .state
-            .lock()
-            .unwrap()
-            .reserved
-            .remove(&self.generation);
+        self.owner.state.locked().reserved.remove(&self.generation);
     }
 }
 
@@ -232,11 +227,7 @@ pub(crate) struct Membership {
 
 impl Membership {
     pub(crate) fn take_writes(&self) -> tokio::sync::mpsc::Receiver<DirectWrite> {
-        self.writes
-            .lock()
-            .unwrap()
-            .take()
-            .expect("one socket writer")
+        self.writes.locked().take().expect("one socket writer")
     }
     pub(crate) fn retirement(&self) -> watch::Receiver<bool> {
         self.retired.subscribe()
@@ -247,14 +238,13 @@ impl Membership {
     // Admission and replacement have one linearization point. The callback
     // must be synchronous, bounded and must not re-enter this registry.
     pub(crate) fn with_current<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
-        let state = self.owner.state.lock().unwrap();
+        let state = self.owner.state.locked();
         state.established.contains_key(&self.generation).then(f)
     }
     pub(crate) fn retire(&self) {
         self.owner
             .state
-            .lock()
-            .unwrap()
+            .locked()
             .established
             .remove(&self.generation);
         self.retired.send_replace(true);

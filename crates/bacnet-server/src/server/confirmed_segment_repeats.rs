@@ -27,6 +27,7 @@
 
 use super::*;
 use bacnet_network::response_route::ResponseRoute;
+use bacnet_types::sync::MutexExt;
 
 /// The acknowledgment a completed segmented request ended with, kept while
 /// its pending entry `id` lives.
@@ -161,9 +162,7 @@ impl ConfirmedRequestTracker {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, TrackerState> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.state.locked()
     }
 
     /// Notes of pending requests, for tests.

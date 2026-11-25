@@ -83,7 +83,7 @@ impl PyReading {
 /// A row's error as the exception a typed read would raise: the device's
 /// Error, Reject or Abort as the protocol, reject or abort error, and
 /// anything else as a BacnetError with its text.
-fn row_error(py: Python<'_>, error: &PropertyError) -> Py<PyAny> {
+pub(super) fn row_error(py: Python<'_>, error: &PropertyError) -> Py<PyAny> {
     let raised = match error {
         PropertyError::Remote(remote) => to_py_err(Error::Remote(*remote)),
         other => BacnetError::new_err(other.to_string()),
