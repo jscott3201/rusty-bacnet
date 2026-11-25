@@ -33,12 +33,12 @@ pub(super) fn confirmed_services(
     }
 }
 
-/// Dispatch one ConfirmedEventNotification (invoke ID 7) from `PEER_B` and
-/// hand back the reply channel's NPDU.
+/// Dispatch one ConfirmedEventNotification (invoke ID 7) from `PEER_B`,
+/// answered on `reply`, or through the link when there is none.
 async fn dispatch(
     services: RequestServices<crate::server::test_transport::TestTransport>,
     request: Bytes,
-    reply: oneshot::Sender<Bytes>,
+    reply: Option<oneshot::Sender<Bytes>>,
 ) {
     BACnetServer::handle_confirmed_request(
         &services,
@@ -58,7 +58,7 @@ async fn dispatch(
             service_choice: ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
             service_request: request,
         },
-        Some(reply),
+        reply,
     )
     .await;
 }
@@ -90,7 +90,7 @@ async fn confirmed_notification_is_acknowledged_while_its_copy_is_still_sending(
     let transactions = Arc::clone(&services.notification_transactions);
     let (reply, answered) = oneshot::channel();
     let request = notification(5);
-    let task = tokio::spawn(dispatch(services, encoded(&request), reply));
+    let task = tokio::spawn(dispatch(services, encoded(&request), Some(reply)));
 
     // The sender has its acknowledgment while the forwarded copy is held in
     // the transport, and the handler is done: the copy goes out from its
@@ -110,6 +110,38 @@ async fn confirmed_notification_is_acknowledged_while_its_copy_is_still_sending(
     );
 }
 
+/// The forwarders are offered the notification only once its SimpleAck has
+/// gone to the link: while that send is held, nothing else is sent, and the
+/// copy follows it (#2558 moved this step out of the handler's body).
+#[tokio::test(start_paused = true)]
+async fn confirmed_notification_is_forwarded_after_its_acknowledgment_is_sent() {
+    let mut nf = NotificationForwarderObject::new(1, "NF").unwrap();
+    nf.add_destination(destination(address_recipient(0, &PEER_A), 40, false))
+        .unwrap();
+    let transport = forwarding_transport();
+    let handle = transport.handle();
+    let sent = transport.sent();
+    handle.block_next_send();
+    let services = confirmed_services(database(vec![nf]), transport);
+    let transactions = Arc::clone(&services.notification_transactions);
+    let request = notification(5);
+    let task = tokio::spawn(dispatch(services, encoded(&request), None));
+
+    handle.wait_blocked().await;
+    // Every other task runs before the paused clock moves this far.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let held = sent.take();
+    assert_eq!(held.len(), 1, "only the held acknowledgment is sent");
+    assert!(is_simple_ack(&held[0].apdu()));
+    handle.release_sends(1);
+    task.await.unwrap();
+    super::event_send::lanes_drained(&transactions).await;
+    assert_eq!(
+        copies(&sent, &request),
+        [unconfirmed(To::Local(PEER_A.to_vec()), 40)]
+    );
+}
+
 #[tokio::test]
 async fn confirmed_notification_is_acknowledged_whatever_forwarding_finds() {
     // No forwarder at all: acknowledged, and counted as not forwarded.
@@ -118,7 +150,7 @@ async fn confirmed_notification_is_acknowledged_whatever_forwarding_finds() {
     let sent = transport.sent();
     let services = confirmed_services(database(Vec::new()), transport);
     let suppressions = Arc::clone(&services.event_suppressions);
-    dispatch(services, encoded(&notification(5)), reply).await;
+    dispatch(services, encoded(&notification(5)), Some(reply)).await;
     assert!(is_simple_ack(&reply_apdu(answered.await.unwrap())));
     assert!(sent.is_empty());
     assert_eq!(
@@ -147,7 +179,7 @@ async fn confirmed_notification_is_acknowledged_whatever_forwarding_finds() {
     let bindings = Arc::clone(&services.device_bindings);
     let transactions = Arc::clone(&services.notification_transactions);
     let (reply, answered) = oneshot::channel();
-    dispatch(services, encoded(&notification(5)), reply).await;
+    dispatch(services, encoded(&notification(5)), Some(reply)).await;
     assert!(is_simple_ack(&reply_apdu(answered.await.unwrap())));
     // The copy's lane asks for the device and waits for it (#1368, #2537).
     sent.wait_for_len(1).await;
@@ -166,7 +198,7 @@ async fn confirmed_notification_is_acknowledged_whatever_forwarding_finds() {
     dispatch(
         confirmed_services(database(Vec::new()), forwarding_transport()),
         encoded(&notification(5)).slice(..10),
-        reply,
+        Some(reply),
     )
     .await;
     assert!(matches!(
