@@ -8,11 +8,12 @@ pub(super) mod tail;
 
 #[path = "lifecycle_period.rs"]
 mod period;
+#[path = "start_tasks.rs"]
+mod tasks;
+use super::audit_recipient_routes::AuditRoutes;
 use super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task as spawn_operation;
 use super::heap_futures::boxed;
-use super::server_seat::{Apdus as _, Link, Own, Started};
-use super::{audit_recipient::spawn_owned, audit_recipient_routes::AuditRoutes};
-use bacnet_endpoint_core::segmented_request::SegmentedRequests;
+use super::server_seat::{Link, Own, Started};
 
 #[path = "start_settings.rs"]
 pub(super) mod settings;
@@ -101,7 +102,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         let Started {
             network,
-            apdus: mut apdu_rx,
+            apdus: apdu_rx,
             audit_routes,
             controls: network_controls,
             notification_transactions,
@@ -163,21 +164,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let event_suppressions = Arc::new(super::event_suppression::EventSuppressions::default());
         let mutation_decisions = Arc::new(crate::mutation::MutationDecisions::default());
 
-        let network_number_task = match (network_controls, seat_number) {
-            (Some(controls), _) => Some(super::network_port::spawn_number_worker(
-                &network,
-                &db,
-                config.registered_network_port,
-                controls,
-                target_audit.as_ref().map(Arc::downgrade),
-            )),
-            // On a seat the node's Number owner publishes; target Audit
-            // follows its notice (#2617).
-            (None, Some(number)) => target_audit
-                .as_ref()
-                .map(|audit| super::server_seat::follow_number(number, Arc::downgrade(audit))),
-            (None, None) => None,
-        };
+        let network_number_task = tasks::spawn_network_number(
+            network_controls,
+            seat_number,
+            &network,
+            &db,
+            &config,
+            &target_audit,
+        );
         let network_dispatch = Arc::clone(&network);
         let config_dispatch = Arc::clone(&config);
         let notification_transactions_dispatch = Arc::clone(&notification_transactions);
@@ -224,157 +218,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &request_tasks.spawner(),
         );
         let timer_runner = command_runs.clone(); // A Timer's expiry starts its writes (#2206).
-        let dispatch_task = spawn_owned(audit_owner.clone(), move || async move {
-            let mut seg_receivers = SegmentedRequests::new(segment_timeout);
-            let mut notifications_open = true;
-            let mut ingress_open = true;
-            // A peer's flood warns once per interval, the rest at debug (#1950).
-            let warnings = Arc::clone(&dispatch_context.services.warnings);
-            let (decode_warning, segment_warning) = (&warnings.decode, &warnings.segment);
-
-            // While ingress is open, finished handlers are joined at the top
-            // of each turn, not awaited below (IdleReap, #1713).
-            let mut idle_reap = super::request_tasks::IdleReap::new();
-            loop {
-                requests.reap_finished();
-                // Drain all selected ownership before the first asynchronous Abort.
-                // With no reassembly open nothing can expire, so the clock
-                // isn't read (#1978 item 6).
-                if !seg_receivers.is_empty() {
-                    Self::reap_expired_requests(
-                        &network_dispatch,
-                        &mut seg_receivers,
-                        runtime_clock::now(),
-                    )
-                    .await;
-                }
-                let received = tokio::select! {
-                    () = super::segmented_receive::wait_receive_deadline(&seg_receivers), if !seg_receivers.is_empty() => continue,
-                    result = notification_transactions_dispatch.join_next(), if notifications_open => {
-                        notifications_open = result.is_some();
-                        NotificationTransactions::observe(result);
-                        continue;
-                    }
-                    result = requests.join_next(), if !ingress_open && !requests.is_empty() => {
-                        super::request_tasks::RequestTasks::observe(result);
-                        continue;
-                    }
-                    () = idle_reap.tick(), if ingress_open && !requests.is_empty() => continue,
-                    received = apdu_rx.recv(), if ingress_open => match received {
-                        Some(received) => received,
-                        None => {
-                            // Local/periodic notification producers outlive ingress.
-                            // Keep both join consumers active, but never poll EOF again.
-                            ingress_open = false;
-                            seg_receivers.clear();
-                            continue;
-                        }
-                    },
-                    else => break,
-                };
-                // Input and the timer can become ready together. Apply expiry
-                // before interpreting this segment in either scheduling order.
-                if !seg_receivers.is_empty() {
-                    Self::reap_expired_requests(
-                        &network_dispatch,
-                        &mut seg_receivers,
-                        runtime_clock::now(),
-                    )
-                    .await;
-                }
-
-                match apdu::decode_apdu(received.apdu.clone()) {
-                    Ok(decoded) => {
-                        if notification_transactions_dispatch
-                            .application_sealed
-                            .load(Ordering::Acquire)
-                        {
-                            seg_receivers.clear();
-                            if matches!(
-                                decoded,
-                                Apdu::ConfirmedRequest(_) | Apdu::UnconfirmedRequest(_)
-                            ) {
-                                continue;
-                            }
-                        }
-                        // A confirmed request may only be addressed to one
-                        // device (Clause 6.3). One that arrives by local,
-                        // remote or global broadcast, or by multicast, leaves
-                        // the server TSM idle (Clause 5.4.5.1): it is neither
-                        // executed nor answered, whatever the service, and
-                        // no reassembly starts for it.
-                        if received.is_group && matches!(decoded, Apdu::ConfirmedRequest(_)) {
-                            debug!("Ignoring a ConfirmedRequest addressed to a group");
-                            continue;
-                        }
-                        // Nor one sent from a group address, where its
-                        // answer would go (#1504).
-                        if matches!(decoded, Apdu::ConfirmedRequest(_))
-                            && dispatch_context
-                                .confirmed_request_tracker
-                                .refuse_group_source(&received.source_mac, |mac| {
-                                    network_dispatch.transport().is_group_destination(mac)
-                                })
-                        {
-                            continue;
-                        }
-                        let source_mac = MacAddr::from_slice(&received.source_mac);
-
-                        // Clause 5.4.5.2 AbortPDU_Received: a peer's Abort
-                        // ('server' = FALSE) ends any reassembly session for
-                        // its transaction. A side effect, not a short
-                        // circuit — the PDU still reaches `dispatch`, whose
-                        // Abort arm cancels in-flight segmented response
-                        // senders and records server-TSM results (#377).
-                        super::segmented_receive::remove_peer_aborted_request(
-                            &mut seg_receivers,
-                            &received,
-                            &decoded,
-                        );
-
-                        if let Apdu::ConfirmedRequest(ref req) = decoded
-                            && req.segmented
-                        {
-                            // The shared receiver takes it (#2742); the plain
-                            // path below is untouched.
-                            Self::receive_request_segment(
-                                &network_dispatch,
-                                &dispatch_context,
-                                &config_dispatch,
-                                &mut seg_receivers,
-                                segment_warning,
-                                &source_mac,
-                                req,
-                                received,
-                            )
-                            .await;
-                        } else {
-                            Self::dispatch(&dispatch_context, &source_mac, decoded, received).await;
-                        }
-                    }
-                    Err(e) => {
-                        warn_throttled!(
-                            decode_warning,
-                            error = %e,
-                            "Server failed to decode received APDU"
-                        );
-                    }
-                }
-            }
-        });
+        let dispatch_task = Self::spawn_dispatch_loop(
+            audit_owner.clone(),
+            tasks::DispatchLoop {
+                segment_timeout,
+                dispatch_context,
+                requests,
+                network_dispatch,
+                config_dispatch,
+                notification_transactions_dispatch,
+                apdu_rx,
+            },
+        );
 
         let cov_table_for_purge = Arc::clone(&cov_table);
-        let cov_purge_task = spawn_owned(audit_owner.clone(), move || async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(30));
-            loop {
-                interval.tick().await;
-                let mut table = cov_table_for_purge.write().await;
-                let purged = table.purge_expired();
-                if purged > 0 {
-                    debug!(purged, "Purged expired COV subscriptions");
-                }
-            }
-        });
+        let cov_purge_task = tasks::spawn_cov_purge(audit_owner.clone(), cov_table_for_purge);
 
         // Background commits fan COV out like a network write (#889).
         let cov_fanout = super::cov_fanout::CovFanout::new(
@@ -396,9 +254,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // (#2535); see `background`.
         let fault_detection_task = if config.enable_fault_detection {
             let fanout = cov_fanout.clone();
-            Some(spawn_owned(audit_owner.clone(), move || {
-                background::fault_detection(fanout)
-            }))
+            Some(tasks::spawn_fault_detection(audit_owner.clone(), fanout))
         } else {
             None
         };
@@ -427,47 +283,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             None
         };
 
-        let trend_log_task = Some(spawn_owned(audit_owner.clone(), || {
-            crate::trend_log::run(Arc::clone(&db))
-        }));
+        let trend_log_task = Some(tasks::spawn_trend_log(audit_owner.clone(), &db));
 
         let schedule_fanout = cov_fanout.clone();
-        // The 60-second Schedule pass, and the work an application's own
-        // `add` or `remove` queued on the database (`crate::membership`).
-        let schedule_tick_task = Some(spawn_owned(audit_owner.clone(), move || {
-            background::schedules(schedule_fanout, membership, command_runs)
-        }));
+        let schedule_tick_task = Some(tasks::spawn_schedules(
+            audit_owner.clone(),
+            schedule_fanout,
+            membership,
+            command_runs,
+        ));
 
-        // Intrinsic-reporting task: once a second, and when a pending
-        // transition's `Time_Delay` ends, it fires the transitions that are due
-        // and sends their EventNotifications. The per-write path only *seeds* a
-        // pending transition, due its delay after the write (see
-        // `fire_event_notifications`); this task is the sole confirmer, so
-        // repeated writes cannot shorten the delay (ASHRAE 135-2020 Clause
-        // 13.3). Runs unconditionally like the trend-log task — a no-pending
-        // sweep is a cheap empty iteration.
-        //
-        // It is also what carries Reliability into event-state-detection when
-        // no writer evaluated the change. Per Clause 13.2.2 the FAULT
-        // determination is a standing condition, so each sweep re-derives it
-        // from the object's current `Reliability`. A network or local write and
-        // the fault detector's object-owned hooks above commit the transition
-        // with the change (#2535), so the sweep finds it done; a setter that
-        // bypasses them reaches detection here. `enable_fault_detection`
-        // governs only whether those hooks run every 10 seconds, never whether
-        // an existing Reliability is honored.
-        //
-        // Six of the nine wired object types have no route that can set
-        // Reliability, so the fault path is correct but inert on them (#218).
-        let intrinsic_reporting_task = Some(spawn_owned(audit_owner.clone(), || {
-            intrinsic::run(cov_fanout.clone())
-        }));
+        let intrinsic_reporting_task = Some(tasks::spawn_intrinsic_reporting(
+            audit_owner.clone(),
+            &cov_fanout,
+        ));
 
-        // Reports what changed while a confirmed report was outstanding, once
-        // it is acknowledged (#896).
-        let cov_revisit_task = Some(spawn_owned(audit_owner.clone(), || {
-            cov_fanout.clone().run_revisits()
-        }));
+        let cov_revisit_task = Some(tasks::spawn_cov_revisits(audit_owner.clone(), &cov_fanout));
 
         let binary_lighting_operation_task =
             Some(spawn_operation(cov_fanout, monotonic, timer_runner));
