@@ -22,13 +22,14 @@
 //! only an SC dial and a router's lookups wait before the hand-off.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetRecipient;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::sync::MutexExt;
 
 use super::ForwarderSaveCounterEntry;
 
@@ -56,7 +57,7 @@ pub(super) struct StartClaim {
 }
 
 fn relock<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
-    lock.lock().unwrap_or_else(PoisonError::into_inner)
+    lock.locked()
 }
 
 /// A registration as the claim keeps it: the objects are `Send` already.

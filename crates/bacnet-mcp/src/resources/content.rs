@@ -1,7 +1,7 @@
 //! What each resource holds.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bacnet_ops::client::Wanted;
@@ -12,6 +12,7 @@ use bacnet_ops::watch::Watched;
 use bacnet_ops::watch::hub::{Phase, Snapshot, Source};
 use bacnet_ops::{DeviceAddress, PropertyError, PropertyRef, Reading};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::sync::MutexExt;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
 
@@ -38,13 +39,13 @@ const CACHE_CAP: usize = 64;
 pub(crate) type Cache = Mutex<HashMap<DeviceAddress, (Instant, Value)>>;
 
 fn cached(cache: &Cache, device: &DeviceAddress, ttl: Duration) -> Option<Value> {
-    let cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    let cache = cache.locked();
     let (at, body) = cache.get(device)?;
     (at.elapsed() < ttl).then(|| body.clone())
 }
 
 fn keep(cache: &Cache, cap: usize, device: &DeviceAddress, body: &Value) {
-    let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut cache = cache.locked();
     if cache.len() >= cap.max(CACHE_CAP)
         && !cache.contains_key(device)
         && let Some(oldest) = cache

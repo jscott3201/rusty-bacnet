@@ -14,9 +14,10 @@ use bacnet_network::router::{
     BACnetRouter, RouterApplicationPort, RouterApplicationPorts, StartedRouter,
 };
 use bacnet_transport::port::TransportPort;
+use bacnet_types::sync::MutexExt;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 /// The longest APDU or segment wait a stack on a split entity may use: the
 /// ports forget a request 60 seconds after its last segment, retry or
@@ -123,7 +124,7 @@ impl Slots {
     }
 
     fn with<R>(&self, role: Role, f: impl FnOnce(&mut Option<RouterApplicationPort>) -> R) -> R {
-        let mut ports = self.ports.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut ports = self.ports.locked();
         match role {
             Role::Client => f(&mut ports.0),
             Role::Server => f(&mut ports.1),

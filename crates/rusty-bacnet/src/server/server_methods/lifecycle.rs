@@ -2,6 +2,7 @@ use super::super::start_claim::{StartCells, StartClaim};
 use super::super::*;
 use bacnet_objects::object_profile::TagsPersistence;
 use bacnet_transport::port::TransportPort;
+use bacnet_types::sync::MutexExt;
 
 /// The ValueError for an object the database refuses: a duplicate name, or
 /// another refusal such as the reserved instance 4194303 (#2171).
@@ -397,10 +398,7 @@ impl BACnetServer {
 
             // No fallible step once the server runs: it must reach `inner`.
             let mut published = inner.write().await;
-            *live_forwarder_save_counters
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                claim.take_forwarder_save_counters();
+            *live_forwarder_save_counters.locked() = claim.take_forwarder_save_counters();
             *published = Some(srv);
             drop(published);
             started.store(true, Ordering::Release);

@@ -24,7 +24,6 @@
 //! device still slow pays one dropped batch again.
 
 use std::collections::HashMap;
-use std::sync::PoisonError;
 use std::time::Duration;
 
 use bacnet_ops::inventory::properties;
@@ -32,6 +31,7 @@ use bacnet_ops::label::kebab;
 use bacnet_ops::{DeviceAddress, InventoryOptions, OpsError, PointRecords};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::sync::MutexExt;
 use tokio::time::Instant;
 
 use super::{GRACE, out_of_budget};
@@ -102,7 +102,7 @@ pub(super) async fn next_batch<'a, T: TransportPort + 'static>(
 /// The most properties a batch asks `device` for, once a batch of several
 /// objects outlasted a call's budget there.
 fn slow_limit<T: TransportPort + 'static>(ctx: &Ctx<T>, device: &Device<T>) -> Option<usize> {
-    let mut slow = ctx.slow.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut slow = ctx.slow.locked();
     limit_of(&mut slow, &device.address, device.instance, Instant::now())
 }
 
@@ -159,7 +159,7 @@ fn slowed<T: TransportPort + 'static>(
         .iter()
         .map(|object| properties(object.object_type(), options).len())
         .sum();
-    let mut slow = ctx.slow.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut slow = ctx.slow.locked();
     let limit = SlowLimit {
         properties: (asked / 2).max(1),
         instance: device.instance,

@@ -42,11 +42,12 @@ mod snapshot;
 
 use std::num::NonZeroU32;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -382,11 +383,7 @@ impl<T: TransportPort + 'static> Hub<T> {
         };
         for (address, slot) in fresh {
             let task = tokio::spawn(device::run(Arc::clone(&self.inner), address, slot));
-            let mut handles = self
-                .inner
-                .handles
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut handles = self.inner.handles.locked();
             handles.retain(|handle| !handle.is_finished());
             handles.push(task);
         }
@@ -529,13 +526,7 @@ impl<T: TransportPort + 'static> Hub<T> {
             .await
             .is_ok();
         self.inner.stop_dispatch.send_replace(true);
-        let handles: Vec<JoinHandle<()>> = self
-            .inner
-            .handles
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .drain(..)
-            .collect();
+        let handles: Vec<JoinHandle<()>> = self.inner.handles.locked().drain(..).collect();
         // Every task is aborted, so the joins below take no time and the
         // call keeps to `wait`. Once every point is done, cancels included,
         // a scheduler can only be running a poll of points no longer

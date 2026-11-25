@@ -1,6 +1,6 @@
 //! `bacnet_list_objects`: a device's Object_List, paged.
 
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 
 use bacnet_ops::client::{MAX_OBJECTS, Wanted};
 use bacnet_ops::format::decode_all;
@@ -9,6 +9,7 @@ use bacnet_ops::{DeviceAddress, OpsError};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::sync::MutexExt;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -199,17 +200,14 @@ pub(super) async fn listing<T: TransportPort + 'static>(
     device: &Device<T>,
 ) -> Result<Listing, ToolError> {
     let lock = {
-        let mut locks = ctx
-            .list_locks
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut locks = ctx.list_locks.locked();
         locks.retain(|_, lock| Arc::strong_count(lock) > 1);
         Arc::clone(locks.entry(device.address.clone()).or_default())
     };
     let _turn = lock.lock().await;
     let failed = |e: &OpsError| ToolError::device(device.instance, e);
     let kept = {
-        let lists = ctx.lists.lock().unwrap_or_else(PoisonError::into_inner);
+        let lists = ctx.lists.locked();
         lists
             .get(&device.address)
             .filter(|kept| kept.fresh())
@@ -320,7 +318,7 @@ fn fresh_partial(total: u32) -> CachedList {
 /// Keep what was read of `device`'s list, evicting the oldest list past
 /// [`LIST_CAP`] devices.
 fn store<T: TransportPort + 'static>(ctx: &Ctx<T>, device: &DeviceAddress, list: CachedList) {
-    let mut lists = ctx.lists.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut lists = ctx.lists.locked();
     lists.insert(device.clone(), list);
     while lists.len() > LIST_CAP {
         let oldest = lists

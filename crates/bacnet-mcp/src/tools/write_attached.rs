@@ -24,6 +24,7 @@ use bacnet_tool::safety::desk::{Caller, Desk, Sent};
 use bacnet_tool::safety::ledger::{Entry, Origin};
 use bacnet_tool::safety::{Gate, Outcome, Preview, Tier};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::sync::MutexExt;
 use rmcp::ErrorData;
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot};
@@ -387,10 +388,7 @@ fn send<T: TransportPort + 'static>(
 /// The answer for a write whose job the TUI dropped mid-way: its
 /// `sending` rows say whether it got as far as the ledger.
 fn ended(sending: &Sending) -> ToolError {
-    let ids = sending
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
+    let ids = sending.locked().clone();
     if ids.is_empty() {
         return ToolError::refused("no-approver", ENDED);
     }

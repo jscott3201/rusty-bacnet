@@ -21,7 +21,7 @@ pub(crate) mod view;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use bacnet_client::client::BACnetClient;
 use bacnet_ops::DeviceAddress;
@@ -30,6 +30,7 @@ use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::raw::{Halt, Reader};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::sync::MutexExt;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::mpsc;
 
@@ -60,7 +61,7 @@ type Queues = HashMap<u32, Arc<Mutex<NameQueue>>>;
 /// Run `f` on `device`'s name queue, if it has one.
 fn with_queue<R>(queues: &Queues, device: u32, f: impl FnOnce(&mut NameQueue) -> R) -> Option<R> {
     let queue = queues.get(&device)?;
-    Some(f(&mut queue.lock().unwrap_or_else(PoisonError::into_inner)))
+    Some(f(&mut queue.locked()))
 }
 
 /// Name queues kept before idle ones are dropped (#1931). An idle queue
@@ -70,10 +71,7 @@ const MAX_QUEUES: usize = 256;
 /// Past [`MAX_QUEUES`], drop the queues no job holds and nothing waits in.
 fn prune(queues: &mut Queues) {
     if queues.len() > MAX_QUEUES {
-        queues.retain(|_, queue| {
-            Arc::strong_count(queue) > 1
-                || !queue.lock().unwrap_or_else(PoisonError::into_inner).idle()
-        });
+        queues.retain(|_, queue| Arc::strong_count(queue) > 1 || !queue.locked().idle());
     }
 }
 

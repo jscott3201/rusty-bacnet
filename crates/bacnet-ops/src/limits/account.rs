@@ -11,9 +11,10 @@
 //! requests on the request-rate meter as an agent's, so a front end that
 //! shares its client with agents (the TUI, #2185) shows their share.
 
+use bacnet_types::sync::MutexExt;
 use std::future::Future;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::time::Instant;
@@ -161,7 +162,7 @@ impl TokenBucket {
             return None;
         }
         let wait = {
-            let mut tokens = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut tokens = self.state.locked();
             let now = Instant::now();
             let refill = now.saturating_duration_since(tokens.at).as_secs_f64() * self.per_second;
             tokens.left = (tokens.left + refill).min(self.burst) - 1.0;
@@ -197,11 +198,7 @@ impl Refund<'_> {
 impl Drop for Refund<'_> {
     fn drop(&mut self) {
         if self.armed {
-            let mut tokens = self
-                .bucket
-                .state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut tokens = self.bucket.state.locked();
             tokens.left += 1.0;
         }
     }

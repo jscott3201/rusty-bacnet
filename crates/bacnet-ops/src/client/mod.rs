@@ -40,7 +40,7 @@ pub(crate) mod routed_paths;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, DeviceEvent};
@@ -48,6 +48,7 @@ use bacnet_transport::any::AnyTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::broadcast;
 
 #[cfg(feature = "serial")]
@@ -239,7 +240,7 @@ impl<T: TransportPort + 'static> Clone for Client<T> {
 
 /// Lock `mutex`, past a panic elsewhere.
 pub(crate) fn lock<V>(mutex: &Mutex<V>) -> MutexGuard<'_, V> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    mutex.locked()
 }
 
 impl<T: TransportPort + 'static> Client<T> {

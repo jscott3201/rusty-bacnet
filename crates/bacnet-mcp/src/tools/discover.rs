@@ -1,6 +1,4 @@
 //! `bacnet_discover`: Who-Is, then the discovery table, paged.
-
-use std::sync::PoisonError;
 use std::time::Duration;
 
 use bacnet_client::discovery::DiscoveredDevice;
@@ -10,6 +8,7 @@ use bacnet_ops::{DeviceAddress, OpsError};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::sync::MutexExt;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -434,7 +433,7 @@ fn broad_allowed<T: TransportPort + 'static>(ctx: &Ctx<T>) -> Result<(), ToolErr
              1000-1999, instead",
         ));
     }
-    let mut last = ctx.broad.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut last = ctx.broad.locked();
     let now = Instant::now();
     if let Some(at) = *last
         && now.duration_since(at) < BROAD_INTERVAL

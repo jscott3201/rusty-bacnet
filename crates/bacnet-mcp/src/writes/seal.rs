@@ -10,10 +10,11 @@
 //! runs on the process's own clock (Tokio's, which tests can pause).
 
 use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use bacnet_ops::octets::hex;
+use bacnet_types::sync::MutexExt;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use serde::{Deserialize, Serialize};
@@ -156,7 +157,7 @@ impl Sealer {
             .map_err(|_| Unsealed::Forged)?;
         let state: State = serde_json::from_slice(&body).map_err(|_| Unsealed::Forged)?;
         let now = self.now_ms();
-        let mut used = self.used.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut used = self.used.locked();
         used.retain(|_, expires| *expires >= now);
         if used.contains_key(&state.nonce) {
             return Err(Unsealed::Replayed);
