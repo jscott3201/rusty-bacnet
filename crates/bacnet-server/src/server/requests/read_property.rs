@@ -265,10 +265,10 @@ mod tests {
     /// (5,256 before), plus the slack, measured on macOS arm64 with Rust
     /// 1.99.0; other transports' differ (BACnet/SC over TLS: 6,048). Its
     /// largest wait is the post-write COV fanout's. It is the boxed future
-    /// of each confirmed request the handler serves, and a rare path awaited inline grows it
-    /// unnoticed (a refused COV report's wait added 872 bytes before it was
-    /// boxed). A toolchain bump that trips it means measuring again; any
-    /// other change, boxing what grew.
+    /// of each confirmed request the handler serves, and a rare path
+    /// awaited inline grows it unnoticed (a refused COV report's wait added
+    /// 872 bytes before it was boxed). A toolchain bump that trips it means
+    /// measuring again; any other change, boxing what grew.
     #[test]
     fn rpm_and_wpm_futures_stay_within_their_ceilings() {
         const SLACK: usize = 64;

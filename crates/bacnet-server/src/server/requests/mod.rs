@@ -234,9 +234,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // WriteProperty, ReadPropertyMultiple and WritePropertyMultiple keep
         // their arms in this body, and every other service runs from
         // `other_services` (#2558). Run from there too, a WriteProperty took
-        // 232 more instructions per request and a ReadPropertyMultiple 46
-        // (perf_counts.py wp and rpm, current-thread runtime, against this
-        // layout, 2026-11-25). WritePropertyMultiple, which no workload
+        // 232 more instructions per request and a ReadPropertyMultiple about
+        // 46: whole-binary totals from a local perf_counts.py run (wp and
+        // rpm, current-thread runtime, 2026-11-25) against this layout, with
+        // per-process hash keys. The structural part was this handler's and
+        // the dispatcher's own count rising (wp +192, rpm +143); the
+        // ReadPropertyMultiple total is within what code generation alone
+        // moves between builds. WritePropertyMultiple, which no workload
         // counts, stays beside WriteProperty.
         let response = match service_choice {
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY => {
