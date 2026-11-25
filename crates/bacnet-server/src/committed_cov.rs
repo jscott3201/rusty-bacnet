@@ -11,9 +11,18 @@
 //! causes under the pass's guard too, before the timestamped capture, as a
 //! write does (#2535): no reader, COV report or timestamped row sees it with
 //! a new value or Reliability and the Event_State from before.
+//!
+//! A pass that runs under a write request's guard can change an object the
+//! request's own attempts already captured rows for (a WritePropertyMultiple
+//! that writes a Schedule and one of its targets). Its change is then one
+//! more write of that request (#2582): captured before the transition, and
+//! the capture after it replaces the newest row each reference queued, as
+//! the request's own capture after a transition does. The transition is
+//! never a row of its own after the request's.
 
 use crate::command_lists::TakenRuns;
 use crate::cov::CovSubscriptionTable;
+use bacnet_device_core::cov::CovSubscriptionKey;
 use bacnet_device_core::cov::life_safety::{
     LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object,
 };
@@ -30,6 +39,22 @@ use tokio::sync::RwLock;
 /// notifications onto their lanes (#2535). True when it committed one.
 pub(crate) type CommitTransition<'a> =
     &'a mut (dyn FnMut(&mut ObjectDatabase, ObjectIdentifier) -> bool + Send);
+
+/// The timestamped rows a write request's own captures queued under its
+/// guard: for each object, the references some attempt on it queued a row
+/// for, as [`TimedWriteCapture::take_queued`] hands them over. The capture
+/// after an object's transition replaces the newest row of each (#2535).
+///
+/// [`TimedWriteCapture::take_queued`]: bacnet_device_core::cov::timed_capture::TimedWriteCapture::take_queued
+pub(crate) type RequestRows = [(ObjectIdentifier, Vec<CovSubscriptionKey>)];
+
+/// The references `rows` holds for `oid`: none when no attempt on it
+/// queued a row.
+pub(crate) fn rows_of(rows: &RequestRows, oid: ObjectIdentifier) -> &[CovSubscriptionKey] {
+    rows.iter()
+        .find(|(object, _)| *object == oid)
+        .map_or(&[], |(_, keys)| keys.as_slice())
+}
 
 /// Objects one background pass changed, collected under its database guard.
 pub(crate) struct BackgroundCommit {
@@ -100,7 +125,68 @@ impl BackgroundCommit {
         for oid in &self.changed {
             transition(db, *oid);
         }
-        self.finish_committed(database, db, cov_table).await
+        self.finish_committed(database, db, cov_table, &[]).await
+    }
+
+    /// [`Self::finish`] for a pass under a write request's guard, after the
+    /// request's own captures queued `rows` (#2582). An object the pass
+    /// changed that the request has rows for is captured once more before
+    /// the transitions, as a write of the request: a value the pass moved
+    /// keeps a row of its own, as each of the request's writes does (#856).
+    /// The capture after the transitions then replaces the newest row of
+    /// each reference the request or that capture queued.
+    pub(crate) async fn finish_in_request(
+        self,
+        database: &Arc<RwLock<ObjectDatabase>>,
+        db: &mut ObjectDatabase,
+        cov_table: &RwLock<CovSubscriptionTable>,
+        transition: CommitTransition<'_>,
+        rows: &RequestRows,
+    ) -> CommittedCov {
+        let replace = self.capture_written(db, cov_table, rows).await;
+        for oid in &self.changed {
+            transition(db, *oid);
+        }
+        self.finish_committed(database, db, cov_table, &replace)
+            .await
+    }
+
+    /// Capture, before their transitions, the objects the pass changed that
+    /// `rows` holds rows for, and return what the capture after the
+    /// transitions replaces for each: the request's references and those
+    /// this capture queued. Lock order: the caller's database guard, then a
+    /// short table read. Nothing is read when `rows` names none of them.
+    async fn capture_written(
+        &self,
+        db: &ObjectDatabase,
+        cov_table: &RwLock<CovSubscriptionTable>,
+        rows: &RequestRows,
+    ) -> Vec<(ObjectIdentifier, Vec<CovSubscriptionKey>)> {
+        let mut replace: Vec<_> = self
+            .changed
+            .iter()
+            .map(|oid| (*oid, rows_of(rows, *oid)))
+            .filter(|(_, keys)| !keys.is_empty())
+            .map(|(oid, keys)| (oid, keys.to_vec()))
+            .collect();
+        if replace.is_empty() {
+            return replace;
+        }
+        let captures: Vec<_> = {
+            let table = cov_table.read().await;
+            replace
+                .iter()
+                .map(|(oid, _)| table.timed_capture(*oid))
+                .collect()
+        };
+        for ((_, keys), capture) in replace.iter_mut().zip(captures) {
+            for key in capture.run(db) {
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        replace
     }
 
     /// Finish under the same guard, `db` on `database`, a pass whose objects'
@@ -108,11 +194,14 @@ impl BackgroundCommit {
     /// timestamped COV-multiple history at commit time, after them, so a
     /// change and its transition are one row (#2535), take the Command runs
     /// the pass queued, then split the fanout owed once the guard is dropped.
+    /// For an object `replace` holds rows for, the capture replaces the
+    /// newest row of each of those references rather than adding one.
     pub(crate) async fn finish_committed(
         self,
         database: &Arc<RwLock<ObjectDatabase>>,
         db: &mut ObjectDatabase,
         cov_table: &RwLock<CovSubscriptionTable>,
+        replace: &RequestRows,
     ) -> CommittedCov {
         if self.changed.is_empty() {
             return CommittedCov::default();
@@ -131,8 +220,10 @@ impl BackgroundCommit {
                 .chain(std::iter::once(table.timed_capture_exact(&life_safety)))
                 .collect()
         };
-        for capture in captures {
-            capture.run(db);
+        // One capture per ordinary object, in order, then the exact one.
+        for (at, capture) in captures.into_iter().enumerate() {
+            let replacing = coarse.get(at).map_or(&[][..], |oid| rows_of(replace, *oid));
+            capture.run_replacing(db, replacing);
         }
         CommittedCov {
             life_safety,

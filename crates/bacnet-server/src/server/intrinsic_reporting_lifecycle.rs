@@ -117,7 +117,7 @@ async fn sweeps<T: TransportPort + 'static>(fanout: &CovFanout<T>, tail: &Fanout
             (
                 settle,
                 commit
-                    .finish_committed(&fanout.db, &mut db, &fanout.cov_table)
+                    .finish_committed(&fanout.db, &mut db, &fanout.cov_table, &[])
                     .await,
             )
         };

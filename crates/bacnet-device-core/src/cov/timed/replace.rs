@@ -24,10 +24,13 @@ impl TimedHistories {
     /// lock, briefly) and drains its whole context: one that
     /// runs between a WritePropertyMultiple's attempts and its capture after
     /// the transition, or between a local authorization's events and that
-    /// capture, leaves this to append. The replacement keeps the replaced
-    /// row's capture instant, so its Max_Notification_Delay still runs from
-    /// the write. Returns `false` when the generation is no longer live and
-    /// nothing was queued.
+    /// capture, leaves this to append. That window also spans a written
+    /// Schedule's pass, which runs between them under the same guard and
+    /// awaits the COV table there (#2582); a row drained in it falls back to
+    /// a push as well. The replacement keeps the replaced row's capture
+    /// instant, so its Max_Notification_Delay still runs from the write.
+    /// Returns `false` when the generation is no longer live and nothing was
+    /// queued.
     pub fn replace_latest(
         &mut self,
         key: &CovSubscriptionKey,
