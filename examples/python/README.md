@@ -26,6 +26,7 @@ accepts configured baud rates of 9600, 19200, 38400, 57600, 76800, or 115200.
 | [`sc_peer_certificates.py`](sc_peer_certificates.py) | Helpers for accepted-Hub snapshots and untrusted rejected-attempt certificates on configured clients |
 | [`ipv6_client_server.py`](ipv6_client_server.py) | BACnet/IPv6 client and server: VMAC addressing and `resolve_vmac` |
 | [`device_management.py`](device_management.py) | DeviceCommunicationControl, CreateObject, error handling |
+| [`inventory.py`](inventory.py) | A device's points as records: `Device.inventory()` and the `Device.points()` async iterator |
 
 ## Running
 
@@ -53,4 +54,7 @@ python sc_secure_connect.py
 
 # Device management
 python device_management.py
+
+# Point inventory (works immediately)
+python inventory.py
 ```

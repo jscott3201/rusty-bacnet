@@ -447,6 +447,44 @@ async fn a_list_that_fails_part_way_is_an_error() {
     stop(client, server).await;
 }
 
+/// `Device::list_objects_whole` gives the whole list, or fails as the
+/// inventory does where `list_objects` keeps part of it: naming the
+/// element, a timeout still a timeout.
+#[tokio::test(start_paused = true)]
+async fn a_whole_list_or_the_element_that_failed() {
+    let (client, server, _) = lab_logged(Faults::default()).await;
+    let device = lab_device(&client).await;
+    let whole = device.list_objects_whole().await.unwrap();
+    assert_eq!(whole, lab_objects());
+    drop(device);
+    stop(client, server).await;
+
+    // The refused whole list, element 0, elements 1 and 2; then element 3
+    // goes unanswered.
+    let faults = Faults {
+        pass: 4,
+        reject_whole_list: true,
+        ..Faults::default()
+    };
+    let (client, server, _) = lab_logged(faults).await;
+    let device = lab_device(&client).await;
+    let error = device.list_objects_whole().await.unwrap_err();
+    assert!(error.timed_out(), "{error}");
+    let text = error.to_string();
+    assert!(text.starts_with("Object_List element 3 of 13: "), "{text}");
+    let named = matches!(
+        error,
+        OpsError::ObjectList {
+            index: 3,
+            total: 13,
+            ..
+        }
+    );
+    assert!(named, "{error:?}");
+    drop(device);
+    stop(client, server).await;
+}
+
 /// An Object_List that names an object twice gives it one record, at its
 /// first place.
 #[tokio::test(start_paused = true)]
