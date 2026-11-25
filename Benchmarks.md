@@ -1205,6 +1205,73 @@ interleaved matrix compare.
   depended on how the tasks interleaved, and the ReadPropertyMultiple
   counts of one binary spread over hundreds of instructions; with these
   settings they spread over tens, and ReadProperty's count is unchanged.
+- **Fixed hash-map keys.** Rust's standard hash maps take random keys once
+  per process, and the server keeps its objects in such a map. About one
+  process in twelve drew keys under which a looked-up object shares its
+  probe group with another, so each lookup checked more slots: that
+  process's ReadPropertyMultiple cost about 30 to 70 more instructions per
+  request, and its WriteProperty 80 to 290 more. Whether such a process was
+  among the twelve baseline values decided those rows' noise floors, which
+  for unchanged code ranged from 6 to 300 instructions per request
+  ([#2591](https://github.com/jscott3201/rusty-bacnet/issues/2591)). The
+  harness therefore fixes the keys. The standard library reaches the C
+  library's `getrandom` function through a symbol a measurement may
+  replace, and the harness's binaries supply their own: given the seed the
+  script passes (`--hash-seed`, 1 by default), it hands out the same bytes
+  every time, so every run of every build draws the same keys. Like the
+  allocator settings, this is a measurement setting only: no library of the
+  stack changes, the harness isn't published, and production builds keep
+  their random keys. Tokio seeds its random choices from the same keys,
+  so those repeat too (which branch a `select!` polls first, which worker
+  the multi-thread runtime steals from); how that runtime's workers
+  interleave still doesn't. Since the hook relies on how the standard
+  library looks the function up, the script stops a count whose runs
+  report random keys, or keys unlike the first run's, rather than let it
+  run on random keys.
+- **What the seed means for a pull request.** Any seed serves for a
+  comparison, since both builds use it. The default, 1, happens to make one
+  of ReadPropertyMultiple's ten lookups probe further than it does under
+  most keys: that row counts about 23 instructions per request more than
+  the common per-process figure, all in the hash table's probing, while
+  ReadProperty and WriteProperty count the common figure. A pull request
+  that changes how the server's object map is laid out can move this
+  probing by a few dozen instructions per request either way, under any
+  seed, as real work would. Four changes do that: a map or a field built
+  from a fresh `RandomState` ahead of `objects` in `ObjectDatabase::new`
+  (each one shifts the keys the object map gets); a different capacity for
+  that map; a different `Hash` for `ObjectIdentifier`; and inserts that
+  `ObjectDatabase::add` adds or drops. Objects the harness itself adds are
+  the same in both builds. Such a shift shows in `attribute` as hash-table
+  lines (`hashbrown`) inside the database lookups, with no change in calls;
+  to tell it from real work, run the pair again with another seed (the
+  workflow's `hash_seed` input): a layout shift moves or disappears, real
+  work stays. The workflow's `hash_seed: none` runs with per-process keys,
+  as production does.
+- **Older harnesses.** The harness comes from the candidate, so an older
+  candidate brings a harness without the fixed keys, and its runs keep
+  per-process keys; every row names the keys its runs had, and the
+  workflow's `harness: workflow` input builds the current harness into
+  both trees instead.
+- **What fixing the keys changed.** Eight matrices against one baseline
+  (ea9f3d728), all floors in instructions per request:
+
+  | Row | Per-process keys (4 matrices) | Fixed keys (4 matrices) |
+  | --- | --- | --- |
+  | ReadPropertyMultiple, current-thread | 6.0, 39.9, 38.8, 42.5 | 7.8, 9.7, 10.0, 9.5 |
+  | ReadPropertyMultiple, multi-thread | 41.4, 78.7, 41.8, 53.9 | 33.4, 41.9, 110.9, 23.2 |
+  | WriteProperty, current-thread | 11.5, 104.9 (two matrices) | 4.0, 9.0, 7.1, 8.0 |
+  | WriteProperty, multi-thread | 103.7, 109.7 (two matrices) | 10.2, 13.0, 6.8, 11.3 |
+  | ReadProperty, both runtimes | 6.5 to 9.9 | 4.3 to 15.1 |
+
+  A candidate whose ReadPropertyMultiple rose by about 50 failed both
+  runtimes in both fixed-key matrices; with per-process keys one of two
+  matrices passed it on the multi-thread runtime. One whose
+  ReadPropertyMultiple rose by about 20 passed both per-process matrices,
+  and failed the current-thread row in both fixed-key ones. What is left on
+  the multi-thread runtime is its workers' parking and timer work, which
+  follows the runner's load: in the matrix with the floor of 110.9, the
+  values of the middle block of the order rose by 30 to 80 for both builds
+  alike, in `park_internal`, clock reads and the I/O driver.
 - **Older figures don't compare.** Counts from before
   [perf-s0b](benchmarks/results/perf-s0b/README.md) used the default release
   profile and glibc's default allocator settings, so they aren't comparable
@@ -1263,9 +1330,14 @@ interleaved matrix compare.
   the baseline twice (A and A') and the candidate once (B), and runs them in
   the order A B A' A' B A, three times, so each build gets six values per
   workload and runtime. Every run first checks its binary's SHA-256.
-- **Noise floor.** The range of the twelve A and A' values of the gated
-  figure per workload and runtime, from the same matrix as the verdict. Two
-  clean builds of one commit give byte-identical binaries. A noise run
+- **Noise floor.** The range (the highest minus the lowest) of the twelve
+  A and A' values of the gated figure per workload and runtime, in
+  instructions per request, from the same matrix as the verdict. Two clean
+  builds of one commit give byte-identical binaries, and each value comes
+  from its own pair of processes, so the range measures how far one
+  commit's count moves from process to process. With the hash-map keys
+  fixed, what is left is timer work that follows wall time, and on the
+  multi-thread runtime the order in which its workers meet. A noise run
   (`--noise`) measures only this.
 - **Gates.** A comparison is accepted only when it covers `rp`, `wp` and
   `rpm` on both runtimes and every row passes. The aimed workload (`rp`
@@ -1278,11 +1350,29 @@ interleaved matrix compare.
   only inside the system allocator doesn't count as one. Requested bytes
   and the allocator's instructions are reported, not gated. Wire bytes must stay
   identical; the existing test suites check that. The script exits non-zero
-  when a comparison isn't accepted.
+  when a comparison isn't accepted. A run of fewer round trips, such as
+  `rpm` alone, judges its rows but can't be accepted however they come out;
+  its summary says when every row passed, then why the run can't accept.
+  Runs whose hash-map keys differ (fixed in some, per process in others)
+  aren't accepted either.
 - **No-regression check.** A change that isn't an optimization, such as a
   refactor or a feature, runs with `--aim none` (the workflow's `aim`
   input). It is accepted when no row rises by more than its noise floor and
   no row adds allocation calls; each row reports its change in floors.
+- **Accepting an explained rise.** A rise above the floor fails, however
+  small. When `attribute` has explained it and the pull request accepts it
+  without a code fix, say because the compiler moved some code in a
+  function the change didn't touch, the comparison runs again with an
+  override (`--allow rpm/ct:21`, the workflow's `allow` input): each named
+  row passes a rise above its floor up to its bound, in instructions per
+  request. Cite the attribution in the pull request and set the bound just
+  above the measured rise, not wider. Rows not named are judged as always,
+  a named row that passed anyway reports its override as unused, a rise
+  past the bound still fails, and no override covers allocation calls. The
+  summary then reads "Accepted with override" and lists each row with its
+  bound, its rise and its floor. An unknown row, an aimed row, or a bound
+  that isn't a number above zero stops the run before anything is built
+  (maintainer's decision on #2591, 2026-11-25).
 - **When a comparison fails.** Compare per-function call counts first:
   `perf_counts.py attribute <run directory> --workload rp --runtime ct`
   lists the calls per request that changed, then the instructions, marking

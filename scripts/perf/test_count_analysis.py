@@ -718,7 +718,7 @@ class Runner(unittest.TestCase):
 
     def args(self, **kwargs):
         base = dict(noise=None, baseline="dev", candidate="topic", workloads="rp,wp,rpm", runtimes="ct,mt",
-                    aim="rp", noise_floors=None, blocks=3, glibc_tunables="")
+                    aim="rp", noise_floors=None, blocks=3, glibc_tunables="", hash_seed="none")
         base.update(kwargs)
         return argparse.Namespace(**base)
 
@@ -902,6 +902,334 @@ class Runner(unittest.TestCase):
         self.assertEqual(perf_counts.exit_code({"mode": "compare", "accepted": False}), 1)
         self.assertEqual(perf_counts.exit_code({"mode": "compare", "accepted": True}), 0)
         self.assertEqual(perf_counts.exit_code({"mode": "noise"}), 0)
+
+    def test_every_run_gets_the_hash_seed_unless_turned_off(self):
+        environment = perf_counts.run_environment(self.args(glibc_tunables="x=1", hash_seed="7"))
+        self.assertEqual(environment, {"GLIBC_TUNABLES": "x=1", perf_counts.HASH_SEED_VAR: "7"})
+        self.assertNotIn(perf_counts.HASH_SEED_VAR, perf_counts.run_environment(self.args()))
+        perf_counts.check_hash_seed(perf_counts.HASH_SEED)
+        perf_counts.check_hash_seed(str(2**64 - 1))
+        for seed in ("-1", "0x10", "", "seed", str(2**64), "١"):
+            with self.subTest(seed=seed), self.assertRaisesRegex(ValueError, "--hash-seed"):
+                perf_counts.plan(self.args(hash_seed=seed))
+
+    def test_quick_mode_refuses_floors_with_other_hash_keys(self):
+        # Floors measured with per-process keys (before #2591) hold the
+        # probing outliers; a seeded run can't use them, nor the reverse.
+        with self.assertRaisesRegex(ValueError, "hash seed"):
+            perf_counts.plan(self.args(workloads="rp", noise_floors=[DATA / "floors-rp.json"], hash_seed="1"))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "floors.json"
+            path.write_text(json.dumps({"environment": {perf_counts.HASH_SEED_VAR: "1"}, "figure": ca.GATED_FIGURE,
+                                        "noise_floors": {"rp/ct": 6.0, "rp/mt": 9.0}}))
+            self.assertEqual(perf_counts.plan(self.args(workloads="rp", noise_floors=[path], hash_seed="1"))[-1],
+                             {"rp/ct": 6.0, "rp/mt": 9.0})
+            with self.assertRaisesRegex(ValueError, "hash seed"):
+                perf_counts.plan(self.args(workloads="rp", noise_floors=[path], hash_seed="2"))
+
+    def test_a_seeded_run_whose_harness_drew_random_keys_stops(self):
+        seeded = {"environment": {perf_counts.HASH_SEED_VAR: "1"}}
+
+        def run(state, check=None, manifest=seeded, name="rpm-ct-01-A1-1000"):
+            perf_counts.check_hash_keys(manifest, {"name": name, "hash_keys": state, "hash_check": check})
+
+        with self.assertRaisesRegex(RuntimeError, "random hash-map keys"):
+            run("random")
+        with self.assertRaisesRegex(RuntimeError, "random hash-map keys"):
+            run("fixed")  # fixed but no check value
+        # A harness before #2591 (no field); no seed asked.
+        run(None)
+        run("random", manifest={"environment": {}})
+
+    def test_a_seeded_run_whose_keys_differ_from_the_first_stops(self):
+        manifest = {"environment": {perf_counts.HASH_SEED_VAR: "1"}}
+        record = {"name": "rpm-ct-01-A1-1000", "hash_keys": "fixed", "hash_check": "00000000deadbeef"}
+        perf_counts.check_hash_keys(manifest, record)
+        self.assertEqual(manifest["hash_check"], "00000000deadbeef")
+        perf_counts.check_hash_keys(manifest, dict(record, name="rpm-ct-02-B1-1000"))
+        with self.assertRaisesRegex(RuntimeError, "rpm-ct-03-P1-1000: hash-map keys check 00000000feedface, not"):
+            perf_counts.check_hash_keys(manifest, dict(record, name="rpm-ct-03-P1-1000",
+                                                       hash_check="00000000feedface"))
+
+
+def with_keys(m, state, labels=("A", "P", "B"), check="0123456789abcdef"):
+    """Marks the runs of `labels` with the hash-map keys their harness
+    reported (`fixed`, `random` or None) and, when fixed, `check`."""
+    for run in m["runs"]:
+        if run["label"] in labels:
+            run["hash_keys"] = state
+            run["hash_check"] = check if state == "fixed" else None
+    return m
+
+
+class HashKeys(unittest.TestCase):
+    """The harness's fixed hash-map keys (#2591), with gated slopes from
+    saved runs of the Perf counts workflow (ReadPropertyMultiple and
+    WriteProperty on the current-thread runtime, baseline ea9f3d728)."""
+
+    # Run 45521327702, rpm/ct: A6 drew keys under which the object map
+    # probed more (its callgrind files show the extra in the hash table's
+    # probe lines, inside the server's read planning); B is 2f2584060, a
+    # real rise of about 50.
+    RPM_A = [62097.3, 62091.9, 62097.3, 62093.7, 62094.2, 62130.5]
+    RPM_P = [62092.2, 62090.6, 62093.3, 62096.0, 62093.3, 62093.1]
+    RPM_B = [62141.3, 62148.6, 62146.3, 62150.3, 62142.8, 62144.2]
+    # Run 45526723224, rpm/ct: A2 and B3 probed more; B is aff9578af, a
+    # real rise of about 20.
+    RPM20_A = [62095.9, 62130.6, 62092.4, 62096.5, 62095.7, 62089.4]
+    RPM20_P = [62094.0, 62095.7, 62089.4, 62088.1, 62094.8, 62098.7]
+    RPM20_B = [62115.0, 62115.3, 62151.9, 62117.6, 62111.7, 62116.0]
+    # Run 45526723224, wp/ct: A'2 probed more (the write path's object
+    # lookups); B is the same as A on this row.
+    WP_A = [33265.1, 33264.5, 33268.5, 33269.6, 33269.5, 33266.2]
+    WP_P = [33258.6, 33361.8, 33265.2, 33261.6, 33256.9, 33265.8]
+
+    def row(self, a, p, b, workload="rpm", state=None):
+        m = with_keys(manifest(a, b, workload=workload, slopes_p=p), state)
+        return ca.analyze(m, None, ("none",))["rows"][0]
+
+    @staticmethod
+    def probing_alike(values, outlier):
+        """`values` with the ordinal that probed more at the median of the
+        rest: what fixed keys would have given it."""
+        rest = [v for i, v in enumerate(values) if i != outlier]
+        return [median(rest) if i == outlier else v for i, v in enumerate(values)]
+
+    def test_one_process_that_probed_more_sets_the_floor(self):
+        row = self.row(self.RPM_A, self.RPM_P, self.RPM_B)
+        self.assertAlmostEqual(row["noise_floor"], 39.9, places=1)
+        self.assertEqual(row["hash_keys"], ca.PER_PROCESS)
+        # The +20 rise passed: A2's probing widened the floor past it.
+        hidden = self.row(self.RPM20_A, self.RPM20_P, self.RPM20_B)
+        self.assertAlmostEqual(hidden["delta"], 19.85, places=2)
+        self.assertAlmostEqual(hidden["noise_floor"], 42.5, places=1)
+        self.assertEqual(hidden["verdict"], "PASS")
+        # WriteProperty: one process sets a floor of 105, wide enough to
+        # hide a rise of 100.
+        wp = self.row(self.WP_A, self.WP_P, [x + 100 for x in self.WP_A], workload="wp")
+        self.assertAlmostEqual(wp["noise_floor"], 104.9, places=1)
+        self.assertEqual(wp["verdict"], "PASS")
+
+    def test_probing_alike_the_floor_is_the_rest_and_the_rises_fail(self):
+        # The same samples without the processes that probed more: the
+        # medians barely move, the floors shrink to the rest's spread.
+        a = self.probing_alike(self.RPM_A, 5)
+        fifty = self.row(a, self.RPM_P, self.RPM_B, state="fixed")
+        self.assertEqual(fifty["hash_keys"], ca.FIXED_KEYS)
+        self.assertAlmostEqual(fifty["noise_floor"], 6.7, places=1)
+        self.assertEqual(fifty["verdict"], "FAIL")
+        twenty = self.row(self.probing_alike(self.RPM20_A, 1), self.RPM20_P, self.probing_alike(self.RPM20_B, 2),
+                          state="fixed")
+        self.assertAlmostEqual(twenty["noise_floor"], 10.6, places=1)
+        self.assertAlmostEqual(twenty["delta"], 19.6, places=1)
+        self.assertEqual(twenty["verdict"], "FAIL")
+        wp = self.row(self.WP_A, self.probing_alike(self.WP_P, 1), [x + 100 for x in self.WP_A], workload="wp",
+                      state="fixed")
+        self.assertAlmostEqual(wp["noise_floor"], 12.7, places=1)
+        self.assertEqual(wp["verdict"], "FAIL")
+
+    def test_rows_and_summary_name_the_keys(self):
+        m = with_keys(manifest(Gates.A, list(Gates.P), slopes_p=Gates.P, cells=ALL_ROUND_TRIPS), "fixed")
+        m["environment"] = {perf_counts.HASH_SEED_VAR: "1"}
+        s = ca.analyze(m, None, ("none",))
+        self.assertTrue(s["accepted"])
+        self.assertEqual(s["hash_keys"], ca.FIXED_KEYS)
+        self.assertIn("(A vs A' in this matrix; hash keys fixed)", ca.verdict_table(s))
+        self.assertIn("Hash-map keys: fixed by the harness in every run (seed 1).", perf_counts.summary_markdown(s))
+        # A run recorded before #2591 has no field: per process, as before.
+        old = ca.analyze(manifest(Gates.A, list(Gates.P), slopes_p=Gates.P, cells=ALL_ROUND_TRIPS), None, ("none",))
+        self.assertTrue(old["accepted"])
+        self.assertEqual(old["hash_keys"], ca.PER_PROCESS)
+        self.assertIn("hash keys per process)", ca.verdict_table(old))
+        self.assertIn("Hash-map keys: per process", perf_counts.summary_markdown(old))
+
+    def test_builds_with_different_keys_are_not_accepted(self):
+        m = with_keys(manifest(Gates.A, list(Gates.P), slopes_p=Gates.P, cells=ALL_ROUND_TRIPS), "fixed", ("B",))
+        s = ca.analyze(m, None, ("none",))
+        self.assertTrue(all(r["verdict"] == "PASS" for r in s["rows"]))
+        self.assertEqual(s["hash_keys"], ca.MIXED_KEYS)
+        self.assertFalse(s["accepted"])
+        self.assertTrue(any("rp/ct the runs' hash-map keys differ" in p for p in s["coverage_problems"]))
+        # Fixed in every run, but to other keys in B.
+        m = with_keys(manifest(Gates.A, list(Gates.P), slopes_p=Gates.P, cells=ALL_ROUND_TRIPS), "fixed")
+        s = ca.analyze(with_keys(m, "fixed", ("B",), check="fedcba9876543210"), None, ("none",))
+        self.assertEqual(s["hash_keys"], ca.MIXED_KEYS)
+        self.assertFalse(s["accepted"])
+
+    def test_result_line_reports_the_keys(self):
+        line = ("RESULT workload=rpm runtime=ct n=1000 warmup=200 allocs=1 bytes=2 allocs_per_iter=0.001000 "
+                "bytes_per_iter=0.002000 {}\n")
+        fixed = ca.parse_result(line.format("hash_keys=fixed hash_check=0123456789abcdef"))
+        self.assertEqual((fixed["hash_keys"], fixed["hash_check"]), ("fixed", "0123456789abcdef"))
+        random = ca.parse_result(line.format("hash_keys=random"))
+        self.assertEqual((random["hash_keys"], random["hash_check"]), ("random", None))
+        older = ca.parse_result(line.format(""))
+        self.assertEqual((older["hash_keys"], older["hash_check"]), (None, None))
+
+    def test_a_partial_run_says_why_it_is_not_accepted(self):
+        s = ca.analyze(manifest(Gates.A, list(Gates.P), slopes_p=Gates.P), None, ("none",))
+        self.assertEqual(s["rows"][0]["verdict"], "PASS")
+        self.assertFalse(s["accepted"])
+        text = perf_counts.summary_markdown(s)
+        self.assertIn("Accepted: False (every row passed; the reasons this run can't accept follow)", text)
+        self.assertIn("- Not acceptable as run: round trips need rp, wp and rpm on ct and mt", text)
+        failed = ca.analyze(manifest(Gates.A, [x + 50 for x in Gates.A], slopes_p=Gates.P), None, ("none",))
+        self.assertIn("Accepted: False\n", perf_counts.summary_markdown(failed))
+
+
+def bump(m, row, per_request, calls=0.0):
+    """Raises build B's `row` ("rpm/ct") by `per_request` gated instructions
+    per request, and its allocation calls by `calls` per request."""
+    workload, runtime = row.split("/")
+    for run in m["runs"]:
+        if (run["workload"], run["runtime"], run["label"]) == (workload, runtime, "B"):
+            run["instructions"] += round(per_request * run["n"])
+            run["allocs"] += round(calls * run["n"])
+    return m
+
+
+class Override(unittest.TestCase):
+    """--allow ROW:BOUND (the maintainer's decision on #2591, 2026-11-25):
+    an attributed rise above the floor passes up to a named bound."""
+
+    ROWS = {f"{w}/{r}" for w in ca.ROUND_TRIP for r in ca.RUNTIMES}
+
+    def matrix(self, rises=(), calls=None):
+        m = manifest(Gates.A, list(Gates.P), slopes_p=Gates.P, cells=ALL_ROUND_TRIPS)
+        for row, rise in rises:
+            bump(m, row, rise, (calls or {}).get(row, 0.0))
+        return m
+
+    def analyze(self, m, allow):
+        return ca.analyze(m, None, ("none",), ca.parse_allow(allow, self.ROWS, ("none",)))
+
+    def test_specs_parse_and_malformed_ones_are_refused(self):
+        self.assertEqual(ca.parse_allow(" rpm/ct:21 , rpm/mt:25.5 ", self.ROWS), {"rpm/ct": 21.0, "rpm/mt": 25.5})
+        self.assertEqual(ca.parse_allow("", self.ROWS), {})
+        self.assertEqual(ca.parse_allow(None, self.ROWS), {})
+        for spec, message in (("rpm/xt:21", "isn't a row of this run"), ("rpm/ct:abc", "must be a number"),
+                              ("rpm/ct:-3", "above zero"), ("rpm/ct:0", "above zero"), ("rpm/ct:nan", "above zero"),
+                              ("rpm/ct:inf", "above zero"), ("rpm/ct", "isn't ROW:BOUND"), ("rpm/ct:", "ROW:BOUND"),
+                              ("rpm/ct:21,rpm/ct:22", "twice")):
+            with self.subTest(spec=spec), self.assertRaisesRegex(ValueError, message):
+                ca.parse_allow(spec, self.ROWS)
+        with self.assertRaisesRegex(ValueError, "an aimed row"):
+            ca.parse_allow("rp/ct:21", self.ROWS, ("rp",))
+
+    def test_a_bad_override_stops_the_run_before_any_build(self):
+        args = Runner.args(Runner(), aim="none")
+        for spec in ("rpm/ct:-1", "codec/none:5", "rp/ct:x"):
+            with self.subTest(spec=spec), self.assertRaises(ValueError):
+                perf_counts.plan(argparse.Namespace(**{**vars(args), "allow": spec}))
+        with self.assertRaisesRegex(ValueError, "noise run"):
+            perf_counts.plan(argparse.Namespace(**{**vars(args), "noise": "dev", "baseline": None, "candidate": None,
+                                                    "allow": "rpm/ct:21"}))
+        *_, allow, floors = perf_counts.plan(argparse.Namespace(**{**vars(args), "allow": "rpm/ct:21"}))
+        self.assertEqual((allow, floors), ({"rpm/ct": 21.0}, {}))
+
+    def test_a_named_rise_within_the_bound_passes_and_the_summary_says_so(self):
+        s = self.analyze(self.matrix([("rpm/ct", 20.0)]), "rpm/ct:21")
+        row = next(r for r in s["rows"] if (r["workload"], r["runtime"]) == ("rpm", "ct"))
+        self.assertEqual(row["verdict"], "PASS")
+        self.assertTrue(row["override"]["used"])
+        self.assertTrue(s["accepted"])
+        self.assertTrue(s["accepted_with_override"])
+        text = perf_counts.summary_markdown(s)
+        self.assertIn("Gates aimed at: none. Accepted with override.", text)
+        self.assertIn("- Override used on rpm/ct: rise 20.0, floor 7.0, bound 21 instructions per request", text)
+        self.assertIn("| PASS (override) |", ca.verdict_table(s))
+        self.assertEqual(perf_counts.exit_code(s), 0)
+        # Without the override the same rise fails.
+        self.assertFalse(ca.analyze(self.matrix([("rpm/ct", 20.0)]), None, ("none",))["accepted"])
+
+    def test_an_override_past_its_bound_or_on_another_row_still_fails(self):
+        past = self.analyze(self.matrix([("rpm/ct", 22.0)]), "rpm/ct:21")
+        self.assertFalse(past["accepted"])
+        self.assertIn("- Override exceeded on rpm/ct", perf_counts.summary_markdown(past))
+        other = self.analyze(self.matrix([("rpm/ct", 20.0), ("rpm/mt", 20.0)]), "rpm/ct:21")
+        self.assertFalse(other["accepted"])
+        self.assertEqual({(r["workload"], r["runtime"]) for r in other["rows"] if r["verdict"] == "FAIL"},
+                         {("rpm", "mt")})
+
+    def test_an_override_on_a_row_that_passed_is_reported_unused(self):
+        s = self.analyze(self.matrix([("rpm/ct", 20.0)]), "rpm/ct:21,wp/ct:10")
+        self.assertTrue(s["accepted_with_override"])
+        unused = next(o for o in s["overrides"] if o["row"] == "wp/ct")
+        self.assertFalse(unused["used"])
+        self.assertIn("- Override unused on wp/ct: rise 0.0, floor 7.0, bound 10 instructions per request; the row "
+                      "passed without it.", perf_counts.summary_markdown(s))
+        alone = self.analyze(self.matrix(), "wp/ct:10")
+        self.assertTrue(alone["accepted"])
+        self.assertFalse(alone["accepted_with_override"])
+        self.assertNotIn("Accepted with override", perf_counts.summary_markdown(alone))
+
+    def test_an_override_never_covers_allocation_calls(self):
+        s = self.analyze(self.matrix([("rpm/ct", 20.0)], calls={"rpm/ct": 1.0}), "rpm/ct:21")
+        row = next(r for r in s["rows"] if (r["workload"], r["runtime"]) == ("rpm", "ct"))
+        self.assertTrue(row["instructions_ok"])
+        self.assertFalse(row["allocations_ok"])
+        self.assertEqual(row["verdict"], "FAIL")
+        self.assertFalse(s["accepted"])
+
+    def test_a_reanalysis_applies_the_runs_own_override_or_a_new_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            m = self.matrix([("rpm/ct", 20.0)])
+            m["allow"] = "rpm/ct:21"
+            (out / "manifest.json").write_text(json.dumps(m))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertTrue(perf_counts.analyze(out, ("none",))["accepted_with_override"])
+                self.assertFalse(perf_counts.analyze(out, ("none",), "")["accepted"])
+                with self.assertRaisesRegex(ValueError, "isn't a row of this run"):
+                    perf_counts.analyze(out, ("none",), "codec/none:5")
+
+
+class MatrixKeys(unittest.TestCase):
+    """run_matrix checks every run's hash-map keys (perf_counts.check_hash_keys)."""
+
+    def manifest(self, hooked=True):
+        files = {"src/lib.rs": "x", **({"src/hash_keys.rs": "y"} if hooked else {})}
+        return {"workloads": ["rp"], "runtimes": ["ct"], "order": "ABPPBA" * 3, "image": {"id": "image"},
+                "environment": {perf_counts.HASH_SEED_VAR: "1"}, "harness": {"files": files}, "runs": [],
+                "variants": {label: {"label": label, "volume": label, "binaries": {"counts": "sha"}}
+                             for label in "ABP"}}
+
+    def run_matrix(self, manifest, fields):
+        """Runs `run_matrix` with a stand-in for Docker that writes each run's
+        RESULT line (ending in `fields`) and callgrind file."""
+        def fake_run(command, stdout=None, stderr=None, **_kwargs):
+            name = re.search(r"--callgrind-out-file=/out/(\S+)\.cg", command[-1])[1]
+            n = int(name.rsplit("-", 1)[1])
+            stderr.write(f"RESULT workload=rp runtime=ct n={n} warmup=200 allocs={2 * n} bytes={200 * n} "
+                         f"allocs_per_iter=2.0 bytes_per_iter=200.0 {fields}\n")
+            (out / "raw" / f"{name}.cg").write_text(synthetic_cg(n))
+            return argparse.Namespace(returncode=0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            original = perf_counts.subprocess.run
+            perf_counts.subprocess.run = fake_run
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    perf_counts.run_matrix(manifest, out, lambda: None)
+            finally:
+                perf_counts.subprocess.run = original
+        return manifest
+
+    def test_every_run_is_checked(self):
+        m = self.run_matrix(self.manifest(), "hash_keys=fixed hash_check=00000000deadbeef")
+        self.assertEqual(len(m["runs"]), 36)
+        self.assertEqual(m["hash_check"], "00000000deadbeef")
+        self.assertEqual({r["hash_keys"] for r in m["runs"]}, {"fixed"})
+        with self.assertRaisesRegex(RuntimeError, "random hash-map keys"):
+            self.run_matrix(self.manifest(), "hash_keys=random")
+
+    def test_a_hooked_harness_that_reports_no_keys_stops(self):
+        with self.assertRaisesRegex(RuntimeError, "reports no hash-map keys"):
+            self.run_matrix(self.manifest(), "")
+        # A harness from before #2591 (no module) runs on, unseeded.
+        m = self.run_matrix(self.manifest(hooked=False), "")
+        self.assertEqual({r["hash_keys"] for r in m["runs"]}, {None})
 
 
 class Callers(unittest.TestCase):

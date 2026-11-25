@@ -209,6 +209,7 @@ fn run(name: &str, n: u64) {
 }
 
 fn main() {
+    bacnet_counts::hash_keys::fix_from_env();
     let mut args = std::env::args().skip(1);
     let name = args.next().unwrap_or_default();
     if name == "list" {

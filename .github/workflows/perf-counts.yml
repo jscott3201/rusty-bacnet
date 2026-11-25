@@ -8,6 +8,9 @@ name: Perf counts
 # floor comes from the same matrix as its verdict; the gates are those
 # scripts/perf/count_analysis.py declares, and the step fails when the
 # candidate isn't accepted. The same ref twice measures the noise floor only.
+# The harness fixes the hash-map keys in every run (#2591), so the floors
+# don't swing with std's per-process seed; an older candidate's harness
+# can't, and `harness: workflow` builds this ref's in both trees instead.
 # Counts compare only within one matrix on one machine. arm64, like the
 # earlier count archive (#1978, #2012).
 #
@@ -35,6 +38,22 @@ on:
         description: "What the candidate must show: rp (an optimization of ReadProperty; other workload names too), or none (no-regression check: nothing above its noise floor)."
         required: true
         default: rp
+      harness:
+        description: "Harness both trees build: candidate (its benchmarks/counts), or workflow (this run's ref's), to count older commits with a newer harness, such as one that fixes the hash-map keys (#2591)."
+        required: true
+        default: candidate
+        type: choice
+        options:
+          - candidate
+          - workflow
+      allow:
+        description: "Override for a rise perf_counts.py attribute has explained and the PR accepts without a code fix: ROW:BOUND pairs, comma-separated (rpm/ct:21), bounds in instructions per request. Never covers allocation calls. Empty for none."
+        required: false
+        default: ""
+      hash_seed:
+        description: "The harness's hash-map seed (#2591): a decimal number, or none for per-process keys as in production. Re-run under another seed to tell a hash-layout shift from real work."
+        required: true
+        default: "1"
 
 permissions:
   contents: read
@@ -64,6 +83,9 @@ jobs:
           CANDIDATE: ${{ inputs.candidate }}
           WORKLOADS: ${{ inputs.workloads }}
           AIM: ${{ inputs.aim }}
+          HARNESS: ${{ inputs.harness }}
+          ALLOW: ${{ inputs.allow }}
+          HASH_SEED: ${{ inputs.hash_seed }}
         run: |
           # A branch name exists here only as origin/<name>.
           resolve() {
@@ -73,11 +95,17 @@ jobs:
           }
           base=$(resolve "$BASELINE") || exit 1
           cand=$(resolve "$CANDIDATE") || exit 1
+          harness=()
+          if [ "$HARNESS" = workflow ]; then
+            harness=(--harness benchmarks/counts)
+          fi
           if [ "$base" = "$cand" ]; then
-            python3 scripts/perf/perf_counts.py run --noise "$base" --workloads "$WORKLOADS" --out perf-out --gzip-raw
+            python3 scripts/perf/perf_counts.py run --noise "$base" --workloads "$WORKLOADS" --out perf-out \
+              --gzip-raw --hash-seed "$HASH_SEED" "${harness[@]}"
           else
             python3 scripts/perf/perf_counts.py run --baseline "$base" --candidate "$cand" \
-              --workloads "$WORKLOADS" --aim "$AIM" --out perf-out --gzip-raw
+              --workloads "$WORKLOADS" --aim "$AIM" --out perf-out --gzip-raw --hash-seed "$HASH_SEED" \
+              --allow "$ALLOW" "${harness[@]}"
           fi
       # A failed comparison: per-function changes, calls first, for the
       # round trips' current-thread rows (Benchmarks.md section 10.4).
