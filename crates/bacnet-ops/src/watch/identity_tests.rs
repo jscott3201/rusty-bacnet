@@ -279,7 +279,7 @@ async fn the_watched_device_coming_back_brings_a_pinned_watch_back() {
 
 /// A pinned watch given up for another device at its address: its device
 /// turns up at station 3 and announces itself there, and the point is
-/// reported moved there, sending nothing.
+/// reported moved there once one read there names it (#2812).
 #[tokio::test(start_paused = true)]
 async fn a_replaced_point_is_moved_once_its_device_turns_up_elsewhere() {
     let mut first = None;
@@ -297,7 +297,8 @@ async fn a_replaced_point_is_moved_once_its_device_turns_up_elsewhere() {
     })
     .await;
     assert_eq!(gone_for(&update), Some(&Why::Moved { to: at(3) }));
-    assert_eq!(lab.sent.len(), sent, "nothing sent");
+    assert_eq!(lab.sent.len(), sent + 1, "one read there");
+    assert_eq!(lab.client.said(&at(3)), Some(N), "naming the device");
     drop((lab.watch, lab.device));
     settle().await;
     stop(vec![second, moved]).await;

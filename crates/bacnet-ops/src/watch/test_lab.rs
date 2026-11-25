@@ -121,7 +121,15 @@ pub(super) struct Quirks {
     /// unknown-object, as from a device that answers a missing instance
     /// with another error.
     pub(super) deny_missing: AtomicBool,
+    /// The instance a device at [`ELSEWHERE`] names itself when its Device
+    /// object is read by the wildcard instance, as one a device is said to
+    /// have moved to; `None`, or any other request there: no answer.
+    pub(super) elsewhere: Mutex<Option<u32>>,
 }
+
+/// The MAC of a station on the client's link besides the lab device's,
+/// which only [`Quirks::elsewhere`] answers for.
+pub(super) const ELSEWHERE: u8 = 9;
 
 /// Device,4194303 as a context-tagged object identifier in a request.
 const WILDCARD_DEVICE: [u8; 5] = [0x0C, 0x02, 0x3F, 0xFF, 0xFF];
@@ -262,15 +270,44 @@ fn answer_routed(handle: &TestTransportHandle, apdu: Vec<u8>) {
 }
 
 fn inject(handle: &TestTransportHandle, frame: Vec<u8>) {
+    inject_from(handle, frame, 2);
+}
+
+/// `frame` from the station at MAC `station`.
+fn inject_from(handle: &TestTransportHandle, frame: Vec<u8>, station: u8) {
     if let Some(inject) = handle.inbound() {
         let _ = inject.try_send(ReceivedNpdu::unverified(
             Bytes::from(frame),
-            MacAddr::from_slice(&[2]),
+            MacAddr::from_slice(&[station]),
             false,
             Vec::new(),
             None,
         ));
     }
+}
+
+/// Answer a request to [`ELSEWHERE`] as [`Quirks::elsewhere`] says.
+fn answer_elsewhere(handle: &TestTransportHandle, quirks: &Quirks, apdu: &[u8]) {
+    let wildcard = apdu.windows(5).any(|bytes| bytes == WILDCARD_DEVICE);
+    let Some(named) = *quirks.elsewhere.lock().unwrap() else {
+        return;
+    };
+    if apdu[3] != READ_PROPERTY || !wildcard {
+        return;
+    }
+    let device = oid(ObjectType::DEVICE, named);
+    let mut value = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_object_id(&mut value, &device);
+    let mut ack = BytesMut::from(&[1, 0, 0x30, apdu[2], READ_PROPERTY][..]);
+    ReadPropertyACK {
+        object_identifier: device,
+        property_identifier: PropertyIdentifier::OBJECT_IDENTIFIER,
+        property_array_index: None,
+        property_value: value.to_vec(),
+    }
+    .encode(&mut ack)
+    .unwrap();
+    inject_from(handle, ack.to_vec(), ELSEWHERE);
 }
 
 /// The value the quirks answer `request` with in place of the device: its
@@ -331,6 +368,10 @@ fn forwards(
         let (invoke, service) = (apdu[2], apdu[3]);
         sent.lock().unwrap().push((service, Instant::now()));
         if quirks.muted.load(Ordering::Relaxed) {
+            return false;
+        }
+        if frame.mac.as_slice() == [ELSEWHERE] {
+            answer_elsewhere(handle, quirks, apdu);
             return false;
         }
         if decoded.destination.is_some() {

@@ -100,10 +100,13 @@ pub enum Why {
     /// No route to the device's address is known: a remote network the
     /// discovery table holds no router for.
     Missing,
-    /// The device's instance answers at `to` now, on positive evidence:
-    /// the row at its old address names another instance and only `to`
-    /// claims this one, or a handle following the instance moved there.
-    /// The point is given up ([`State::Gone`](super::State::Gone)); watch
+    /// The device's instance answers at `to` now: the device there named
+    /// itself so, answering the hub's read of its Device object by the
+    /// wildcard instance (#2812). That read is cued by the hub's look for a
+    /// device that stopped answering (the row at its old address names
+    /// another instance and only `to` claims this one) or by a handle
+    /// following the instance moving there; neither alone gives the point
+    /// up. The point is given up ([`State::Gone`](super::State::Gone)); watch
     /// the point at `to` instead. The hub doesn't follow it, but starts the
     /// point again if the old address answers for the instance again.
     Moved {
@@ -120,8 +123,8 @@ pub enum Why {
     /// held, lapses with its lifetime. The point is given up
     /// ([`State::Gone`](super::State::Gone)), becomes
     /// [`Moved`](Self::Moved) once `watched` announces itself at one other
-    /// address, and starts again when its address answers for `watched`
-    /// again.
+    /// address and names itself there when read, and starts again when its
+    /// address answers for `watched` again.
     Replaced {
         /// The instance an earlier answer named for the point.
         watched: u32,

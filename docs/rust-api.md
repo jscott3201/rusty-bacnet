@@ -13220,11 +13220,19 @@ polled point stops being polled. A non-empty watch never ends on its own:
 drop it to stop.
 
 A device that stops answering (a poll or a first read fails; a point whose
-renewal failed goes to the next poll) is looked for. Its points are given
-up (`State::Gone { why: Why::Moved { to } }`) only on positive evidence:
-the row at the address names another instance now and one other address
-claims this one, or a following handle moved by its own rule (one Who-Is
-at most every `QUIET`), for the hub's request or one of its own. A row
+renewal failed goes to the next poll) is looked for: the one other address
+claiming its instance when the row at its address names another instance
+now, or where a following handle moved by its own rule (one Who-Is at
+most every `QUIET`). That address, or one a following handle moved to for
+a request of its own (before a request, a handle moves on the discovery
+table's rows alone, which I-Ams nobody asked for fill), is only a cue
+(#2812): the device there is asked which it is, by one ReadProperty of its
+Device object by the wildcard instance through its gate and the client's
+rate, at once and then on the pace of a claim's asks (below). Its points
+are given up (`State::Gone { why: Why::Moved { to } }`) only when that
+answer names their instance. Another instance, no answer, or a device that
+refuses the wildcard read changes nothing for the watch, and a handle that
+moved stays where it moved. A row
 merely gone from the discovery table (aged out of a quiet device) is no
 move, nor are the announcement times `Device::moved_to` reports: a
 duplicate starting up while the device misses a request looks the same,
@@ -13309,7 +13317,8 @@ read again when it starts again, as is another watch of the device. A
 given-up point's renewals stop and nothing more is sent
 for it, cancels included, since the new device never held its
 subscription, and its values are dropped. It becomes `Why::Moved` once its
-instance announces itself at one other address (that sends nothing), and
+instance announces itself at one other address and the device there names
+itself so when read (one paced read there, as above), and
 starts again when its address answers for it again. A pinned handle's
 points stay given up until then; a following handle moves by its own
 rule, and its `point` gives the point at the new address to watch. Not

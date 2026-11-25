@@ -28,7 +28,8 @@ impl<T: TransportPort + 'static> Device<T> {
     /// ([`address`](Self::address)), and a watch of it follows the device
     /// that address names when the watch starts. A following handle that
     /// moves later makes its points at the new address, and a watch of the
-    /// old one reports the move ([`Why::Moved`](crate::watch::Why::Moved));
+    /// old one reports the move ([`Why::Moved`](crate::watch::Why::Moved))
+    /// once the device there names itself so to the hub's read (#2812);
     /// another device taking the address is reported too
     /// ([`Why::Replaced`](crate::watch::Why::Replaced)), and never watched
     /// as this one. Sends nothing.
@@ -115,7 +116,9 @@ impl<T: TransportPort + 'static> Client<T> {
     }
 
     /// Where the device that was at `from`, claiming `instance`, answers
-    /// now, after a request to it went unanswered, when that is certain.
+    /// now, after a request to it went unanswered, as far as a handle's
+    /// rule or the discovery table can say: the watch hub reads which
+    /// device answers there before it takes it (#2812).
     /// When a handle follows the instance at `from`, as that handle would
     /// after a timeout: it may send one Who-Is for the instance (at most
     /// one every [`QUIET`](crate::device::QUIET) for the handles following

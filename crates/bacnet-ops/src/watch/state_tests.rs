@@ -13,7 +13,7 @@ use tokio::time::Instant;
 use super::State;
 use super::hub::*;
 use super::stream_tests::{lab_device, latest, next, number, own_hub, until};
-use super::test_lab::{LAB, Lab, RPM, SUBSCRIBE_COV, ai, lab_at, oid, settle};
+use super::test_lab::{ELSEWHERE, LAB, Lab, RP, RPM, SUBSCRIBE_COV, ai, lab_at, oid, settle};
 use super::*;
 use crate::device::ClientEvent;
 use bacnet_types::enums::ObjectType;
@@ -173,13 +173,15 @@ async fn a_watch_keeps_its_subscription_renewed() {
     lab.stop().await;
 }
 
-/// A point given up while a poll of its device is out stays given up when
-/// the poll ends, whether the device answered it or not.
+/// A move told while a poll of its device is out is checked once the poll
+/// ends, whether the device answered it or not: the device at the new
+/// address names the point's (#2812), and the point is given up.
 #[tokio::test(start_paused = true)]
 async fn a_poll_ending_after_a_move_leaves_the_point_given_up() {
     for answered in [false, true] {
         let lab = Lab::start(WatchOptions::default()).await;
         lab.quirks.refuse_cov.store(true, Ordering::Relaxed);
+        *lab.quirks.elsewhere.lock().unwrap() = Some(LAB);
         let device = lab_device(&lab).await;
         let mut watch = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
         until(&mut watch, |u| polled_for(u).is_some()).await;
@@ -199,6 +201,8 @@ async fn a_poll_ending_after_a_move_leaves_the_point_given_up() {
             to: elsewhere.clone(),
         };
         lab.client.shared.events.send(moved).unwrap();
+        // The read there waits for the poll, which no answer reaches.
+        lab.quirks.muted.store(false, Ordering::Relaxed);
         tokio::time::sleep(Duration::from_secs(5)).await;
         let last = latest(&mut watch).await.expect("given up");
         let gone = State::Gone {
@@ -206,7 +210,6 @@ async fn a_poll_ending_after_a_move_leaves_the_point_given_up() {
         };
         assert_eq!(last.state, gone, "answered {answered}: {last:?}");
         drop((watch, device));
-        lab.quirks.muted.store(false, Ordering::Relaxed);
         settle().await;
         lab.stop().await;
     }
@@ -234,11 +237,13 @@ async fn a_notified_value_clears_the_first_reads_error() {
 }
 
 /// A following handle's move of another instance from the device's
-/// address speaks for another device: its points stay. One of the
-/// device's own instance gives them up.
+/// address speaks for another device: its points stay, and nothing is
+/// read. One of the device's own instance gives them up, once the device
+/// at the new address names it (#2812).
 #[tokio::test(start_paused = true)]
 async fn a_move_of_another_instance_leaves_the_points() {
     let lab = Lab::start(WatchOptions::default()).await;
+    *lab.quirks.elsewhere.lock().unwrap() = Some(LAB);
     let device = lab_device(&lab).await;
     let mut watch = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
     until(&mut watch, |u| u.state == State::Subscribed).await;
@@ -249,8 +254,10 @@ async fn a_move_of_another_instance_leaves_the_points() {
         from: lab_at(),
         to: elsewhere.clone(),
     };
+    let from = Instant::now();
     lab.client.shared.events.send(moved(4242)).unwrap();
     assert!(latest(&mut watch).await.is_none(), "another device's move");
+    assert_eq!(lab.sent(RP, from), 0, "nothing read for it");
     lab.client.shared.events.send(moved(LAB)).unwrap();
     let update = latest(&mut watch).await.expect("its own move");
     assert_eq!(
@@ -307,21 +314,30 @@ const PRESENT: bacnet_types::enums::PropertyIdentifier =
     bacnet_types::enums::PropertyIdentifier::PRESENT_VALUE;
 
 /// Tell the hub that a handle following `instance` moved it from the lab
-/// device's address.
+/// device's address to [`ELSEWHERE`], where a device names itself so.
 fn moved_away(lab: &Lab, instance: u32) {
-    let to = crate::DeviceAddress::local(&[9]).unwrap();
+    *lab.quirks.elsewhere.lock().unwrap() = Some(instance);
+    told_moved(lab, instance);
+}
+
+/// Tell the hub that a handle following `instance` moved it from the lab
+/// device's address to [`ELSEWHERE`], whatever answers there.
+fn told_moved(lab: &Lab, instance: u32) {
+    let to = crate::DeviceAddress::local(&[ELSEWHERE]).unwrap();
     let from = lab_at();
     let moved = ClientEvent::Moved { instance, from, to };
     lab.client.shared.events.send(moved).unwrap();
 }
 
-/// A start in flight when its device's points are given up, answered after
-/// the table came to name another instance at the address, brings the
-/// given-up point back no more than any other start would: the table must
-/// name the point's instance there when the start is answered. Its own
-/// point began with the old instance, which an answer had named for the
-/// address (the first point's name read): the device there is
-/// asked, names the other (#2603), and the point is given up for it.
+/// A start in flight when a move of its device is told, answered after the
+/// table came to name another instance at the address, brings no point
+/// back: the table must name the point's instance there when the start is
+/// answered. The move is only a cue (#2812): nothing answers at the new
+/// address yet. Its own point began with the old instance, which an answer
+/// had named for the address (the first point's name read): the device
+/// there is asked, names the other (#2603), and both points are given up
+/// for it. A move told once the device answers at the new address has them
+/// say it went there, and still brings neither back.
 #[tokio::test(start_paused = true)]
 async fn a_start_from_before_the_move_does_not_revive() {
     let lab = Lab::start(WatchOptions::default()).await;
@@ -344,7 +360,7 @@ async fn a_start_from_before_the_move_does_not_revive() {
         .await
         .unwrap();
     *lab.quirks.named.lock().unwrap() = Some(LAB + 1);
-    moved_away(&lab, LAB);
+    told_moved(&lab, LAB);
     until(&mut first, |u| matches!(u.state, State::Gone { .. })).await;
     lab.quirks.slow_rpm_ack.store(false, Ordering::Relaxed);
     let replaced = Why::Replaced {
@@ -357,6 +373,18 @@ async fn a_start_from_before_the_move_does_not_revive() {
     tokio::time::sleep(Duration::from_secs(5)).await;
     let after = latest(&mut first).await;
     assert!(after.is_none(), "revived by a stale start: {after:?}");
+    // The device answers at the new address, told past the reads' pace.
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    moved_away(&lab, LAB);
+    let to = crate::DeviceAddress::local(&[ELSEWHERE]).unwrap();
+    let moved = State::Gone {
+        why: Why::Moved { to },
+    };
+    for watch in [&mut first, &mut late] {
+        let update = next(watch).await;
+        assert_eq!(update.state, moved);
+        assert!(latest(watch).await.is_none(), "not revived");
+    }
     drop((first, late, device));
     settle().await;
     lab.stop().await;
