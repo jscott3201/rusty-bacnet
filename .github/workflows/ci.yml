@@ -189,6 +189,11 @@ jobs:
         run: cargo fmt --all --check
       - name: File-size cap (700 LOC)
         run: bash scripts/ci/check-file-size.sh
+      # std locks are taken poisoned or not, through bacnet_types::sync (#2559).
+      - name: Lock-poison policy
+        run: |
+          python3 scripts/ci/check-lock-poison.py --self-test
+          python3 scripts/ci/check-lock-poison.py
       - name: No-secret scan
         run: |
           bash scripts/ci/test-check-no-secrets.sh
