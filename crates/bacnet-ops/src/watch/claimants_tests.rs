@@ -1,10 +1,11 @@
 //! Two claimants (#2812): a new address naming the watched device is a
 //! move only when the old address doesn't answer as it any more. The hub
-//! asks the old address once more, unless it is failing already: still the
-//! device, nothing changes (a responder elsewhere, an impostor's own host,
-//! ends no watch); silent, the points are given up as moved; another
-//! device, they are given up for it, then said to have moved. The reads'
-//! pace belongs to the watched address, whichever addresses are named.
+//! asks the old address once more: still the device, nothing changes (a
+//! responder elsewhere, an impostor's own host, ends no watch); timing
+//! out, the points are given up as moved; another device, they are given
+//! up for it, then said to have moved; the link failing the ask, nothing
+//! changes. The reads' pace belongs to the watched address, whichever
+//! addresses are named.
 
 use std::time::Duration;
 
@@ -163,4 +164,27 @@ async fn a_cue_whose_watch_is_dropped_before_its_turn_reads_nothing() {
     );
     bus.unsilence(2);
     stop(servers).await;
+}
+
+/// A handle's move to station 3, where a responder names the device, while
+/// the link fails every send to station 2: the ask there fails at the
+/// client, which says nothing of the device, and the watch goes on.
+#[tokio::test(start_paused = true)]
+async fn an_ask_the_link_fails_changes_nothing() {
+    let mut lab = Lab::new(Handle::Follows).await;
+    let impostor = server(lab.bus.port(3), N, "impostor").await;
+    lab.servers.push(impostor);
+    lab.bus.break_link(2);
+    let before = lab.reads_at(2);
+    lab.tell(3);
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert_eq!(lab.reads_at(3), 1, "one read at station 3");
+    assert_eq!(
+        lab.reads_at(2) - before,
+        1,
+        "the ask, which the link failed"
+    );
+    lab.goes_on(35.0).await;
+    lab.none_given_up(1).await;
+    lab.stop().await;
 }

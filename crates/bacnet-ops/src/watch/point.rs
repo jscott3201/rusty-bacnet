@@ -103,15 +103,25 @@ pub enum Why {
     /// The device's instance answers at `to` now: the device there named
     /// itself so, answering the hub's read of its Device object by the
     /// wildcard instance (#2812), and it is gone from the point's address:
-    /// that address is failing, or its device, asked once more, isn't that
-    /// one (a device still answering as it there is a second claimant, and
-    /// the point stays watched). That read is cued by the hub's look for a
-    /// device that stopped answering (the row at its old address names
-    /// another instance and only `to` claims this one) or by a handle
-    /// following the instance moving there; neither alone gives the point
-    /// up. The point is given up ([`State::Gone`](super::State::Gone)); watch
-    /// the point at `to` instead. The hub doesn't follow it, but starts the
-    /// point again if the old address answers for the instance again.
+    /// its device, asked once more, times out or isn't that one (a device
+    /// still answering as it there is a second claimant, and the point
+    /// stays watched). The ask is skipped only when no route to the address
+    /// is known, or when the hub's own look, after its own request there
+    /// went unanswered, found `to` while the address is failing. That read
+    /// is cued by the hub's look for a device that stopped answering (the
+    /// row at its old address names another instance and only `to` claims
+    /// this one) or by a handle following the instance moving there;
+    /// neither alone gives the point up. The point is given up
+    /// ([`State::Gone`](super::State::Gone)); watch the point at `to`
+    /// instead. The hub doesn't follow it, but starts the point again if
+    /// the old address answers for the instance again.
+    ///
+    /// A point given up already, for another device at its address
+    /// ([`Replaced`](Self::Replaced)), is no longer watched there, so the
+    /// old address isn't asked: any device at `to` naming the instance has
+    /// it say `Moved`, at most once each turn of the hub's pace. Take `to`
+    /// as a hint: a watch made there checks which device answers as any
+    /// watch does.
     Moved {
         /// Where the device answers now.
         to: DeviceAddress,

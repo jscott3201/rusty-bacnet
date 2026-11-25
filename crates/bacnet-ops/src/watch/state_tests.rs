@@ -203,19 +203,30 @@ async fn a_move_told_during_a_poll_goes_by_the_polls_answer() {
             from: lab_at(),
             to: elsewhere.clone(),
         };
+        let told = Instant::now();
         lab.client.shared.events.send(moved).unwrap();
         tokio::time::sleep(Duration::from_secs(5)).await;
+        // The read at the new address, then the ask here (after the name
+        // read an unanswered poll cues, #2603).
+        assert_eq!(lab.sent_to(RP, ELSEWHERE, told), 1, "answered {answered}");
+        let here = lab.sent_to(RP, 2, told);
+        assert_eq!(here, 1 + usize::from(!answered), "answered {answered}");
         let last = latest(&mut watch).await;
         let gone = State::Gone {
             why: Why::Moved { to: elsewhere },
         };
         match answered {
             false => assert_eq!(last.map(|u| u.state), Some(gone)),
-            true => assert!(
-                last.as_ref()
-                    .is_none_or(|u| !matches!(u.state, State::Gone { .. })),
-                "two claimants: {last:?}"
-            ),
+            true => {
+                let gone = last.is_some_and(|u| matches!(u.state, State::Gone { .. }));
+                assert!(!gone, "two claimants");
+                for _ in 0..12 {
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    if let Some(update) = latest(&mut watch).await {
+                        assert!(!matches!(update.state, State::Gone { .. }), "{update:?}");
+                    }
+                }
+            }
         }
         drop((watch, device));
         lab.quirks.muted.store(false, Ordering::Relaxed);

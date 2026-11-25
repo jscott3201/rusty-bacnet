@@ -209,7 +209,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         let arrivals: Vec<Arrival> = slot.inbox().drain(..).collect();
         device.arrive(arrivals);
         if let Some((instance, to)) = slot.take_moved() {
-            device.cue_move(instance, to);
+            device.cue_move(instance, to, false);
         }
         device.heard();
         device.reap();
@@ -475,7 +475,7 @@ impl<T: TransportPort + 'static> Device<T> {
             Done::Located(instance, to) => {
                 self.locating.remove(&instance);
                 if let Some(to) = to {
-                    self.cue_move(instance, to);
+                    self.cue_move(instance, to, true);
                 }
             }
             Done::Arrived(instance, to, found) => self.arrived(instance, to, found),

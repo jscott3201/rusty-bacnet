@@ -154,6 +154,8 @@ impl std::fmt::Display for WatchError {
 impl std::error::Error for WatchError {}
 
 #[cfg(test)]
+mod asked_tests;
+#[cfg(test)]
 mod claimants_tests;
 #[cfg(test)]
 mod identity_tests;

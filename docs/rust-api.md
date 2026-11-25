@@ -13256,15 +13256,26 @@ Device object by the wildcard instance through its gate and the client's
 rate, at once and then on the pace of a claim's asks (below). Its points
 are given up (`State::Gone { why: Why::Moved { to } }`) only when that
 answer names their instance and the device is gone from their address:
-unless the address is failing already (in its poll backoff, or a point
-there unreachable), its device is asked once more, as a claim is checked.
-Still that device, the two addresses are two claimants (a duplicate, or a
-responder on an impostor's own host), and nothing changes, logged as a
-warning once a lifetime; silent, the points are given up as moved; another
-device, they are given up for it (`Why::Replaced`), then say where their
-own went. Another instance at the new address, no answer there, or a
-device that refuses the wildcard read changes nothing for the watch, and a
-handle that moved stays where it moved. The pace and the one slot a cue
+its device is asked once more, as a claim is checked, whatever the
+address looked like before (a renewal or poll may fail for many reasons,
+and a router's reject for a routed address can be forged). The ask is
+skipped only when no route to the address is known, or when the cue came
+from the hub's own look, after its own request there went unanswered, and
+the address is failing (in its poll backoff, or a point there
+unreachable). Still that device, the two addresses are two claimants (a
+duplicate, or a responder on an impostor's own host), and nothing
+changes, logged as a warning once a lifetime for each instance and other
+address; the ask timing out (a router's reject or the client's own
+failure says nothing), the points are given up as moved; another device,
+they are given up for it (`Why::Replaced`), then say where their own went.
+Another instance at the new address, no answer there, or a device that
+refuses the wildcard read changes nothing for the watch, and a handle that
+moved stays where it moved. A point given up already (`Why::Replaced`)
+isn't watched at its address, so nothing is asked there: any device at the
+new address naming its instance has it say `Why::Moved { to }`, at most
+once each turn of the pace. An application should take that `to` as a
+hint; a watch made there checks which device answers as any watch does.
+The pace and the one slot a cue
 waits in belong to the watched address, whichever addresses cues name: a
 stream of forged cues can hold a real move's read to one a lifetime, or
 take a real cue's slot, until the hub's own look after an unanswered poll
