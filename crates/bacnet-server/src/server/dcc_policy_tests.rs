@@ -314,28 +314,32 @@ fn dcc_configured_validation_retains_decode_password_unknown_mode_precedence() {
             if class == ErrorClass::SECURITY && code == ErrorCode::PASSWORD_FAILURE)
         );
         assert!(matches!(failure.outcome, DccOutcome::PasswordFailure));
-        let mut data = BytesMut::new();
-        DeviceCommunicationControlRequest {
-            time_duration: None,
-            enable_disable: EnableDisable::from_raw(3),
-            password: password.clone(),
+        // The peer's undefined mode, refused as out of range at the
+        // enable-disable member, after any time-duration (#1833); it still
+        // goes out as SERVICES / OTHER, not as a Reject.
+        for (time_duration, at) in [(None, 0), (Some(5), 2), (Some(300), 3)] {
+            let mut data = BytesMut::new();
+            DeviceCommunicationControlRequest {
+                time_duration,
+                enable_disable: EnableDisable::from_raw(3),
+                password: password.clone(),
+            }
+            .encode(&mut data)
+            .unwrap();
+            let failure = validate(&data);
+            assert!(matches!(
+                failure.error,
+                Error::Decoding(refused)
+                    if refused.kind == bacnet_types::error::DecodingKind::OutOfRange
+                        && refused.label == "unknown EnableDisable value"
+                        && refused.offset == at
+            ));
+            assert_eq!(
+                bacnet_device_core::reply::error_fields(&failure.error),
+                (ErrorClass::SERVICES, ErrorCode::OTHER)
+            );
+            assert!(matches!(failure.outcome, DccOutcome::Malformed));
         }
-        .encode(&mut data)
-        .unwrap();
-        // The peer's undefined mode, refused as out of range (#1833); it
-        // still goes out as SERVICES / OTHER, not as a Reject.
-        let failure = validate(&data);
-        assert!(matches!(
-            failure.error,
-            Error::Decoding(refused)
-                if refused.kind == bacnet_types::error::DecodingKind::OutOfRange
-                    && refused.label == "unknown EnableDisable value"
-        ));
-        assert_eq!(
-            bacnet_device_core::reply::error_fields(&failure.error),
-            (ErrorClass::SERVICES, ErrorCode::OTHER)
-        );
-        assert!(matches!(failure.outcome, DccOutcome::Malformed));
     }
 }
 

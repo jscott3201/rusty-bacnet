@@ -430,7 +430,8 @@ fn synchronize_clock(
             )
         })
     {
-        // Nor for this source.
+        // A decision about a peer, not a missing feature; it only reaches
+        // the debug log below, so its kind is provisional (#1833).
         return Err(Error::unsupported("time sync: source not allowed"));
     }
     let clock = clock.ok_or(Error::unsupported("Device clock is disabled"))?;

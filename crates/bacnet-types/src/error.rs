@@ -173,10 +173,14 @@ impl fmt::Display for Candidates<'_> {
 /// [`Error::InvalidArgument`], [`Error::Unsupported`],
 /// [`Error::LimitReached`]) is for a person to read and may change; a
 /// number or fact a caller acts on has a typed variant or field of its own,
-/// as [`Error::SendTooLong`] carries its length and limit. A value a
-/// component keeps (a builder setting, an option, a table it holds) that it
-/// refuses is [`Error::InvalidConfig`]; a value used for one call, or text
-/// parsed once, is [`Error::InvalidArgument`].
+/// as [`Error::SendTooLong`] carries its length and limit. What a component
+/// is built or started with (a builder setting, an option, a table it is
+/// configured with, or a value made to configure it) that it refuses is
+/// [`Error::InvalidConfig`], wherever the check runs. A value refused at the
+/// call that hands it to a component is [`Error::InvalidArgument`], even
+/// when the component would keep it (a device added to the client's table,
+/// a routed path's limit, a server's new clock zone), and so is text parsed
+/// once.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 // Clippy fails if the attribute above goes.
@@ -300,15 +304,18 @@ pub enum Error {
     #[error("{1}")]
     State(Lifecycle, Refusal),
 
-    /// A value the component would keep, refused before anything ran
-    /// (#1833): a builder setting, an option or a table, such as a timeout
-    /// outside its range or two modes that can't run together.
+    /// What the component is built or started with, refused (#1833): a
+    /// builder setting, an option, a table it is configured with or a value
+    /// made to configure it, such as a timeout outside its range or two
+    /// modes that can't run together.
     #[error("{0}")]
     InvalidConfig(Refusal),
 
-    /// A value used for one call, or text parsed once, refused before
-    /// anything was sent (#1833), such as an address or MAC of the wrong
-    /// form for the link, or a send's options the link can't carry.
+    /// A value refused at the call that hands it over, or text parsed once,
+    /// before anything was sent (#1833), such as an address or MAC of the
+    /// wrong form for the link, or a send's options the link can't carry.
+    /// It is so even when the component would keep the value, such as a
+    /// device added to the client's table.
     #[error("{0}")]
     InvalidArgument(Refusal),
 
@@ -406,11 +413,12 @@ pub enum Error {
         candidates: Box<[BACnetAddress]>,
     },
 
-    /// A request named a device the client can't place: no address in its
-    /// discovery table claims the instance, and none answered a Who-Is for
-    /// it, or no router is known for a remote network's station. Nothing
-    /// was sent to the device. Only with `std`, as for
-    /// [`Error::AmbiguousDevice`].
+    /// A request named a device that can't be placed: no address in the
+    /// client's discovery table claims the instance, and none answered a
+    /// Who-Is for it, or no router is known for a remote network's station,
+    /// as when a server's audit notification goes to a recipient whose
+    /// router it hasn't learned. Nothing was sent to the device. Only with
+    /// `std`, as for [`Error::AmbiguousDevice`].
     #[cfg(feature = "std")]
     #[error("device {device} is not known to the client; discover it first")]
     UnknownDevice {

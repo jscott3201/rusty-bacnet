@@ -96,7 +96,9 @@ pub(super) fn publish<T: TransportPort + 'static>(
             registration::publish_bip(db, oid, port, capacity)?;
         }
         _ => {
-            let port = transport.bip6_port().ok_or(Error::unsupported(
+            // The link reports no single B/IP mode now, as `prepare`
+            // refuses one configured both ways (#1833).
+            let port = transport.bip6_port().ok_or(Error::invalid_config(
                 "registered B/IP mode changed during bind",
             ))?;
             registration::publish_bip6(db, oid, port, capacity)?;

@@ -160,21 +160,22 @@ pub fn unreachable(error: &Error) -> bool {
 ///   Nothing was sent, or, with `sent`, a request that went out had its
 ///   retry withheld; either way no word of the device's, and the next
 ///   request fails the same way until the node is enabled again.
-/// - [`Error::Encoding`], the client's untyped error (#1833 types it). A
-///   client out of invoke IDs comes as this, and so does a response channel
-///   closed under a request, which **had already left**. So this is not
-///   "never sent", and nothing may send again on the strength of it: reads
-///   only stop on it. They are kept in because they have no type to tell
-///   them from the refusal this exists for, and each ends a read for the
-///   same reason: the client, not the property, failed.
+/// - [`Error::Encoding`], the untyped error of the crates #1833 has not
+///   reached yet: the client's or the link's own failure there too.
 /// - The local refusals #1833 typed out of it: [`Error::State`] (a
 ///   BACnet/SC link that isn't connected to its hub, a closed loopback
-///   channel), [`Error::InvalidConfig`], [`Error::InvalidArgument`] (a MAC
-///   of the wrong form for the link, or a router's application given a
-///   station that names no network), [`Error::Unsupported`] and
-///   [`Error::LimitReached`]. Each is the client's or the link's own
-///   refusal, as the untyped error was. A stopped transport's send is
-///   [`Error::Transport`], which [`unreachable()`] counts instead.
+///   channel, a client seat that has closed), [`Error::InvalidConfig`],
+///   [`Error::InvalidArgument`] (a MAC of the wrong form for the link, or a
+///   router's application given a station that names no network),
+///   [`Error::Unsupported`] and [`Error::LimitReached`] (a client out of
+///   invoke IDs). Each is the client's or the link's own refusal. A stopped
+///   transport's send is [`Error::Transport`], which [`unreachable()`]
+///   counts instead.
+///
+/// A request the client's own stop cut off while it waited for its answer
+/// fails here too, and it **may already have left**. So a failure here is
+/// not "never sent", and nothing may send again on the strength of one:
+/// reads only stop on it, since the client, not the property, failed.
 ///
 /// A request too long for the link or the routed path
 /// ([`Error::SendTooLong`], [`Error::RoutedPathTooLong`]), or one that

@@ -365,10 +365,12 @@ A call the stack turns down on its own side, before or without any exchange
 with a peer, is a local refusal with a variant per kind (#1833), so a caller
 matches the kind without reading text: `Error::State(Lifecycle, Refusal)` for
 a lifecycle state (`AlreadyStarted`, `NotRunning`, `Stopping`,
-`NotConnected`, `Closed`), `Error::InvalidConfig` for a value the component
-keeps (a builder setting, an option, a table), `Error::InvalidArgument` for a
-value used for one call or text parsed once (an address or MAC of the wrong
-form for the link), `Error::Unsupported` for what this platform, build or
+`NotConnected`, `Closed`), `Error::InvalidConfig` for what the component is
+built or started with (a builder setting, an option, a table it is configured
+with), `Error::InvalidArgument` for a value refused at the call that hands it
+over, even one the component would keep (an address or MAC of the wrong form
+for the link, a device added to the client's table, a routed path's limit),
+or text parsed once, `Error::Unsupported` for what this platform, build or
 component doesn't offer, and `Error::LimitReached` for a resource cap,
 including a one-holder resource (a lock, a lease, a seat) another holds. A
 `Refusal` is the text for a person and not API: a static label with as many
@@ -13974,15 +13976,15 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Decoding(DecodeError)` | Malformed received data, with its offset and `DecodingKind` |
 | `Error::Encode(EncodeError)`, `Error::Range(RangeError)` | A value an encoder, validator or constructor refused, with a static label |
 | `Error::State(Lifecycle, Refusal)` | A call the component's lifecycle state refuses: already started, not running, stopping, not connected to its peer, or closed (#1833) |
-| `Error::InvalidConfig(Refusal)` | A value the component would keep (a builder setting, an option, a table) refused before anything ran |
-| `Error::InvalidArgument(Refusal)` | A value for one call, or text parsed once, refused before anything was sent, such as a MAC of the wrong form for the link |
+| `Error::InvalidConfig(Refusal)` | What the component is built or started with (a builder setting, an option, a table it is configured with) refused |
+| `Error::InvalidArgument(Refusal)` | A value refused at the call that hands it over, even one the component would keep, or text parsed once, before anything was sent, such as a MAC of the wrong form for the link |
 | `Error::Unsupported(Refusal)` | Not offered on this platform, in this build, or by this kind of component |
 | `Error::LimitReached(Refusal)` | A resource cap reached: a full table, a counter run out, a one-holder resource another holds |
 | `Error::SendTooLong { length, limit }` | A send refused for its length before anything was written |
-| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (objects, device-core and the crates above the client and server), and, until their own change, the transport's I/O failures as text, the MS/TP and Ethernet NPDU-length refusals, B/IP's refusals of an NPDU too long, a socket that can't take the datagram now and a socket's own failure, an endpoint's send that waited past its deadline, a server's audit forwarding that ran out of time or found no route, and `resolve_device` for an instance not in the client's table |
+| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (objects, device-core and the crates above the client and server), and, until their own change, the transport's I/O failures as text, the MS/TP and Ethernet NPDU-length refusals, B/IP's refusals of an NPDU too long, a socket that can't take the datagram now and a socket's own failure, an endpoint's send that waited past its deadline, a server's audit forwarding that ran out of time, and `resolve_device` for an instance not in the client's table |
 | `Error::Transport(io_error)` | Transport I/O failure, and a stopped transport's send (`NotConnected`) |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
-| `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles) |
+| `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles); a server's audit send to a recipient with no router known fails this way too, and counts as not sent |
 
 ---
 
