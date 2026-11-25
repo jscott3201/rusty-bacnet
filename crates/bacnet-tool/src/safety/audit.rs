@@ -119,6 +119,7 @@ impl Audit {
         let event = event.to_string();
         tokio::task::spawn_blocking(move || {
             let line = line(&context, level, &event, fields);
+            // lock-poison: fail-closed (a panic mid-write may have torn a record)
             let mut file = file
                 .lock()
                 .map_err(|_| "the audit log's lock is poisoned".to_string())?;

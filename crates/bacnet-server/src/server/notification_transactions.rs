@@ -129,6 +129,10 @@ struct NotificationCore {
     /// node's seat the node's, whose reserves decide how much of it the
     /// server may hold (#2617).
     coordinator: Arc<OutboundTransactionCoordinator>,
+    /// Pending answers, waiters and the closed flag. It fails closed when a
+    /// panic poisoned it (#2559): every user then treats the adapter as
+    /// closed, as the coordinator it leases from does, so nothing acts on
+    /// an answer, lease or waiter a half-done update left.
     state: Mutex<NotificationState>,
 }
 
@@ -603,6 +607,7 @@ impl NotificationCore {
             }
             _ => return false,
         };
+        // lock-poison: fail-closed (poisoned acts closed; the request times out)
         let sender = match self.state.lock() {
             Ok(mut state) => state.pending.remove(&token),
             Err(_) => None,
@@ -617,6 +622,7 @@ impl NotificationCore {
     }
 
     pub(super) fn close(&self) {
+        // lock-poison: fail-closed (poisoned acts closed)
         let (pending, waiters) = match self.state.lock() {
             Ok(mut state) => {
                 if state.closed {
@@ -638,6 +644,7 @@ impl NotificationCore {
 
     fn rearm(&self, token: LeaseToken) -> Result<oneshot::Receiver<CovAckResult>, Rearm> {
         let (sender, receiver) = oneshot::channel();
+        // lock-poison: fail-closed (poisoned acts closed)
         let Ok(mut state) = self.state.lock() else {
             return Err(Rearm::Closed);
         };
@@ -655,12 +662,14 @@ impl NotificationCore {
     /// Take the sender back from the pending answers: whether it was still
     /// there, rather than taken by an answer or by closing.
     fn withdraw(&self, token: LeaseToken) -> bool {
+        // lock-poison: fail-closed (poisoned acts closed; sender kept)
         self.state
             .lock()
             .map_or(true, |mut state| state.pending.remove(&token).is_some())
     }
 
     fn release(&self, token: LeaseToken) {
+        // lock-poison: fail-closed (poisoned acts closed; lease still released)
         if let Ok(mut state) = self.state.lock() {
             state.pending.remove(&token);
         }
@@ -668,6 +677,7 @@ impl NotificationCore {
     }
 
     fn cancel(&self, token: LeaseToken) {
+        // lock-poison: fail-closed (poisoned acts closed; lease still cancelled)
         if let Ok(mut state) = self.state.lock() {
             state.pending.remove(&token);
         }
