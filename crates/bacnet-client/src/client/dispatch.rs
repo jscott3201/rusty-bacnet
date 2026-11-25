@@ -9,6 +9,9 @@ use bacnet_network::layer::ReceivedApdu;
 
 #[path = "dispatch_answers.rs"]
 mod answers;
+#[cfg(test)]
+#[path = "dispatch_order_tests.rs"]
+mod order_tests;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Dispatch a received APDU to the appropriate handler.
