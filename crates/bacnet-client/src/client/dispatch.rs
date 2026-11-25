@@ -22,10 +22,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// requests' below. The two stay inline because a call into a future of
     /// their own cost each ReadProperty, WriteProperty and
     /// ReadPropertyMultiple round trip 28 to 44 more instructions in the
-    /// counting harness, 14 of them the child future's drop glue.
+    /// counting harness (`scripts/perf/perf_counts.py` against 38bb02c02),
+    /// 14 of them the child future's drop glue.
     ///
     /// The dispatch loop awaits this before it takes the next frame, so each
-    /// frame's effects come before the next frame's. Two orders the stack
+    /// frame's effects come before the next frame's, except what a frame
+    /// hands to the reassembly task (`hand_off_segment`, `hand_off_abort`,
+    /// #2646), which runs out of line. Two orders the stack
     /// relies on (#2603) live in what the request functions call: an I-Am's
     /// device events go out under the discovery table's lock
     /// (`device_events::heard_i_am`), and a confirmed COV notification's

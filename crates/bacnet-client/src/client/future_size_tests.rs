@@ -17,6 +17,13 @@
 //! too, either way: one that trips a bound means measuring the sizes on dev
 //! again with the new compiler and setting the bounds from those, not a
 //! regression to chase here.
+//!
+//! The dispatch and segmented-receive bounds come from #2558, not
+//! 54fec70ed: the sizes after its split, measured on macOS aarch64 only.
+//! Nothing those futures hold is laid out by platform: no field under a
+//! `target_os`, `unix` or `windows` cfg, and the one feature-gated field, a
+//! direct BACnet/SC peer's certificate, sits behind an `Arc`. So they take
+//! the same 32-byte margin.
 
 use super::segmentation_context::SegmentedRequestLimits;
 use super::station::ConfirmedTarget;

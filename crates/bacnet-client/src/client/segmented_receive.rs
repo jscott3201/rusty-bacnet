@@ -2,10 +2,15 @@
 //! its window (#2558). Split from `segmentation.rs`, which keeps the sending
 //! side, with no behavior change.
 //!
-//! `handle_segmented_complex_ack` admits the segment to its transaction;
-//! `receive_admitted_segment` takes it into the transaction's reassembly
-//! session, acknowledges the window and completes the transaction on the
-//! final segment.
+//! `handle_segmented_complex_ack` runs two steps in turn: `admit_segment`
+//! admits the segment to its transaction, and `receive_admitted_segment`
+//! takes it into the transaction's reassembly session, acknowledges the
+//! window and completes the transaction on the final segment.
+//!
+//! The log lines moved with the code, so their target is now
+//! `bacnet_client::client::segmented_receive`, not
+//! `bacnet_client::client::segmentation`: a log filter on the old target
+//! no longer matches them.
 
 use super::segmentation_context::{InboundSegmentSource, ReassemblyAbortTarget};
 use super::*;

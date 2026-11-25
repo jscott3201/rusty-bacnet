@@ -4,7 +4,11 @@
 //! Each body is the match arm it was, moved as it stood: the same statements
 //! in the same order, taking the same locks. `dispatch_apdu` awaits each one
 //! before it returns, so the dispatch loop still handles one frame's effects
-//! before it takes the next.
+//! before it takes the next, except a requester's Abort, which
+//! `dispatch_abort` hands to the reassembly task to run out of line
+//! (`hand_off_abort`, #2646). Log lines here carry the target
+//! `bacnet_client::client::dispatch::answers`, which a filter on
+//! `bacnet_client::client::dispatch` still covers.
 
 use super::super::response_admission::current_reassembly_owner;
 use super::*;
@@ -180,7 +184,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // below the server=FALSE guard above, or an echoed copy of
         // this client's own Abort would tear down a healthy
         // reassembly. Behaviorally redundant with the per-segment
-        // pending gate in `handle_segmented_complex_ack` — a later
+        // pending gate in `admit_segment` — a later
         // segment would find no transaction and clear the session
         // anyway — so no test can pin this line alone; it is kept so
         // the slot frees at the Abort, not at the peer's next move.
