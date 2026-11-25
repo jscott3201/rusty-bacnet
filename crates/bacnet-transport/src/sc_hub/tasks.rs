@@ -1,6 +1,7 @@
 //! Hub-owned tasks. Only the supervisor polls joins; weak spawners cannot
 //! keep the task set alive through the futures it owns.
 
+use bacnet_types::sync::MutexExt;
 use std::future::{Future, poll_fn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -88,7 +89,7 @@ impl Tasks {
     }
 
     pub fn request_shutdown(&self) {
-        self.state.lock().unwrap().sealed = true;
+        self.state.locked().sealed = true;
         self.shutdown.send_replace(true);
     }
 
@@ -100,7 +101,7 @@ impl Tasks {
     /// the separate graceful channel to start the Disconnect exchange.
     pub fn request_graceful(&self) {
         let first = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.locked();
             if state.sealed {
                 false
             } else {
@@ -118,7 +119,7 @@ impl Tasks {
     /// Drain kind chosen by the first seal: graceful only when the first
     /// seal was [`Self::request_graceful`].
     pub fn graceful_kind(&self) -> bool {
-        self.state.lock().unwrap().graceful_kind
+        self.state.locked().graceful_kind
     }
 
     pub fn graceful_ctx(&self) -> GracefulCtx {
@@ -134,18 +135,18 @@ impl Tasks {
     }
 
     pub fn set_outcome(&self, outcome: ScHubShutdownOutcome) {
-        *self.outcome.lock().unwrap() = Some(outcome);
+        *self.outcome.locked() = Some(outcome);
     }
 
     pub fn get_outcome(&self) -> Option<ScHubShutdownOutcome> {
-        *self.outcome.lock().unwrap()
+        *self.outcome.locked()
     }
 
     /// Reap completed tasks while accepting connections. Empty sets must sleep
     /// until a spawn, rather than making the supervisor spin.
     pub async fn reap(&self) {
         poll_fn(|cx| {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.locked();
             match state.set.poll_join_next(cx) {
                 Poll::Ready(None) => {
                     state.empty_waiter = Some(cx.waker().clone());
@@ -167,7 +168,7 @@ impl Tasks {
     pub async fn drain(&self) {
         self.request_shutdown();
         let mut set = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.locked();
             state.empty_waiter = None;
             std::mem::take(&mut state.set)
         };
@@ -184,7 +185,7 @@ impl Tasks {
     /// from an abort.
     pub async fn drain_gracefully(&self, overall: std::time::Duration) -> bool {
         let mut set = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.locked();
             state.empty_waiter = None;
             std::mem::take(&mut state.set)
         };
@@ -211,7 +212,7 @@ impl Spawner {
         let Some(shared) = self.0.upgrade() else {
             return false;
         };
-        let mut state = shared.lock().unwrap();
+        let mut state = shared.locked();
         if state.sealed {
             return false;
         }
@@ -233,7 +234,7 @@ pub(super) struct AbortOnExit(Tasks);
 impl Drop for AbortOnExit {
     fn drop(&mut self) {
         self.0.request_shutdown();
-        self.0.state.lock().unwrap().set.abort_all();
+        self.0.state.locked().set.abort_all();
     }
 }
 

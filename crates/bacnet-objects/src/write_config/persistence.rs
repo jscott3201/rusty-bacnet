@@ -301,7 +301,7 @@ mod file {
 
     impl WriteConfigPersistence for FileWriteConfigPersistence {
         fn load(&self, object: ObjectIdentifier) -> Result<Option<WriteConfigSnapshot>, Error> {
-            let Some(octets) = self.file.read()? else {
+            let Some(octets) = self.file.read_octets()? else {
                 return Ok(None);
             };
             Ok(Some(format::decode(object, &octets)?))

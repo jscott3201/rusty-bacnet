@@ -13,7 +13,8 @@
 //! a send path, and `start`, which has `&mut self`, reaches them through
 //! `get_mut`.
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use bacnet_types::sync::MutexExt;
+use std::sync::{Mutex, MutexGuard};
 
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -54,7 +55,7 @@ pub(crate) struct Stopping<'a> {
 
 impl StopGate {
     fn lock(&self) -> MutexGuard<'_, Gate> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.0.locked()
     }
 
     /// The right to stop the transport, or `None` once a stop has finished,
@@ -86,7 +87,7 @@ impl StopGate {
 
     /// Open the gate for the stop after a new start.
     pub(crate) fn open(&mut self) {
-        *self.0.get_mut().unwrap_or_else(PoisonError::into_inner) = Gate::Open;
+        *self.0.get_mut_locked() = Gate::Open;
     }
 
     /// Mark an abort (#2617): from now on [`Self::is_stopped`] is true,
@@ -151,15 +152,12 @@ pub(crate) struct Tasks(Mutex<Vec<JoinHandle<()>>>);
 
 impl Tasks {
     fn lock(&self) -> MutexGuard<'_, Vec<JoinHandle<()>>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.0.locked()
     }
 
     /// Keep `task`, which a start spawned.
     pub(crate) fn push(&mut self, task: JoinHandle<()>) {
-        self.0
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(task);
+        self.0.get_mut_locked().push(task);
     }
 
     /// Whether any task is kept: started and not yet stopped.

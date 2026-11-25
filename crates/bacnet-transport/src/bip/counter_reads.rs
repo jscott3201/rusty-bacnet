@@ -6,10 +6,7 @@ use super::*;
 impl BipTransport {
     /// Return the operational BBMD management counters.
     pub fn management_counters(&self) -> ManagementCounters {
-        match self.management_limiter.lock() {
-            Ok(limiter) => limiter.counters(),
-            Err(poison) => poison.into_inner().counters(),
-        }
+        self.management_limiter.locked().counters()
     }
 
     /// Return operational Foreign Device Table counters if BBMD mode is enabled.

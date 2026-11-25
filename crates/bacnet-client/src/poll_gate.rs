@@ -30,12 +30,13 @@
 //! for a few steps and never across an await; wakers are woken, and those
 //! replaced or removed dropped, once it is let go.
 
+use bacnet_types::sync::MutexExt;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 
 /// A one-holder gate guarding no data: holding it across awaits is its
@@ -67,7 +68,7 @@ struct Waiter {
 
 impl PollGate {
     fn state(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.locked()
     }
 
     /// Wait for the gate, borrowing it.

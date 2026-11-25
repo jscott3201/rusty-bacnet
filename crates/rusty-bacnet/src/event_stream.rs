@@ -27,9 +27,10 @@
 //! conversion, a closed exit gate or a closed loop that dropped the queued
 //! callback).
 
+use bacnet_types::sync::MutexExt;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::time::Duration;
 
 use pyo3::IntoPyObjectExt;
@@ -110,7 +111,7 @@ pub(crate) struct Trace {
 
 impl Redelivery {
     fn item(&self) -> MutexGuard<'_, Option<Py<PyAny>>> {
-        self.item.lock().unwrap_or_else(PoisonError::into_inner)
+        self.item.locked()
     }
 
     fn take(&self) -> Option<Py<PyAny>> {

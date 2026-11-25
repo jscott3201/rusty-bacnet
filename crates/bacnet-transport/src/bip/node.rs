@@ -22,7 +22,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddrV4;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock};
 use std::time::Duration;
 
 use bacnet_bip_codec::{BvlcFunction, Bvll, BvllError};
@@ -34,6 +34,7 @@ use bacnet_bip_core::node::{
 };
 use bacnet_time::HostClock;
 use bacnet_types::error::Error;
+use bacnet_types::sync::{MutexExt, RwLockExt};
 use bytes::{Bytes, BytesMut};
 use tokio::sync::{Notify, oneshot};
 use tracing::{debug, info, warn};
@@ -82,7 +83,7 @@ impl<'a> HostPolicy<'a> {
 
 impl Policy for HostPolicy<'_> {
     fn admit_management(&mut self, source: SocketAddrV4, _function: BvlcFunction) -> bool {
-        let mut limiter = self.limiter.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut limiter = self.limiter.locked();
         limiter.check_now(source.ip().octets())
     }
 
@@ -374,10 +375,7 @@ impl NodeHandle {
     /// The node's link as it stands: its address, subnet and mode. A copy,
     /// so no lock is held while the caller decides on it.
     pub(super) fn link(&self) -> Link {
-        self.link
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .link
+        self.link.read_locked().link
     }
 
     /// Run `send` on the node's link and the socket a send leaves from,
@@ -389,7 +387,7 @@ impl NodeHandle {
         &self,
         send: impl FnOnce(&Link, &Arc<BipSocket>) -> Result<R, Error>,
     ) -> Result<R, Error> {
-        let linked = self.link.read().unwrap_or_else(PoisonError::into_inner);
+        let linked = self.link.read_locked();
         match &linked.socket {
             Some(socket) => send(&linked.link, socket),
             None => Err(crate::port::stopped()),
@@ -457,7 +455,7 @@ impl NodeHandle {
             state.register = None;
             state.attempt_started = None;
             state.refusal_warned = false;
-            self.link.write().unwrap_or_else(PoisonError::into_inner).link = *state.node.link();
+            self.link.write_locked().link = *state.node.link();
             info!(bbmd = ?foreign.bbmd, ttl = foreign.ttl, "B/IP foreign device moved to a new BBMD registration");
             Ok(())
         })
@@ -472,10 +470,7 @@ impl NodeHandle {
                 return Ok(());
             }
             state.node.set_subnet(subnet).map_err(config_error)?;
-            self.link
-                .write()
-                .unwrap_or_else(PoisonError::into_inner)
-                .link = *state.node.link();
+            self.link.write_locked().link = *state.node.link();
             Ok(())
         })
     }
@@ -495,11 +490,7 @@ impl NodeHandle {
     /// The socket every send leaves from, or `None` once the node has
     /// stopped.
     pub(super) fn socket(&self) -> Option<Arc<BipSocket>> {
-        self.link
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .socket
-            .clone()
+        self.link.read_locked().socket.clone()
     }
 
     /// The error for a send the link refused, counted.
@@ -509,7 +500,7 @@ impl NodeHandle {
     }
 
     fn lock(&self) -> MutexGuard<'_, NodeState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.locked()
     }
 
     /// The link's returns, which the client record keeps (#2572).
@@ -650,12 +641,7 @@ impl NodeHandle {
         let mut state = self.lock();
         // Taken under the node lock (lock order: the node lock, then the
         // link's), and let go of once both are free.
-        let socket = self
-            .link
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .socket
-            .take();
+        let socket = self.link.write_locked().socket.take();
         let kept = state.held.len() + state.queued.len();
         let discarded = u32::try_from(kept).unwrap_or(u32::MAX);
         if discarded > 0 && !state.stopped {

@@ -45,6 +45,7 @@
 
 use super::*;
 use crate::server::segmented_send::{SegmentedSendHandle, Superseded};
+use bacnet_types::sync::MutexExt;
 use std::sync::Weak;
 
 /// An answer the task `handle` sends in segments for pending entry `id`.
@@ -100,9 +101,7 @@ impl ConfirmedRequestTracker {
     }
 
     fn lock_state(&self) -> std::sync::MutexGuard<'_, TrackerState> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.state.locked()
     }
 }
 

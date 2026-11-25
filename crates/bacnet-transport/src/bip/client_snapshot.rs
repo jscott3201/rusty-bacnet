@@ -1,11 +1,12 @@
 //! Bounded observations of this transport's outgoing management exchanges.
 
 use std::net::SocketAddrV4;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use bacnet_bip_codec::BvlcResultCode;
 use bacnet_bip_core::node::{AttemptOutcome, ExchangeCounters, NodeCounters, Operation};
+use bacnet_types::sync::MutexExt;
 
 use super::link_returns::LinkReturns;
 use super::node::NodeHandle;
@@ -250,11 +251,11 @@ pub(super) struct ClientRecord {
 
 impl ClientRecord {
     fn lock(&self) -> MutexGuard<'_, BvlcClientSnapshot> {
-        self.snapshot.lock().unwrap_or_else(PoisonError::into_inner)
+        self.snapshot.locked()
     }
 
     fn node_slot(&self) -> MutexGuard<'_, Weak<NodeHandle>> {
-        self.node.lock().unwrap_or_else(PoisonError::into_inner)
+        self.node.locked()
     }
 
     /// The transport started: clear the last-attempt status.

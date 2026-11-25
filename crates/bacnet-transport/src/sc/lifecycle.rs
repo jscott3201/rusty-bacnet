@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::{ScConnectionState, ScTransport, WebSocketPort};
 use crate::sc_frame::encode_sc_message;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use bytes::BytesMut;
 
 /// How long [`ScTransport::stop`](crate::port::TransportPort::stop) spends
@@ -41,11 +42,7 @@ impl<W: WebSocketPort> ScTransport<W> {
         let hub = self.say_goodbye_to_hub(budget);
         // A primary restore's goodbye to the failover hub finishes in the
         // same budget rather than being cut off (#2520).
-        let restore = self
-            .restore_disconnect_task
-            .lock()
-            .ok()
-            .and_then(|mut task| task.take());
+        let restore = self.restore_disconnect_task.locked().take();
         let restore = async {
             if let Some(mut task) = restore
                 && tokio::time::timeout_at(budget, &mut task).await.is_err()
@@ -139,16 +136,8 @@ impl<W: WebSocketPort> ScTransport<W> {
         &self,
     ) -> (Option<JoinHandle<()>>, Option<JoinHandle<()>>) {
         self.end_at_once();
-        let task = self
-            .recv_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        let restore_task = self
-            .restore_disconnect_task
-            .lock()
-            .ok()
-            .and_then(|mut task| task.take());
+        let task = self.recv_task.locked().take();
+        let restore_task = self.restore_disconnect_task.locked().take();
         (task, restore_task)
     }
 
@@ -156,16 +145,10 @@ impl<W: WebSocketPort> ScTransport<W> {
     /// joins them, end the direct links and close the connection's record.
     fn end_at_once(&self) {
         self.direct_membership.retire_all();
-        if let Some(task) = &*self
-            .recv_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-        {
+        if let Some(task) = &*self.recv_task.locked() {
             task.abort();
         }
-        if let Ok(task) = self.restore_disconnect_task.lock()
-            && let Some(task) = &*task
-        {
+        if let Some(task) = &*self.restore_disconnect_task.locked() {
             task.abort();
         }
         if let Some(conn) = &self.connection
@@ -230,10 +213,7 @@ impl AbortMark {
 
     /// Remember the runtime a start runs on.
     pub(super) fn started_on(&self, runtime: tokio::runtime::Handle) {
-        *self
-            .runtime
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(runtime);
+        *self.runtime.locked() = Some(runtime);
     }
 
     /// Take the hub socket out of `slot`: now, or, while something holds
@@ -243,12 +223,9 @@ impl AbortMark {
             drop(hub.take());
             return;
         }
-        let runtime = tokio::runtime::Handle::try_current().ok().or_else(|| {
-            self.runtime
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone()
-        });
+        let runtime = tokio::runtime::Handle::try_current()
+            .ok()
+            .or_else(|| self.runtime.locked().clone());
         if let Some(runtime) = runtime {
             let slot = Arc::clone(slot);
             runtime.spawn(async move { drop(slot.lock().await.take()) });
@@ -273,8 +250,7 @@ impl<T: Send + Sync + 'static> Drop for ReleaseOnAbort<T> {
 
 /// An unstarted socket's slot, locked.
 fn lock_unstarted<W>(slot: &std::sync::Mutex<Option<W>>) -> std::sync::MutexGuard<'_, Option<W>> {
-    slot.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    slot.locked()
 }
 
 impl<W: WebSocketPort> Drop for ScTransport<W> {

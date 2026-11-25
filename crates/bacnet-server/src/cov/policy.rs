@@ -1,6 +1,7 @@
 //! The server's COV telemetry atomics and its confirmed in-flight tracker.
 
 use bacnet_device_core::cov::{CovCounters, CovRecipient};
+use bacnet_types::sync::MutexExt;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -218,7 +219,7 @@ impl CovInFlightTracker {
         max_per_peer: usize,
         global_semaphore: &Arc<Semaphore>,
     ) -> Result<CovInFlightGuard, InFlightAcquireError> {
-        let mut guard = self.peer_in_flight.lock().unwrap();
+        let mut guard = self.peer_in_flight.locked();
         let current = guard.get(&peer).copied().unwrap_or(0);
         if current >= max_per_peer {
             return Err(InFlightAcquireError::PeerLimitExceeded);
@@ -254,7 +255,7 @@ impl CovInFlightTracker {
 
     /// Each peer's confirmed notifications in flight now.
     pub(crate) fn in_flight(&self) -> HashMap<CovRecipient, usize> {
-        self.peer_in_flight.lock().unwrap().clone()
+        self.peer_in_flight.locked().clone()
     }
 
     /// Completes once a confirmed notification in flight ends after this
@@ -269,7 +270,7 @@ impl CovInFlightTracker {
     }
 
     fn release(&self, peer: &CovRecipient) {
-        let mut guard = self.peer_in_flight.lock().unwrap();
+        let mut guard = self.peer_in_flight.locked();
         if let Some(count) = guard.get_mut(peer) {
             *count = count.saturating_sub(1);
             if *count == 0 {

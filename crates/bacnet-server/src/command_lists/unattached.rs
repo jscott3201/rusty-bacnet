@@ -21,7 +21,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, TryLockError};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use bacnet_encoding::primitives::encode_property_value;
@@ -31,6 +31,7 @@ use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::{BACnetActionCommand, BACnetDeviceObjectPropertyReference};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::sync::MutexExt;
 use bytes::BytesMut;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
@@ -105,7 +106,7 @@ impl Future for Driver {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let mut runs = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut runs = self.0.locked();
         let Some(future) = runs.as_mut() else {
             return Poll::Ready(());
         };
@@ -127,11 +128,7 @@ impl Drop for Driver {
 /// when a poll holds it or they are gone already. The caller drops them
 /// once the lock is let go: ending them takes nothing of it.
 fn take_unless_polled(slot: &Slot) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>> {
-    match slot.try_lock() {
-        Ok(mut runs) => runs.take(),
-        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().take(),
-        Err(TryLockError::WouldBlock) => None,
-    }
+    slot.try_locked()?.take()
 }
 
 /// Run `runs`, and any runs their writes start, to their ends, making no

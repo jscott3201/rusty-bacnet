@@ -16,7 +16,8 @@
 
 use super::TransactionOwner;
 use bacnet_transport::port::DataAttribute;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use bacnet_types::sync::MutexExt;
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::Notify;
 
 /// Request-side timer state delivered to the task waiting for a response.
@@ -71,15 +72,12 @@ impl TransactionShared {
     }
 
     fn snapshot(&self) -> (u64, TransactionProgress) {
-        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let state = self.state.locked();
         (state.version, state.value)
     }
 
     fn version(&self) -> u64 {
-        self.state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .version
+        self.state.locked().version
     }
 }
 
@@ -89,7 +87,7 @@ impl TransactionOwner {
     /// Called only under the TSM lock, so publishes are serialized.
     pub(super) fn publish_progress(&self, value: TransactionProgress) {
         {
-            let mut state = self.0.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut state = self.0.state.locked();
             state.version = state.version.wrapping_add(1);
             state.value = value;
         }

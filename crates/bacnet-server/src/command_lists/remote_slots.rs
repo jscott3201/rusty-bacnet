@@ -23,9 +23,10 @@
 //! one, frees what it held.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// The most requests in other devices the server's runs keep outstanding at
@@ -109,7 +110,7 @@ impl RemoteSlots {
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<ObjectIdentifier, DeviceQueue>> {
-        self.devices.lock().unwrap_or_else(PoisonError::into_inner)
+        self.devices.locked()
     }
 }
 

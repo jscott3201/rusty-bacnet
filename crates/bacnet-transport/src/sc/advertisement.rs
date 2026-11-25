@@ -8,6 +8,8 @@
 use std::time::Duration;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+#[cfg(feature = "sc-tls")]
+use bacnet_types::sync::MutexExt;
 use bytes::BytesMut;
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -119,11 +121,7 @@ impl<W: WebSocketPort> super::ScTransport<W> {
         mut self,
         config: crate::sc_tls::DirectAcceptConfig,
     ) -> Result<(Self, crate::sc_tls::DirectListener), bacnet_types::error::Error> {
-        let unstarted = self
-            .ws
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_some();
+        let unstarted = self.ws.get_mut_locked().is_some();
         if !unstarted || self.direct_intake.npdus.is_some() {
             return Err(bacnet_types::error::Error::Encoding(
                 "SC direct listener requires an unstarted, unregistered transport".into(),

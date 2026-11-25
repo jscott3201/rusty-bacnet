@@ -157,7 +157,7 @@ impl FileColorOutputPersistence {
 #[cfg(feature = "std")]
 impl ColorOutputPersistence for FileColorOutputPersistence {
     fn load(&self, object: ObjectIdentifier) -> Result<Option<ColorOutputSnapshot>, Error> {
-        let Some(octets) = self.file.read()? else {
+        let Some(octets) = self.file.read_octets()? else {
             return Ok(None);
         };
         Ok(Some(format::decode(object, &octets)?))

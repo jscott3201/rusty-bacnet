@@ -13,6 +13,7 @@ use bacnet_network::layer::{NetworkReport, ReceivedNetworkControl, ReceivedNetwo
 use bacnet_network::network_number::NumberControl;
 use bacnet_npdu::NetworkMessageType;
 use bacnet_router_core::message::Networks;
+use bacnet_types::sync::MutexExt;
 
 /// Network-report broadcast channel capacity. A subscriber this far behind
 /// loses the oldest and is told how many with `RecvError::Lagged`; the
@@ -53,13 +54,9 @@ pub(super) fn publish(
         let empty_ack = control.npdu.message_type
             == Some(NetworkMessageType::INITIALIZE_ROUTING_TABLE_ACK)
             && control.npdu.payload.is_empty()
-            && queried
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_ref()
-                .is_some_and(|target| {
-                    target.answers(&control.source_mac, control.npdu.source.as_ref())
-                });
+            && queried.locked().as_ref().is_some_and(|target| {
+                target.answers(&control.source_mac, control.npdu.source.as_ref())
+            });
         empty_ack.then(|| ReceivedNetworkReport {
             source_mac: control.source_mac.clone(),
             source_network: control.npdu.source.clone(),

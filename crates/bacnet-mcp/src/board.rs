@@ -9,9 +9,10 @@
 //! await; the TUI takes a copy with [`Board::calls_since`], which never
 //! waits for the lock, so it never holds up a frame.
 
+use bacnet_types::sync::MutexExt;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, TryLockError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use rmcp::ErrorData;
@@ -101,11 +102,7 @@ impl PartialEq for Board {
 impl Board {
     /// Record a call, dropping the oldest when the ring is full.
     pub fn record(&self, row: CallRow) {
-        let mut log = self
-            .inner
-            .log
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut log = self.inner.log.locked();
         if log.rows.len() >= CALLS {
             log.rows.pop_front();
             log.dropped += 1;
@@ -118,11 +115,7 @@ impl Board {
     /// `None` when none were, or when a session holds the lock this
     /// moment (the caller asks again later rather than wait).
     pub fn calls_since(&self, seq: u64) -> Option<Calls> {
-        let log = match self.inner.log.try_lock() {
-            Ok(log) => log,
-            Err(TryLockError::Poisoned(log)) => log.into_inner(),
-            Err(TryLockError::WouldBlock) => return None,
-        };
+        let log = self.inner.log.try_locked()?;
         (log.seq != seq).then(|| Calls {
             rows: log.rows.iter().rev().cloned().collect(),
             dropped: log.dropped,

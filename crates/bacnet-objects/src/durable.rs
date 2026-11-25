@@ -157,6 +157,8 @@ use std::time::Instant;
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
+#[cfg(feature = "std")]
+use bacnet_types::sync::CondvarExt;
 
 use crate::prelude::*;
 use crate::sync::Mutex;
@@ -230,10 +232,7 @@ impl Event {
     fn wait_blocking(&self) {
         let mut state = self.state.lock();
         while !state.done {
-            state = self
-                .happened
-                .wait(state)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state = self.happened.wait_locked(state);
         }
     }
 

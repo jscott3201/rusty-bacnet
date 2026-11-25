@@ -22,7 +22,7 @@ only when every job under it did (see [Merge evidence](#merge-evidence)).
 
 | Job | PR to `dev` | PR to `main` | Push to `dev` (merge) | Push to `main`, `v*` tag, weekly, manual |
 | --- | --- | --- | --- | --- |
-| Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions, the `named_codes!` copies, changelog fragments, the [tool pins](#tool-pins), the [fuzz crates' lockfiles](#fuzzing) | ✓ | ✓ | ✓ | ✓ |
+| Lint: rustfmt, 700-LOC cap, the lock-poison policy, no-secret scan, script regressions, the `named_codes!` copies, changelog fragments, the [tool pins](#tool-pins), the [fuzz crates' lockfiles](#fuzzing) | ✓ | ✓ | ✓ | ✓ |
 | Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS, the `no_std` crates on bare-metal targets and their `alloc` tests on the host; the every-feature and PyO3 rustdoc runs include private items. The workspace runs include the [samples](#samples). Also the [firmware link test](#firmware-link-test): the MS/TP, B/IP and MS/TP device images built without an allocator, and the APDU, objects, reporting, points and enrollment images with one, checked against their size budgets | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`); also the [`no_std` crates](#no_std-checks)' tests and doctests with `alloc` and without `std`, and their tests without either | ✓ | ✓ | ✓ | ✓ |
 | Python bindings: `maturin develop` (maturin at its [pinned](#tool-pins) version), then `python -m unittest discover -s crates/rusty-bacnet/tests`, the website's sample tests (`python -m unittest discover -s website/tests/python`: the loopback lab, and the CLI samples on the pages run against it with a debug `bacnet-cli` build; the root README's samples too (#2105): its quickstart server runs, its Python programs and CLI lines run against it, its MCP host configuration is parsed, its Rust blocks must match the `readme_*` Cargo examples that clippy compiles, and its dependency table must name published crates at the release; the step sets `BACNET_LAB_EXPECTED_VERSION` to the workspace version, since the lab otherwise expects the site's release and the wheel under test can be ahead of it) and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
@@ -1882,6 +1882,7 @@ bash scripts/ci/test-plan-skip.sh          # the merge-run skip (#1466)
 python3 scripts/ci/test-check-msrv.py
 python3 scripts/ci/test-firmware-size.py
 python3 scripts/ci/check-named-codes.py     # the named_codes! copies match
+python3 scripts/ci/check-lock-poison.py --self-test && python3 scripts/ci/check-lock-poison.py   # std locks taken poisoned or not
 python3 -m unittest discover -s scripts/release
 python3 -m unittest discover -s scripts -p 'test_changelog.py'
 python3 scripts/changelog.py check
@@ -1906,6 +1907,24 @@ depends on another for it (#1684). `check-named-codes.py` compares each
 `macro_rules!` definition, from that line to the closing brace, with the
 first, and fails with a diff when one differs, so a change to one is made to
 all three. The doc comments above them may differ.
+
+Non-test code never panics on a poisoned std `Mutex`, `RwLock` or `Condvar`
+(#2559). By default it takes the lock through the extension traits in
+`bacnet_types::sync` (`locked()`, `read_locked()`, `write_locked()`,
+`wait_locked()`), so one panicking task doesn't make every later user of the
+lock panic. Where a half-done update must not be used, it fails closed
+instead and says why on the site: `// lock-poison: fail-closed (<why>)`. A
+wanted panic would be marked `// lock-poison: allow (<why>)`.
+`check-lock-poison.py` fails on an unwrapped lock, `get_mut()` or Condvar
+wait, hand-written `PoisonError::into_inner` or `TryLockError::Poisoned`
+outside that module (`try_locked()` is the poison-tolerant `try_lock`), and
+a lock result looked at (`.ok()`, `.map_err(..)`, `?`, `if let Ok`, `match`
+and the like) without the fail-closed marker; it lists each marked site
+with its reason. It reads every tracked `.rs` file the workspace builds or ships as a
+sample: the crates with their examples and build scripts, the benchmark
+tools, `examples/`, `firmware/` and `website/examples/`. Tests, benches, fuzz
+targets and the archived `benchmarks/results/` are left out, and so is test
+code inside a source file, which may unwrap.
 
 `scripts/ci/check-msrv.sh --linux-native` needs a native Linux GNU host with
 the MSRV toolchain (`RUST_MSRV`) installed, Python 3, a C toolchain, `pkg-config`, `libpcap-dev`,

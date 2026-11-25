@@ -4,6 +4,7 @@ use super::connector::dial_reconnect_ws;
 use super::observability::ScObserver;
 use super::*;
 use crate::sc_frame::Vmac;
+use bacnet_types::sync::MutexExt;
 
 async fn connect_probe_from(conn: &Arc<Mutex<ScConnection>>) -> Arc<Mutex<ScConnection>> {
     Arc::new(Mutex::new(conn.lock().await.connect_probe()))
@@ -78,10 +79,7 @@ pub(super) async fn retire<W: WebSocketPort>(
     // A restore task targets the previous failover, not the current socket
     // (connector freshness is a caller contract). Terminate any outstanding
     // task as well, so it cannot initiate deferred cleanup after retirement.
-    let task = restore_disconnect_task
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .take();
+    let task = restore_disconnect_task.locked().take();
     if let Some(task) = task {
         task.abort();
         let _ = task.await;

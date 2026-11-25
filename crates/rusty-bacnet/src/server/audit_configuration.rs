@@ -156,7 +156,7 @@ impl BACnetServer {
         let configs = parse_reporters(reporters)?;
         let identities = configs.iter().map(|value| value.identifier).collect();
         {
-            let mut pending = self.lock_pending()?;
+            let mut pending = self.lock_pending();
             self.check_forwarding_configuration()?;
             let indices = configs
                 .iter()
@@ -200,10 +200,7 @@ impl BACnetServer {
         let value = crate::types::audit_recipient_from_py(recipient, "recipient")?;
         self.validate_audit_recipient_input(&value)?;
         self.check_forwarding_configuration()?;
-        *self
-            .audit_recipient
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("recipient lock poisoned"))? = Some(value);
+        *self.audit_recipient.locked() = Some(value);
         Ok(())
     }
 
@@ -218,7 +215,7 @@ impl BACnetServer {
         let device = instance_identifier(device_instance, "device_instance", ObjectType::DEVICE)?;
         let mac = crate::types::parse_address(address)?;
         {
-            let _pending = self.lock_pending()?;
+            let _pending = self.lock_pending();
             self.check_forwarding_configuration()?;
         }
         if self.transport_type != "bip" {
@@ -266,7 +263,7 @@ impl BACnetServer {
         if device.instance_number() == self.device_instance {
             return Err(PyValueError::new_err("parent Device must be remote"));
         }
-        let mut pending = self.lock_pending()?;
+        let mut pending = self.lock_pending();
         self.check_forwarding_configuration()?;
         let index = pending_audit_log_index(&pending, object_id)?;
         pending[index]
@@ -307,7 +304,7 @@ impl BACnetServer {
             allow_all,
         };
         {
-            let objects = self.lock_pending()?;
+            let objects = self.lock_pending();
             self.check_start_not_in_flight()?;
             if self.started.load(Ordering::Acquire) {
                 return Err(PyRuntimeError::new_err(

@@ -34,10 +34,11 @@
 //! never hears `declined` for a write that goes, nor the reverse.
 
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bacnet_tool::safety::{Preview, Tier};
+use bacnet_types::sync::MutexExt;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -202,8 +203,7 @@ impl AgentApproval {
     pub fn withdrawn(&self) -> bool {
         self.inner
             .answer
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .locked()
             .as_ref()
             .is_none_or(oneshot::Sender::is_closed)
     }
@@ -225,12 +225,7 @@ impl AgentApproval {
     }
 
     fn answer(&self, decision: Decision) -> bool {
-        let sender = self
-            .inner
-            .answer
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
+        let sender = self.inner.answer.locked().take();
         sender.is_some_and(|sender| sender.send(decision).is_ok())
     }
 }

@@ -4,9 +4,10 @@
 //! reports. Kept in the transport's client record, beside the node, so the
 //! node's own state, which every send and receive reads, keeps its layout.
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 use bacnet_bip_core::node::RegistrationEvent;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::watch;
 
 #[derive(Debug, Default)]
@@ -42,7 +43,7 @@ impl LinkReturns {
     /// success is no return: the broadcasts made before it were held and
     /// go now.
     pub(super) fn event(&self, event: &RegistrationEvent) {
-        let mut follow = self.follow.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut follow = self.follow.locked();
         let back = match event {
             RegistrationEvent::Registered { .. } => {
                 std::mem::take(&mut follow.lost) | std::mem::take(&mut follow.dropped)
@@ -68,15 +69,12 @@ impl LinkReturns {
 
     /// The BBMD refused a broadcast: it holds no entry for this device.
     pub(super) fn broadcast_dropped(&self) {
-        self.follow
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .dropped = true;
+        self.follow.locked().dropped = true;
     }
 
     /// A new start follows its own registration from scratch.
     pub(super) fn restart(&self) {
-        *self.follow.lock().unwrap_or_else(PoisonError::into_inner) = Follow::default();
+        *self.follow.locked() = Follow::default();
     }
 
     /// A receiver of the count.

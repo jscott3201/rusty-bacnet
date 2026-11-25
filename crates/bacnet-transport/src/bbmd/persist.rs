@@ -28,12 +28,13 @@ use std::io::Write as _;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use bytes::BytesMut;
 use tracing::{debug, warn};
 
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 
 use super::{BbmdState, BdtEntry, encode_bdt_entries};
 
@@ -179,7 +180,7 @@ impl BdtFile {
     /// Write `rows`, of `generation`, with the NAT setting in the trailer
     /// when given, as described on `save`.
     pub(crate) fn save_with(&self, generation: u64, rows: &[BdtEntry], nat: Option<PersistedNat>) {
-        let mut written = self.written.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut written = self.written.locked();
         if generation <= *written {
             debug!(generation, newest = *written, "Skipped saving an older BDT");
         } else {

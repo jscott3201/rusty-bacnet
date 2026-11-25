@@ -52,6 +52,26 @@ fn local(clock: &ServerClock) -> (Date, Time) {
     (frame.local_date, frame.local_time)
 }
 
+/// A panic under the clock's lock leaves the clock working (#2559): it
+/// still reads, checks and takes a zone, and synchronizes, where it once hid
+/// the Device's clock properties and refused zone writes and synchronization.
+#[tokio::test(start_paused = true)]
+async fn a_poisoned_clock_keeps_reading_and_taking_writes() {
+    let clock = synced(zone(0, false), time(10, 0, 0, 0));
+    clock.poison_for_test();
+    assert_eq!(local(&clock).1, time(10, 0, 0, 0));
+    assert_eq!(clock.zone(), zone(0, false));
+    clock.check_zone(-60, false).unwrap();
+    clock.write_zone(-60, false).unwrap();
+    assert_eq!(clock.zone(), zone(-60, false));
+    assert_eq!(local(&clock).1.hour, 11);
+    clock.set_zone(zone(0, false)).unwrap();
+    clock
+        .synchronize(date(2024, 7, 4, 4), time(12, 0, 0, 0), true)
+        .unwrap();
+    assert_eq!(local(&clock).1, time(12, 0, 0, 0));
+}
+
 fn reader(clock: &Arc<ServerClock>) -> Option<Arc<dyn ClockReader>> {
     Some(Arc::clone(clock) as Arc<dyn ClockReader>)
 }
@@ -111,7 +131,7 @@ async fn a_zone_change_keeps_the_utc_instant_and_the_synchronization() {
         (frame.utc_offset, frame.daylight_savings_status),
         (300, true)
     );
-    assert_eq!(clock.zone(), Some(zone(300, true)));
+    assert_eq!(clock.zone(), zone(300, true));
 
     // Six hours west instead of five, still in daylight saving.
     clock.set_zone(zone(360, true)).unwrap();
@@ -207,7 +227,7 @@ async fn a_step_is_judged_in_the_zone_its_value_is_stored_under() {
     assert_eq!(holds() - before, 1);
     assert_eq!(step, Some(30 * 6_000));
     assert_eq!(local(&clock), (thursday, time(9, 45, 0, 0)));
-    assert_eq!(clock.zone(), Some(zone(300, true)));
+    assert_eq!(clock.zone(), zone(300, true));
 
     // 09:45 in daylight saving, five hours west, is 13:45 UTC. A UTC value
     // of 14:45 is an hour ahead, the cap exactly, whatever the zone.
@@ -429,7 +449,7 @@ fn concurrent_readers_see_the_old_pair_or_the_new() {
     for (reader, seen) in seen.iter().enumerate() {
         assert!(seen[0] > 0 && seen[1] > 0, "reader {reader}: {seen:?}");
     }
-    assert_eq!(clock.zone(), Some(west));
+    assert_eq!(clock.zone(), west);
 }
 
 /// The next Schedule pass and a Calendar's Present_Value follow the new

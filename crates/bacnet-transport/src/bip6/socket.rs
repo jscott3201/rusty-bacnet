@@ -24,7 +24,7 @@
 use std::{
     io,
     net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
-    sync::{Arc, PoisonError, RwLock},
+    sync::{Arc, RwLock},
 };
 use tokio::net::UdpSocket;
 
@@ -35,6 +35,7 @@ use super::{
 use crate::tap::{FrameTap, TapDirection, TapPeer};
 use crate::udp_metadata::{DestinationReceiver, IpVersion, ReceivedDatagram};
 use bacnet_types::data_link::DataLink;
+use bacnet_types::sync::RwLockExt;
 
 /// Every task that owns the socket owns it through one `Arc`, so the
 /// registered Network Port's lease lives as long as the last of them. Rust
@@ -255,31 +256,22 @@ pub(super) struct SocketSlot(RwLock<Option<Arc<Bip6Socket>>>);
 impl SocketSlot {
     /// The socket, while the transport runs.
     pub(super) fn get(&self) -> Option<Arc<Bip6Socket>> {
-        self.0
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.0.read_locked().clone()
     }
 
     /// Whether the transport runs.
     pub(super) fn is_some(&self) -> bool {
-        self.0
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_some()
+        self.0.read_locked().is_some()
     }
 
     /// Hold `socket` from a start on.
     pub(super) fn set(&mut self, socket: Arc<Bip6Socket>) {
-        *self.0.get_mut().unwrap_or_else(PoisonError::into_inner) = Some(socket);
+        *self.0.get_mut_locked() = Some(socket);
     }
 
     /// Take the socket out, for a stop.
     pub(super) fn take(&self) -> Option<Arc<Bip6Socket>> {
-        self.0
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
+        self.0.write_locked().take()
     }
 }
 

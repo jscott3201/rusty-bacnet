@@ -47,6 +47,7 @@ use bacnet_router_core::router::{OriginateError, Request, SourceSelection};
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_types::MacAddr;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
@@ -377,11 +378,7 @@ impl RouterApplicationPort {
     /// and a drop all do.
     fn end_tasks(&self) {
         self.feed.detach(slot(self.side));
-        let follow = self
-            .follow
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        let follow = self.follow.locked().take();
         if let Some(task) = follow {
             task.abort();
         }
@@ -424,10 +421,7 @@ impl TransportPort for RouterApplicationPort {
         let mut limits = self.limits.clone();
         let published = self.published.clone();
         let cap = self.cap;
-        *self
-            .follow
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tokio::spawn(async move {
+        *self.follow.get_mut_locked() = Some(tokio::spawn(async move {
             loop {
                 let now = capped(cap, *limits.borrow_and_update());
                 published.send_if_modified(|current| std::mem::replace(current, now) != now);

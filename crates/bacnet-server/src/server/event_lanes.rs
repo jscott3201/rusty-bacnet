@@ -34,6 +34,7 @@ use super::super::event_suppression::{EventNotificationCounters, EventSuppressio
 use super::*;
 use bacnet_encoding::constructed::encode_event_notification;
 use bacnet_services::alarm_event::{EventNotificationRequest, ForwardedEventNotification};
+use bacnet_types::sync::MutexExt;
 use std::collections::VecDeque;
 use std::sync::OnceLock;
 use tokio::task::JoinSet;
@@ -529,9 +530,7 @@ pub(super) fn lane_state(transactions: &NotificationTransactions) -> &LaneState 
 
 impl LaneState {
     fn lock(&self) -> std::sync::MutexGuard<'_, EventLanes> {
-        self.lanes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.lanes.locked()
     }
 }
 

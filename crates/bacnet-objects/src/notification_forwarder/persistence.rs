@@ -116,7 +116,7 @@ impl FileNotificationForwarderPersistence {
 #[cfg(feature = "std")]
 impl NotificationForwarderPersistence for FileNotificationForwarderPersistence {
     fn load(&self, forwarder: ObjectIdentifier) -> Result<Option<ForwarderSnapshot>, Error> {
-        let Some(octets) = self.file.read()? else {
+        let Some(octets) = self.file.read_octets()? else {
             return Ok(None);
         };
         Ok(Some(format::decode(forwarder, &octets)?))

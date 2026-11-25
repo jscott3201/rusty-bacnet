@@ -16,6 +16,7 @@ use crate::sc_frame::{
     ControlRecipient, ScFunction, ScMessage, Vmac, decode_sc_message, encode_sc_message,
     validate_control,
 };
+use bacnet_types::sync::MutexExt;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -79,7 +80,7 @@ impl PooledDirect {
             let mut idle_deadline = tokio::time::Instant::now() + DIRECT_POOL_IDLE_TTL;
             let touch = |idle_deadline: &mut tokio::time::Instant| {
                 *idle_deadline = tokio::time::Instant::now() + DIRECT_POOL_IDLE_TTL;
-                *activity.lock().unwrap() = Instant::now() + DIRECT_POOL_IDLE_TTL;
+                *activity.locked() = Instant::now() + DIRECT_POOL_IDLE_TTL;
             };
             let mut last_received = tokio::time::Instant::now();
             let mut pending_heartbeat = None;
@@ -430,7 +431,7 @@ impl DirectPool {
         let expired: Vec<_> = self
             .entries
             .iter()
-            .filter(|(_, e)| now >= *e.idle_deadline.lock().unwrap() || !e.member.is_current())
+            .filter(|(_, e)| now >= *e.idle_deadline.locked() || !e.member.is_current())
             .map(|(v, _)| *v)
             .collect();
         for vmac in expired {

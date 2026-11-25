@@ -26,6 +26,7 @@ impl NotificationTransactions {
 impl NotificationCore {
     /// See [`NotificationTransactions::free_invoke_ids`].
     fn free(&self) -> usize {
+        // lock-poison: fail-closed (poisoned acts closed: no room)
         let owed = match self.state.lock() {
             Ok(state) if !state.closed => state.waiters.owed(),
             _ => return 0,

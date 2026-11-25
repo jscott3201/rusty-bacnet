@@ -38,6 +38,7 @@ use super::super::cov_fanout::CovFanout;
 use super::super::event_send::{Settle, settled, settled_by};
 use super::*;
 use crate::committed_cov::CommittedCov;
+use bacnet_types::sync::MutexExt;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// The most passes of one task whose COV fanout waits for their event
@@ -142,15 +143,11 @@ impl<'a, T: TransportPort + 'static> FanoutTail<'a, T> {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, VecDeque<Pass>> {
-        self.queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.queue.locked()
     }
 
     fn copies(&self) -> std::sync::MutexGuard<'_, Copies> {
-        self.copies
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.copies.locked()
     }
 
     /// Hand the fanout of a pass that has just committed to the tail: what

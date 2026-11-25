@@ -14,6 +14,7 @@
 use super::*;
 use bacnet_network::layer::{NetworkReport, RoutingTableEntry};
 use bacnet_npdu::{RejectMessageReason, RejectMessageToNetwork};
+use bacnet_types::sync::MutexExt;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::poll_gate::PollGate;
@@ -234,10 +235,7 @@ struct Outstanding<'a>(&'a std::sync::Mutex<Option<QueryTarget>>);
 
 impl Drop for Outstanding<'_> {
     fn drop(&mut self) {
-        *self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        *self.0.locked() = None;
     }
 }
 
@@ -355,11 +353,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let end = start.checked_add(wait.total).ok_or_else(overflow)?;
         let first_deadline = start.checked_add(wait.first_answer).ok_or_else(overflow)?;
         let mut rx = self.network_reports();
-        *self
-            .routing_query
-            .outstanding
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(target.clone());
+        *self.routing_query.outstanding.locked() = Some(target.clone());
         let _outstanding = Outstanding(&self.routing_query.outstanding);
         self.network
             .send_routing_table_query(&target.hop, target.station.as_ref())

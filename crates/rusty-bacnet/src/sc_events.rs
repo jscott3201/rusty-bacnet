@@ -1,13 +1,14 @@
 //! Frozen Python copies of SC hub-connector events and link status, and the
 //! async iterator over the events (#1829).
 
-use std::sync::{Mutex as StdMutex, MutexGuard, PoisonError};
+use std::sync::{Mutex as StdMutex, MutexGuard};
 use std::time::Duration;
 
 use bacnet_transport::sc::{
     ScActiveHub, ScConnectionState, ScDialStage, ScDisconnectCause, ScEvent, ScLinkStatus,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode};
+use bacnet_types::sync::MutexExt;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use tokio::sync::broadcast;
@@ -319,7 +320,7 @@ impl FirstScEvents {
     }
 
     fn slot(&self) -> MutexGuard<'_, Option<broadcast::Receiver<ScEvent>>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.0.locked()
     }
 }
 

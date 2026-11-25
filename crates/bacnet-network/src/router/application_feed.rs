@@ -40,11 +40,12 @@
 //! drops. The router itself never waits.
 
 use std::borrow::Cow;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use bacnet_npdu::{Address, GLOBAL_NETWORK, NetworkPriority, Npdu};
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use bytes::Bytes;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -119,11 +120,7 @@ impl Feed {
                 consumers.slots[slot] = Some(tx);
             }
         });
-        let source = self
-            .source
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
+        let source = self.source.locked().take();
         if let Some(source) = source {
             let task = tokio::spawn(run(
                 source,
@@ -133,7 +130,7 @@ impl Feed {
                     transactions: self.transactions.clone(),
                 },
             ));
-            *self.task.lock().unwrap_or_else(PoisonError::into_inner) = Some(task);
+            *self.task.locked() = Some(task);
         }
         rx
     }
@@ -147,12 +144,7 @@ impl Feed {
 
 impl Drop for Feed {
     fn drop(&mut self) {
-        if let Some(task) = self
-            .task
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-        {
+        if let Some(task) = self.task.get_mut_locked().take() {
             task.abort();
         }
     }

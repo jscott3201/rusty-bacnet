@@ -4,6 +4,7 @@
 //! in TUI mode tracing goes here (and optionally to `--log-file`) instead of
 //! the usual fmt subscriber.
 
+use bacnet_types::sync::MutexExt;
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -60,9 +61,7 @@ impl LogRing {
 
     fn lock(&self) -> MutexGuard<'_, Ring> {
         // A panic while holding the lock leaves only a complete line or none.
-        self.ring
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.ring.locked()
     }
 
     /// Append a line, dropping the oldest when full.

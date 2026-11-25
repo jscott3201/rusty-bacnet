@@ -12,6 +12,7 @@ use bacnet_bip_codec::{BvlcFunction, BvlcResultCode, Bvll};
 use bacnet_bip_core::Arrival;
 use bacnet_bip_core::bbmd::ForwardRefusal;
 use bacnet_bip_core::node::ForBbmd;
+use bacnet_types::sync::MutexExt;
 
 use crate::bbmd::{self, Forward, Reply};
 use crate::bvll::encode_bvll;
@@ -173,10 +174,7 @@ async fn send_table_ack(ack: Bvll<'_>, sender: SocketAddrV4, ctx: &RecvContext) 
             limiter.check_and_record_fdt_response(ip, resp_len)
         }
     };
-    let allowed = match ctx.management_limiter.lock() {
-        Ok(mut limiter) => check(&mut limiter),
-        Err(poison) => check(&mut poison.into_inner()),
-    };
+    let allowed = check(&mut ctx.management_limiter.locked());
     if !allowed {
         debug!(
             ip = %Ipv4Addr::from(ip),

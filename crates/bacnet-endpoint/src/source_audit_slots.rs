@@ -72,11 +72,12 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::poll_fn;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 
 use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetAddress;
+use bacnet_types::sync::MutexExt;
 
 /// The audited operations a session holds at once.
 pub(crate) const SLOTS: usize = 64;
@@ -356,7 +357,7 @@ impl Slots {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.locked()
     }
 
     /// Wait for a slot in `lane`, as the module documentation describes.

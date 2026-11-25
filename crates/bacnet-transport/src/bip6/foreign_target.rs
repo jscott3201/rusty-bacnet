@@ -36,13 +36,14 @@ pub use release::Bip6ReleaseCounters;
 pub use waiting::Bip6ForeignStatus;
 
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use bacnet_types::bip_port::{ForeignDeviceChanges, ForeignRegistration};
 use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::Notify;
 
 use super::foreign_bbmd::Bip6ForeignBbmd;
@@ -279,7 +280,7 @@ impl ForeignTarget {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.locked()
     }
 
     /// The registration in effect.

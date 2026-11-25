@@ -257,6 +257,7 @@ impl NotificationCore {
         head: Option<Head>,
     ) -> Result<NotificationReservation, NotificationReserveError> {
         let (sender, receiver) = oneshot::channel();
+        // lock-poison: fail-closed (poisoned acts closed; StatePoisoned)
         let mut state = self
             .state
             .lock()
@@ -304,6 +305,7 @@ impl NotificationCore {
         metadata: LeaseMetadata,
     ) -> Result<Arrival, NotificationReserveError> {
         {
+            // lock-poison: fail-closed (poisoned acts closed; StatePoisoned)
             let mut state = self
                 .state
                 .lock()
@@ -318,6 +320,7 @@ impl NotificationCore {
         match self.lease(metadata, None) {
             Ok(reservation) => Ok(Arrival::Leased(reservation)),
             Err(NotificationReserveError::Coordinator(ReserveError::Exhausted)) => {
+                // lock-poison: fail-closed (poisoned acts closed; StatePoisoned)
                 let mut state = self
                     .state
                     .lock()
@@ -331,6 +334,7 @@ impl NotificationCore {
     /// Ready once `ticket` heads the queue, or once the state is closed or
     /// poisoned, for the attempt to say so.
     fn poll_turn(&self, cx: &mut Context<'_>, ticket: Option<u64>) -> Poll<()> {
+        // lock-poison: fail-closed (poisoned acts closed: ready, to say so)
         let Ok(mut state) = self.state.lock() else {
             return Poll::Ready(());
         };
@@ -354,6 +358,7 @@ impl NotificationCore {
     /// Ready once the state is closed or poisoned; otherwise `ticket`'s place
     /// keeps `cx`'s waker, for closing to wake.
     fn park(&self, cx: &mut Context<'_>, ticket: u64) -> Poll<()> {
+        // lock-poison: fail-closed (poisoned acts closed: ready, to say so)
         let Ok(mut state) = self.state.lock() else {
             return Poll::Ready(());
         };
@@ -370,6 +375,7 @@ impl NotificationCore {
     /// Give up `ticket`'s place, waking the next when it was the head, and
     /// the work held back for it.
     fn leave(&self, ticket: u64) {
+        // lock-poison: fail-closed (poisoned acts closed: nobody to wake)
         let left = match self.state.lock() {
             Ok(mut state) => state.waiters.leave(ticket),
             Err(_) => Left::default(),

@@ -13,13 +13,14 @@ pub(crate) mod seal;
 pub(crate) mod tui;
 
 use std::path::Path;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bacnet_ops::octets::hex;
 use bacnet_tool::safety::desk::{Caller, Waiting};
 use bacnet_tool::safety::{DEFAULT_MINUTES, Level, Preview, Tier};
+use bacnet_types::sync::MutexExt;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
@@ -109,10 +110,7 @@ impl Writes {
     }
 
     fn armed(&self) -> Option<Armed> {
-        self.armed
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.armed.locked().clone()
     }
 
     /// Whether a write session is armed now.
@@ -137,7 +135,7 @@ impl Writes {
     /// Arm a write session for `minutes`.
     pub(crate) fn arm(&self, minutes: u32, reason: Option<String>) {
         let until = Instant::now() + Duration::from_secs(u64::from(minutes) * 60);
-        *self.armed.lock().unwrap_or_else(PoisonError::into_inner) = Some(Armed { until, reason });
+        *self.armed.locked() = Some(Armed { until, reason });
         self.signals.session_changed();
     }
 
@@ -561,7 +559,7 @@ impl Caller for McpCaller<'_> {
                         && e.run == bacnet_tool::safety::run_id()
                 })
                 .map(|e| e.id);
-            *sending.lock().unwrap_or_else(PoisonError::into_inner) = ids.collect();
+            *sending.locked() = ids.collect();
         }
         match self.host {
             Some(host) => host.ledger_changed(entries),

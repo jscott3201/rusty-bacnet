@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use bytes::BytesMut;
 use tokio::sync::{Mutex, watch};
 use tokio::task::JoinHandle;
@@ -223,13 +224,8 @@ pub(super) async fn publish_primary_restore<W: WebSocketPort>(
     let task = tokio::spawn(async move {
         send_disconnect_request(&*disconnect_ws, disconnect_msg, timeout).await;
     });
-    match ctx.restore_disconnect_task.lock() {
-        Ok(mut slot) => {
-            if let Some(previous) = slot.replace(task) {
-                previous.abort();
-            }
-        }
-        Err(_) => task.abort(),
+    if let Some(previous) = ctx.restore_disconnect_task.locked().replace(task) {
+        previous.abort();
     }
     Ok(Some(restored_ws))
 }

@@ -2,6 +2,7 @@ use crate::port::DataAttribute;
 use crate::sc_frame::{BROADCAST_VMAC, ScFunction, ScMessage, ScOption, encode_sc_message};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use bytes::{Bytes, BytesMut};
 use tracing::warn;
 
@@ -29,9 +30,7 @@ fn mu_diag() -> &'static Mutex<DiagnosticThrottle> {
 /// as suppressed when the window budget is exhausted. Lock failure fails
 /// open (still logs) so diagnostics never go fully silent.
 fn emit_mu_diagnostic(log: impl FnOnce(u64)) {
-    let mut guard = mu_diag()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = mu_diag().locked();
     if guard.should_emit_now() {
         let suppressed = guard.take_suppressed();
         drop(guard);

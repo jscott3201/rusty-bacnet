@@ -4,6 +4,7 @@ use super::{RequestAdmissionCounters, RequestAdmissionPolicy};
 use crate::caller_waits::{CallerTask, for_caller};
 use bacnet_device_core::write::Unfinished;
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::sync::MutexExt;
 use std::future::{Future, poll_fn};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
@@ -92,7 +93,7 @@ impl RequestTaskSpawner {
     pub(super) fn strand(&self, left: Unfinished) -> Result<(), Unfinished> {
         match self.0.upgrade() {
             Some(owner) => {
-                owner.3.lock().unwrap().push(left);
+                owner.3.locked().push(left);
                 Ok(())
             }
             None => Err(left),
@@ -102,7 +103,7 @@ impl RequestTaskSpawner {
     /// Take back `source`'s run of `generation` if it was stranded.
     pub(super) fn unstrand(&self, source: ObjectIdentifier, generation: u64) -> Option<Unfinished> {
         let owner = self.0.upgrade()?;
-        let mut stranded = owner.3.lock().unwrap();
+        let mut stranded = owner.3.locked();
         let at = stranded
             .iter()
             .position(|left| left.is(source, generation))?;
@@ -160,7 +161,7 @@ impl RequestTasks {
 
     /// The runs stranded so far, for `stop()` to end.
     pub(super) fn take_stranded(&self) -> Vec<Unfinished> {
-        std::mem::take(&mut *self.3.lock().unwrap())
+        std::mem::take(&mut *self.3.locked())
     }
 
     /// The tasks releasing what dropped local writes staged (#2495).
@@ -188,7 +189,7 @@ impl RequestTasks {
         peer: super::request_peer::CanonicalRequester,
         make: impl FnOnce() -> F,
     ) -> Result<(), Rejection> {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.locked();
         let guard = self.1.try_enter(class, peer, state.closed)?;
         let task = Box::pin(make());
         let owner = state.audit_owner.as_ref().and_then(Weak::upgrade);
@@ -205,11 +206,11 @@ impl RequestTasks {
     }
 
     pub(super) fn set_audit_owner(&self, owner: &Arc<bacnet_objects::database::AuditOwnership>) {
-        self.0.lock().unwrap().audit_owner = Some(Arc::downgrade(owner));
+        self.0.locked().audit_owner = Some(Arc::downgrade(owner));
     }
 
     pub(super) fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.locked();
         // Admission and registration are one synchronous critical section.
         if !state.closed {
             let owner = state.audit_owner.as_ref().and_then(Weak::upgrade);
@@ -227,7 +228,7 @@ impl RequestTasks {
         task: impl Future<Output = ()> + Send + 'static,
         handle: &tokio::runtime::Handle,
     ) {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.locked();
         if !state.closed {
             let owner = state.audit_owner.as_ref().and_then(Weak::upgrade);
             state.tasks.spawn_on(
@@ -264,7 +265,7 @@ impl RequestTasks {
         if tokio::runtime::Handle::try_current().is_err() {
             return Err(task);
         }
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.locked();
         if state.closed {
             return Err(task);
         }
@@ -283,13 +284,13 @@ impl RequestTasks {
     }
 
     pub(super) fn close(&self) {
-        let mut state = self.0.lock().unwrap();
+        let mut state = self.0.locked();
         state.closed = true;
         state.tasks.abort_all();
     }
 
     pub(super) fn is_empty(&self) -> bool {
-        self.0.lock().unwrap().tasks.is_empty()
+        self.0.locked().tasks.is_empty()
     }
 
     /// Join every handler that has finished, without waiting and without
@@ -297,7 +298,7 @@ impl RequestTasks {
     /// (see [`IdleReap`]).
     pub(super) fn reap_finished(&self) {
         loop {
-            let Some(result) = self.0.lock().unwrap().tasks.try_join_next() else {
+            let Some(result) = self.0.locked().tasks.try_join_next() else {
                 return;
             };
             Self::observe(Some(result));
@@ -308,7 +309,7 @@ impl RequestTasks {
     /// is joined. No handle or mutex guard is held across an await, so cancelling
     /// stop leaves the remaining joins in this server-owned set.
     pub(super) async fn join_next(&self) -> Option<Result<(), JoinError>> {
-        poll_fn(|cx| self.0.lock().unwrap().tasks.poll_join_next(cx)).await
+        poll_fn(|cx| self.0.locked().tasks.poll_join_next(cx)).await
     }
 
     pub(super) fn observe(result: Option<Result<(), JoinError>>) {

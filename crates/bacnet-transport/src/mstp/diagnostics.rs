@@ -2,9 +2,10 @@
 //! counters; never a wire capture or timing source.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use bacnet_mstp_core::{MasterSnapshot, MasterState, MstpCounters as CoreCounters};
+use bacnet_types::sync::MutexExt;
 
 use super::MstpExecutionStatus;
 use super::queues::SharedQueues;
@@ -128,11 +129,7 @@ impl MstpDiagnostics {
     /// event. It is published with the counters, after every event the task
     /// handles, and keeps its last value once the transport stops.
     pub fn node_state(&self) -> Option<MstpNodeState> {
-        *self
-            .counters
-            .node
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        *self.counters.node.locked()
     }
 
     /// How the transport's MAC loop runs: on which runtime, and on Linux
@@ -141,11 +138,7 @@ impl MstpDiagnostics {
     /// succeeds; a start that couldn't apply a setting fails and leaves it
     /// `None`. It keeps its value once the transport stops.
     pub fn execution_status(&self) -> Option<MstpExecutionStatus> {
-        self.counters
-            .execution
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.counters.execution.locked().clone()
     }
 }
 
@@ -194,7 +187,7 @@ macro_rules! counters {
             fn snapshot(&self) -> MstpDiagnosticsSnapshot {
                 MstpDiagnosticsSnapshot {
                     $($field: self.$field.load(Ordering::Relaxed),)+
-                    mac: *self.mac.lock().unwrap_or_else(PoisonError::into_inner),
+                    mac: *self.mac.locked(),
                 }
             }
         }
@@ -251,26 +244,23 @@ impl Counters {
     ///
     /// [`MasterCore::take_counters`]: bacnet_mstp_core::MasterCore::take_counters
     pub(super) fn publish(&self, take: impl FnOnce() -> CoreCounters) {
-        let mut totals = self.mac.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut totals = self.mac.locked();
         totals.add(take());
     }
 
     /// Record how the loop runs, at a successful start.
     pub(super) fn publish_execution(&self, status: MstpExecutionStatus) {
-        *self
-            .execution
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(status);
+        *self.execution.locked() = Some(status);
     }
 
     /// Publish the node's state, after the counters of the same event.
     pub(super) fn publish_node(&self, snapshot: MasterSnapshot) {
-        *self.node.lock().unwrap_or_else(PoisonError::into_inner) = Some(snapshot.into());
+        *self.node.locked() = Some(snapshot.into());
     }
 
     /// Add the queues' counters to the totals after a send changed them.
     pub(super) fn publish_queues(&self, queues: &SharedQueues) {
-        let mut totals = self.mac.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut totals = self.mac.locked();
         let (unicast, broadcast) = queues.take_counters();
         totals.unicast.add(unicast);
         totals.broadcast.add(broadcast);

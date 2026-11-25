@@ -4,6 +4,7 @@
 //! An admitted worker owns that guard through startup/publication or teardown.
 //! Dropping its waiter never aborts partial transport startup or joined cleanup.
 
+use bacnet_types::sync::MutexExt;
 use std::future::Future;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{RwLock, oneshot};
@@ -41,7 +42,7 @@ struct Preparation {
 struct CloseRequest(Arc<StdMutex<Preparation>>);
 impl Drop for CloseRequest {
     fn drop(&mut self) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).closing -= 1;
+        self.0.locked().closing -= 1;
     }
 }
 
@@ -84,7 +85,7 @@ impl<S, P> Lifecycle<S, P> {
         &self,
         register: impl FnOnce(&mut Vec<P>) -> T,
     ) -> Option<T> {
-        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pending = self.pending.locked();
         if pending.sealed {
             return None;
         }
@@ -102,11 +103,7 @@ impl<S, P> Lifecycle<S, P> {
     }
 
     pub(crate) fn pending_count(&self) -> usize {
-        self.pending
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .objects
-            .len()
+        self.pending.locked().objects.len()
     }
 }
 
@@ -130,7 +127,7 @@ impl<S: Session, P: Clone + Send + 'static> Lifecycle<S, P> {
         }
         // No await between admission, registration sealing, and worker transfer.
         let objects = {
-            let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            let mut pending = self.pending.locked();
             pending.sealed = true;
             std::mem::take(&mut pending.objects)
         };
@@ -138,7 +135,7 @@ impl<S: Session, P: Clone + Send + 'static> Lifecycle<S, P> {
         let preparing = self.preparing.clone();
         let (cancel, cancelled) = oneshot::channel();
         {
-            let mut preparation = preparing.lock().unwrap_or_else(|e| e.into_inner());
+            let mut preparation = preparing.locked();
             if preparation.closing > 0 {
                 let _ = cancel.send(());
             } else {
@@ -156,11 +153,7 @@ impl<S: Session, P: Clone + Send + 'static> Lifecycle<S, P> {
                 _ = cancelled => Some(Err(LifecycleError::StartupCancelled)),
                 prepared = build(objects.clone()) => Some(prepared.map_err(LifecycleError::Operation)),
             };
-            preparing
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .cancel
-                .take();
+            preparing.locked().cancel.take();
             let outcome = match prepared {
                 Some(Ok(mut running)) => {
                     match running.start().await {
@@ -180,7 +173,7 @@ impl<S: Session, P: Clone + Send + 'static> Lifecycle<S, P> {
                 None => Ok(()),
             };
             if session.is_none() {
-                let mut pending = pending.lock().unwrap_or_else(|e| e.into_inner());
+                let mut pending = pending.locked();
                 pending.objects = objects;
                 pending.sealed = false;
             }
@@ -196,7 +189,7 @@ impl<S: Session, P: Clone + Send + 'static> Lifecycle<S, P> {
         // through the start-admission/sender-publication gap. Once admitted, this
         // request cannot cancel a later generation; cancellation drops it too.
         let request = {
-            let mut preparing = self.preparing.lock().unwrap_or_else(|e| e.into_inner());
+            let mut preparing = self.preparing.locked();
             preparing.closing += 1;
             if let Some(cancel) = preparing.cancel.take() {
                 let _ = cancel.send(());
@@ -217,7 +210,7 @@ impl<S: Session, P: Clone + Send + 'static> Lifecycle<S, P> {
             };
             // stop has settled; dropping the terminal owner releases resources.
             session.take();
-            pending.lock().unwrap_or_else(|e| e.into_inner()).sealed = false;
+            pending.locked().sealed = false;
             let _ = result.send(outcome);
         });
         waiter.await.map_err(|_| LifecycleError::WorkerEnded)?

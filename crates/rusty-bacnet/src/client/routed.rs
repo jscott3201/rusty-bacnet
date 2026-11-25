@@ -23,11 +23,12 @@
 //! to directly either way.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 use bacnet_client::client::Station;
 use bacnet_ops::device::MISS_MEMORY;
 use bacnet_ops::{DeviceAddress, OpsError};
+use bacnet_types::sync::MutexExt;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyString;
@@ -264,18 +265,14 @@ impl Asking<'_> {
 impl Drop for Asking<'_> {
     fn drop(&mut self) {
         // Only this lookup inserts the station's entry, so it is its own.
-        self.lookups
-            .asking
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&self.station);
+        self.lookups.asking.locked().remove(&self.station);
     }
 }
 
 impl StationLookups {
     /// Join the lookup in flight for `station`, or start it.
     fn turn(&self, station: &StationKey) -> Turn<'_> {
-        let mut asking = self.asking.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut asking = self.asking.locked();
         if let Some(answer) = asking.get(station) {
             return Turn::Wait(answer.clone());
         }

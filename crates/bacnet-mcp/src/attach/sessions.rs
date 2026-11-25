@@ -7,7 +7,7 @@
 
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bacnet_ops::Client;
@@ -15,6 +15,7 @@ use bacnet_ops::limits::Overlay;
 use bacnet_tool::safety::audit::Audit;
 use bacnet_tool::safety::{FrontEnd, Level};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::sync::MutexExt;
 use futures_util::FutureExt as _;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -220,11 +221,7 @@ impl<T: TransportPort + 'static> Sessions<T> {
     /// [`refuse`](Self::refuse), with the `error` behind it.
     fn refuse_with(&self, peer: Option<PeerId>, why: &'static str, error: Option<String>) {
         let connection = self.next.fetch_add(1, Ordering::Relaxed);
-        let admitted = self
-            .refusals
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .admit(Instant::now());
+        let admitted = self.refusals.locked().admit(Instant::now());
         let Some(left_out) = admitted else {
             return tracing::debug!("MCP socket: refused a connection ({why}), not recorded");
         };

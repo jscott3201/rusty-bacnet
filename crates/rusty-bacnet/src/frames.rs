@@ -1,12 +1,13 @@
 //! Bounded raw-frame observation, sharing the event bridge's cancellation delivery.
 
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::task::{Context, Poll};
 use std::time::{Instant, SystemTime};
 
 use bacnet_transport::tap::{FrameTapReceiver, TapDirection, TapPeer, TappedFrame};
 use bacnet_types::data_link::DataLink;
+use bacnet_types::sync::MutexExt;
 use pyo3::exceptions::{PyStopAsyncIteration, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -297,7 +298,7 @@ struct Carry {
 
 impl<R: TapStream> SourceState<R> {
     fn receiver(&self) -> MutexGuard<'_, Option<R>> {
-        self.receiver.lock().unwrap_or_else(PoisonError::into_inner)
+        self.receiver.locked()
     }
 
     /// The `missed_before` of a fresh item whose queue gap is `queue_gap`,
@@ -310,7 +311,7 @@ impl<R: TapStream> SourceState<R> {
     /// over the items Python received, plus whatever was lost after the
     /// last of them, is then the iterator's `missed`.
     fn missed_before(&self, queue_gap: u64, lost: u64) -> u64 {
-        let mut carry = self.carry.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut carry = self.carry.locked();
         let lost_since = lost.saturating_sub(carry.lost);
         let carried = if lost_since == 0 {
             0
@@ -503,7 +504,7 @@ impl FrameSubscriptions {
             source,
         });
         let weak: Weak<dyn Close> = Arc::downgrade(&subscription) as Weak<dyn Close>;
-        let mut subscriptions = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut subscriptions = self.0.locked();
         subscriptions.retain(|old| old.strong_count() != 0);
         subscriptions.push(weak);
         subscription
@@ -511,8 +512,7 @@ impl FrameSubscriptions {
 
     /// End the current generation; a later owner restart may subscribe anew.
     pub(crate) fn close(&self) {
-        let subscriptions =
-            std::mem::take(&mut *self.0.lock().unwrap_or_else(PoisonError::into_inner));
+        let subscriptions = std::mem::take(&mut *self.0.locked());
         for subscription in subscriptions.into_iter().filter_map(|weak| weak.upgrade()) {
             subscription.close();
         }
