@@ -10,23 +10,30 @@
  * with `scripts/release/website_samples.py --pin`, and the notes then say
  * so; `--follow-dev` restores the `dev` form after it (docs/ci.md, "Release").
  */
-import { release, repository, sitePath } from './site.mjs';
+import { release, repository } from './site.mjs';
 
 /**
  * Every sample, by the name a page gives SampleNote: its path under
  * website/examples and its language. `since` names the release that will
- * first ship a sample no release has yet; its note says so instead of
- * linking the tag, and the release that ships it removes the key.
+ * first ship a sample no release has yet: its note can't link the sample at
+ * the tag, so it links `tagPage`, the page (under src/content/docs) that
+ * showed the release's version inline, or else says the sample is new. The
+ * release that ships it removes both keys.
  */
 export const samples = {
   'bip-router': { path: 'rust/bip-router', language: 'rust' },
+  'first-read': { path: 'rust/first-read', language: 'rust', since: '0.16.0', tagPage: 'start/rust.md' },
   'sc-operator-policy': { path: 'rust/sc-operator-policy', language: 'rust' },
   'server-device': { path: 'rust/server-device', language: 'rust' },
   'shared-endpoint': { path: 'rust/shared-endpoint', language: 'rust' },
   'bip_router.py': { path: 'python/bip_router.py', language: 'python' },
+  'first_read.py': { path: 'python/first_read.py', language: 'python', since: '0.16.0', tagPage: 'start/python.md' },
   'loopback_lab.py': { path: 'python/loopback_lab.py', language: 'python' },
   'server_device.py': { path: 'python/server_device.py', language: 'python' },
 };
+
+/** The pip line that installs `rusty-bacnet` from the `dev` branch: pip builds the extension with Cargo. */
+export const devInstall = `python -m pip install "rusty-bacnet @ git+${repository}@dev#subdirectory=crates/rusty-bacnet"`;
 
 /** How a manifest names a BACnet crate from the `dev` branch, before any other key. */
 export const devSource = `git = "${repository}", branch = "dev"`;
@@ -93,16 +100,17 @@ function newer(a, b) {
   return false;
 }
 
-/** @typedef {{ text?: string, code?: string, strong?: string, href?: string }} Run */
+/** @typedef {{ text?: string, code?: string, strong?: string, href?: string, block?: string }} Run */
 
 /**
- * One sample's note, as runs of `{ text }`, `{ code }`, `{ strong }` and
- * `{ text, href }`. `manifests` maps every Rust sample's path to its
- * Cargo.toml: the state is theirs together, and a Rust note names its own
- * manifest's minimum Rust version.
+ * One sample's note, as runs of `{ text }`, `{ code }`, `{ strong }`,
+ * `{ text, href }` and `{ block }`, a shell command shown as its own block
+ * (the text after it is a new paragraph). `manifests` maps every Rust
+ * sample's path to its Cargo.toml: the state is theirs together, and a Rust
+ * note names its own manifest's minimum Rust version.
  * @param {string} name
  * @param {Record<string, string>} manifests
- * @param {{ siteRelease?: string, registry?: Record<string, { path: string, language: string, since?: string }> }} [options]
+ * @param {{ siteRelease?: string, registry?: Record<string, { path: string, language: string, since?: string, tagPage?: string }> }} [options]
  * @returns {Run[]}
  */
 export function sampleNote(name, manifests, { siteRelease = release, registry = samples } = {}) {
@@ -116,25 +124,33 @@ export function sampleNote(name, manifests, { siteRelease = release, registry = 
     if (!msrv) throw new Error(`${sample.path}/Cargo.toml: no rust-version`);
   }
   if (sample.since !== undefined && !newer(sample.since, siteRelease)) {
-    throw new Error(`v${siteRelease} has ${name}: remove its since key`);
+    throw new Error(`v${siteRelease} has ${name}: remove its since and tagPage keys`);
+  }
+  if (sample.tagPage !== undefined && sample.since === undefined) {
+    throw new Error(`${name}: tagPage goes with since`);
   }
   if (pinned !== null) {
     return rust
       ? [{ text: 'The manifest pins ' }, { strong: `v${pinned}` }, { text: ' of the BACnet crates on crates.io, whose minimum Rust version is ' }, { strong: msrv }, { text: '.' }]
-      : [{ text: `This program runs with the v${pinned} ` }, { code: 'rusty-bacnet' }, { text: ' package; ' },
-        { text: 'install it in a virtual environment', href: sitePath('start/python/') }, { text: ' first.' }];
+      : [{ text: `This program runs with the v${pinned} ` }, { code: 'rusty-bacnet' }, { text: ' package. Install it in a virtual environment:' },
+        { block: `python -m pip install rusty-bacnet==${pinned}` }];
   }
   const runs = rust
     ? [{ text: 'This sample follows the ' }, { code: 'dev' }, { text: ' branch: its manifest takes the BACnet crates from ' },
       { code: 'dev' }, { text: ' on GitHub, so these files build as shown, with Rust ' }, { strong: msrv }, { text: ' or later. ' }]
-    : [{ text: 'This program follows the ' }, { code: 'dev' }, { text: ' branch: run it with ' }, { code: 'rusty-bacnet' },
-      { text: ' built from a ' }, { code: 'dev' }, { text: ' checkout in a virtual environment, as ' },
-      { text: 'Build from source', href: sitePath('development/build-from-source/') }, { text: ' shows. ' }];
+    : [{ text: 'This program follows the ' }, { code: 'dev' }, { text: ' branch. Install ' }, { code: 'rusty-bacnet' },
+      { text: ' from ' }, { code: 'dev' }, { text: ' in a virtual environment; pip builds its native extension, so install ' },
+      { text: 'Rust', href: 'https://rustup.rs' }, { text: ' first:' }, { block: devInstall }];
+  const reader = rust ? `For the v${siteRelease} crates on crates.io, ` : `For the v${siteRelease} package from PyPI, `;
+  if (sample.tagPage !== undefined) {
+    return [...runs, { text: `${reader}follow ` },
+      { text: `this page as v${siteRelease} published it`, href: `${repository}/blob/v${siteRelease}/website/src/content/docs/${sample.tagPage}` },
+      { text: ' instead.' }];
+  }
   if (sample.since !== undefined) {
     return [...runs, { text: `It is new since v${siteRelease}, so no release has it yet.` }];
   }
-  return [...runs,
-    { text: rust ? `For the v${siteRelease} crates on crates.io, use ` : `For the v${siteRelease} package from PyPI, use ` },
+  return [...runs, { text: `${reader}use ` },
     { text: `the same ${rust ? 'sample' : 'program'} at v${siteRelease}`, href: tagUrl(sample, siteRelease) },
     { text: '.' }];
 }
@@ -149,5 +165,23 @@ export function tagUrl(sample, version = release) {
  * @param {Run[]} runs
  */
 export function noteMarkdown(runs) {
-  return runs.map(run => run.href ? `[${run.text}](${run.href})` : run.code ? `\`${run.code}\`` : run.strong ? `**${run.strong}**` : run.text).join('');
+  return runs.map(run => run.block !== undefined ? `\n\n\`\`\`sh\n${run.block}\n\`\`\`\n\n`
+    : run.href ? `[${run.text}](${run.href})` : run.code ? `\`${run.code}\`` : run.strong ? `**${run.strong}**` : run.text).join('');
+}
+
+/**
+ * A note's runs as the paragraphs and command blocks the component renders.
+ * @param {Run[]} runs
+ * @returns {Array<{ block: string } | { inline: Run[] }>}
+ */
+export function noteParts(runs) {
+  /** @type {Array<{ block: string } | { inline: Run[] }>} */
+  const parts = [];
+  for (const run of runs) {
+    const last = parts.at(-1);
+    if (run.block !== undefined) parts.push({ block: run.block });
+    else if (last && 'inline' in last) last.inline.push(run);
+    else parts.push({ inline: [run] });
+  }
+  return parts;
 }

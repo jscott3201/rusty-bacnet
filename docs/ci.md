@@ -2123,8 +2123,8 @@ To release:
    same sample at the last release's tag. In the same PR, after `site.mjs`
    names the new release, pin them to it; the notes then say the manifests
    pin the release, and the tag carries pinned manifests for the next
-   cycle's links. Remove the `since` key of any sample new in this release
-   (the website tests name it):
+   cycle's links. Remove the `since` and `tagPage` keys of any sample new in
+   this release (the website tests name it):
 
    ```bash
    python3 scripts/release/website_samples.py --pin 0.16.0

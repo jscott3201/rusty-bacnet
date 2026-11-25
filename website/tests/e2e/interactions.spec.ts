@@ -196,7 +196,27 @@ test('native code copy writes the displayed code to the clipboard', async ({ pag
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(source.trimEnd());
 });
 
-test('the local lab says which rusty-bacnet its script runs with', async ({ page }) => {
-  await page.goto(base + 'start/local-lab/');
-  await expectSampleNote(page.locator('.sl-markdown-content'), 'loopback_lab.py');
+// The start pages' programs are files under examples/ (#2648): each page says
+// which release they need, shows them byte for byte and serves them.
+test('the start pages say which release their programs need and show them as their files', async ({ page, request }) => {
+  for (const [path, name, files] of [
+    ['start/local-lab/', 'loopback_lab.py', []],
+    ['start/python/', 'first_read.py', [['python/first_read.py', 'examples/first_read.py']]],
+    ['start/rust/', 'first-read', [
+      ['rust/first-read/Cargo.toml', 'examples/rust/first-read/Cargo.toml'],
+      ['rust/first-read/src/main.rs', 'examples/rust/first-read/src/main.rs'],
+    ]],
+  ] as const) {
+    await page.goto(base + path);
+    const main = page.locator('.sl-markdown-content');
+    await expectSampleNote(main, name);
+    for (const [source, href] of files) {
+      const text = await readFile(new URL('../../examples/' + source, import.meta.url), 'utf8');
+      await expect(main.locator('pre code').filter({ hasText: text.split('\n')[0] })).toHaveText(text.trimEnd(), { useInnerText: true });
+      await expect(main.locator(`a[href="${base + href}"]`)).toHaveCount(1);
+      const download = await request.get(base + href);
+      expect(download.status()).toBe(200);
+      expect(await download.text()).toBe(text);
+    }
+  }
 });

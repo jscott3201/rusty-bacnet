@@ -420,7 +420,8 @@ SAMPLES: dict[str, object] = {
     'start/installation.mdx::<Code lang="powershell" code={String.raw`py -3.13 -m venv .venv': Skip("F", POWERSHELL),
     "start/installation.mdx::.\\.venv\\Scripts\\python.exe -c \"from rusty_bacnet import BACnetClient; "
     "from importlib.metadata import version; print(version('rusty-bacnet'))\"": Skip("F", POWERSHELL),
-    # The same table as start/rust.md, which first_read_source.rs checks.
+    # The first-read sample's dependencies at the release, which
+    # first_read_source.rs checks.
     'start/installation.mdx::<Code lang="toml" code={`[dependencies]': SITE_SAMPLES_A,
     "start/local-lab.mdx::my-bacnet-lab/": Skip("G", "a directory tree"),
     "start/local-lab.mdx::.venv/bin/python loopback_lab.py": LAB_A,
@@ -429,12 +430,12 @@ SAMPLES: dict[str, object] = {
     "start/local-lab.mdx::.venv/bin/python loopback_lab.py --serve --seconds 300": LAB_A,
     "start/local-lab.mdx::.\\.venv\\Scripts\\python.exe loopback_lab.py --serve --seconds 300": Skip("F", POWERSHELL),
     'start/local-lab.mdx::<Code code={labSource} lang="python" title="loopback_lab.py" />': LAB_A,
-    "start/python.md::from __future__ import annotations": PY_FIRST_READ_A,
-    "start/python.md::python first_read.py 192.168.1.100:47808 --instance 1": PY_FIRST_READ_A,
-    "start/rust.md::cargo new first-read": Skip("F", INSTALL),
-    "start/rust.md::[dependencies]": FIRST_READ_A,
-    "start/rust.md::use std::net::{Ipv4Addr, SocketAddrV4};": FIRST_READ_A,
-    "start/rust.md::cargo run -- 192.168.1.100:47808": FIRST_READ_A,
+    'start/python.mdx::<Code code={firstReadSource} lang="python" title="first_read.py" />': PY_FIRST_READ_A,
+    "start/python.mdx::python first_read.py 192.168.1.100:47808 --instance 1": PY_FIRST_READ_A,
+    "start/rust.mdx::cargo new first-read": Skip("F", INSTALL),
+    'start/rust.mdx::<Code code={firstReadManifest} lang="toml" title="Cargo.toml" />': FIRST_READ_A,
+    'start/rust.mdx::<Code code={firstReadSource} lang="rust" title="src/main.rs" />': FIRST_READ_A,
+    "start/rust.mdx::cargo run -- 192.168.1.100:47808": FIRST_READ_A,
     "tui/mstp.mdx::bacnet tui --mstp-monitor /dev/ttyUSB0 --mstp-baud 38400": Parse(),
     "tui/mstp.mdx::bacnet --mstp /dev/ttyUSB0 --mstp-mac 3 tui": Parse(),
     "tui/mstp.mdx::bacnet --mstp /dev/ttyUSB0 --mstp-mac 3 --mstp-rt-priority 40 --mstp-cpus 3 tui":

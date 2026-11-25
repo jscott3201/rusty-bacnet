@@ -128,12 +128,12 @@ table; `test_site_samples.py` fails when this file is out of date. Run
 | start/local-lab.mdx:81 | sh | `.venv/bin/python loopback_lab.py --serve --seconds 300` | run or compiled by another CI test |  |
 | start/local-lab.mdx:88 | powershell | `.\.venv\Scripts\python.exe loopback_lab.py --serve --seco...` | not checked (class F) | PowerShell; the job that runs this test is Linux only |
 | start/local-lab.mdx:120 | python | `<Code code={labSource} lang="python" title="loopback_lab....` | run or compiled by another CI test |  |
-| start/python.md:14 | python | `from __future__ import annotations` | run or compiled by another CI test |  |
-| start/python.md:59 | sh | `python first_read.py 192.168.1.100:47808 --instance 1` | run or compiled by another CI test |  |
-| start/rust.md:10 | sh | `cargo new first-read` | not checked (class F) | installs or builds software |
-| start/rust.md:17 | toml | `[dependencies]` | run or compiled by another CI test |  |
-| start/rust.md:31 | rust | `use std::net::{Ipv4Addr, SocketAddrV4};` | run or compiled by another CI test |  |
-| start/rust.md:66 | sh | `cargo run -- 192.168.1.100:47808` | run or compiled by another CI test |  |
+| start/python.mdx:21 | python | `<Code code={firstReadSource} lang="python" title="first_r...` | run or compiled by another CI test |  |
+| start/python.mdx:25 | sh | `python first_read.py 192.168.1.100:47808 --instance 1` | run or compiled by another CI test |  |
+| start/rust.mdx:16 | sh | `cargo new first-read` | not checked (class F) | installs or builds software |
+| start/rust.mdx:25 | toml | `<Code code={firstReadManifest} lang="toml" title="Cargo.t...` | run or compiled by another CI test |  |
+| start/rust.mdx:33 | rust | `<Code code={firstReadSource} lang="rust" title="src/main....` | run or compiled by another CI test |  |
+| start/rust.mdx:35 | sh | `cargo run -- 192.168.1.100:47808` | run or compiled by another CI test |  |
 | tui/mstp.mdx:15 | sh | `bacnet tui --mstp-monitor /dev/ttyUSB0 --mstp-baud 38400` | CLI arguments parsed by the CLI (--help) |  |
 | tui/mstp.mdx:108 | sh | `bacnet --mstp /dev/ttyUSB0 --mstp-mac 3 tui` | CLI arguments parsed by the CLI (--help) |  |
 | tui/mstp.mdx:116 | sh | `bacnet --mstp /dev/ttyUSB0 --mstp-mac 3 --mstp-rt-priorit...` | CLI arguments parsed by the CLI (--help) |  |

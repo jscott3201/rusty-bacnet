@@ -21,6 +21,9 @@ export async function assertSampleNotes(body, names, label) {
       assert.ok(note.includes(`v${release}`), `${label}: ${name}'s note names the release`);
     } else if (samples[name].since === undefined) {
       assert.ok(note.includes('follows the `dev` branch') && note.includes(`](${tagUrl(samples[name])})`), `${label}: ${name} follows dev and links its tag`);
+    } else if (samples[name].tagPage !== undefined) {
+      assert.ok(note.includes('follows the `dev` branch') && note.includes(`/blob/v${release}/website/src/content/docs/${samples[name].tagPage})`),
+        `${label}: ${name} follows dev and links the page at its tag`);
     } else {
       assert.ok(note.includes('follows the `dev` branch') && note.includes(`new since v${release}`), `${label}: ${name} is new`);
     }

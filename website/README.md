@@ -90,10 +90,12 @@ imports one gives its note with `<SampleNote sample="…" />`; the note comes
 from `src/lib/samples.mjs`, which lists every sample, and says the sample
 follows `dev` and links it at the release's tag, or, once a release has
 pinned the manifests (`scripts/release/website_samples.py --pin`), that they
-pin it. A sample no release has yet takes a `since` key there, and its note
-says it is new. `tests/unit/sample-notes.test.mjs` checks the registry, the
-notes, the manifests and, with the tag fetched, that each linked file is at
-the tag.
+pin it. A sample no release has yet takes a `since` key there: its note
+links `tagPage`, the page that showed the release's version inline (as the
+start pages did at 0.15.0), or else says the sample is new. A Python note
+gives the pip line for its state: from `dev`, or the release from PyPI.
+`tests/unit/sample-notes.test.mjs` checks the registry, the notes, the
+manifests and, with the tag fetched, that each linked file is at the tag.
 
 ## Tutorial validation
 
@@ -127,12 +129,11 @@ That evidence is for v0.11.0.
 
 ## Displayed Python first-read verification
 
-The binding unittest suite also extracts the sole Python code block from
-`src/content/docs/start/python.md` and executes those exact bytes in a subprocess.
+The binding unittest suite also runs `examples/python/first_read.py`, which
+`src/content/docs/start/python.mdx` imports as it is, in a subprocess.
 It uses the installed extension and an ephemeral loopback server to check typed
-values, instance selection, unknown-object errors and argument bounds. Missing,
-ambiguous, empty or unclosed Python blocks fail instead of silently selecting a
-different sample. Run this check from the repository root:
+values, instance selection, unknown-object errors and argument bounds. Run this
+check from the repository root:
 
 ```sh
 python -m unittest discover -s crates/rusty-bacnet/tests -p test_website_first_read.py -v
