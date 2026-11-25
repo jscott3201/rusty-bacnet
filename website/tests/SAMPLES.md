@@ -79,27 +79,27 @@ table; `test_site_samples.py` fails when this file is out of date. Run
 | guides/safe-writes.md:39 | sh | `bacnet write 192.168.1.100 av:1 pv null --priority 8` | run against a loopback server |  |
 | guides/safe-writes.md:52 | sh | `bacnet --allow-write write 192.168.1.100 av:1 pv 72.5 --p...` | run against a loopback server |  |
 | integrate/pics.mdx:26 | rust | `use bacnet_objects::DeviceIdentity;` | compiled: a Cargo example's exact text |  |
-| integrate/router.mdx:41 | sh | `bacnet whois-router` | CLI arguments parsed by the CLI (--help) |  |
-| integrate/router.mdx:95 | toml | `<Code code={routerManifest} lang="toml" title="Cargo.toml...` | run or compiled by another CI test |  |
-| integrate/router.mdx:97 | rust | `<Code code={routerSource} lang="rust" title="src/main.rs" />` | run or compiled by another CI test |  |
-| integrate/router.mdx:104 | python | `<Code code={routerPython} lang="python" title="bip_router...` | run or compiled by another CI test |  |
-| integrate/router.mdx:111 | text | `Router started: networks 1 and 5` | run or compiled by another CI test |  |
-| integrate/security.mdx:115 | toml | `<Code code={policyManifest} lang="toml" title="Cargo.toml...` | run or compiled by another CI test |  |
-| integrate/security.mdx:117 | rust | `<Code code={policySource} lang="rust" title="src/main.rs" />` | run or compiled by another CI test |  |
-| integrate/security.mdx:123 | sh | `BACNET_DCC_PASSWORD='replace-me' cargo run -- operator.ex...` | run or compiled by another CI test |  |
-| integrate/security.mdx:129 | text | `DCC without a certificate: denied` | run or compiled by another CI test |  |
-| integrate/server.mdx:46 | toml | `<Code code={serverManifest} lang="toml" title="Cargo.toml...` | run or compiled by another CI test |  |
-| integrate/server.mdx:48 | rust | `<Code code={serverSource} lang="rust" title="src/main.rs" />` | run or compiled by another CI test |  |
-| integrate/server.mdx:52 | sh | `cargo run` | run or compiled by another CI test |  |
-| integrate/server.mdx:63 | sh | `.venv/bin/python server_device.py` | run or compiled by another CI test |  |
-| integrate/server.mdx:67 | python | `<Code code={serverPython} lang="python" title="server_dev...` | run or compiled by another CI test |  |
-| integrate/server.mdx:76 | text | `Serving device 1001 at 127.0.0.1:<assigned-port>` | run or compiled by another CI test |  |
-| integrate/server.mdx:83 | sh | `bacnet --interface 127.0.0.1 --port 0 read 127.0.0.1:<ass...` | run against a loopback server |  |
-| integrate/shared-endpoints.mdx:27 | text | `shared-endpoint-guide/` | not checked (class G) | a directory tree |
-| integrate/shared-endpoints.mdx:34 | toml | `<Code code={endpointManifest} lang="toml" title="Cargo.to...` | run or compiled by another CI test |  |
-| integrate/shared-endpoints.mdx:36 | rust | `<Code code={endpointSource} lang="rust" title="src/main.r...` | run or compiled by another CI test |  |
-| integrate/shared-endpoints.mdx:42 | sh | `cargo run` | run or compiled by another CI test |  |
-| integrate/shared-endpoints.mdx:48 | text | `Started endpoint: 127.0.0.1:<assigned-port>` | run or compiled by another CI test |  |
+| integrate/router.mdx:42 | sh | `bacnet whois-router` | CLI arguments parsed by the CLI (--help) |  |
+| integrate/router.mdx:98 | toml | `<Code code={routerManifest} lang="toml" title="Cargo.toml...` | run or compiled by another CI test |  |
+| integrate/router.mdx:100 | rust | `<Code code={routerSource} lang="rust" title="src/main.rs" />` | run or compiled by another CI test |  |
+| integrate/router.mdx:109 | python | `<Code code={routerPython} lang="python" title="bip_router...` | run or compiled by another CI test |  |
+| integrate/router.mdx:116 | text | `Router started: networks 1 and 5` | run or compiled by another CI test |  |
+| integrate/security.mdx:118 | toml | `<Code code={policyManifest} lang="toml" title="Cargo.toml...` | run or compiled by another CI test |  |
+| integrate/security.mdx:120 | rust | `<Code code={policySource} lang="rust" title="src/main.rs" />` | run or compiled by another CI test |  |
+| integrate/security.mdx:126 | sh | `BACNET_DCC_PASSWORD='replace-me' cargo run -- operator.ex...` | run or compiled by another CI test |  |
+| integrate/security.mdx:132 | text | `DCC without a certificate: denied` | run or compiled by another CI test |  |
+| integrate/server.mdx:49 | toml | `<Code code={serverManifest} lang="toml" title="Cargo.toml...` | run or compiled by another CI test |  |
+| integrate/server.mdx:51 | rust | `<Code code={serverSource} lang="rust" title="src/main.rs" />` | run or compiled by another CI test |  |
+| integrate/server.mdx:55 | sh | `cargo run` | run or compiled by another CI test |  |
+| integrate/server.mdx:70 | sh | `.venv/bin/python server_device.py` | run or compiled by another CI test |  |
+| integrate/server.mdx:74 | python | `<Code code={serverPython} lang="python" title="server_dev...` | run or compiled by another CI test |  |
+| integrate/server.mdx:83 | text | `Serving device 1001 at 127.0.0.1:<assigned-port>` | run or compiled by another CI test |  |
+| integrate/server.mdx:90 | sh | `bacnet --interface 127.0.0.1 --port 0 read 127.0.0.1:<ass...` | run against a loopback server |  |
+| integrate/shared-endpoints.mdx:30 | text | `shared-endpoint-guide/` | not checked (class G) | a directory tree |
+| integrate/shared-endpoints.mdx:37 | toml | `<Code code={endpointManifest} lang="toml" title="Cargo.to...` | run or compiled by another CI test |  |
+| integrate/shared-endpoints.mdx:39 | rust | `<Code code={endpointSource} lang="rust" title="src/main.r...` | run or compiled by another CI test |  |
+| integrate/shared-endpoints.mdx:45 | sh | `cargo run` | run or compiled by another CI test |  |
+| integrate/shared-endpoints.mdx:51 | text | `Started endpoint: 127.0.0.1:<assigned-port>` | run or compiled by another CI test |  |
 | project/performance.mdx:78 | sh | `cargo bench -p bacnet-benchmarks --bench bip_latency` | not checked (class F) | benchmarks; run sequentially by hand |
 | project/upgrading/v0-14.md:20 | sh | `python -m pip install --upgrade rusty-bacnet==0.14.0` | not checked (class F) | installs or builds software |
 | project/upgrading/v0-15.md:20 | sh | `python -m pip install --upgrade rusty-bacnet==0.15.0` | not checked (class F) | installs or builds software |
@@ -121,13 +121,13 @@ table; `test_site_samples.py` fails when this file is out of date. Run
 | start/installation.mdx:172 | powershell | `<Code lang="powershell" code={String.raw`py -3.13 -m venv...` | not checked (class F) | PowerShell; the job that runs this test is Linux only |
 | start/installation.mdx:175 | powershell | `.\.venv\Scripts\python.exe -c "from rusty_bacnet import B...` | not checked (class F) | PowerShell; the job that runs this test is Linux only |
 | start/installation.mdx:207 | toml | `<Code lang="toml" code={`[dependencies]` | run or compiled by another CI test |  |
-| start/local-lab.mdx:27 | text | `my-bacnet-lab/` | not checked (class G) | a directory tree |
-| start/local-lab.mdx:40 | sh | `.venv/bin/python loopback_lab.py` | run or compiled by another CI test |  |
-| start/local-lab.mdx:47 | powershell | `.\.venv\Scripts\python.exe loopback_lab.py` | not checked (class F) | PowerShell; the job that runs this test is Linux only |
-| start/local-lab.mdx:56 | text | `Example server: 127.0.0.1:<assigned-port>` | run or compiled by another CI test |  |
-| start/local-lab.mdx:78 | sh | `.venv/bin/python loopback_lab.py --serve --seconds 300` | run or compiled by another CI test |  |
-| start/local-lab.mdx:85 | powershell | `.\.venv\Scripts\python.exe loopback_lab.py --serve --seco...` | not checked (class F) | PowerShell; the job that runs this test is Linux only |
-| start/local-lab.mdx:117 | python | `<Code code={labSource} lang="python" title="loopback_lab....` | run or compiled by another CI test |  |
+| start/local-lab.mdx:30 | text | `my-bacnet-lab/` | not checked (class G) | a directory tree |
+| start/local-lab.mdx:43 | sh | `.venv/bin/python loopback_lab.py` | run or compiled by another CI test |  |
+| start/local-lab.mdx:50 | powershell | `.\.venv\Scripts\python.exe loopback_lab.py` | not checked (class F) | PowerShell; the job that runs this test is Linux only |
+| start/local-lab.mdx:59 | text | `Example server: 127.0.0.1:<assigned-port>` | run or compiled by another CI test |  |
+| start/local-lab.mdx:81 | sh | `.venv/bin/python loopback_lab.py --serve --seconds 300` | run or compiled by another CI test |  |
+| start/local-lab.mdx:88 | powershell | `.\.venv\Scripts\python.exe loopback_lab.py --serve --seco...` | not checked (class F) | PowerShell; the job that runs this test is Linux only |
+| start/local-lab.mdx:120 | python | `<Code code={labSource} lang="python" title="loopback_lab....` | run or compiled by another CI test |  |
 | start/python.md:14 | python | `from __future__ import annotations` | run or compiled by another CI test |  |
 | start/python.md:59 | sh | `python first_read.py 192.168.1.100:47808 --instance 1` | run or compiled by another CI test |  |
 | start/rust.md:10 | sh | `cargo new first-read` | not checked (class F) | installs or builds software |

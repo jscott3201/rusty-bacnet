@@ -82,6 +82,19 @@ displayed `bacnet` command against the CLI's argument definitions without a
 build. The TUI's profile tables and command-bar lines are parsed by the CLI's
 own code in `crates/bacnet-cli/src/tui/site_samples_tests.rs`.
 
+The programs under `examples/` follow the `dev` branch between releases
+(#2648): the workspace compiles the Rust ones as `bacnet-integration-tests`
+bins and CI runs the Python ones against a development build, and each Rust
+manifest takes the BACnet crates from `dev` with a git dependency. A page that
+imports one gives its note with `<SampleNote sample="…" />`; the note comes
+from `src/lib/samples.mjs`, which lists every sample, and says the sample
+follows `dev` and links it at the release's tag, or, once a release has
+pinned the manifests (`scripts/release/website_samples.py --pin`), that they
+pin it. A sample no release has yet takes a `since` key there, and its note
+says it is new. `tests/unit/sample-notes.test.mjs` checks the registry, the
+notes, the manifests and, with the tag fetched, that each linked file is at
+the tag.
+
 ## Tutorial validation
 
 `examples/python/loopback_lab.py` is the sole tutorial body: MDX imports it and

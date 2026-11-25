@@ -1,4 +1,17 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
+import { sampleManifests } from '../../scripts/content.mjs';
+import { sampleNote } from '../../src/lib/samples.mjs';
+
+/** A sample's note (src/lib/samples.mjs, #2648) is shown once in `main`, with its links. */
+export async function expectSampleNote(main: Locator, name: string) {
+  const runs = sampleNote(name, await sampleManifests());
+  const note = main.locator('p').filter({ hasText: runs.map((run) => run.text ?? run.code ?? run.strong).join('') });
+  await expect(note).toHaveCount(1);
+  await expect(note).toBeVisible();
+  for (const run of runs.filter((run) => run.href)) {
+    await expect(note.getByRole('link', { name: run.text, exact: true })).toHaveAttribute('href', run.href!);
+  }
+}
 
 export async function selectTheme(page: Page, theme: 'light' | 'dark' | 'auto') {
   const picker = page.getByRole('combobox', { name: 'Select theme' });

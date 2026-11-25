@@ -2116,6 +2116,19 @@ To release:
      build-from-source link sits in `docs/rust-api.md` and
      `docs/python-api.md`. Then `curl -sI` every
      `jscott3201.github.io/rusty-bacnet/` link in the README for a 200.
+
+   **Website samples (#2648).** Between releases the samples under
+   `website/examples/rust` take the BACnet crates from the `dev` branch, and
+   each page's note (`website/src/lib/samples.mjs`) says so and links the
+   same sample at the last release's tag. In the same PR, after `site.mjs`
+   names the new release, pin them to it; the notes then say the manifests
+   pin the release, and the tag carries pinned manifests for the next
+   cycle's links. Remove the `since` key of any sample new in this release
+   (the website tests name it):
+
+   ```bash
+   python3 scripts/release/website_samples.py --pin 0.16.0
+   ```
 2. Optionally, dispatch a dry run on the release branch first: it runs
    everything the release does short of publishing.
 3. Tag a commit on `main`'s or `dev`'s first-parent history (a merge commit,
@@ -2126,8 +2139,21 @@ To release:
    git push origin v0.15.0
    ```
 
-The tag push also starts CI's heavy jobs on the tagged commit, and the release
-waits for them (see [CI gate](#ci-gate)).
+   The tag push also starts CI's heavy jobs on the tagged commit, and the
+   release waits for them (see [CI gate](#ci-gate)).
+4. Once `release.yml` has published the crates, build every website sample
+   from the tag against them, outside the workspace: each sample is copied to
+   a new temporary directory and built there with a target directory of its
+   own, removed afterwards. The script builds them all and lists each one that
+   failed; a failure is a sample the release's readers can't build, to fix
+   forward. Then, in a PR to `dev`, return the samples to the `dev` branch:
+
+   ```bash
+   git checkout --detach v0.16.0
+   python3 scripts/release/website_samples.py --build    # needs CMake for BACnet/SC's aws-lc
+   git switch dev && git pull
+   python3 scripts/release/website_samples.py --follow-dev
+   ```
 
 ### Jobs
 

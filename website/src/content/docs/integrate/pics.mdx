@@ -19,7 +19,7 @@ The draft describes the configuration you built and nothing more. It is not a te
 
 ## Generate one in Rust
 
-This program builds a server with a Device and two objects on 127.0.0.1, drafts its PICS, stops the server and prints the PICS as Markdown. It uses the crates from the [server guide's Cargo.toml](/rusty-bacnet/examples/rust/server-device/Cargo.toml); put it in `src/main.rs` and run `cargo run`. CI compiles this exact program against v{release}.
+This program builds a server with a Device and two objects on 127.0.0.1, drafts its PICS, stops the server and prints the PICS as Markdown. It uses the crates from the [server guide's Cargo.toml](/rusty-bacnet/examples/rust/server-device/Cargo.toml); put it in `src/main.rs` and run `cargo run`. CI compiles this exact program in the workspace, as it does the server guide's, so the two build against the same crates.
 
 The product details go on the Device object, and the PICS reads them there along with the protocol version and revision, so `PicsConfig` holds only what the server can't report about itself.
 

@@ -5,6 +5,7 @@ description: "Decide which peers may write to, create and delete objects in, or 
 
 import { Code } from '@astrojs/starlight/components';
 import { release, repository } from '../../../lib/site.mjs';
+import SampleNote from '../../../components/SampleNote.astro';
 import policySource from '../../../../examples/rust/sc-operator-policy/src/main.rs?raw';
 import policyManifest from '../../../../examples/rust/sc-operator-policy/Cargo.toml?raw';
 
@@ -110,7 +111,9 @@ Only a server with a direct BACnet/SC listener sees certificates. On a server th
 
 ### Save the program and manifest
 
-Put [Cargo.toml](/rusty-bacnet/examples/rust/sc-operator-policy/Cargo.toml) in a new directory and [main.rs](/rusty-bacnet/examples/rust/sc-operator-policy/src/main.rs) in its `src` subdirectory. The manifest pins **v{release}**, whose minimum Rust version is **1.95**. BACnet/SC's TLS library (aws-lc) needs CMake and a C toolchain to build.
+<SampleNote sample="sc-operator-policy" />
+
+Put [Cargo.toml](/rusty-bacnet/examples/rust/sc-operator-policy/Cargo.toml) in a new directory and [main.rs](/rusty-bacnet/examples/rust/sc-operator-policy/src/main.rs) in its `src` subdirectory. BACnet/SC's TLS library (aws-lc) needs CMake and a C toolchain to build.
 
 <Code code={policyManifest} lang="toml" title="Cargo.toml" />
 

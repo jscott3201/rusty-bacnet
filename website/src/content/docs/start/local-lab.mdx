@@ -9,6 +9,7 @@ import Checkpoint from '../../../components/Checkpoint.astro';
 import NextStep from '../../../components/NextStep.astro';
 import labSource from '../../../../examples/python/loopback_lab.py?raw';
 import { release, repository } from '../../../lib/site.mjs';
+import SampleNote from '../../../components/SampleNote.astro';
 
 **No controller required.** This lab runs a real Rusty BACnet server and client on your machine. It reads an example analog input, checks the response, and closes both endpoints.
 
@@ -21,6 +22,8 @@ Both endpoints bind to **127.0.0.1**. The script does not perform discovery, req
 Complete the **Python** path in [Install the tools](/rusty-bacnet/start/installation/). The script checks for <code>rusty-bacnet=={release}</code> before it starts. Run it with the interpreter from that environment.
 
 ## 2. Save the lab script
+
+<SampleNote sample="loopback_lab.py" />
 
 [Save loopback_lab.py](/rusty-bacnet/examples/loopback_lab.py) beside your `.venv` directory. The complete source is also available at the end of this page.
 

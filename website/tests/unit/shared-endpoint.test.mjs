@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { frontmatter, plainBody } from '../../scripts/content.mjs';
-import { release } from '../../src/lib/site.mjs';
+import { assertManifestSource, assertSampleNotes } from './sample-notes.mjs';
 
 const root = new URL('../../', import.meta.url);
 test('shared-endpoint MDX and raw export use the complete canonical program and manifest', async () => {
@@ -13,9 +13,9 @@ test('shared-endpoint MDX and raw export use the complete canonical program and 
   const manifest = await readFile(new URL('examples/rust/shared-endpoint/Cargo.toml', root), 'utf8');
   assert.match(source, /^import endpointSource from '\.\.\/\.\.\/\.\.\/\.\.\/examples\/rust\/shared-endpoint\/src\/main\.rs\?raw';$/m);
   assert.match(source, /^import endpointManifest from '\.\.\/\.\.\/\.\.\/\.\.\/examples\/rust\/shared-endpoint\/Cargo\.toml\?raw';$/m);
-  assert.ok(manifest.includes(`bacnet-endpoint = "=${release}"`), 'manifest follows the site release');
+  assertManifestSource(manifest, 'shared-endpoint');
   const body = await plainBody(frontmatter(source).body, file, []);
-  assert.ok(body.includes(`These files target **v${release}**`));
+  await assertSampleNotes(body, ['shared-endpoint'], 'integrate/shared-endpoints');
   const rust = [...body.matchAll(/^```rust\n([\s\S]*?)^```/gm)];
   const toml = [...body.matchAll(/^```toml\n([\s\S]*?)^```/gm)];
   assert.equal(rust.length, 1);
@@ -31,7 +31,8 @@ test('shared-endpoint MDX and raw export use the complete canonical program and 
   ]) assert.ok(body.includes(`## ${heading}`), heading);
   assert.ok(body.includes('not a loopback-confined listener'));
   assert.ok(body.includes('does **not** exercise a BACnet request/reply'));
-  assert.ok(body.includes('Rust 1.99.0 and a development test harness'));
+  assert.ok(body.includes('CI compiles the exact source displayed here in the workspace'));
+  assert.ok(body.includes('against the published crates'));
   for (const path of ['Cargo.toml', 'src/main.rs']) {
     assert.ok(body.includes(`https://jscott3201.github.io/rusty-bacnet/examples/rust/shared-endpoint/${path}`));
   }

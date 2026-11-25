@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { readFile } from 'node:fs/promises';
-import { selectTheme, expectContainedPage } from './helpers';
+import { selectTheme, expectContainedPage, expectSampleNote } from './helpers';
 const base = '/rusty-bacnet/';
 
 test('nested installation deep links reveal native OS tabs and focus the destination', async ({ page }) => {
@@ -194,4 +194,9 @@ test('native code copy writes the displayed code to the clipboard', async ({ pag
   await page.locator('details .expressive-code').getByRole('button', { name: /Copy/ }).click();
   const source = await readFile(new URL('../../examples/python/loopback_lab.py', import.meta.url), 'utf8');
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(source.trimEnd());
+});
+
+test('the local lab says which rusty-bacnet its script runs with', async ({ page }) => {
+  await page.goto(base + 'start/local-lab/');
+  await expectSampleNote(page.locator('.sl-markdown-content'), 'loopback_lab.py');
 });

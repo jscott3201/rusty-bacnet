@@ -74,7 +74,7 @@ test('native Ubuntu validation installs the lockfile, Chromium and runs the comp
     'node-version': '24', cache: 'npm', 'cache-dependency-path': 'website/package-lock.json',
   });
   assert.deepEqual(validate.steps.map((entry) => entry.id), [
-    'checkout', 'publication-request', 'node', 'dependencies', 'browser', 'verify', 'reports', 'pages', 'provenance',
+    'checkout', 'publication-request', 'release-tag', 'node', 'dependencies', 'browser', 'verify', 'reports', 'pages', 'provenance',
   ]);
   for (const [id, command] of [
     ['dependencies', 'npm ci'],
@@ -90,7 +90,23 @@ test('native Ubuntu validation installs the lockfile, Chromium and runs the comp
     for (const entry of job.steps) assert.equal(entry['continue-on-error'], undefined);
   }
   assert.deepEqual(validate.steps.filter((entry) => entry.run).map((entry) => entry.id),
-    ['publication-request', 'dependencies', 'browser', 'verify', 'provenance']);
+    ['publication-request', 'release-tag', 'dependencies', 'browser', 'verify', 'provenance']);
+});
+
+// The sample notes link the release's tag (#2648); the test that checks the
+// linked paths needs the tag, which the shallow checkout lacks.
+test('validation fetches only the site release\'s tag, by the release site.mjs names', () => {
+  const fetch = step('release-tag');
+  assert.equal(fetch.if, undefined);
+  assert.equal(fetch.env, undefined);
+  const result = spawnSync('bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c',
+    fetch.run.replace(/^git fetch .*$/m, 'echo "$release"; false \\')], {
+    cwd: new URL('../../', import.meta.url), encoding: 'utf8', timeout: 5_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const release = readFileSync(new URL('../../src/lib/site.mjs', import.meta.url), 'utf8').match(/^export const release = '([0-9.]+)';$/m)[1];
+  assert.equal(result.stdout, `${release}\nNo tag v${release} to fetch.\n`);
+  assert.match(fetch.run, /^git fetch --no-tags --depth=1 origin "refs\/tags\/v\$release:refs\/tags\/v\$release" \\$/m);
 });
 
 test('only a successful manual canonical dev publication uploads dist and deploys the same named artifact', () => {
