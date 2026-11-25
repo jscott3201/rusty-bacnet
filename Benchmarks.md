@@ -1221,18 +1221,36 @@ interleaved matrix compare.
   every time, so every run of every build draws the same keys. Like the
   allocator settings, this is a measurement setting only: no library of the
   stack changes, the harness isn't published, and production builds keep
-  their random keys. Tokio's scheduling choices, which it seeds from the
-  same keys, repeat too. Since the hook relies on how the standard library
-  looks the function up, the script stops a count whose runs report random
-  keys, or keys unlike the first run's, rather than let it run on random
-  keys. Any seed serves for a comparison; another seed can move a row's
-  absolute count by a few dozen instructions per request (seed 1 puts
-  ReadPropertyMultiple about 23 above the common case), and so can a
-  change to what the benchmark database holds, which `attribute` shows as
-  hash-table lines in the database lookups. The harness comes from the
-  candidate, so an older candidate brings a harness without this, and its
-  runs keep per-process keys; every row names the keys its runs had, and
-  the workflow's `harness: workflow` input builds the current harness into
+  their random keys. Tokio seeds its random choices from the same keys,
+  so those repeat too (which branch a `select!` polls first, which worker
+  the multi-thread runtime steals from); how that runtime's workers
+  interleave still doesn't. Since the hook relies on how the standard
+  library looks the function up, the script stops a count whose runs
+  report random keys, or keys unlike the first run's, rather than let it
+  run on random keys.
+- **What the seed means for a pull request.** Any seed serves for a
+  comparison, since both builds use it. The default, 1, happens to make one
+  of ReadPropertyMultiple's ten lookups probe further than it does under
+  most keys: that row counts about 23 instructions per request more than
+  the common per-process figure, all in the hash table's probing, while
+  ReadProperty and WriteProperty count the common figure. A pull request
+  that changes how the server's object map is laid out can move this
+  probing by a few dozen instructions per request either way, under any
+  seed, as real work would. Four changes do that: a map or a field built
+  from a fresh `RandomState` ahead of `objects` in `ObjectDatabase::new`
+  (each one shifts the keys the object map gets); a different capacity for
+  that map; a different `Hash` for `ObjectIdentifier`; and inserts that
+  `ObjectDatabase::add` adds or drops. Objects the harness itself adds are
+  the same in both builds. Such a shift shows in `attribute` as hash-table
+  lines (`hashbrown`) inside the database lookups, with no change in calls;
+  to tell it from real work, run the pair again with another seed (the
+  workflow's `hash_seed` input): a layout shift moves or disappears, real
+  work stays. The workflow's `hash_seed: none` runs with per-process keys,
+  as production does.
+- **Older harnesses.** The harness comes from the candidate, so an older
+  candidate brings a harness without the fixed keys, and its runs keep
+  per-process keys; every row names the keys its runs had, and the
+  workflow's `harness: workflow` input builds the current harness into
   both trees instead.
 - **What fixing the keys changed.** Eight matrices against one baseline
   (ea9f3d728), all floors in instructions per request:
@@ -1341,6 +1359,20 @@ interleaved matrix compare.
   refactor or a feature, runs with `--aim none` (the workflow's `aim`
   input). It is accepted when no row rises by more than its noise floor and
   no row adds allocation calls; each row reports its change in floors.
+- **Accepting an explained rise.** A rise above the floor fails, however
+  small. When `attribute` has explained it and the pull request accepts it
+  without a code fix, say because the compiler moved some code in a
+  function the change didn't touch, the comparison runs again with an
+  override (`--allow rpm/ct:21`, the workflow's `allow` input): each named
+  row passes a rise above its floor up to its bound, in instructions per
+  request. Cite the attribution in the pull request and set the bound just
+  above the measured rise, not wider. Rows not named are judged as always,
+  a named row that passed anyway reports its override as unused, a rise
+  past the bound still fails, and no override covers allocation calls. The
+  summary then reads "Accepted with override" and lists each row with its
+  bound, its rise and its floor. An unknown row, an aimed row, or a bound
+  that isn't a number above zero stops the run before anything is built
+  (maintainer's decision on #2591, 2026-11-25).
 - **When a comparison fails.** Compare per-function call counts first:
   `perf_counts.py attribute <run directory> --workload rp --runtime ct`
   lists the calls per request that changed, then the instructions, marking

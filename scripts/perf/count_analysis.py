@@ -107,12 +107,22 @@ The no-regression check (`--aim none`, #2314) aims at nothing: every row
 must stay within its floor and keep its allocation calls, for a change that
 isn't an optimization. Each row reports its change in floors.
 
+An override (`--allow rpm/ct:21`, the maintainer's decision on #2591,
+2026-11-25) lets a row that isn't aimed at rise above its floor up to a
+named bound, in instructions per request, for a rise that `perf_counts.py
+attribute` has explained and the PR accepts without a code fix. A row not
+named is judged as always; a named row that passed anyway reports its
+override as unused; a rise past the bound still fails; allocation calls are
+never covered. The summary lists each override with its bound, the rise
+and the floor, and an accepted run that used one says so.
+
 When a comparison fails, compare per-function call counts first
 (`perf_counts.py attribute`): unchanged calls with changed instructions
 point at codegen (inlining) rather than at more work per request.
 """
 
 import json
+import math
 import re
 import statistics
 from pathlib import Path
@@ -677,14 +687,44 @@ def validate_aim(aimed, workloads):
         raise ValueError(f"aimed workload(s) not in the run: {', '.join(missing)}")
 
 
-def judge(workload, runtime, metrics_a, metrics_b, floor, floor_source, aimed):
+def parse_allow(spec, rows, aimed=()):
+    """An override spec, "rpm/ct:21,rpm/mt:25", as {row: bound}. Each row
+    must be one of `rows` (this run's "workload/runtime" keys) and not an
+    aimed workload's, named once, with a finite bound above zero, in
+    instructions per request (per iteration for a codec row)."""
+    allow = {}
+    for part in (spec or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        row, colon, value = (x.strip() for x in part.partition(":"))
+        if not colon or not row or not value:
+            raise ValueError(f"--allow entry {part!r} isn't ROW:BOUND, such as rpm/ct:21")
+        if row not in rows:
+            raise ValueError(f"--allow names {row!r}, which isn't a row of this run ({', '.join(sorted(rows))})")
+        if row.split("/")[0] in aimed and not regression_only(aimed):
+            raise ValueError(f"--allow names {row!r}, an aimed row: an override covers a rise, not a saving")
+        if row in allow:
+            raise ValueError(f"--allow names {row!r} twice")
+        try:
+            bound = float(value)
+        except ValueError:
+            raise ValueError(f"--allow bound for {row} must be a number, not {value!r}") from None
+        if not math.isfinite(bound) or bound <= 0:
+            raise ValueError(f"--allow bound for {row} must be above zero, not {value!r}")
+        allow[row] = bound
+    return allow
+
+
+def judge(workload, runtime, metrics_a, metrics_b, floor, floor_source, aimed, bound=None):
     """One row of a comparison's verdict table.
 
     Round trips aimed at: a saving of at least MIN_SAVING and more than
     FLOOR_FACTOR floors, every pair lower. Codec workloads aimed at: the
     same without the 100-instruction minimum, which is a per-request bar.
-    Others: no rise beyond the floor. All: allocation calls up by at most
-    ALLOC_TOLERANCE. Every instruction rule judges the gated figure; the
+    Others: no rise beyond the floor, or with an override (`bound`) no rise
+    beyond the bound. All: allocation calls up by at most ALLOC_TOLERANCE,
+    which no override covers. Every instruction rule judges the gated figure; the
     system allocator's instructions and requested bytes are reported, not
     gated (#2555).
     """
@@ -715,8 +755,12 @@ def judge(workload, runtime, metrics_a, metrics_b, floor, floor_source, aimed):
     else:
         # A floor under EXACT (the codec rows: a few instructions per whole
         # program) counts as EXACT, so +0.00003 per iteration isn't a rise.
-        instr_ok = delta <= max(floor, EXACT)
+        within = delta <= max(floor, EXACT)
+        instr_ok = within or (bound is not None and delta <= bound)
         row["gate"] = "not higher than the noise floor"
+        if bound is not None:
+            row["override"] = {"bound": bound, "used": instr_ok and not within}
+            row["gate"] += f", or with the override not higher than {bound:g}"
     row["instructions_ok"] = instr_ok
     row["allocations_ok"] = row["b_calls"] - row["a_calls"] <= ALLOC_TOLERANCE
     row["verdict"] = "PASS" if instr_ok and row["allocations_ok"] else "FAIL"
@@ -780,7 +824,7 @@ def allocator_notes(rows):
     return notes
 
 
-def analyze(manifest, recorded_floors=None, aimed=("rp",)):
+def analyze(manifest, recorded_floors=None, aimed=("rp",), allow=None):
     """The summary of a completed matrix manifest.
 
     A noise run (A and A') reports floors. A comparison (A, A' and B) takes
@@ -796,6 +840,11 @@ def analyze(manifest, recorded_floors=None, aimed=("rp",)):
     pairs = sorted({(r["workload"], r["runtime"]) for r in runs})
     if not noise:
         validate_aim(aimed, {w for w, _ in pairs})
+        # The same checks as the plan's, for a re-analysis.
+        parse_allow(",".join(f"{row}:{bound!r}" for row, bound in (allow or {}).items()),
+                    {f"{w}/{r}" for w, r in pairs}, aimed)
+    elif allow:
+        raise ValueError("a noise run has no candidate, so --allow doesn't apply")
     rows = []
     for workload, runtime in pairs:
         labels = sorted({r["label"] for r in runs if (r["workload"], r["runtime"]) == (workload, runtime)})
@@ -821,7 +870,7 @@ def analyze(manifest, recorded_floors=None, aimed=("rp",)):
                 "gate": "none: measures the noise floor", "verdict": "floor",
             }
         else:
-            row = judge(workload, runtime, metrics["A"], metrics["B"], floor, source, aimed)
+            row = judge(workload, runtime, metrics["A"], metrics["B"], floor, source, aimed, (allow or {}).get(key))
         # The total's own floor, for comparison with the gated figure's
         # (reported only; quick mode has no A' and no such floor).
         row["total_noise_floor"] = noise_floor(metrics["A"], metrics["P"], "total") if "P" in metrics else None
@@ -856,6 +905,9 @@ def analyze(manifest, recorded_floors=None, aimed=("rp",)):
         summary["aimed"] = list(aimed)
         summary["coverage_problems"] = problems
         summary["accepted"] = not problems and bool(rows) and all(r["verdict"] == "PASS" for r in rows)
+        summary["overrides"] = [{"row": f"{r['workload']}/{r['runtime']}", **r["override"], "rise": r["delta"],
+                                 "floor": r["noise_floor"], "verdict": r["verdict"]} for r in rows if "override" in r]
+        summary["accepted_with_override"] = summary["accepted"] and any(o["used"] for o in summary["overrides"])
     return summary
 
 
@@ -937,7 +989,7 @@ def verdict_table(summary):
             f"{fmt(row['a_total'])} / {fmt(row['b_total'])}",
             fmt(row["total_delta"]) + (f" ({fmt(total_floor)})" if total_floor is not None else ""),
             f"{row['a_calls']:.4f} / {row['b_calls']:.4f}", f"{row['a_bytes']:.2f} / {row['b_bytes']:.2f}",
-            row["verdict"],
+            row["verdict"] + (" (override)" if row.get("override", {}).get("used") else ""),
         ])
     return table(headers, rows)
 

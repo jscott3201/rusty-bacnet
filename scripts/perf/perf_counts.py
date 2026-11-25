@@ -5,7 +5,8 @@
   perf_counts.py run --baseline REF --candidate REF [options]   # A, A' and B
   perf_counts.py run --noise REF [options]                      # A and A'
   perf_counts.py run --baseline v0.13.0 --candidate REF --baseline-compat v013 --workloads codec
-  perf_counts.py analyze OUT [--aim rp,... | --aim none]
+  perf_counts.py run --baseline REF --candidate REF --aim none --allow rpm/ct:21   # an attributed rise
+  perf_counts.py analyze OUT [--aim rp,... | --aim none] [--allow ROW:BOUND,...]
   perf_counts.py attribute OUT [--workload rp] [--runtime ct]   # calls first
 
 Each workload and runtime is a row. Its figure is the median, over six
@@ -18,6 +19,16 @@ lower; any other row may rise by no more than its floor; no row may add
 more than 0.01 allocation calls per request. `--aim none` is the
 no-regression check: no row is aimed at, so it is accepted when no row
 rises above its noise floor and no allocation calls are added.
+
+`--allow ROW:BOUND[,ROW:BOUND]` is the override for a rise that `attribute`
+has explained and the PR accepts without a code fix (#2591): a named row
+that isn't aimed at passes a rise above its floor up to BOUND instructions
+per request. Rows not named are judged as always, a named row that passed
+anyway reports the override as unused, and allocation calls are never
+covered. The summary says "Accepted with override" and lists each
+override's row, bound, rise and floor. An unknown row, an aimed row, a
+repeated row or a bound that isn't a number above zero stops the run
+before any build.
 
 `run`:
 1. builds the image from scripts/perf/Dockerfile (tag rb-perf-counts:<hash
@@ -387,12 +398,16 @@ def check_hash_keys(manifest, record):
     `std` never asked the harness's `getrandom`, and a check value unlike
     the first run's means it drew the keys some other way (a toolchain
     whose `std` changed). Either would let the rows go back to per-process
-    keys unnoticed. A harness from before #2591 reports nothing, and its
-    rows say so. The first run's check value goes into the manifest."""
+    keys unnoticed. A harness from before #2591 (no `src/hash_keys.rs`)
+    reports nothing, and its rows say so; one with the module that reports
+    nothing stops too. The first run's check value goes into the manifest."""
     name, state, check = record["name"], record.get("hash_keys"), record.get("hash_check")
-    if HASH_SEED_VAR not in (manifest.get("environment") or {}) or state is None:
-        return
     source = "benchmarks/counts/src/hash_keys.rs"
+    hooked = "src/hash_keys.rs" in ((manifest.get("harness") or {}).get("files") or {})
+    if HASH_SEED_VAR not in (manifest.get("environment") or {}) or (state is None and not hooked):
+        return
+    if state is None:
+        raise RuntimeError(f"{name}: the harness has {source} but its RESULT line reports no hash-map keys")
     if state != "fixed" or check is None:
         raise RuntimeError(f"{name}: the harness was given {HASH_SEED_VAR} but reports random hash-map keys, so std "
                            f"didn't take them from the harness's getrandom ({source})")
@@ -645,10 +660,24 @@ def summary_markdown(summary):
         lines.append(f"Baseline builds (A and A') byte-identical: {summary['baseline_builds_identical']}")
     if summary["mode"] != "noise":
         partial = not summary["accepted"] and summary["rows"] and all(r["verdict"] == "PASS" for r in summary["rows"])
-        lines.append(f"Gates aimed at: {', '.join(summary['aimed'])}. Accepted: {summary['accepted']}"
-                     + (" (every row passed; the reasons this run can't accept follow)" if partial else ""))
+        verdict = ("Accepted with override." if summary.get("accepted_with_override")
+                   else f"Accepted: {summary['accepted']}"
+                   + (" (every row passed; the reasons this run can't accept follow)" if partial else ""))
+        lines.append(f"Gates aimed at: {', '.join(summary['aimed'])}. {verdict}")
         lines += [f"- Not acceptable as run: {problem}" for problem in summary["coverage_problems"]]
+        lines += [override_line(o) for o in summary.get("overrides") or []]
     return "\n".join(lines) + "\n"
+
+
+def override_line(override):
+    """One override under the verdict: used, unused, or exceeded."""
+    row, bound, rise, floor = override["row"], override["bound"], override["rise"], override["floor"]
+    figures = f"rise {ca.fmt(rise)}, floor {ca.fmt(floor)}, bound {bound:g} instructions per request"
+    if override["used"]:
+        return f"- Override used on {row}: {figures}; the rise is above the floor and within the bound."
+    if rise <= max(floor, ca.EXACT):
+        return f"- Override unused on {row}: {figures}; the row passed without it."
+    return f"- Override exceeded on {row}: {figures}; the rise is past the bound, so the row fails."
 
 
 def hash_keys_line(summary):
@@ -677,7 +706,7 @@ def fill_allocator(manifest, raw):
             run.update(ca.allocator_record_of(text))
 
 
-def analyze(out, aim=("rp",)):
+def analyze(out, aim=("rp",), allow=None):
     """Analyzes a completed matrix in OUT and writes its tables there. A
     quick comparison's floors are those its manifest recorded, and only
     when they are of the figure gated now."""
@@ -688,7 +717,12 @@ def analyze(out, aim=("rp",)):
     floors = dict(manifest.get("recorded_floors") or {})
     if floors:
         ca.check_floors_figure(manifest.get("recorded_floors_figure"), f"{out / 'manifest.json'} (quick mode)")
-    summary = ca.analyze(manifest, floors, aim)
+    # An override as given on the command line (a spec string), the run's
+    # own when none is given, or already parsed ({row: bound}).
+    if allow is None or isinstance(allow, str):
+        spec = manifest.get("allow") if allow is None else allow
+        allow = ca.parse_allow(spec, {f"{r['workload']}/{r['runtime']}" for r in manifest["runs"]}, aim)
+    summary = ca.analyze(manifest, floors, aim, allow)
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     (out / "summary.md").write_text(summary_markdown(summary))
     write_profiles(manifest, out, summary)
@@ -776,11 +810,15 @@ def plan(args):
                 raise ValueError(f"no recorded floor for {', '.join(missing)}")
         else:
             refs, order = {"A": args.baseline, "P": args.baseline, "B": args.candidate}, "ABPPBA"
-    return mode, refs, order * args.blocks, workloads, runtimes, aim, floors
+    rows = {f"{w}/{r}" for w in workloads for r in (runtimes if w in ca.ROUND_TRIP else ["none"])}
+    allow = ca.parse_allow(getattr(args, "allow", None), rows, aim)
+    if allow and mode == "noise":
+        raise ValueError("--allow is for a comparison: a noise run has no candidate")
+    return mode, refs, order * args.blocks, workloads, runtimes, aim, allow, floors
 
 
 def run(args):
-    mode, refs, order, workloads, runtimes, aim, floors = plan(args)
+    mode, refs, order, workloads, runtimes, aim, allow, floors = plan(args)
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=False)
     run_id = uuid.uuid4().hex[:8]
@@ -795,6 +833,8 @@ def run(args):
         # The figure quick mode's floors are of; `analyze` checks it again.
         "recorded_floors_figure": ca.GATED_FIGURE if floors else None,
         "environment": run_environment(args),
+        # The override spec as given; `analyze` applies it again.
+        "allow": getattr(args, "allow", None) or "",
         "variants": {},
         "runs": [],
     }
@@ -844,7 +884,7 @@ def run(args):
             caller_split(manifest, out)
             save()
         annotate(manifest, out)
-        summary = analyze(out, aim)
+        summary = analyze(out, aim, allow)
         if args.gzip_raw:
             for path in (out / "raw").glob("*.cg"):
                 with open(path, "rb") as src, gzip.open(f"{path}.gz", "wb") as dst:
@@ -889,6 +929,10 @@ def main(argv=None):
                             help="workloads judged on the saving gate (default rp), or none: the no-regression check")
     run_parser.add_argument("--glibc-tunables", default=GLIBC_TUNABLES,
                             help=f"GLIBC_TUNABLES for every counted run (default {GLIBC_TUNABLES!r}; empty for none)")
+    run_parser.add_argument("--allow", default="", metavar="ROW:BOUND,...",
+                            help="override for an attributed rise: a named row that isn't aimed at passes a rise "
+                                 "above its floor up to BOUND instructions per request (rpm/ct:21); never covers "
+                                 "allocation calls")
     run_parser.add_argument("--hash-seed", default=HASH_SEED,
                             help=f"the harness's fixed hash-map keys for every counted run (default {HASH_SEED}; "
                                  "none for per-process keys, as in production: the ReadPropertyMultiple and "
@@ -901,6 +945,8 @@ def main(argv=None):
     analyze_parser = commands.add_parser("analyze", help="re-analyze a completed run")
     analyze_parser.add_argument("out")
     analyze_parser.add_argument("--aim", default="rp")
+    analyze_parser.add_argument("--allow", default=None, metavar="ROW:BOUND,...",
+                                help="override for an attributed rise (default: the run's own)")
     attribute_parser = commands.add_parser(
         "attribute", help="per-function changes of a completed run: calls in first, then self instructions")
     attribute_parser.add_argument("out")
@@ -916,7 +962,7 @@ def main(argv=None):
             return 0
         else:
             aim = tuple(a.strip() for a in args.aim.split(",") if a.strip())
-            summary = analyze(Path(args.out).resolve(), aim)
+            summary = analyze(Path(args.out).resolve(), aim, args.allow)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

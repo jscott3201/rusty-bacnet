@@ -46,6 +46,14 @@ on:
         options:
           - candidate
           - workflow
+      allow:
+        description: "Override for a rise perf_counts.py attribute has explained and the PR accepts without a code fix: ROW:BOUND pairs, comma-separated (rpm/ct:21), bounds in instructions per request. Never covers allocation calls. Empty for none."
+        required: false
+        default: ""
+      hash_seed:
+        description: "The harness's hash-map seed (#2591): a decimal number, or none for per-process keys as in production. Re-run under another seed to tell a hash-layout shift from real work."
+        required: true
+        default: "1"
 
 permissions:
   contents: read
@@ -76,6 +84,8 @@ jobs:
           WORKLOADS: ${{ inputs.workloads }}
           AIM: ${{ inputs.aim }}
           HARNESS: ${{ inputs.harness }}
+          ALLOW: ${{ inputs.allow }}
+          HASH_SEED: ${{ inputs.hash_seed }}
         run: |
           # A branch name exists here only as origin/<name>.
           resolve() {
@@ -91,10 +101,11 @@ jobs:
           fi
           if [ "$base" = "$cand" ]; then
             python3 scripts/perf/perf_counts.py run --noise "$base" --workloads "$WORKLOADS" --out perf-out \
-              --gzip-raw "${harness[@]}"
+              --gzip-raw --hash-seed "$HASH_SEED" "${harness[@]}"
           else
             python3 scripts/perf/perf_counts.py run --baseline "$base" --candidate "$cand" \
-              --workloads "$WORKLOADS" --aim "$AIM" --out perf-out --gzip-raw "${harness[@]}"
+              --workloads "$WORKLOADS" --aim "$AIM" --out perf-out --gzip-raw --hash-seed "$HASH_SEED" \
+              --allow "$ALLOW" "${harness[@]}"
           fi
       # A failed comparison: per-function changes, calls first, for the
       # round trips' current-thread rows (Benchmarks.md section 10.4).

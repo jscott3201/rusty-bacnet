@@ -24,8 +24,9 @@
 //! these get the same bytes in every run: `std`'s hash-map keys (every
 //! `HashMap` and `HashSet`, and the server's digest of oversized requests);
 //! Tokio's random number generator, which seeds from a `RandomState`, so
-//! `select!` and the multi-thread runtime's work stealing pick in the same
-//! order every run; and the `getrandom` crate, which finds this function by
+//! its random choices (which `select!` branch it polls first, which worker
+//! it steals from) repeat, though the multi-thread runtime's interleaving
+//! still doesn't; and the `getrandom` crate, which finds this function by
 //! name: the stack's random B/IPv6 and SC addresses, SC reconnect jitter and
 //! network-number answer delays, none of which the counted B/IP round trips
 //! reach. The client's invoke IDs count up and draw nothing. The harness
@@ -48,7 +49,8 @@ pub const HASH_SEED_VAR: &str = "BACNET_COUNTS_HASH_SEED";
 
 static SEED: AtomicU64 = AtomicU64::new(0);
 static SEEDED: AtomicBool = AtomicBool::new(false);
-/// Requests answered from the seed: none means `std` never asked this
+/// Requests for bytes answered from the seed (the `getrandom` crate's
+/// zero-length probe doesn't count): none means `std` never asked this
 /// binary's `getrandom`, so the keys weren't fixed.
 static SERVED: AtomicU64 = AtomicU64::new(0);
 /// The main thread's first keys, as one hash of [`CHECK_INPUT`].
@@ -150,7 +152,9 @@ mod hook {
                 written += 1;
             }
         }
-        SERVED.fetch_add(1, Relaxed);
+        if len > 0 {
+            SERVED.fetch_add(1, Relaxed);
+        }
         // A request is at most `isize::MAX` bytes, as for `read`.
         len as isize
     }

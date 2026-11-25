@@ -1077,6 +1077,161 @@ class HashKeys(unittest.TestCase):
         self.assertIn("Accepted: False\n", perf_counts.summary_markdown(failed))
 
 
+def bump(m, row, per_request, calls=0.0):
+    """Raises build B's `row` ("rpm/ct") by `per_request` gated instructions
+    per request, and its allocation calls by `calls` per request."""
+    workload, runtime = row.split("/")
+    for run in m["runs"]:
+        if (run["workload"], run["runtime"], run["label"]) == (workload, runtime, "B"):
+            run["instructions"] += round(per_request * run["n"])
+            run["allocs"] += round(calls * run["n"])
+    return m
+
+
+class Override(unittest.TestCase):
+    """--allow ROW:BOUND (the maintainer's decision on #2591, 2026-11-25):
+    an attributed rise above the floor passes up to a named bound."""
+
+    ROWS = {f"{w}/{r}" for w in ca.ROUND_TRIP for r in ca.RUNTIMES}
+
+    def matrix(self, rises=(), calls=None):
+        m = manifest(Gates.A, list(Gates.P), slopes_p=Gates.P, cells=ALL_ROUND_TRIPS)
+        for row, rise in rises:
+            bump(m, row, rise, (calls or {}).get(row, 0.0))
+        return m
+
+    def analyze(self, m, allow):
+        return ca.analyze(m, None, ("none",), ca.parse_allow(allow, self.ROWS, ("none",)))
+
+    def test_specs_parse_and_malformed_ones_are_refused(self):
+        self.assertEqual(ca.parse_allow(" rpm/ct:21 , rpm/mt:25.5 ", self.ROWS), {"rpm/ct": 21.0, "rpm/mt": 25.5})
+        self.assertEqual(ca.parse_allow("", self.ROWS), {})
+        self.assertEqual(ca.parse_allow(None, self.ROWS), {})
+        for spec, message in (("rpm/xt:21", "isn't a row of this run"), ("rpm/ct:abc", "must be a number"),
+                              ("rpm/ct:-3", "above zero"), ("rpm/ct:0", "above zero"), ("rpm/ct:nan", "above zero"),
+                              ("rpm/ct:inf", "above zero"), ("rpm/ct", "isn't ROW:BOUND"), ("rpm/ct:", "ROW:BOUND"),
+                              ("rpm/ct:21,rpm/ct:22", "twice")):
+            with self.subTest(spec=spec), self.assertRaisesRegex(ValueError, message):
+                ca.parse_allow(spec, self.ROWS)
+        with self.assertRaisesRegex(ValueError, "an aimed row"):
+            ca.parse_allow("rp/ct:21", self.ROWS, ("rp",))
+
+    def test_a_bad_override_stops_the_run_before_any_build(self):
+        args = Runner.args(Runner(), aim="none")
+        for spec in ("rpm/ct:-1", "codec/none:5", "rp/ct:x"):
+            with self.subTest(spec=spec), self.assertRaises(ValueError):
+                perf_counts.plan(argparse.Namespace(**{**vars(args), "allow": spec}))
+        with self.assertRaisesRegex(ValueError, "noise run"):
+            perf_counts.plan(argparse.Namespace(**{**vars(args), "noise": "dev", "baseline": None, "candidate": None,
+                                                    "allow": "rpm/ct:21"}))
+        *_, allow, floors = perf_counts.plan(argparse.Namespace(**{**vars(args), "allow": "rpm/ct:21"}))
+        self.assertEqual((allow, floors), ({"rpm/ct": 21.0}, {}))
+
+    def test_a_named_rise_within_the_bound_passes_and_the_summary_says_so(self):
+        s = self.analyze(self.matrix([("rpm/ct", 20.0)]), "rpm/ct:21")
+        row = next(r for r in s["rows"] if (r["workload"], r["runtime"]) == ("rpm", "ct"))
+        self.assertEqual(row["verdict"], "PASS")
+        self.assertTrue(row["override"]["used"])
+        self.assertTrue(s["accepted"])
+        self.assertTrue(s["accepted_with_override"])
+        text = perf_counts.summary_markdown(s)
+        self.assertIn("Gates aimed at: none. Accepted with override.", text)
+        self.assertIn("- Override used on rpm/ct: rise 20.0, floor 7.0, bound 21 instructions per request", text)
+        self.assertIn("| PASS (override) |", ca.verdict_table(s))
+        self.assertEqual(perf_counts.exit_code(s), 0)
+        # Without the override the same rise fails.
+        self.assertFalse(ca.analyze(self.matrix([("rpm/ct", 20.0)]), None, ("none",))["accepted"])
+
+    def test_an_override_past_its_bound_or_on_another_row_still_fails(self):
+        past = self.analyze(self.matrix([("rpm/ct", 22.0)]), "rpm/ct:21")
+        self.assertFalse(past["accepted"])
+        self.assertIn("- Override exceeded on rpm/ct", perf_counts.summary_markdown(past))
+        other = self.analyze(self.matrix([("rpm/ct", 20.0), ("rpm/mt", 20.0)]), "rpm/ct:21")
+        self.assertFalse(other["accepted"])
+        self.assertEqual({(r["workload"], r["runtime"]) for r in other["rows"] if r["verdict"] == "FAIL"},
+                         {("rpm", "mt")})
+
+    def test_an_override_on_a_row_that_passed_is_reported_unused(self):
+        s = self.analyze(self.matrix([("rpm/ct", 20.0)]), "rpm/ct:21,wp/ct:10")
+        self.assertTrue(s["accepted_with_override"])
+        unused = next(o for o in s["overrides"] if o["row"] == "wp/ct")
+        self.assertFalse(unused["used"])
+        self.assertIn("- Override unused on wp/ct: rise 0.0, floor 7.0, bound 10 instructions per request; the row "
+                      "passed without it.", perf_counts.summary_markdown(s))
+        alone = self.analyze(self.matrix(), "wp/ct:10")
+        self.assertTrue(alone["accepted"])
+        self.assertFalse(alone["accepted_with_override"])
+        self.assertNotIn("Accepted with override", perf_counts.summary_markdown(alone))
+
+    def test_an_override_never_covers_allocation_calls(self):
+        s = self.analyze(self.matrix([("rpm/ct", 20.0)], calls={"rpm/ct": 1.0}), "rpm/ct:21")
+        row = next(r for r in s["rows"] if (r["workload"], r["runtime"]) == ("rpm", "ct"))
+        self.assertTrue(row["instructions_ok"])
+        self.assertFalse(row["allocations_ok"])
+        self.assertEqual(row["verdict"], "FAIL")
+        self.assertFalse(s["accepted"])
+
+    def test_a_reanalysis_applies_the_runs_own_override_or_a_new_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            m = self.matrix([("rpm/ct", 20.0)])
+            m["allow"] = "rpm/ct:21"
+            (out / "manifest.json").write_text(json.dumps(m))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertTrue(perf_counts.analyze(out, ("none",))["accepted_with_override"])
+                self.assertFalse(perf_counts.analyze(out, ("none",), "")["accepted"])
+                with self.assertRaisesRegex(ValueError, "isn't a row of this run"):
+                    perf_counts.analyze(out, ("none",), "codec/none:5")
+
+
+class MatrixKeys(unittest.TestCase):
+    """run_matrix checks every run's hash-map keys (perf_counts.check_hash_keys)."""
+
+    def manifest(self, hooked=True):
+        files = {"src/lib.rs": "x", **({"src/hash_keys.rs": "y"} if hooked else {})}
+        return {"workloads": ["rp"], "runtimes": ["ct"], "order": "ABPPBA" * 3, "image": {"id": "image"},
+                "environment": {perf_counts.HASH_SEED_VAR: "1"}, "harness": {"files": files}, "runs": [],
+                "variants": {label: {"label": label, "volume": label, "binaries": {"counts": "sha"}}
+                             for label in "ABP"}}
+
+    def run_matrix(self, manifest, fields):
+        """Runs `run_matrix` with a stand-in for Docker that writes each run's
+        RESULT line (ending in `fields`) and callgrind file."""
+        def fake_run(command, stdout=None, stderr=None, **_kwargs):
+            name = re.search(r"--callgrind-out-file=/out/(\S+)\.cg", command[-1])[1]
+            n = int(name.rsplit("-", 1)[1])
+            stderr.write(f"RESULT workload=rp runtime=ct n={n} warmup=200 allocs={2 * n} bytes={200 * n} "
+                         f"allocs_per_iter=2.0 bytes_per_iter=200.0 {fields}\n")
+            (out / "raw" / f"{name}.cg").write_text(synthetic_cg(n))
+            return argparse.Namespace(returncode=0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            original = perf_counts.subprocess.run
+            perf_counts.subprocess.run = fake_run
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    perf_counts.run_matrix(manifest, out, lambda: None)
+            finally:
+                perf_counts.subprocess.run = original
+        return manifest
+
+    def test_every_run_is_checked(self):
+        m = self.run_matrix(self.manifest(), "hash_keys=fixed hash_check=00000000deadbeef")
+        self.assertEqual(len(m["runs"]), 36)
+        self.assertEqual(m["hash_check"], "00000000deadbeef")
+        self.assertEqual({r["hash_keys"] for r in m["runs"]}, {"fixed"})
+        with self.assertRaisesRegex(RuntimeError, "random hash-map keys"):
+            self.run_matrix(self.manifest(), "hash_keys=random")
+
+    def test_a_hooked_harness_that_reports_no_keys_stops(self):
+        with self.assertRaisesRegex(RuntimeError, "reports no hash-map keys"):
+            self.run_matrix(self.manifest(), "")
+        # A harness from before #2591 (no module) runs on, unseeded.
+        m = self.run_matrix(self.manifest(hooked=False), "")
+        self.assertEqual({r["hash_keys"] for r in m["runs"]}, {None})
+
+
 class Callers(unittest.TestCase):
     def test_semaphore_cost_is_split_by_nearest_matching_caller(self):
         functions = {
