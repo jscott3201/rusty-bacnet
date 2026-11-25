@@ -1908,14 +1908,22 @@ depends on another for it (#1684). `check-named-codes.py` compares each
 first, and fails with a diff when one differs, so a change to one is made to
 all three. The doc comments above them may differ.
 
-Non-test code takes a std `Mutex`, `RwLock` or `Condvar` whether a panic
-poisoned it or not, through the extension traits in `bacnet_types::sync`
-(`locked()`, `read_locked()`, `write_locked()`, `wait_locked()`), so one
-panicking task doesn't make every later user of the lock panic (#2559).
-`check-lock-poison.py` fails on `.lock().unwrap()`, `.read().expect(..)`, an
-unwrapped Condvar wait and hand-written `PoisonError::into_inner` outside
-that module; test code may keep `unwrap()`. A wanted panic is marked
-`// lock-poison: allow` on its line, with the reason.
+Non-test code never panics on a poisoned std `Mutex`, `RwLock` or `Condvar`
+(#2559). By default it takes the lock through the extension traits in
+`bacnet_types::sync` (`locked()`, `read_locked()`, `write_locked()`,
+`wait_locked()`), so one panicking task doesn't make every later user of the
+lock panic. Where a half-done update must not be used, it fails closed
+instead and says why on the site: `// lock-poison: fail-closed (<why>)`. A
+wanted panic would be marked `// lock-poison: allow (<why>)`.
+`check-lock-poison.py` fails on an unwrapped lock, `get_mut()` or Condvar
+wait, hand-written `PoisonError::into_inner` outside that module, and a lock
+result looked at (`.ok()`, `.map_err(..)`, `if let Ok`, `match` and the
+like) without the fail-closed marker; it prints how many marked sites there
+are. It reads every tracked `.rs` file the workspace builds or ships as a
+sample: the crates with their examples and build scripts, the benchmark
+tools, `examples/`, `firmware/` and `website/examples/`. Tests, benches, fuzz
+targets and the archived `benchmarks/results/` are left out, and so is test
+code inside a source file, which may unwrap.
 
 `scripts/ci/check-msrv.sh --linux-native` needs a native Linux GNU host with
 the MSRV toolchain (`RUST_MSRV`) installed, Python 3, a C toolchain, `pkg-config`, `libpcap-dev`,

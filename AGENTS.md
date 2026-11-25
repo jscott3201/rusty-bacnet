@@ -42,6 +42,7 @@ The older `_spec/rusty-bacnet-compliance-execution-plan/` documents are historic
 - **Hard limits.**
   - Every `.rs` file stays under 700 lines (`scripts/ci/check-file-size.sh`).
   - `missing_docs` is deny, and clippy warnings are errors.
+  - Never panic on a poisoned std lock: take it through `bacnet_types::sync` (`locked()`, `read_locked()`, `write_locked()`, `wait_locked()`), or, where a half-done update must not be used, fail closed and mark the site `// lock-poison: fail-closed (<why>)`. `scripts/ci/check-lock-poison.py` enforces it (#2559).
   - Tests use one shared test transport, `bacnet_transport::test_transport::TestTransport` (feature `test-support`, dev-dependencies only). Don't write another `impl TransportPort` in tests: each one compiles the generic stack into the test binary again (#904, #2557). `bacnet-server`'s in-crate tests still share their own `TestTransport` until #2557 folds it onto the shared one.
 - **Timing tests.** Use Tokio's paused clock, not real sleeps or short real-time budgets.
 - **Async review checklist.**

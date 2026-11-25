@@ -1,40 +1,49 @@
 #!/usr/bin/env python3
-"""Check that non-test code takes std locks whether poisoned or not.
+"""Check that non-test code never panics on a poisoned std lock.
 
-The rule (#2559): a std `Mutex`, `RwLock` or `Condvar` is taken whether a
-panicking holder poisoned it or not, through the extension traits in
-`bacnet_types::sync` (`MutexExt::locked()`, `RwLockExt::read_locked()` and
-`write_locked()`, `CondvarExt::wait_locked()` and so on), so one panicking
-task can't turn every later user of the lock into a second panic. Code
-whose data a half-done update leaves unusable returns an error on poison
-instead (`.lock().map_err(..)`), which this script leaves alone. It fails
-on the spellings that panic or that write the helpers out by hand:
+The rule (#2559): a std `Mutex`, `RwLock` or `Condvar` poisoned by a panic is
+taken anyway, through the extension traits in `bacnet_types::sync`
+(`MutexExt::locked()`, `RwLockExt::read_locked()` and `write_locked()`,
+`CondvarExt::wait_locked()` and so on), so one panicking task can't make
+every later user of the lock panic too. Where a half-done update must not be
+used, the code fails closed instead, returning an error or doing nothing, and
+says why with `// lock-poison: fail-closed (<why>)`. A wanted panic, which
+nothing here has, would say so with `// lock-poison: allow (<why>)`. A marker
+counts on the flagged line, earlier in the same statement, or in the comment
+lines just above it. The script fails on:
 
-- `.lock()`, `.read()` or `.write()` followed by `.unwrap()` or `.expect(`.
-  tokio's `lock`, `read` and `write` are async, so `.lock().unwrap()` can't
-  type-check on a tokio lock, `.lock().await` never matches, and the
-  pattern needs no type information. (tokio's `try_lock()` can't be
-  poisoned, and `try_lock` isn't matched.)
-- a Condvar wait (`.wait(..)`, `.wait_timeout(..)`, `.wait_while(..)`,
-  `.wait_timeout_while(..)`) followed by `.unwrap()` or `.expect(`.
+- `.lock()`, `.read()` or `.write()` followed by `.unwrap()` or `.expect(`,
+  also through `.ok()`, through the type (`Mutex::lock(&m).unwrap()`) or
+  through a binding (`let g = m.lock();` then `g.unwrap()`), a zero-argument
+  `.get_mut()` unwrapped, and an unwrapped Condvar wait. tokio's `lock`,
+  `read` and `write` are async, so none of these can type-check on a tokio
+  lock and the patterns need no type information; `.lock().await` never
+  matches, and `try_lock` isn't looked at.
 - `PoisonError::into_inner`, `|e| e.into_inner()` closures and
-  `Err(e) => .. e.into_inner()` arms: the helpers written out, which
-  belong in `bacnet_types::sync` only.
+  `Err(e) => .. e.into_inner()` arms: the helpers written out, which belong
+  in `bacnet_types::sync` only.
+- a lock result looked at instead of taken, unless marked fail-closed with a
+  reason: a Result method (`.ok()`, `.map_err(..)`, `.is_ok_and(..)` and the
+  like) or `?` after the call, or the call as the scrutinee of `if let Ok`,
+  `let Ok(..) else` or `match`. For `.read()` and `.write()`, `?` and `match`
+  are not checked: the durable files' own `read()` returns a Result, and the
+  script can't tell them apart.
 
-It reads every tracked `crates/*/src/**/*.rs` file with comments, string
-literals and test-only code blanked out: items under `#[cfg(test)]`,
-`#[cfg(doctest)]`, `#[cfg(feature = "test-support")]` and predicates that
-imply one of them (`all(test, ..)`, `any(test, feature = "test-support")`),
-`#[test]` functions, and files reached only through such a `mod x;`. Test
-code, `tests/`, `benches/`, `examples/` and `fuzz/` may keep `unwrap()`.
-A line can opt out with a `// lock-poison: allow` comment, which should say
-why the panic is wanted.
+It reads every tracked `.rs` file the workspace builds or ships as a sample
+(crates, their examples and build scripts, the benchmark tools, examples/,
+firmware/, website/examples/) except tests/, benches/, fuzz/ and the archived
+benchmarks/results/, with comments, string literals and test-only code
+blanked out: items under `#[cfg(test)]`, `#[cfg(doctest)]`,
+`#[cfg(feature = "test-support")]` and predicates that imply one of them
+(`all(test, ..)`, `any(test, feature = "test-support")`), `#[test]`
+functions, and files reached only through such a `mod x;`. Test code may
+unwrap.
 
     python3 scripts/ci/check-lock-poison.py           # check the tree
     python3 scripts/ci/check-lock-poison.py FILE...   # check these files
     python3 scripts/ci/check-lock-poison.py --self-test
 
-Exit status: 0 when clean, 1 on a finding.
+Exit status: 0 when clean, 1 on a finding or when there was nothing to read.
 """
 
 import re
@@ -43,10 +52,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-ALLOW = "lock-poison: allow"
 # The helpers' own definitions are the one place that spells out into_inner.
 HELPER = "crates/bacnet-types/src/sync.rs"
-SOURCE = re.compile(r"^crates/[^/]+/src/.+\.rs$")
 
 
 TOKEN = re.compile(r"//|/\*|(?<!\w)b?r(#*)\"|\"|'")
@@ -261,73 +268,200 @@ def test_files(paths):
     return tests
 
 
-HAND_WRITTEN = "poison recovery written out: use bacnet_types::sync's extension traits"
-BAD = [
-    (
-        re.compile(r"\.(lock|read|write)\(\s*\)\s*\.\s*(unwrap\(\s*\)|expect\s*\()"),
-        "std lock taken with {0}, which panics when it is poisoned: use {1}",
-    ),
-    (re.compile(r"PoisonError\s*::\s*into_inner\b"), HAND_WRITTEN),
-    (re.compile(r"\|\s*(\w+)\s*\|\s*\1\s*\.\s*into_inner\(\s*\)\s*\)"), HAND_WRITTEN),
-    (re.compile(r"\bErr\s*\(\s*(\w+)\s*\)\s*=>[^,;{}]*?\b\1\s*\.\s*into_inner\(\s*\)"), HAND_WRITTEN),
-]
-WAIT = re.compile(r"\.(wait|wait_timeout|wait_while|wait_timeout_while)\s*\(")
+ALLOW = re.compile(r"lock-poison: allow\b")
+FAIL_CLOSED = re.compile(r"lock-poison: fail-closed\b(?: \((?P<why>[^)]*\w[^)]*)\))?")
+PANIC = r"(?P<panic>unwrap\s*\(\s*\)|expect\s*\()"
+LOCK = r"\.\s*(?P<method>lock|read|write)\s*\(\s*\)"
 HELPERS = {
     "lock": "MutexExt::locked()",
     "read": "RwLockExt::read_locked()",
     "write": "RwLockExt::write_locked()",
 }
+HAND_WRITTEN = "poison recovery written out: use bacnet_types::sync's extension traits"
+INTO_INNER = (
+    r"unwrap_or_else\s*\(\s*(?:(?:std\s*::\s*)?sync\s*::\s*)?PoisonError\s*::\s*into_inner\s*\)"
+    r"|unwrap_or_else\s*\(\s*\|\s*(?P<v>\w+)\s*\|\s*(?P=v)\s*\.\s*into_inner\(\s*\)\s*\)"
+)
+# A lock call whose result is unwrapped, directly or through `.ok()`.
+PANICS = re.compile(LOCK + r"\s*\.\s*(?:ok\s*\(\s*\)\s*\.\s*)?" + PANIC)
+# The same through a type path: `Mutex::lock(&m).unwrap()`.
+UFCS = re.compile(r"\b\w*(?:Mutex|RwLock)\s*::\s*(?P<method>lock|read|write)\s*\(")
+GET_MUT = re.compile(r"\.\s*get_mut\s*\(\s*\)\s*\.\s*" + PANIC)
+WAIT = re.compile(r"\.\s*(?:wait|wait_timeout|wait_while|wait_timeout_while)\s*\(")
+FOLLOWED_BY_PANIC = re.compile(r"\s*\.\s*" + PANIC)
+# `let guard = m.lock();` and then `guard.unwrap()`.
+BOUND = re.compile(r"\blet\s+(?:mut\s+)?(?P<name>\w+)\s*(?::[^=;]*)?=[^;]*?" + LOCK + r"\s*;")
+REBIND = re.compile(r"\blet\s+(?:mut\s+)?$")
+HAND = [
+    re.compile(r"PoisonError\s*::\s*into_inner\b"),
+    re.compile(r"\|\s*(\w+)\s*\|\s*\1\s*\.\s*into_inner\(\s*\)\s*\)"),
+    re.compile(r"\bErr\s*\(\s*(\w+)\s*\)\s*=>[^,;{}]*?\b\1\s*\.\s*into_inner\(\s*\)"),
+]
+ERR_ARM_BLOCK = re.compile(r"\bErr\s*\(\s*(?P<name>\w+)\s*\)\s*=>\s*\{")
+# A lock result looked at instead of taken: a Result method or `?` after the
+# call, or the call as an `if let Ok(..)`, `let Ok(..) else` or `match`
+# scrutinee. `?` and `match` count for `.lock()` only: the durable files'
+# own `read()` returns a Result, and `?` on a poisoned RwLock would need a
+# From<PoisonError> that no error type here has.
+RESULT_METHOD = re.compile(
+    r"\s*\.\s*(?:ok|err|is_ok|is_err|is_ok_and|is_err_and|map|map_err|map_or|map_or_else"
+    r"|and_then|or_else|unwrap_or|unwrap_or_default|unwrap_or_else|inspect|inspect_err)\b"
+)
+INTO_INNER_AFTER = re.compile(r"\s*\.\s*(?:" + INTO_INNER + ")")
+QUESTION = re.compile(r"\s*\?")
+SCRUTINEE_END = re.compile(r"\s*(?:\{|else\b|&&)")
+LET_OK = re.compile(r"\blet\s+(?:Ok|Err)\s*\(")
+# `match` on the call; `match &*m.lock()` derefs a guard, not a Result.
+MATCH = re.compile(r"\bmatch\s+(?!&?\s*\*)")
+STATEMENT_END = re.compile(r"[;{}]\s*$")
+
+
+def _close_paren(code, j):
+    """Offset just past the `)` that closes the `(` before offset `j`."""
+    depth = 1
+    while j < len(code) and depth:
+        depth += {"(": 1, ")": -1}.get(code[j], 0)
+        j += 1
+    return j
+
+
+def _statement_start(code, offset):
+    """Offset of the statement holding `offset`: just past the last `;`,
+    `{` or `}` before it."""
+    k = max(code.rfind(";", 0, offset), code.rfind("{", 0, offset), code.rfind("}", 0, offset))
+    return k + 1
+
+
+def _marked(raw_lines, code_lines, line, marker):
+    """The `marker` match on `line` (1-based), on the statement's earlier
+    lines, or in the comment lines just above the statement; else None."""
+    k = line - 1
+    while k >= 0 and line - k <= 12:
+        if m := marker.search(raw_lines[k]):
+            return m
+        if k < line - 1 and STATEMENT_END.search(code_lines[k]):
+            return None
+        k -= 1
+    return None
 
 
 def findings(path, raw, blanked=None):
-    """[(line, message)] for the bad spellings in non-test code of `raw`."""
+    """([(line, message)] for the bad spellings in non-test code of `raw`,
+    the number of fail-closed sites marked with a reason)."""
     if blanked is None:
         blanked = blank_comments_and_strings(raw)
     code, _ = strip_test_items(blanked, raw)
-    lines = raw.splitlines()
-    found = []
+    raw_lines, code_lines = raw.splitlines(), code.splitlines()
+    helper = str(path) == HELPER
+    found = {}
+    closed = 0
 
-    def report(offset, message):
+    def report(offset, message, marker=ALLOW):
         line = code.count("\n", 0, offset) + 1
-        if ALLOW not in lines[line - 1]:
-            found.append((line, message))
+        if line in found or _marked(raw_lines, code_lines, line, marker):
+            return
+        found[line] = message
 
-    for pattern, message in BAD:
-        if str(path) == HELPER and "into_inner" in pattern.pattern:
-            continue
-        for m in pattern.finditer(code):
-            if m.lastindex and m.lastindex >= 2:
-                how = "unwrap()" if m.group(2).startswith("unwrap") else "expect()"
-                report(m.start(), message.format(how, HELPERS[m.group(1)]))
-            else:
-                report(m.start(), message)
+    for m in PANICS.finditer(code):
+        how = "unwrap()" if m.group("panic").startswith("unwrap") else "expect()"
+        report(
+            m.start(),
+            f"std lock taken with {how}, which panics when it is poisoned: "
+            f"use {HELPERS[m.group('method')]}",
+        )
+    for m in UFCS.finditer(code):
+        if FOLLOWED_BY_PANIC.match(code, _close_paren(code, m.end())):
+            report(
+                m.start(),
+                "std lock taken through its type and unwrapped: "
+                f"use {HELPERS[m.group('method')]}",
+            )
+    for m in GET_MUT.finditer(code):
+        report(
+            m.start(),
+            "get_mut() unwrapped, which panics when the lock is poisoned: use get_mut_locked()",
+        )
     for m in WAIT.finditer(code):
-        depth, j = 1, m.end()
-        while j < len(code) and depth:
-            depth += {"(": 1, ")": -1}.get(code[j], 0)
-            j += 1
-        if re.match(r"\s*\.\s*(unwrap\(\s*\)|expect\s*\()", code[j:]):
+        if FOLLOWED_BY_PANIC.match(code, _close_paren(code, m.end())):
             report(m.start(), "Condvar wait unwrapped, which panics on poison: use CondvarExt")
-    return found
+    for m in BOUND.finditer(code):
+        # The binding's first use, past any `let` that names it again.
+        for use in re.compile(r"\b" + m.group("name") + r"\b").finditer(code, m.end()):
+            if REBIND.search(code[max(0, use.start() - 16) : use.start()]):
+                continue
+            if FOLLOWED_BY_PANIC.match(code, use.end()):
+                report(
+                    use.start(),
+                    f"std lock result `{m.group('name')}` unwrapped, which panics when it "
+                    f"is poisoned: use {HELPERS[m.group('method')]}",
+                )
+            break
+    if not helper:
+        for pattern in HAND:
+            for m in pattern.finditer(code):
+                report(m.start(), HAND_WRITTEN)
+        for m in ERR_ARM_BLOCK.finditer(code):
+            depth, j = 1, m.end()
+            while j < len(code) and depth:
+                depth += {"{": 1, "}": -1}.get(code[j], 0)
+                j += 1
+            body = code[m.end() : j]
+            if re.search(r"\b" + m.group("name") + r"\s*\.\s*into_inner\(\s*\)", body):
+                report(m.start(), HAND_WRITTEN)
+    for m in re.finditer(LOCK, code):
+        after = m.end()
+        lock_only = m.group("method") == "lock"
+        inspected = (
+            RESULT_METHOD.match(code, after) and not INTO_INNER_AFTER.match(code, after)
+        ) or (lock_only and QUESTION.match(code, after))
+        if not inspected and SCRUTINEE_END.match(code, after):
+            before = code[_statement_start(code, m.start()) : m.start()]
+            inspected = LET_OK.search(before) or (lock_only and MATCH.search(before))
+        if not inspected:
+            continue
+        line = code.count("\n", 0, m.start()) + 1
+        mark = _marked(raw_lines, code_lines, line, FAIL_CLOSED)
+        if mark and mark.group("why"):
+            closed += 1
+        elif mark:
+            found.setdefault(
+                line, "fail-closed marker without a reason: `// lock-poison: fail-closed (<why>)`"
+            )
+        else:
+            report(
+                m.start(),
+                "std lock result inspected instead of taken: take it (MutexExt/RwLockExt), or "
+                "fail closed with `// lock-poison: fail-closed (<why>)` where a half-done "
+                "update must not be used",
+            )
+    return sorted(found.items()), closed
+
+
+# Tracked Rust the workspace builds or ships as samples. Tests, benches and
+# fuzz targets may unwrap; benchmarks/results/ holds archived snapshots.
+EXCLUDED = re.compile(r"(^|/)(tests|benches|fuzz)/|^benchmarks/results/")
 
 
 def tracked_sources():
     out = subprocess.run(
-        ["git", "ls-files", "crates/*.rs"], cwd=ROOT, capture_output=True, text=True, check=True
+        ["git", "ls-files", "*.rs"], cwd=ROOT, capture_output=True, text=True, check=True
     ).stdout
-    return [Path(p) for p in out.splitlines() if SOURCE.match(p)]
+    return [Path(p) for p in out.splitlines() if not EXCLUDED.search(p)]
 
 
 def check(paths):
+    """(findings printed, fail-closed sites marked)."""
     tests = test_files(tracked_sources())
-    bad = 0
+    bad = closed = 0
     for p in sorted(paths):
         if p in tests:
             continue
-        for line, message in findings(p, *lexed(p)):
+        found, marked = findings(p, *lexed(p))
+        closed += marked
+        for line, message in found:
             print(f"{p}:{line}: {message}")
             bad += 1
-    return bad
+    return bad, closed
 
 
 GOOD = """
@@ -339,18 +473,36 @@ fn f(m: &Mutex<u8>, r: &RwLock<u8>, t: &tokio::sync::Mutex<u8>) {
     let _c = r.write_locked();
     // m.lock().unwrap() in a comment is fine
     let _s = "m.lock().unwrap() in a string is fine";
+    let _d = std::fs::read(path).unwrap();
 }
 async fn g(t: &tokio::sync::Mutex<u8>, w: &tokio::sync::RwLock<u8>) {
     let _a = t.lock().await;
     let _b = w.read().await;
     let _c = t.try_lock().unwrap();
+    let pending = t.lock();
+    let _d = pending.await;
+    let _e = tokio::time::timeout(d, w.write()).await;
 }
-fn h(m: &Mutex<u8>) {
+fn h(m: &Mutex<u8>) -> Result<(), Error> {
     let _a = m.lock().unwrap(); // lock-poison: allow (the panic is wanted)
+    // lock-poison: fail-closed (a half-done lease could repeat an ID)
+    let _b = m
+        .lock()
+        .map_err(|_| Error::Poisoned)?;
+    // lock-poison: fail-closed (poisoned acts closed)
+    if let Ok(mut g) = m.lock() {
+        *g += 1;
+    }
+    Ok(())
+}
+fn persisted(file: &Durable) -> Result<(), Error> {
+    let Some(octets) = file.read()? else { return Ok(()) };
+    let _ = match file.read() { Ok(x) => x, Err(e) => return Err(e) };
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
-    fn t(m: &std::sync::Mutex<u8>) { let _a = m.lock().unwrap(); }
+    fn t(m: &std::sync::Mutex<u8>) { let _a = m.lock().unwrap(); let _b = m.lock().ok(); }
 }
 #[cfg(any(test, feature = "test-support"))]
 fn support(m: &std::sync::Mutex<u8>) { let _a = m.lock().unwrap(); }
@@ -365,37 +517,78 @@ fn arms(m: &Mutex<u8>, x: u8) {
         _ => {}
     }
 }
+fn guard(table: &SyncMutex<Option<u8>>) -> u8 {
+    match &*table.lock() {
+        Some(x) => *x,
+        None => 0,
+    }
+}
 """
 
 BAD_SAMPLES = [
     "fn f(m: &Mutex<u8>) { let _a = m.lock().unwrap(); }",
-    "fn f(m: &Mutex<u8>) { let _a = m.lock().expect(\"poisoned\"); }",
+    'fn f(m: &Mutex<u8>) { let _a = m.lock().expect("poisoned"); }',
     "fn f(m: &RwLock<u8>) { let _a = m\n    .read()\n    .unwrap(); }",
     "fn f(m: &RwLock<u8>) { let _a = m.write().unwrap(); }",
+    "fn f(m: &Mutex<u8>) { let _a = m.lock().ok().unwrap(); }",
+    "fn f(m: &Mutex<u8>) { let _a = Mutex::lock(&m).unwrap(); }",
+    'fn f(m: &RwLock<u8>) { let _a = std::sync::RwLock::write(&m).expect("x"); }',
+    "fn f(m: &mut Mutex<u8>) { *m.get_mut().unwrap() = 1; }",
+    "fn f(m: &Mutex<u8>) {\n    let g = m.lock();\n    let g = g.unwrap();\n}",
     "fn f(m: &Mutex<u8>) { let _a = m.lock().unwrap_or_else(PoisonError::into_inner); }",
+    "fn f(m: &Mutex<u8>) { let _a = m.lock().unwrap_or_else(std::sync::PoisonError::into_inner); }",
     "fn f(m: &Mutex<u8>) { let _a = m.lock().unwrap_or_else(|e| e.into_inner()); }",
-    "fn f(m: &Mutex<u8>) {\n    let _a = match m.lock() {\n        Ok(a) => a,\n        Err(p) => p.into_inner(),\n    };\n}",
-    "fn f(m: &Mutex<u8>) -> u8 {\n    match m.lock() {\n        Ok(a) => *a,\n        Err(poison) => *poison.into_inner(),\n    }\n}",
+    "fn f(m: &Mutex<u8>) {\n    let _a = match m.lock() {\n        Ok(a) => a,\n"
+    "        Err(p) => p.into_inner(),\n    };\n}",
+    "fn f(m: &Mutex<u8>) -> u8 {\n    match m.lock() {\n        Ok(a) => *a,\n"
+    "        Err(poison) => *poison.into_inner(),\n    }\n}",
+    "fn f(m: &Mutex<u8>) {\n    let _a = match m.lock() {\n        Ok(a) => a,\n"
+    "        Err(p) => {\n            warn();\n            p.into_inner()\n        }\n    };\n}",
     "fn f(c: &Condvar, g: G) { let _g = c.wait_timeout(g, d).unwrap(); }",
-    "fn f(c: &Condvar, g: G) { let _g = c.wait_while(g, |s| s.busy()).expect(\"x\"); }",
+    'fn f(c: &Condvar, g: G) { let _g = c.wait_while(g, |s| s.busy()).expect("x"); }',
+    "fn f(m: &Mutex<u8>) -> Option<u8> { Some(*m.lock().ok()?) }",
+    "fn f(m: &Mutex<u8>) -> Result<(), E> { let _a = m.lock().map_err(|_| E)?; Ok(()) }",
+    "fn f(m: &Mutex<u8>) -> bool { m.lock().is_ok_and(|g| *g > 0) }",
+    "fn f(m: &RwLock<u8>) -> bool { m.read().map_or(false, |g| *g > 0) }",
+    "fn f(m: &Mutex<u8>) {\n    if let Ok(mut g) = m.lock() {\n        *g += 1;\n    }\n}",
+    "fn f(m: &RwLock<u8>) {\n    let Ok(g) = m.write() else {\n        return;\n    };\n}",
+    "fn f(m: &Mutex<u8>) {\n    match m.lock() {\n        Ok(g) => drop(g),\n        Err(_) => {}\n    }\n}",
+    "fn f(m: &Mutex<u8>) {\n    // lock-poison: fail-closed\n    if let Ok(g) = m.lock() {\n"
+    "        drop(g);\n    }\n}",
+    "fn f(m: &Mutex<u8>) {\n    // lock-poison: fail-closed (why)\n    let a = 1;\n"
+    "    if let Ok(g) = m.lock() {\n        drop(g);\n    }\n}",
     "#[cfg(not(test))]\nfn f(m: &Mutex<u8>) { let _a = m.lock().unwrap(); }",
     "struct S {\n    #[cfg(test)]\n    a: u8,\n    b: u8,\n}\nfn f(m: &Mutex<u8>) { m.lock().unwrap(); }",
-    "fn f(m: &Mutex<u8>, x: u8) {\n    match x {\n        #[cfg(test)]\n        0 => {}\n        _ => drop(m.lock().unwrap()),\n    }\n}",
+    "fn f(m: &Mutex<u8>, x: u8) {\n    match x {\n        #[cfg(test)]\n        0 => {}\n"
+    "        _ => drop(m.lock().unwrap()),\n    }\n}",
     "#[cfg(test)]\nuse std::sync::Mutex;\nfn f(m: &Mutex<u8>) { m.lock().unwrap(); }",
-    "#[cfg(any(test, feature = \"std\"))]\nfn f(m: &Mutex<u8>) { let _a = m.lock().unwrap(); }",
+    '#[cfg(any(test, feature = "std"))]\nfn f(m: &Mutex<u8>) { let _a = m.lock().unwrap(); }',
 ]
 
 
 def self_test():
     failures = 0
-    good = findings(Path("good.rs"), GOOD)
+    good, closed = findings(Path("good.rs"), GOOD)
     if good:
         print(f"self-test: the good sample was flagged: {good}")
         failures += 1
+    if closed != 2:
+        print(f"self-test: counted {closed} fail-closed sites in the good sample, not 2")
+        failures += 1
     for sample in BAD_SAMPLES:
-        if not findings(Path("bad.rs"), sample):
+        if not findings(Path("bad.rs"), sample)[0]:
             print(f"self-test: not flagged: {sample!r}")
             failures += 1
+    # A pathspec that finds nothing must fail, not print OK.
+    global tracked_sources
+    tracked = tracked_sources
+    tracked_sources = list
+    try:
+        if main([]) != 1:
+            print("self-test: an empty scan passed")
+            failures += 1
+    finally:
+        tracked_sources = tracked
     print("self-test: ok" if not failures else f"self-test: {failures} failure(s)")
     return 1 if failures else 0
 
@@ -404,14 +597,21 @@ def main(argv):
     if argv == ["--self-test"]:
         return self_test()
     paths = [Path(a) for a in argv] if argv else tracked_sources()
-    bad = check(paths)
+    if not paths:
+        print("error: no Rust files to check (did the pathspec change?)")
+        return 1
+    bad, closed = check(paths)
     if bad:
         print(
             f"\n{bad} std lock site(s) (#2559): take the lock through bacnet_types::sync's "
-            "MutexExt, RwLockExt or CondvarExt, or mark a wanted panic `// lock-poison: allow`."
+            "MutexExt, RwLockExt or CondvarExt; fail closed with `// lock-poison: fail-closed "
+            "(<why>)`; or mark a wanted panic `// lock-poison: allow`."
         )
         return 1
-    print("OK: std locks in non-test code are taken poisoned or not (bacnet_types::sync).")
+    print(
+        f"OK: {len(paths)} files; std locks are taken poisoned or not (bacnet_types::sync), "
+        f"{closed} marked fail-closed."
+    )
     return 0
 
 
