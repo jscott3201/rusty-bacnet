@@ -21,8 +21,9 @@ fn floating_limit_normal_stays_normal() {
 
 #[test]
 fn floating_limit_to_high() {
-    // setpoint=50, high_diff=10 → high_limit=60; value=65 exceeds
-    let (mut db, ee_oid, ai_oid) = setup_floating_limit(65.0, 50.0, 10.0, 10.0, 2.0);
+    // setpoint=50, high_diff=10 → high_limit=60; value=62 exceeds. The low
+    // diff differs (15), so the limits swapped (65) would leave it NORMAL.
+    let (mut db, ee_oid, ai_oid) = setup_floating_limit(62.0, 50.0, 10.0, 15.0, 2.0);
     let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].enrollment_oid, ee_oid);
@@ -34,8 +35,9 @@ fn floating_limit_to_high() {
 
 #[test]
 fn floating_limit_to_low() {
-    // setpoint=50, low_diff=10 → low_limit=40; value=35 below
-    let (mut db, _ee_oid, _ai_oid) = setup_floating_limit(35.0, 50.0, 10.0, 10.0, 2.0);
+    // setpoint=50, low_diff=10 → low_limit=40; value=38 below. The high
+    // diff differs (15), so the limits swapped (35) would leave it NORMAL.
+    let (mut db, _ee_oid, _ai_oid) = setup_floating_limit(38.0, 50.0, 15.0, 10.0, 2.0);
     let transitions = evaluate_event_enrollments(&mut db, 1);
     assert_eq!(transitions.len(), 1);
     assert_eq!(transitions[0].change.to, EventState::LOW_LIMIT);

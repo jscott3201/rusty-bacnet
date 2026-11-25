@@ -961,6 +961,7 @@ pub use seat::SeatedClientBuilder;
 mod segmentation;
 mod segmentation_abort;
 mod segmentation_context;
+mod segmented_receive;
 mod segmented_request;
 mod send_checks;
 pub use send_checks::RemoteBroadcast;
