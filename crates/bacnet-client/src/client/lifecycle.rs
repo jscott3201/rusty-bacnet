@@ -421,7 +421,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             }
                             Ok(decoded) => {
                                 Self::dispatch_apdu(
-                                    DispatchContext {
+                                    &DispatchContext {
                                         tsm: &tsm_dispatch,
                                         device_table: &device_table_dispatch,
                                         network: network_dispatch,
