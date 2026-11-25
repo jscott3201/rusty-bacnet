@@ -22,6 +22,7 @@ use bacnet_transport::port::TransportPort;
 use super::{Client, ResolveScope};
 use crate::error::OpsError;
 use crate::limits::RequestLimits;
+use crate::watch::WatchSettings;
 use crate::write::WritePolicy;
 
 /// `duration` in whole milliseconds, as the low-level builders take it.
@@ -30,12 +31,16 @@ fn millis(duration: Duration) -> u64 {
 }
 
 /// What every connect builder keeps besides the low-level builder: the
-/// request limits, where a handle by instance asks for its device, and the
-/// priorities its writes may use.
+/// request limits, where a handle by instance asks for its device, the
+/// priorities its writes may use, its watches' settings, and the timers
+/// its watches' renewals leave room for.
 struct Kept {
     limits: RequestLimits,
     resolve_scope: ResolveScope,
     write_policy: WritePolicy,
+    watch_settings: WatchSettings,
+    /// The APDU timeout and retries set on the low-level builder.
+    timer: (Duration, u8),
 }
 
 impl Default for Kept {
@@ -44,16 +49,26 @@ impl Default for Kept {
             limits: RequestLimits::new(0),
             resolve_scope: ResolveScope::default(),
             write_policy: WritePolicy::default(),
+            watch_settings: WatchSettings::default(),
+            timer: (Duration::from_secs(6), 3),
         }
     }
 }
 
 impl Kept {
+    /// Refuse watch settings no hub takes, before anything is bound.
+    fn check(&self) -> Result<(), OpsError> {
+        Ok(self.watch_settings.validate()?)
+    }
+
     /// A client that wraps `low`, with these settings.
     fn wrap<T: TransportPort + 'static>(self, low: BACnetClient<T>) -> Client<T> {
+        let (timeout, retries) = self.timer;
         Client::new(Arc::new(low), Arc::new(self.limits))
             .with_resolve_scope(self.resolve_scope)
             .with_write_policy(self.write_policy)
+            .with_watch_settings(self.watch_settings)
+            .with_request_budget(timeout * (u32::from(retries) + 1))
     }
 }
 
@@ -68,6 +83,7 @@ macro_rules! common_settings {
             #[must_use]
             pub fn apdu_timeout(mut self, timeout: Duration) -> Self {
                 self.builder = self.builder.apdu_timeout_ms(millis(timeout));
+                self.kept.timer.0 = timeout;
                 self
             }
 
@@ -76,6 +92,19 @@ macro_rules! common_settings {
             #[must_use]
             pub fn apdu_retries(mut self, retries: u8) -> Self {
                 self.builder = self.builder.apdu_retries(retries);
+                self.kept.timer.1 = retries;
+                self
+            }
+
+            /// The settings the client's watches take
+            /// ([`Client::watch`]): [`WatchSettings::default`] unless set
+            /// (five-minute subscriptions, polls at most every 10 s, COV
+            /// where the device takes it). [`Client::watch_with`] takes
+            /// others for one watch. Settings no hub takes are refused by
+            /// `connect`, before anything is bound.
+            #[must_use]
+            pub fn watch_settings(mut self, settings: WatchSettings) -> Self {
+                self.kept.watch_settings = settings;
                 self
             }
 
@@ -199,9 +228,12 @@ impl BipConnect {
     ///
     /// # Errors
     ///
-    /// As the low-level builder's `build_any`, as [`OpsError::Client`]:
-    /// settings it refuses, and a socket that can't be bound.
+    /// [`OpsError::Watch`] for watch settings no hub takes, before anything
+    /// is bound; then as the low-level builder's `build_any`, as
+    /// [`OpsError::Client`]: settings it refuses, and a socket that can't be
+    /// bound.
     pub async fn connect(self) -> Result<Client, OpsError> {
+        self.kept.check()?;
         let low = Box::pin(self.builder.build_any()).await?;
         Ok(self.kept.wrap(low))
     }
@@ -242,8 +274,11 @@ impl Bip6Connect {
     ///
     /// # Errors
     ///
-    /// As the low-level builder's `build_any`, as [`OpsError::Client`].
+    /// [`OpsError::Watch`] for watch settings no hub takes, before anything
+    /// is bound; then as the low-level builder's `build_any`, as
+    /// [`OpsError::Client`].
     pub async fn connect(self) -> Result<Client, OpsError> {
+        self.kept.check()?;
         let low = Box::pin(self.builder.build_any()).await?;
         Ok(self.kept.wrap(low))
     }
@@ -331,11 +366,13 @@ mod sc {
         ///
         /// # Errors
         ///
-        /// As the low-level builder's `build_any`, as
-        /// [`OpsError::Client`]: a missing or reserved VMAC or UUID and
+        /// [`OpsError::Watch`] for watch settings no hub takes; then as the
+        /// low-level builder's `build_any`, as [`OpsError::Client`]: a missing or reserved VMAC or UUID and
         /// other refused settings before any dial, then a hub that can't
         /// be reached or refuses the connection.
         pub async fn connect(self) -> Result<Client, OpsError> {
+            self.kept.check()?;
+            self.kept.check()?;
             let low = Box::pin(self.builder.build_any()).await?;
             Ok(self.kept.wrap(low))
         }
@@ -418,6 +455,7 @@ mod mstp {
         ///
         /// # Errors
         ///
+        /// [`OpsError::Watch`] for watch settings no hub takes;
         /// [`OpsError::Parse`] for a baud rate not in
         /// [`STANDARD_BAUD_RATES`] and settings the MS/TP transport refuses
         /// (a MAC above Max_Master, no information frame per token), before
@@ -431,6 +469,7 @@ mod mstp {
                 self.config.max_info_frames,
                 self.config.baud_rate
             );
+            self.kept.check()?;
             let refused = |reason: String| OpsError::parse("MS/TP settings", &settings, reason);
             if !STANDARD_BAUD_RATES.contains(&self.config.baud_rate) {
                 return Err(refused(format!(

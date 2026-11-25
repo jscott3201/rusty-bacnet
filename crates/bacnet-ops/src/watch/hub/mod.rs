@@ -41,7 +41,6 @@ pub mod first;
 pub(crate) mod ranges;
 mod snapshot;
 
-use std::num::NonZeroU32;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -54,10 +53,11 @@ use tokio::task::JoinHandle;
 
 pub use self::snapshot::{Phase, Snapshot, Source};
 pub use super::options::{
-    Backoff, Fallback, MAX_ROWS, MAX_SAMPLES, MIN_POLL, MissingDevice, POLL_FLOOR, Reads,
+    Backoff, Fallback, MAX_POLL, MAX_ROWS, MAX_SAMPLES, MIN_POLL, MissingDevice, POLL_FLOOR, Reads,
     WatchOptions,
 };
 pub use super::sample::{Sample, Samples};
+pub use super::settings::Lifetime;
 use super::shared::{Arrival, DeviceSlot, Registry, Running, Shared};
 use super::{Point, WatchError, device, dispatch, shared};
 use crate::client::Client;
@@ -96,7 +96,7 @@ pub(in crate::watch) const PROCESS_BASE: u32 = 0x4D43_0000;
 const PROCESS_SPAN: u32 = 0x1_0000;
 
 /// How many ranges a client has: at most this many hubs live on one client
-/// at once, its own hub included. A hub holds its range until it is gone,
+/// at once, its pooled ones included. A hub holds its range until it is gone,
 /// its cancels done or given up ([`ranges`]).
 pub(in crate::watch) const PROCESS_RANGES: u32 = 256;
 
@@ -108,31 +108,6 @@ fn process_base(index: u32) -> u32 {
 /// The identifier after `process` in the range starting at `base`.
 fn next_process(base: u32, process: u32) -> u32 {
     base + (process.wrapping_sub(base).wrapping_add(1)) % PROCESS_SPAN
-}
-
-/// A COV subscription's lifetime in seconds: never zero, so never the
-/// subscription that doesn't lapse.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Lifetime(pub(in crate::watch) NonZeroU32);
-
-impl Lifetime {
-    /// Five minutes, the TUI's default.
-    pub const DEFAULT: Self = Self(NonZeroU32::new(300).expect("300 is not zero"));
-
-    /// A lifetime of `secs`; `None` for 0.
-    pub fn new(secs: u32) -> Option<Self> {
-        let secs = NonZeroU32::new(secs)?;
-        Some(Self(secs))
-    }
-
-    /// The lifetime in seconds, at least 1.
-    pub fn secs(self) -> u32 {
-        self.0.get()
-    }
-
-    pub(in crate::watch) fn duration(self) -> Duration {
-        Duration::from_secs(u64::from(self.secs()))
-    }
 }
 
 /// How long before a lifetime of `secs` ends its renewal should go: a
@@ -275,8 +250,7 @@ pub(crate) struct Inner<T: TransportPort + 'static> {
     handles: Mutex<Vec<JoinHandle<()>>>,
     stop_dispatch: watch::Sender<bool>,
     /// The range of subscriber process identifiers the hub holds, and
-    /// whether it gives it back when it goes: the client's own hub keeps
-    /// its range for the client's life.
+    /// whether it gives it back when it goes (a test keeps one).
     range: (u32, bool),
 }
 
@@ -317,10 +291,11 @@ impl<T: TransportPort + 'static> Hub<T> {
     /// [`validate`](WatchOptions::validate) refuses, [`WatchError::NoRuntime`]
     /// outside a Tokio runtime, which its tasks need, and
     /// [`WatchError::Hubs`] when every range is held: 256 hubs live on the
-    /// client, its own included, or still cancelling. Nothing is taken
+    /// client, the client's pooled ones included
+    /// ([`Client::watch_with`]), or still cancelling. Nothing is taken
     /// then.
     pub fn new(client: Client<T>, options: WatchOptions) -> Result<Self, WatchError> {
-        options.validate().map_err(WatchError::Settings)?;
+        options.validate()?;
         if tokio::runtime::Handle::try_current().is_err() {
             return Err(WatchError::NoRuntime);
         }
@@ -332,8 +307,7 @@ impl<T: TransportPort + 'static> Hub<T> {
 
     /// A hub as [`new`](Self::new) makes it, under `options` already
     /// checked, in range `range`, which it gives back when it goes if
-    /// `release`: a client's own hub, made again, takes its one range each
-    /// time and keeps it.
+    /// `release`: a test makes hubs in one range it keeps.
     pub(in crate::watch) fn in_range(
         client: Client<T>,
         options: WatchOptions,
@@ -547,8 +521,10 @@ impl<T: TransportPort + 'static> Hub<T> {
 
     /// Stop every watch, wait up to `wait` for their cancels, and stop the
     /// notification receiver. Later [`watch`](Self::watch) calls fail.
-    /// True when every cancel finished in time; the subscriptions of those
-    /// that didn't lapse with their lifetime.
+    /// Every [`Watch`](super::Watch) taken from the hub ends first, its
+    /// stream giving `None` at once, so none sees a point stop. True when
+    /// every cancel finished in time; the subscriptions of those that
+    /// didn't lapse with their lifetime.
     pub async fn shutdown(&self, wait: Duration) -> bool {
         let (entries, devices): (Vec<Arc<Shared>>, Vec<Arc<DeviceSlot>>) = {
             let mut table = self.inner.registry.table();
@@ -557,6 +533,8 @@ impl<T: TransportPort + 'static> Hub<T> {
             let entries = table.entries.drain().map(|(_, slot)| slot.shared).collect();
             (entries, table.devices.values().cloned().collect())
         };
+        let watches = std::mem::take(&mut *self.inner.registry.watches.locked());
+        super::stream::end_all(watches);
         for shared in &entries {
             shared.stop();
         }

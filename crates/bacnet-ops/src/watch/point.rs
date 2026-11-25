@@ -89,6 +89,19 @@ pub enum Why {
     /// again ([`CovSupport::Refused`](super::CovSupport::Refused)). Not
     /// asked again.
     Refused(String),
+    /// The device refused the subscription's lifetime as out of the range
+    /// it takes, with its error: a services-class value-out-of-range error,
+    /// which SubscribeCOV and SubscribeCOVProperty name for that alone
+    /// (Clauses 13.14.1.3.1 and 13.15.1.3.1). Polled, and not asked again
+    /// until the point starts again; nothing is remembered of the device's
+    /// COV service. A shorter lifetime may be taken; every device takes up
+    /// to [`Lifetime::MAX`](super::hub::Lifetime::MAX), the longest a watch
+    /// asks for, so only one taking less than the standard asks answers so.
+    LifetimeRefused(String),
+    /// The watch's settings poll every point
+    /// ([`WatchSettings::subscribe`](super::WatchSettings::subscribe) is
+    /// false): no subscription is asked for.
+    PollOnly,
     /// The first read or the subscription had no answer, with the error:
     /// subscribed again after a backoff.
     NoAnswer(String),

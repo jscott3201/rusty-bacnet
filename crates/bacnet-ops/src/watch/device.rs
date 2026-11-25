@@ -56,7 +56,7 @@ use super::jobs::{self, Answer, Outcome, Polled, Started};
 use super::options::MissingDevice;
 use super::sample::Via;
 use super::shared::{Arrival, DeviceSlot, FirstSample, Running, Shared};
-use super::support::fills_table;
+use super::support::{fills_table, refuses_lifetime};
 use crate::client::batch::Missing;
 use crate::client::{failed_locally, unreachable};
 use crate::device::DeviceAddress;
@@ -616,9 +616,11 @@ impl<T: TransportPort + 'static> Device<T> {
             Outcome::Asked(Err(e)) if unreachable(e) || failed_locally(e)
         );
         let full = matches!(&started.outcome, Outcome::Asked(Err(e)) if fills_table(e));
+        let lifetime = matches!(&started.outcome, Outcome::Asked(Err(e)) if refuses_lifetime(e));
+        let poll_only = matches!(started.outcome, Outcome::PollOnly);
         let transient = match &started.outcome {
             Outcome::Asked(Err(_)) => unanswered || full,
-            Outcome::Refused => false,
+            Outcome::Refused | Outcome::PollOnly => false,
             Outcome::Asked(Ok(_)) | Outcome::NotAsked => true,
         };
         // `None` when nothing was asked: the first read had no answer.
@@ -648,6 +650,7 @@ impl<T: TransportPort + 'static> Device<T> {
             }
             Outcome::Asked(Err(error)) => Some(error.to_string()),
             Outcome::Refused => Some(REFUSED_BEFORE.to_string()),
+            Outcome::PollOnly => Some(POLL_ONLY.to_string()),
             Outcome::NotAsked => None,
         };
         lost |= unanswered;
@@ -677,7 +680,12 @@ impl<T: TransportPort + 'static> Device<T> {
                 shared.lock().snapshot.state
             };
             // `Refused` only for the device's own no.
-            let (why, note) = if full {
+            let (why, note) = if poll_only {
+                (Why::PollOnly, error)
+            } else if lifetime {
+                let note = format!("COV lifetime refused: {error}");
+                (Why::LifetimeRefused(error), note)
+            } else if full {
                 let note = format!("COV table full: {error}");
                 (Why::Full(error), note)
             } else if unanswered {
@@ -822,3 +830,6 @@ impl<T: TransportPort + 'static> Device<T> {
 /// Why a point is polled whose device refused the COV service itself for
 /// an earlier point.
 const REFUSED_BEFORE: &str = "the device refused this COV service before; not asked again";
+
+/// Why a point of a hub that polls every point is polled.
+const POLL_ONLY: &str = "polled: the watch's settings poll every point";

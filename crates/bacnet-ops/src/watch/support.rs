@@ -113,6 +113,19 @@ pub(super) fn refuses_service(error: &Error) -> bool {
     }
 }
 
+/// Whether `error`, a device's answer to a subscription, refuses its
+/// lifetime as out of the range the device takes: a services-class
+/// value-out-of-range error, the one SubscribeCOV and SubscribeCOVProperty
+/// name for that (Clauses 13.14.1.3.1 and 13.15.1.3.1). Not a refusal of
+/// the service: the device may take a shorter one.
+pub(super) fn refuses_lifetime(error: &Error) -> bool {
+    matches!(
+        error.remote(),
+        Some(RemoteError::Error { class, code })
+            if class == ErrorClass::SERVICES && code == ErrorCode::VALUE_OUT_OF_RANGE
+    )
+}
+
 /// Whether `error`, a device's answer to a subscription, says its
 /// subscription table is full (a resources-class Error PDU): not a
 /// refusal, since a full table frees up; the point is polled meanwhile and
@@ -284,6 +297,19 @@ mod tests {
         )));
         assert!(!refuses_service(&Error::Timeout(
             std::time::Duration::from_secs(1)
+        )));
+        // A lifetime out of the device's range refuses neither the service
+        // nor the point for good.
+        let lifetime = error(ErrorClass::SERVICES, ErrorCode::VALUE_OUT_OF_RANGE);
+        assert!(!refuses_service(&lifetime));
+        assert!(refuses_lifetime(&lifetime));
+        assert!(!refuses_lifetime(&error(
+            ErrorClass::PROPERTY,
+            ErrorCode::VALUE_OUT_OF_RANGE
+        )));
+        assert!(!refuses_lifetime(&error(
+            ErrorClass::SERVICES,
+            ErrorCode::SERVICE_REQUEST_DENIED
         )));
     }
 

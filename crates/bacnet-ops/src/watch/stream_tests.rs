@@ -68,16 +68,16 @@ pub(super) async fn lab_device(lab: &Lab) -> Device<TestTransport> {
     device
 }
 
-/// Whether the client's own hub is alive.
+/// Whether one of the client's pooled hubs is alive.
 pub(super) fn own_hub(lab: &Lab) -> bool {
-    lab.client
-        .shared
-        .hub
-        .lock()
-        .unwrap()
-        .hub
-        .upgrade()
-        .is_some()
+    pooled(&lab.client) > 0
+}
+
+/// How many of `client`'s pooled hubs are alive.
+pub(super) fn pooled<T: bacnet_transport::port::TransportPort + 'static>(
+    client: &crate::Client<T>,
+) -> usize {
+    client.shared.watch_pool.lock().unwrap().live()
 }
 
 /// Acceptance: a point subscribes, its first update carries the first
@@ -184,7 +184,7 @@ async fn an_empty_watch_ends_and_a_point_named_twice_is_one() {
     let device = lab_device(&lab).await;
     let point = device.point("ai:1").unwrap();
     let mut twice = lab.client.watch([point.clone(), point]).unwrap();
-    assert_eq!(twice.points().count(), 1);
+    assert_eq!(twice.points().len(), 1);
     next(&mut twice).await;
     assert_eq!(lab.table().await.len(), 1);
     drop((twice, device));
@@ -234,31 +234,31 @@ async fn a_watch_past_the_cap_takes_nothing() {
 const PROPERTY: bacnet_types::enums::PropertyIdentifier =
     bacnet_types::enums::PropertyIdentifier::PRESENT_VALUE;
 
-/// The client's own hub goes with its last watch and comes back with the
-/// next, in the same range of subscriber process identifiers each time,
-/// however often: a few hundred cycles never take a second range, which
-/// could wrap onto another hub's (the lab's own hub took the first).
+/// A pooled hub goes with its last watch, its cancel done, and gives its
+/// range of subscriber process identifiers back; the next takes the next
+/// free range, going round past the end, and never the lab hub's, which
+/// lives on: more cycles than there are ranges hold two at most.
 #[tokio::test(start_paused = true)]
-async fn the_client_hub_keeps_one_range_however_often_it_is_made() {
+async fn a_pooled_hub_gives_its_range_back_with_its_last_watch() {
     let lab = Lab::start(WatchOptions::default()).await;
     let device = lab_device(&lab).await;
-    for _ in 0..300 {
+    let mut ranges = std::collections::BTreeSet::new();
+    for _ in 0..PROCESS_RANGES + 4 {
         let mut watch = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
         until(&mut watch, |u| u.state == State::Subscribed).await;
         let table = lab.table().await;
         assert_eq!(table.len(), 1);
-        let process = table[0].recipient.process_identifier;
-        assert_eq!(process, PROCESS_BASE + 0x1_0000, "the client's range");
+        let range = (table[0].recipient.process_identifier - PROCESS_BASE) / 0x1_0000;
+        assert_ne!(range, 0, "the lab hub's range");
+        ranges.insert(range);
+        assert_eq!(lab.client.shared.ranges.lock().unwrap().held(), 2);
         drop(watch);
         settle().await;
         assert!(!own_hub(&lab), "the hub went with its last watch");
         assert!(lab.table().await.is_empty(), "cancelled");
+        assert_eq!(lab.client.shared.ranges.lock().unwrap().held(), 1);
     }
-    let held = lab.client.shared.ranges.lock().unwrap().held();
-    assert_eq!(
-        held, 2,
-        "two ranges held in all: the lab's hub's and the client's"
-    );
+    assert_eq!(ranges.len(), PROCESS_RANGES as usize - 1, "every free one");
     drop(device);
     lab.stop().await;
 }
@@ -316,28 +316,30 @@ async fn points_come_from_the_property_grammar() {
     lab.stop().await;
 }
 
-/// The client's hub, made again in its one range, gives its first point
-/// the identifier an earlier hub's subscription still holds on the device
-/// (its cancel went unanswered). That old subscription's notifications,
-/// about another object, never land on the new point.
+/// A hub made again in a range an earlier one had (ranges come round after
+/// 256 hubs) gives its first point the identifier the earlier hub's
+/// subscription still holds on the device (its cancel went unanswered).
+/// That old subscription's notifications, about another object, never land
+/// on the new point.
 #[tokio::test(start_paused = true)]
 async fn a_reused_identifier_takes_no_late_notification() {
     let lab = Lab::start(WatchOptions::default()).await;
     let device = lab_device(&lab).await;
-    let mut watch = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
+    let options = crate::watch::WatchSettings::default().options(Duration::from_secs(2));
+    let in_range = || Hub::in_range(lab.client.clone(), options.clone(), 7, false);
+    let mut watch = in_range().stream([device.point("ai:1").unwrap()]).unwrap();
     until(&mut watch, |u| u.state == State::Subscribed).await;
     lab.quirks
         .muted
         .store(true, std::sync::atomic::Ordering::Relaxed);
     drop(watch);
     tokio::time::sleep(Duration::from_secs(40)).await;
-    assert!(!own_hub(&lab), "the hub went");
     lab.quirks
         .muted
         .store(false, std::sync::atomic::Ordering::Relaxed);
     let old = lab.table().await;
     assert_eq!(old.len(), 1, "the old subscription stays: {old:?}");
-    let mut again = lab.client.watch([device.point("ai:2").unwrap()]).unwrap();
+    let mut again = in_range().stream([device.point("ai:2").unwrap()]).unwrap();
     until(&mut again, |u| u.state == State::Subscribed).await;
     let table = lab.table().await;
     let processes: Vec<u32> = table

@@ -18,6 +18,13 @@ use super::*;
 use crate::device::ClientEvent;
 use bacnet_types::enums::ObjectType;
 
+/// When a client hub's renewal goes after its subscription: the default
+/// lifetime less the margin the default request budget leaves.
+fn renewal_due() -> Duration {
+    let options = WatchSettings::default().options(DEFAULT_REQUEST_BUDGET);
+    options.lifetime.duration() - options.renewal_margin
+}
+
 fn polled_for(update: &Update) -> Option<&Why> {
     match &update.state {
         State::Polled { why } => Some(why),
@@ -125,7 +132,7 @@ async fn a_silent_device_is_reported_and_comes_back() {
     until(&mut watch, |u| u.state == State::Subscribed).await;
     latest(&mut watch).await;
     lab.quirks.muted.store(true, Ordering::Relaxed);
-    tokio::time::sleep(Duration::from_secs(245)).await;
+    tokio::time::sleep(renewal_due() + Duration::from_secs(5)).await;
     let lost = latest(&mut watch)
         .await
         .expect("an update when the renewal failed");
@@ -160,7 +167,7 @@ async fn a_watch_keeps_its_subscription_renewed() {
     let mut watch = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
     until(&mut watch, |u| u.state == State::Subscribed).await;
     latest(&mut watch).await;
-    tokio::time::sleep(Duration::from_secs(241)).await;
+    tokio::time::sleep(renewal_due() + Duration::from_secs(1)).await;
     let remaining = lab.table().await[0].time_remaining;
     assert!(remaining >= 298, "renewed: {remaining}");
     if let Some(update) = latest(&mut watch).await {

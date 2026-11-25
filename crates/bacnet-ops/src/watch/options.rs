@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::error::Refusal;
 
+use super::WatchError;
 use super::hub::{Lifetime, POINT_PROPERTIES};
 use crate::limits::TokenBucket;
 
@@ -15,6 +17,9 @@ pub const MIN_POLL: Duration = Duration::from_secs(10);
 
 /// The lowest [`WatchOptions::poll_floor`] a hub takes.
 pub const POLL_FLOOR: Duration = Duration::from_secs(1);
+
+/// The longest [`WatchOptions::poll_every`] a hub takes: an hour.
+pub const MAX_POLL: Duration = Duration::from_secs(3600);
 
 /// Rows a point's snapshot holds at most: what it reads, the first read's
 /// extras, and room for a device's spares.
@@ -50,11 +55,11 @@ impl Backoff {
         }
     }
 
-    fn validate(self, what: &str) -> Result<(), String> {
+    /// Refused with `refusal` unless the first wait is above 0 and at
+    /// most the longest.
+    fn validate(self, refusal: &'static str) -> Result<(), WatchError> {
         if self.first.is_zero() || self.longest < self.first {
-            return Err(format!(
-                "{what}: the first wait must be above 0 and at most the longest"
-            ));
+            return Err(refused(refusal));
         }
         Ok(())
     }
@@ -166,6 +171,10 @@ pub struct WatchOptions {
     pub samples: usize,
     /// Points watched at once, those still cancelling included.
     pub max_points: usize,
+    /// Each point is subscribed for COV where its device takes it; `false`
+    /// polls every point ([`Why::PollOnly`](super::Why::PollOnly)) and
+    /// sends no subscription.
+    pub subscribe: bool,
     /// The hub's own rate, taken by each request it sends but cancels;
     /// `None` for none beyond the client's limits.
     pub bucket: Option<Arc<TokenBucket>>,
@@ -191,6 +200,7 @@ impl Default for WatchOptions {
             coalesce: Duration::from_secs(1),
             samples: 32,
             max_points: 256,
+            subscribe: true,
             bucket: None,
             agent: false,
         }
@@ -198,47 +208,65 @@ impl Default for WatchOptions {
 }
 
 impl WatchOptions {
-    /// Check the settings: polls no faster than the floor, a renewal
-    /// margin inside the lifetime, backoffs that start above zero, room
-    /// for one point and its rows.
-    pub fn validate(&self) -> Result<(), String> {
+    /// Check the settings: polls no faster than the floor and at least
+    /// every [`MAX_POLL`], a renewal margin inside the lifetime, backoffs
+    /// that start above zero, room for one point and its rows.
+    ///
+    /// # Errors
+    ///
+    /// [`WatchError::Settings`], saying which setting is refused.
+    pub fn validate(&self) -> Result<(), WatchError> {
         if self.poll_floor < POLL_FLOOR {
-            return Err(format!(
-                "the poll floor is at least {} s",
-                POLL_FLOOR.as_secs()
-            ));
+            return Err(numbered("the poll floor is at least {} s", POLL_FLOOR));
         }
         if self.poll_every < self.poll_floor {
-            return Err(format!(
-                "polls go at most every {} s",
-                self.poll_floor.as_secs()
-            ));
+            return Err(numbered("polls go at most every {} s", self.poll_floor));
+        }
+        if self.poll_every > MAX_POLL {
+            return Err(numbered("polls go at least every {} s", MAX_POLL));
         }
         if self.renewal_margin.is_zero() || self.renewal_margin >= self.lifetime.duration() {
-            return Err("the renewal margin must be inside the lifetime".into());
+            return Err(refused("the renewal margin must be inside the lifetime"));
         }
-        self.poll_backoff.validate("poll_backoff")?;
-        self.retry_cov.validate("retry_cov")?;
+        self.poll_backoff
+            .validate("poll_backoff: the first wait must be above 0 and at most the longest")?;
+        self.retry_cov
+            .validate("retry_cov: the first wait must be above 0 and at most the longest")?;
         if self.retry_cov.first < self.poll_floor {
-            return Err("retry_cov waits at least the poll floor".into());
+            return Err(refused("retry_cov waits at least the poll floor"));
         }
         if self.max_points == 0 || self.max_points > 0xFFFF {
-            return Err("max_points must be 1 to 65535".into());
+            return Err(refused("max_points must be 1 to 65535"));
         }
         if self.coalesce > Duration::from_secs(60) {
-            return Err("coalesce must be a minute or less".into());
+            return Err(refused("coalesce must be a minute or less"));
         }
         if !(1..=MAX_SAMPLES).contains(&self.samples) {
-            return Err(format!("samples must be 1 to {MAX_SAMPLES}"));
+            return Err(WatchError::Settings(
+                Refusal::new("samples must be 1 to {}").with_value(MAX_SAMPLES as u64),
+            ));
         }
         let reads = &self.reads;
         if reads.object.is_empty() {
-            return Err("an object watch must read a property".into());
+            return Err(refused("an object watch must read a property"));
         }
         // The extras: Object_Name, Status_Flags and two state texts.
         if reads.object.len() + reads.first.len() + 4 > MAX_ROWS {
-            return Err(format!("a point reads at most {MAX_ROWS} rows"));
+            return Err(WatchError::Settings(
+                Refusal::new("a point reads at most {} rows").with_value(MAX_ROWS as u64),
+            ));
         }
         Ok(())
     }
+}
+
+/// Settings refused for `label`.
+fn refused(label: &'static str) -> WatchError {
+    WatchError::Settings(Refusal::new(label))
+}
+
+/// Settings refused for `label`, whose one placeholder takes `duration`'s
+/// whole seconds.
+fn numbered(label: &'static str, duration: Duration) -> WatchError {
+    WatchError::Settings(Refusal::new(label).with_value(duration.as_secs()))
 }

@@ -48,11 +48,15 @@ async fn a_bip_client_connects_and_reads_over_loopback() {
         .limits(RequestLimits::new(50))
         .resolve_scope(ResolveScope::Network(5))
         .write_policy(WritePolicy::default().allow_priorities([Priority::CRITICAL_EQUIPMENT]))
+        .watch_settings(WatchSettings::default().with_subscribe(false))
         .connect()
         .await
         .unwrap();
     assert_eq!(client.resolve_scope(), ResolveScope::Network(5));
     assert!(client.write_policy().allows(Priority::CRITICAL_EQUIPMENT));
+    assert!(!client.watch_settings().subscribe, "the builder's");
+    // A 2 s timeout sent twice: what the watches' renewals leave room for.
+    assert_eq!(client.request_budget(), Duration::from_secs(4));
     let device: Device = client.device(address.as_str()).await.unwrap();
     assert_eq!(device.resolve_instance().await.unwrap(), 2560);
     let ai = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
@@ -91,6 +95,34 @@ async fn a_builder_client_resolves_locally_by_default() {
         .unwrap();
     assert_eq!(client.resolve_scope(), ResolveScope::Local);
     assert_eq!(client.write_policy(), WritePolicy::default());
+    assert_eq!(client.watch_settings(), &WatchSettings::default());
+    assert_eq!(
+        client.request_budget(),
+        crate::watch::DEFAULT_REQUEST_BUDGET
+    );
+}
+
+/// Watch settings no hub takes are refused by `connect`, before anything
+/// is bound: a poll interval past an hour.
+#[tokio::test]
+async fn a_builder_refuses_watch_settings_before_binding() {
+    let slow = WatchSettings::default().with_poll_every(Duration::from_secs(3601));
+    let Err(refused) = Client::bip()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .watch_settings(slow)
+        .connect()
+        .await
+    else {
+        panic!("refused watch settings connected");
+    };
+    assert!(
+        matches!(
+            refused,
+            OpsError::Watch(crate::watch::WatchError::Settings(_))
+        ),
+        "{refused:?}"
+    );
 }
 
 /// The B/IPv6 builder takes its settings and makes a connect future;

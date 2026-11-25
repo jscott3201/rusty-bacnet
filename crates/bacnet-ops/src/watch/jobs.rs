@@ -73,6 +73,8 @@ pub(super) enum Outcome {
     NotAsked,
     /// Not asked: the device refused the service itself before.
     Refused,
+    /// Not asked: the hub's settings poll every point.
+    PollOnly,
     /// Asked: the subscription, or the device's refusal or silence.
     Asked(Result<ManagedCOVSubscription, Error>),
 }
@@ -158,6 +160,8 @@ pub(super) async fn start<T: TransportPort + 'static>(
     let (outcome, observed, cov) = if first.as_ref().is_err_and(unreachable) {
         // Subscribing would only time out too.
         (Outcome::NotAsked, None, known)
+    } else if !inner.options.subscribe {
+        (Outcome::PollOnly, None, known)
     } else if known == CovSupport::Refused {
         (Outcome::Refused, None, CovSupport::Refused)
     } else {
