@@ -74,8 +74,9 @@ impl<T: Clone + Send> EventSource<T> for broadcast::Receiver<T> {
 /// The one-item slot for an item a cancelled `__anext__` could not take.
 #[derive(Default)]
 pub(crate) struct Redelivery {
-    /// A leaf lock: held only to swap the item, never across an await or a
-    /// call into Python.
+    /// A leaf lock: held only to swap the item (or, purging, to check its
+    /// type and read its Rust fields), never across an await or a call
+    /// that runs Python code.
     item: StdMutex<Option<Py<PyAny>>>,
     /// Wakes a waiting `next()` when the slot fills or a delivery settles.
     filled: Notify,
@@ -314,6 +315,23 @@ impl<T: Send + 'static, R: EventSource<T> + 'static> LossyReceiver<T, R> {
     /// own close must also wake a read currently waiting on its receiver.
     pub(crate) fn close(&self) {
         self.slot.close();
+    }
+
+    /// Drop the item waiting for redelivery when `stale` says it is stale,
+    /// as a watch's `remove` does for an update of a point it no longer
+    /// holds (#2603). Called with the GIL held; `stale` runs under the
+    /// slot's lock, so it may check the item's type and read its Rust
+    /// fields but never run Python code. The item drops once the lock is
+    /// let go. Neither a loss (`missed`) nor a delivery.
+    pub(crate) fn purge(&self, stale: impl FnOnce(&Py<PyAny>) -> bool) {
+        let dropped = {
+            let mut item = self.slot.item();
+            match item.as_ref() {
+                Some(object) if stale(object) => item.take(),
+                _ => None,
+            }
+        };
+        drop(dropped);
     }
 
     /// The delivery paths taken so far, for another module's tests of an

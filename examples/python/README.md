@@ -27,7 +27,7 @@ accepts configured baud rates of 9600, 19200, 38400, 57600, 76800, or 115200.
 | [`ipv6_client_server.py`](ipv6_client_server.py) | BACnet/IPv6 client and server: VMAC addressing and `resolve_vmac` |
 | [`device_management.py`](device_management.py) | DeviceCommunicationControl, CreateObject, error handling |
 | [`inventory.py`](inventory.py) | A device's points as records: `Device.inventory()` and the `Device.points()` async iterator |
-| [`watch.py`](watch.py) | Watching points with `Device.watch()`: COV renewed before each lifetime ends, polling where COV is refused |
+| [`watch.py`](watch.py) | Watching points with `Device.watch()`: COV renewed before each lifetime ends, polling where COV is refused, the client's watch defaults, and `add`/`remove` on a live watch |
 
 ## Running
 

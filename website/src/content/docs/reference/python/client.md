@@ -85,6 +85,9 @@ Properties:
 
 - `write_policy: WritePolicy`: The priorities `Device.write` and `relinquish` may use, as `write_policy=` set them.
 - `resolve_scope: Literal["local", "global"] | int`: Where a `device()` handle made from a bare instance asks for it, as `resolve_scope=` set it.
+- `watch_lifetime: int`: The COV lifetime of a `Device.watch` that names none, in seconds, as `watch_lifetime=` set it.
+- `watch_poll_interval: float`: The poll interval of a `Device.watch` that names none, in seconds, as `watch_poll_interval=` set it.
+- `watch_subscribe: bool`: Whether a `Device.watch` that doesn't say subscribes its points for COV (False: polls them), as `watch_subscribe=` set it.
 
 ### BACnetClient.__init__
 
@@ -133,8 +136,21 @@ def __init__(
     write_policy: Optional[WritePolicy] = None,
     resolve_scope: Literal["local", "global"] | int | None = None,
     accept_complex_ack_for_simple_services: bool = False,
+    watch_lifetime: Optional[int] = None,
+    watch_poll_interval: Optional[float] = None,
+    watch_subscribe: Optional[bool] = None,
 ) -> None
 ```
+
+`watch_lifetime` (default None, which is 300),
+`watch_poll_interval` (default None, which is 10.0) and
+`watch_subscribe` (default None, which is True): what a
+`Device.watch` takes unless it names its own `lifetime`,
+`poll_interval` or `subscribe` (#2603). Watches with equal
+settings share their subscriptions. A lifetime is 1 to 28800 s
+(eight hours, the longest every device must take), a poll interval
+1 to 3600 s, `watch_subscribe=False` polls every point; another
+value raises ValueError, another type TypeError.
 
 `write_policy` (default None, which is `WritePolicy()`): the
 priorities `Device.write` and `relinquish` may use. The default

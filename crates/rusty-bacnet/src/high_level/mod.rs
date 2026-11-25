@@ -39,7 +39,7 @@ pub(crate) use discovered::PyDiscovered;
 pub(crate) use errors::ops_err;
 pub(crate) use priorities::{PyPriorityView, PyWritePolicy};
 pub(crate) use specs::target_arg;
-pub(crate) use watch::{Ended, WatchShared};
+pub(crate) use watch::{Ended, WatchShared, client_settings};
 
 /// The high-level client over the binding's transport.
 pub(crate) type OpsClient = bacnet_ops::Client<AppTransport>;

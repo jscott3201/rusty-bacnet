@@ -3397,32 +3397,36 @@ class Watch:
     latest value and how its watch goes; ``async with`` closes it on the
     way out.
 
-    The watch runs a watch hub of its own: each point is read, then
-    subscribed for COV for ``lifetime`` seconds at a time and renewed
-    before each lifetime ends; a point the device won't subscribe is polled
-    with the device's other polled points. An update comes with each value
-    read or notified and each change of a point's state. A consumer that
-    falls behind gets one update a point, with its latest value and state,
-    never a queue of old ones (``folded`` counts the changes folded away).
-    A cancel that lands while an update is on its way puts it back: the
-    next ``__anext__`` returns it first. Concurrent ``__anext__`` calls
-    complete one at a time, each with the next update. The watch never
-    ends on its own, even when a point is given up.
+    The watch runs on one of its client's watch hubs, which every watch of
+    the same settings (``lifetime``, ``poll_interval``, ``subscribe``)
+    shares (#2603): a point two of them hold is one subscription. Each
+    point is read, then subscribed for COV for ``lifetime`` seconds at a
+    time and renewed before each lifetime ends; a point the device won't
+    subscribe, or every point when ``subscribe`` is False, is polled with
+    the device's other polled points. An update comes with each value read
+    or notified and each change of a point's state. A consumer that falls
+    behind gets one update a point, with its latest value and state, never
+    a queue of old ones (``folded`` counts the changes folded away). A
+    cancel that lands while an update is on its way puts it back: the next
+    ``__anext__`` returns it first. Concurrent ``__anext__`` calls complete
+    one at a time, each with the next update. ``add`` and ``remove``
+    change the points while another task iterates. The watch never ends on
+    its own, even when a point is given up or every point removed.
 
     It ends on ``close()``, when the object goes away, or on its client's
     ``stop()``, whichever comes first: ``__anext__`` raises
     ``StopAsyncIteration`` then and ever after, saying why, and the
-    subscriptions are cancelled, the device's answers waited for up to
-    5 s; any not answered by then lapse with their lifetime. It holds the
-    client only through its own hub, which a stop ends before it stops
-    the client: a stop with live watches waits for their cancels, all at
-    once, up to 5 s for a device that doesn't answer, and up to 2 s more
-    for their hubs to let go of the client. A client started again
-    doesn't revive it: watch again. A client holds at most 256 live
-    watches (each runs a hub with a range of subscriber process
-    identifiers of its own): one more raises ``RuntimeError`` until one
-    ends. Frozen; compares by identity and refuses ``copy`` and
-    ``pickle``."""
+    subscriptions no other watch holds are cancelled, the device's answers
+    waited for up to 5 s; any not answered by then lapse with their
+    lifetime. It holds the client only through its hub, which a stop shuts
+    before it stops the client: a stop with live watches waits for their
+    cancels, all at once, up to 5 s for a device that doesn't answer, and
+    up to 2 s more for the hubs to let go of the client. A client started
+    again doesn't revive it: watch again. A client runs at most 256 hubs
+    at once, one for each set of watch settings in use (each with a range
+    of subscriber process identifiers of its own): a watch of a 257th
+    raises ``RuntimeError`` until one ends. Frozen; compares by identity
+    and refuses ``copy`` and ``pickle``."""
 
     @property
     def address(self) -> str:
@@ -3433,9 +3437,9 @@ class Watch:
 
     @property
     def points(self) -> tuple[tuple[ObjectIdentifier, PropertyIdentifier, Optional[int]], ...]:
-        """The points watched, in the order named, each once, as
-        ``(object, property, array_index)``: Present_Value for a point
-        named by its object alone."""
+        """The points watched, in the order named, added ones last, each
+        once, as ``(object, property, array_index)``: Present_Value for a
+        point named by its object alone."""
         ...
 
     @property
@@ -3446,6 +3450,52 @@ class Watch:
     @property
     def poll_interval(self) -> float:
         """The least time between two polls of the device, in seconds."""
+        ...
+
+    @property
+    def subscribe(self) -> bool:
+        """Whether points are subscribed for COV where the device takes
+        it; False polls every point."""
+        ...
+
+    def add(
+        self,
+        points: Iterable[
+            str
+            | ObjectIdentifier
+            | tuple[ObjectIdentifier | str, PropertyIdentifier | str]
+            | tuple[ObjectIdentifier | str, PropertyIdentifier | str, int]
+        ],
+    ) -> Awaitable[int]:
+        """Watch ``points`` too, at the watch's address, each in what
+        ``read_many`` takes; those watched already are left as they are.
+        Resolves to the count newly watched. Each new point is read, then
+        subscribed (or polled) under the watch's settings; one another
+        watch of the same settings holds joins its subscription. Raised:
+        ``TypeError`` or ``ValueError`` for a bad argument (one str, bytes
+        or bytearray, no points, more than 4096, ALL, REQUIRED or OPTIONAL)
+        before the awaitable is made; on await ``RuntimeError`` once the
+        watch has ended, or when the points would take the watch's hub past
+        4096 (nothing is added then)."""
+        ...
+
+    def remove(
+        self,
+        points: Iterable[
+            str
+            | ObjectIdentifier
+            | tuple[ObjectIdentifier | str, PropertyIdentifier | str]
+            | tuple[ObjectIdentifier | str, PropertyIdentifier | str, int]
+        ],
+    ) -> Awaitable[int]:
+        """Stop watching ``points`` in this watch, each in what
+        ``read_many`` takes. Done before this returns: no ``__anext__``
+        begun after hands out one of them, an update already waiting
+        included; one already waiting may still get an update it had
+        taken. Resolves to the count removed. A point no other watch holds
+        is cancelled on the wire afterwards, best effort, without delaying
+        this. Raised: ``TypeError`` or ``ValueError`` for a bad argument,
+        ``RuntimeError`` once the watch has ended."""
         ...
 
     @property
@@ -3596,6 +3646,8 @@ class WatchReason:
         self,
     ) -> Literal[
         "refused",
+        "lifetime-refused",
+        "poll-only",
         "no-answer",
         "full",
         "lapsed",
@@ -3606,7 +3658,10 @@ class WatchReason:
         "other",
     ]:
         """The reason: ``"refused"`` (the device refused the subscription;
-        not asked again), ``"no-answer"`` (the first read or the
+        not asked again), ``"lifetime-refused"`` (the device refused the
+        subscription's lifetime as longer than it takes; polled, not asked
+        again: watch with a shorter one), ``"poll-only"`` (the watch polls
+        every point, ``subscribe=False``), ``"no-answer"`` (the first read or the
         subscription went unanswered), ``"full"`` (the device's
         subscription table was full) or ``"lapsed"`` (a renewal failed),
         each subscribed again after a backoff; ``"missing"`` (no router to
@@ -3621,8 +3676,8 @@ class WatchReason:
     @property
     def error(self) -> Optional[str]:
         """The device's error, or the client's, as text, for
-        ``"refused"``, ``"no-answer"``, ``"full"`` and ``"lapsed"``; else
-        None."""
+        ``"refused"``, ``"lifetime-refused"``, ``"no-answer"``, ``"full"``
+        and ``"lapsed"``; else None."""
         ...
 
     @property
@@ -4176,8 +4231,9 @@ class Device:
             | tuple[ObjectIdentifier | str, PropertyIdentifier | str, int]
         ],
         *,
-        lifetime: int = 300,
-        poll_interval: float = 10.0,
+        lifetime: Optional[int] = None,
+        poll_interval: Optional[float] = None,
+        subscribe: Optional[bool] = None,
     ) -> Awaitable[Watch]:
         """Watch ``points`` of the device, as a ``Watch``: an async
         iterator of ``WatchUpdate``s, each point's latest value and how its
@@ -4189,10 +4245,13 @@ class Device:
         property, index)`` tuple; each point once. A Present_Value is
         watched by SubscribeCOV on its object, any other property or element
         by SubscribeCOVProperty. Each point is read once, then subscribed
-        for ``lifetime`` seconds at a time, renewed before each lifetime
-        ends; a point the device won't subscribe is polled, with the
-        device's other polled points, every ``poll_interval`` seconds (1 to
-        3600).
+        for ``lifetime`` seconds at a time (1 to 28800), renewed before
+        each lifetime ends; a point the device won't subscribe, or every
+        point with ``subscribe=False``, is polled, with the device's other
+        polled points, every ``poll_interval`` seconds (1 to 3600). A
+        keyword left None takes the client's (``watch_lifetime``,
+        ``watch_poll_interval``, ``watch_subscribe``); watches with equal
+        settings share their subscriptions (#2603).
 
         The points are at the device's address now: a following handle
         whose device moves later reports it (``why.kind == "moved"``)
@@ -4205,11 +4264,12 @@ class Device:
         subscriptions are cancelled, waiting up to 5 s for the device's
         answers. Raised: TypeError or ValueError for a bad argument when
         the call is made (one str, no points, more than 4096, ALL, REQUIRED
-        or OPTIONAL, a lifetime of 0, a ``poll_interval`` outside 1 to
-        3600; a bool for either); on await what any call raises on a
-        stopped client, and ``BacnetLookupError`` for a following handle
-        whose device can't be placed, and ``RuntimeError`` when the client
-        already holds 256 live watches. Nothing is sent until the watch
+        or OPTIONAL, a lifetime outside 1 to 28800, a ``poll_interval``
+        outside 1 to 3600; a bool for either, and anything but a bool for
+        ``subscribe``); on await what any call raises on a stopped client,
+        and ``BacnetLookupError`` for a following handle whose device can't
+        be placed, and ``RuntimeError`` when the client already runs
+        watches of 256 different settings. Nothing is sent until the watch
         starts. A client from ``endpoint.client()`` leaves room in each
         renewal for a request on the default timers (6 s, 3 retries)."""
         ...
@@ -6089,8 +6149,21 @@ class BACnetClient:
         write_policy: Optional[WritePolicy] = None,
         resolve_scope: Literal["local", "global"] | int | None = None,
         accept_complex_ack_for_simple_services: bool = False,
+        watch_lifetime: Optional[int] = None,
+        watch_poll_interval: Optional[float] = None,
+        watch_subscribe: Optional[bool] = None,
     ) -> None:
-        """``write_policy`` (default None, which is ``WritePolicy()``): the
+        """``watch_lifetime`` (default None, which is 300),
+        ``watch_poll_interval`` (default None, which is 10.0) and
+        ``watch_subscribe`` (default None, which is True): what a
+        ``Device.watch`` takes unless it names its own ``lifetime``,
+        ``poll_interval`` or ``subscribe`` (#2603). Watches with equal
+        settings share their subscriptions. A lifetime is 1 to 28800 s
+        (eight hours, the longest every device must take), a poll interval
+        1 to 3600 s, ``watch_subscribe=False`` polls every point; another
+        value raises ValueError, another type TypeError.
+
+        ``write_policy`` (default None, which is ``WritePolicy()``): the
         priorities ``Device.write`` and ``relinquish`` may use. The default
         refuses 1, 2, 5 and 6 with ``BacnetWriteDeniedError``, sending
         nothing; ``WritePolicy().allow_priorities([...])`` allows some of
@@ -6286,6 +6359,24 @@ class BACnetClient:
     def resolve_scope(self) -> Literal["local", "global"] | int:
         """Where a ``device()`` handle made from a bare instance asks for
         it, as ``resolve_scope=`` set it."""
+        ...
+
+    @property
+    def watch_lifetime(self) -> int:
+        """The COV lifetime of a ``Device.watch`` that names none, in
+        seconds, as ``watch_lifetime=`` set it."""
+        ...
+
+    @property
+    def watch_poll_interval(self) -> float:
+        """The poll interval of a ``Device.watch`` that names none, in
+        seconds, as ``watch_poll_interval=`` set it."""
+        ...
+
+    @property
+    def watch_subscribe(self) -> bool:
+        """Whether a ``Device.watch`` that doesn't say subscribes its points
+        for COV (False: polls them), as ``watch_subscribe=`` set it."""
         ...
 
     def device(

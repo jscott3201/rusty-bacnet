@@ -49,12 +49,6 @@ impl DeviceTie {
         WatchTie::new(std::sync::Arc::clone(&self.inner), watch)
     }
 
-    /// A request's time with its retries on the client, which a watch's
-    /// renewals leave room for.
-    pub(crate) fn request_budget(&self) -> std::time::Duration {
-        self.inner.request_budget()
-    }
-
     /// What `read` makes of the handle, when the client now started has
     /// made it: for a getter, which can't wait for a lease. `read` gets no
     /// clone to keep, so a stop is never left waiting on a getter.

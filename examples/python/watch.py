@@ -4,6 +4,8 @@ Demonstrates:
 - `Device.watch()`: each point read, then subscribed for COV and renewed
   before each lifetime ends, as an async iterator of `WatchUpdate`s
 - telling a value that changed from a point the watch gave up
+- the client's watch defaults (`watch_lifetime=`), which a watch may override
+- `Watch.add()` and `Watch.remove()`, changing the points while iterating
 - `async with`, which cancels the subscriptions on the way out
 """
 
@@ -32,17 +34,21 @@ async def main():
     )
     server.add_analog_input(1, "Zone Temp", EngineeringUnits.DEGREES_FAHRENHEIT, 72.5)
     server.add_binary_value(1, "Occupied")
+    server.add_analog_input(2, "Supply Temp", EngineeringUnits.DEGREES_FAHRENHEIT, 55.0)
     await server.start()
     address = await server.local_address()
 
-    async with BACnetClient(interface="127.0.0.1", port=0,
-                            broadcast_address="127.0.0.1") as client:
+    # Every watch of this client takes one-minute subscriptions unless it
+    # names its own; watches with equal settings share their subscriptions.
+    async with BACnetClient(interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
+                            watch_lifetime=60) as client:
         ahu = await client.device(address)
         changes = asyncio.ensure_future(change_values(server))
         seen = 0
-        # Five-minute subscriptions by default; a point the device won't
-        # subscribe is polled every `poll_interval` seconds instead.
-        async with await ahu.watch(["ai:1", "bv:1"], lifetime=60) as watch:
+        changed = False
+        # A point the device won't subscribe is polled every `poll_interval`
+        # seconds instead (`subscribe=False` polls every point).
+        async with await ahu.watch(["ai:1", "bv:1"]) as watch:
             async for update in watch:
                 if update.state == "gone":
                     # Another device took the address ("replaced"), or the
@@ -58,6 +64,13 @@ async def main():
                 print(f"{update.object_id}  {update.value.text:12} via {update.via:5} "
                       f"flags={flags} ({update.state})")
                 seen += update.object_id == ZONE_TEMP and update.via == "cov"
+                if seen == 1 and not changed:
+                    changed = True
+                    # Change the points while iterating: no update of bv:1
+                    # comes once `remove` has returned.
+                    await watch.add(["ai:2"])
+                    await watch.remove(["bv:1"])
+                    print(f"now watching {len(watch)} points")
                 if seen >= 4:
                     break
         # Leaving `async with` cancelled the subscriptions.
