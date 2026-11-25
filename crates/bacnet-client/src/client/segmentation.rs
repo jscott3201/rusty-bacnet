@@ -418,7 +418,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     biased;
                     response = &mut *response_rx => {
                         return Ok(WindowAck::Terminal(
-                            response.map_err(|_| super::requests::request_cut_off()),
+                            response.map_err(|_| Error::RequestCutOff { sent: true }),
                         ));
                     }
                     // A transaction that left the TSM resolves the

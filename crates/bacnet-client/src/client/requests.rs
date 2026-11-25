@@ -46,29 +46,6 @@ struct RequestSize<'a> {
     sized_by: Option<(u16, &'a [u8])>,
 }
 
-/// The text of [`request_cut_off`].
-const CUT_OFF: Refusal = Refusal::new("TSM response channel closed");
-
-/// What a confirmed request fails with when the client's tasks end under it
-/// (#2617, #2720): its open transaction is dropped by the stop, or, still
-/// waiting for its turn at the destination, it is woken by the dispatch
-/// task's end. It is [`Error::State`] with [`Lifecycle::Closed`] (#1833);
-/// [`is_request_cut_off`] tells it from the other closed refusals.
-#[cold]
-pub(super) fn request_cut_off() -> Error {
-    Error::State(Lifecycle::Closed, CUT_OFF)
-}
-
-/// Whether `error` is the one a confirmed request fails with when this
-/// client's tasks end under it: its own `stop()`, or the stop of the
-/// endpoint or node it runs on, while the request waited for its answer or
-/// its turn (#2617, #2720). The request may have gone out, so whether the
-/// device carried it out is unknown. Another [`Lifecycle::Closed`] refusal,
-/// such as a send once the client's seat has closed, is not this.
-pub fn is_request_cut_off(error: &Error) -> bool {
-    matches!(error, Error::State(Lifecycle::Closed, refusal) if *refusal == CUT_OFF)
-}
-
 /// Whether `response` is the device's own answer to a confirmed request: an
 /// acknowledgment, of the right kind or not (#2721), or its Error, Reject
 /// or Abort. Any of them shows that the request reached the device (Clause
@@ -164,9 +141,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// (#2722). [`Error::UnknownDevice`] for a remote address with no named
     /// router and no row in the discovery table, since the row is the route.
     /// Then the errors of the request itself; a request the client's stop
-    /// cuts off, waiting for its turn or open, fails with
-    /// [`Error::State`] of [`Lifecycle::Closed`], which
-    /// [`is_request_cut_off`] recognizes.
+    /// cuts off fails with [`Error::RequestCutOff`]: `sent: false` while it
+    /// waited for its turn, `sent: true` once it was open.
     ///
     /// [`BACnetAddress`]: bacnet_types::constructed::BACnetAddress
     pub async fn confirmed_request(
@@ -241,7 +217,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             let key = pacing::PaceKey::of(target);
             match self.pacer.wait(key, &self.routing_query.ended).await {
                 Some(pace) => pace,
-                None => return Err(request_cut_off()),
+                // Still waiting for its turn: nothing has gone out.
+                None => return Err(Error::RequestCutOff { sent: false }),
             }
         } else {
             pacing::PaceGuard::unpaced()

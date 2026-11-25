@@ -716,3 +716,19 @@ fn local_refusals_fail_locally_and_a_stopped_link_is_unreachable() {
     assert!(!super::failed_locally(&stopped), "{stopped}");
     assert!(super::unreachable(&stopped), "{stopped}");
 }
+
+/// A request the client's stop cut off fails locally, as its untyped text
+/// did, whether or not it went out (#1833): no timeout, no unreachable
+/// device, no RPM fallback, and nothing Object_Name could explain.
+#[test]
+fn a_cut_off_request_fails_locally() {
+    use bacnet_types::error::Error;
+    for sent in [false, true] {
+        let error = Error::RequestCutOff { sent };
+        assert!(super::failed_locally(&error), "{error}");
+        assert!(!super::unreachable(&error), "{error}");
+        assert!(!super::timed_out(&error), "{error}");
+        assert_eq!(super::rpm_failure(&error), super::RpmFailure::Other);
+        assert!(!crate::watch::hub::first::name_may_explain(&error));
+    }
+}

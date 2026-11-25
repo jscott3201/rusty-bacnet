@@ -171,11 +171,13 @@ pub fn unreachable(error: &Error) -> bool {
 ///   invoke IDs). Each is the client's or the link's own refusal. A stopped
 ///   transport's send is [`Error::Transport`], which [`unreachable()`]
 ///   counts instead.
+/// - [`Error::RequestCutOff`]: the client's own stop, or its node's, ended
+///   the request before an answer came. With `sent` it **may already have
+///   left**, and the device may have carried it out.
 ///
-/// A request the client's own stop cut off while it waited for its answer
-/// fails here too, and it **may already have left**. So a failure here is
-/// not "never sent", and nothing may send again on the strength of one:
-/// reads only stop on it, since the client, not the property, failed.
+/// So a failure here is not "never sent", and nothing may send again on the
+/// strength of one: reads only stop on it, since the client, not the
+/// property, failed.
 ///
 /// A request too long for the link or the routed path
 /// ([`Error::SendTooLong`], [`Error::RoutedPathTooLong`]), or one that
@@ -196,6 +198,7 @@ pub(crate) fn failed_locally(error: &Error) -> bool {
             | Error::UnsupportedTransport { .. }
             | Error::RoutedPathCapacityExceeded { .. }
             | Error::InitiationDisabled { .. }
+            | Error::RequestCutOff { .. }
     )
 }
 

@@ -986,7 +986,6 @@ pub use event_notifications::{
 pub use i_have::{I_HAVE_CHANNEL_CAPACITY, MAX_I_HAVE_REPLIES, ReceivedIHave, collect_answers};
 pub use network_reports::{DiscoveredRouter, NETWORK_REPORT_CHANNEL_CAPACITY};
 pub use pacing::MAX_MIN_REQUEST_INTERVAL_MS;
-pub use requests::is_request_cut_off;
 pub use routed_path_limits::DEFAULT_ROUTED_PATH_MAX_NPDU;
 pub use routed_path_listing::{RoutedPathLimit, RoutedPathLimitSource};
 pub use routing_table::{

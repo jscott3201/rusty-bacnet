@@ -461,6 +461,22 @@ pub enum Error {
         /// device may have carried it out.
         sent: bool,
     },
+
+    /// A confirmed request whose transaction its client ended under it
+    /// before an answer came (#2617, #2720, #1833): the client's own stop,
+    /// or the stop or drop of the endpoint or node it runs on, while the
+    /// request waited for its turn at the destination or for its answer.
+    /// It is that one transaction's outcome, not a lifecycle state of the
+    /// client: a call made after the stop gets its own refusal. No answer
+    /// will come for it.
+    #[error("the request ended without an answer: the client stopped while it waited")]
+    RequestCutOff {
+        /// `false`: nothing of the request left, as it was still waiting
+        /// for its turn. `true`: the request, or some of its segments, may
+        /// have gone out, and the device may have carried it out, so a
+        /// write is not to be sent again blindly.
+        sent: bool,
+    },
 }
 
 impl From<RemoteError> for Error {

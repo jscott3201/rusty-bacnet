@@ -56,7 +56,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
             tokio::select! {
                 response = &mut response_rx => {
-                    return response.map_err(|_| request_cut_off());
+                    return response.map_err(|_| Error::RequestCutOff { sent: true });
                 }
                 // Progress is never published after the transaction leaves
                 // the TSM; the response arm above resolves then instead.
@@ -143,7 +143,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         retry_apdu.len(),
                     ) {
                         return Expired::End(
-                            (&mut *response_rx).await.map_err(|_| request_cut_off()),
+                            (&mut *response_rx)
+                                .await
+                                .map_err(|_| Error::RequestCutOff { sent: true }),
                         );
                     }
                     let send_result = self
@@ -162,7 +164,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             }
                             RequestTimerExpiration::NoTransaction => {
                                 return Expired::End(
-                                    (&mut *response_rx).await.map_err(|_| request_cut_off()),
+                                    (&mut *response_rx)
+                                        .await
+                                        .map_err(|_| Error::RequestCutOff { sent: true }),
                                 );
                             }
                             RequestTimerExpiration::TimedOut => {
@@ -201,9 +205,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         bacnet_types::enums::AbortReason::TSM_TIMEOUT,
                     )))
                 }
-                RequestTimerExpiration::NoTransaction => {
-                    Expired::End((&mut *response_rx).await.map_err(|_| request_cut_off()))
-                }
+                RequestTimerExpiration::NoTransaction => Expired::End(
+                    (&mut *response_rx)
+                        .await
+                        .map_err(|_| Error::RequestCutOff { sent: true }),
+                ),
             }
         }
     }
@@ -247,9 +253,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         bacnet_types::enums::AbortReason::TSM_TIMEOUT,
                     )))
                 }
-                SegmentTimerExpiration::NoTransaction => {
-                    Expired::End((&mut *response_rx).await.map_err(|_| request_cut_off()))
-                }
+                SegmentTimerExpiration::NoTransaction => Expired::End(
+                    (&mut *response_rx)
+                        .await
+                        .map_err(|_| Error::RequestCutOff { sent: true }),
+                ),
             }
         }
     }

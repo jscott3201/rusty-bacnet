@@ -37,8 +37,10 @@ use super::decode::{placeholder_count, write_label};
 /// deciding between `NotRunning`, `Stopping` and `Closed` from their own
 /// state. The server reports `Closed` once its stop has begun or a cleanup
 /// task failed, and the client `Stopping` while its seat's node stops and
-/// `Closed` once its seat, its coordinator or a request's channel has
-/// closed.
+/// `Closed` once its seat, its coordinator or a request's SegmentAck
+/// channel has closed. A request the client's stop cut off is not a
+/// lifecycle state but its own outcome,
+/// [`Error::RequestCutOff`](super::Error::RequestCutOff).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Lifecycle {

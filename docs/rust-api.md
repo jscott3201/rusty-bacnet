@@ -387,9 +387,9 @@ this way; the other hosted crates still report theirs as `Error::Encoding` or
 `Error::OutOfRange` text until #1833 reaches them. An endpoint session or
 ingress that is not running says why with its `Lifecycle`: `NotRunning`
 before its start, `Stopping` while a stop runs, and `Closed` once stopped or
-shut, since each starts once. A stopped server's broadcaster, a closed seat
-and a confirmed request its client's stop cut off are `Closed` too;
-`bacnet_client::client::is_request_cut_off` tells the last from the others.
+shut, since each starts once. A stopped server's broadcaster and a closed
+client seat are `Closed` too. A confirmed request its client's stop cut off
+is no lifecycle refusal but its own outcome, `Error::RequestCutOff { sent }`.
 A server answers each of its own refusals with the Error PDU SERVICES /
 OTHER, as it answered their text. A
 stopped transport's send still fails with
@@ -13984,6 +13984,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (objects, device-core and the crates above the client and server), and, until their own change, the transport's I/O failures as text, the MS/TP and Ethernet NPDU-length refusals, B/IP's refusals of an NPDU too long, a socket that can't take the datagram now and a socket's own failure, an endpoint's send that waited past its deadline, a server's audit forwarding that ran out of time, and `resolve_device` for an instance not in the client's table |
 | `Error::Transport(io_error)` | Transport I/O failure, and a stopped transport's send (`NotConnected`) |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
+| `Error::RequestCutOff { sent }` | The client's stop, or its endpoint's or node's, ended a confirmed request before an answer came (#1833). `sent: false`: it was still waiting for its turn and nothing left. `sent: true`: it, or some of its segments, may have gone out and been carried out, so don't send a write again blindly |
 | `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles); a server's audit send to a recipient with no router known fails this way too, and counts as not sent |
 
 ---
@@ -15099,8 +15100,7 @@ What a caller sees differently:
 - A request waiting for its turn at a destination (`min_request_interval_ms`)
   fails at once when the session stops or is dropped, as the narrow
   requester's did, but with the error an open request cut off by the stop
-  gets, `Error::State(Lifecycle::Closed, _)` that
-  `bacnet_client::client::is_request_cut_off` recognizes, where the narrow
+  gets, `Error::RequestCutOff` (with `sent: false`), where the narrow
   requester returned `"endpoint shutdown"` (#2720).
 - A routed request whose router is the link's broadcast or a group address
   is refused before anything is sent, as the narrow requester refused it

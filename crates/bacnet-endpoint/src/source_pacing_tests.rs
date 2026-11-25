@@ -93,7 +93,7 @@ async fn a_waiting_audited_read_fails_at_once_when_the_session_stops_or_drops() 
         };
         let error = bounded(read).await.unwrap().unwrap_err();
         assert!(
-            bacnet_client::client::is_request_cut_off(&error),
+            matches!(error, Error::RequestCutOff { sent: false }),
             "stopped {stop}: {error:?}"
         );
         // The waiter no longer holds the source, so nothing of the session

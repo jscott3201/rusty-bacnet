@@ -223,11 +223,9 @@ pub fn to_py_err(err: Error) -> PyErr {
         }
         // The request's transaction was ended under it: the client stopped
         // while it waited, by its own stop() or, on an endpoint's link, by
-        // the endpoint's close (#2617). A closed refusal the client tells
-        // from its others (#1833); any other raises its own text below.
-        ref cut_off if bacnet_client::client::is_request_cut_off(cut_off) => {
-            BacnetError::new_err(REQUEST_CUT_OFF)
-        }
+        // the endpoint's close (#2617), whether or not it had gone out
+        // (#1833).
+        Error::RequestCutOff { .. } => BacnetError::new_err(REQUEST_CUT_OFF),
         _ => BacnetError::new_err(err.to_string()),
     }
 }

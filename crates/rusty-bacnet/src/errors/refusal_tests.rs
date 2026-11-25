@@ -51,10 +51,11 @@ fn local_refusals_raise_the_base_exception_with_their_text() {
     });
 }
 
-/// A request the client's stop cut off (#2617), now a closed refusal
-/// (#1833), raises the base exception with the message it raised as text;
-/// every other closed refusal, a closed seat's included, raises its own
-/// text, and so does the untyped text, which no client sends any more.
+/// A request the client's stop cut off (#2617), now its own variant
+/// (#1833), raises the base exception with the message it raised before,
+/// whether or not it had gone out; the closed refusals that look like it (a
+/// closed seat, a closed SegmentAck channel, an endpoint's shutdown) each
+/// raise their own text.
 #[test]
 fn a_cut_off_request_keeps_its_message() {
     Python::initialize();
@@ -64,27 +65,15 @@ fn a_cut_off_request_keeps_its_message() {
             assert!(raised.value(py).get_type().is(py.get_type::<BacnetError>()));
             raised.value(py).str().unwrap().to_str().unwrap().to_owned()
         };
-        let cut_off = Error::state(Lifecycle::Closed, "TSM response channel closed");
-        assert!(bacnet_client::client::is_request_cut_off(&cut_off));
-        assert_eq!(message(cut_off), REQUEST_CUT_OFF);
-        for (other, text) in [
-            (
-                Error::state(
-                    Lifecycle::Closed,
-                    "the client's seat has closed: its node or the client stopped",
-                ),
-                "the client's seat has closed: its node or the client stopped",
-            ),
-            (
-                Error::state(Lifecycle::Stopping, "TSM response channel closed"),
-                "TSM response channel closed",
-            ),
-            (
-                Error::Encoding("TSM response channel closed".into()),
-                "encoding error: TSM response channel closed",
-            ),
+        for sent in [false, true] {
+            assert_eq!(message(Error::RequestCutOff { sent }), REQUEST_CUT_OFF);
+        }
+        for text in [
+            "the client's seat has closed: its node or the client stopped",
+            "SegmentAck channel closed",
+            "endpoint shutdown",
         ] {
-            assert_eq!(message(other), text);
+            assert_eq!(message(Error::state(Lifecycle::Closed, text)), text);
         }
     });
 }

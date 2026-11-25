@@ -131,7 +131,8 @@ fn a_failed_requests_result() {
     // (#1833).
     for local in [
         Error::Encoding("local".into()),
-        super::requests::request_cut_off(),
+        Error::RequestCutOff { sent: false },
+        Error::RequestCutOff { sent: true },
         Error::invalid_config("local"),
         Error::invalid_argument("local"),
         Error::unsupported("local"),
@@ -178,10 +179,12 @@ fn which_requests_reached_their_target() {
         assert!(attempted(&Err(reached)));
     }
     // The client's own refusals, typed (#1833), count as the untyped text
-    // they replace did: not attempted.
+    // they replace did: not attempted. So does a request its client's stop
+    // cut off, either way: its record says it ended without an answer.
     for refused in [
         Error::Encoding("TSM response channel closed".into()),
-        super::requests::request_cut_off(),
+        Error::RequestCutOff { sent: false },
+        Error::RequestCutOff { sent: true },
         super::seat::seat_closed(),
         Error::state(Lifecycle::Stopping, "the seat's node is stopping"),
         Error::invalid_config("transport not set on ClientBuilder"),

@@ -408,6 +408,21 @@ fn initiation_disabled_says_whether_the_request_went_out() {
     assert!(withheld.starts_with("no retry sent"), "{withheld}");
 }
 
+/// A request its client's stop cut off reads the same whether it went out
+/// or not (#1833); `sent` says which, and no peer sent it.
+#[test]
+fn a_cut_off_request_reads_alike_either_way() {
+    for sent in [false, true] {
+        let cut_off = Error::RequestCutOff { sent };
+        assert_eq!(
+            cut_off.to_string(),
+            "the request ended without an answer: the client stopped while it waited"
+        );
+        assert_eq!(cut_off.remote(), None);
+        assert_eq!(cut_off.reject_reason(), None);
+    }
+}
+
 #[test]
 fn send_too_long_keeps_the_observed_lengths_without_becoming_an_apdu_reject() {
     let error = Error::SendTooLong {
