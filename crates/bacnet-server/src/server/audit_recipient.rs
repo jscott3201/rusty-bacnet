@@ -339,14 +339,11 @@ impl<T: TransportPort + 'static> TargetAudit<T> {
                 // the same owner lock as this commit and shutdown sealing.
                 *self.recipient.locked() = new.clone();
                 *current = new;
-                for (_, other) in self.association.reporters() {
+                // `contexts` holds every associated Reporter with its next
+                // epoch, so recording them looks nothing up.
+                for (other, next, _) in &contexts {
                     if !Arc::ptr_eq(other, &status) {
-                        let next = contexts
-                            .iter()
-                            .find(|(reporter, _, _)| Arc::ptr_eq(reporter, other))
-                            .unwrap()
-                            .1;
-                        other.commit_recipient_epoch(next);
+                        other.commit_recipient_epoch(*next);
                     }
                 }
                 let network = Arc::clone(&self.network);
@@ -445,3 +442,7 @@ where
         future.await;
     })
 }
+
+#[cfg(test)]
+#[path = "audit_recipient_install_tests.rs"]
+mod install_tests;
