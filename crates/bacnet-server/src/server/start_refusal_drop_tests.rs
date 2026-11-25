@@ -217,3 +217,6 @@ async fn a_refusal_lets_go_of_its_database_off_the_runtime() {
         );
     }
 }
+
+#[path = "start_phase_paths_tests.rs"]
+mod phase_paths;
