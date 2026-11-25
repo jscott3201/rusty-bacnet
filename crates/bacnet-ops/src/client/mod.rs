@@ -39,7 +39,7 @@ pub(crate) mod read;
 pub(crate) mod routed_paths;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -201,9 +201,9 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// it only ever shrinks, and goes with the address's other learned
     /// facts (`Client::sweep`); at most `device::follow::REMEMBERED`.
     pub(crate) rpm_limits: Mutex<HashMap<DeviceAddress, (u32, usize)>>,
-    /// Watch hubs made on this client, so each takes its own range of
-    /// subscriber process identifiers (#2185).
-    hubs: AtomicU32,
+    /// The ranges of subscriber process identifiers the client's live hubs
+    /// hold, so no two alive at once share one (#2185).
+    pub(crate) ranges: Mutex<crate::watch::hub::ranges::Ranges>,
     /// The client's own hub, which its [`watch`](Client::watch)es share
     /// while any holds a point, and its range of process identifiers.
     pub(crate) hub: Mutex<crate::watch::OwnHub<T>>,
@@ -257,7 +257,7 @@ impl<T: TransportPort + 'static> Client<T> {
                 limits,
                 no_rpm: Mutex::new(HashSet::new()),
                 rpm_limits: Mutex::new(HashMap::new()),
-                hubs: AtomicU32::new(0),
+                ranges: Mutex::default(),
                 hub: Mutex::new(crate::watch::OwnHub::new()),
                 cov: Mutex::new(HashMap::new()),
                 follows: Mutex::new(HashMap::new()),
@@ -291,12 +291,6 @@ impl<T: TransportPort + 'static> Client<T> {
         Arc::try_unwrap(self.shared)
             .ok()
             .map(|shared| shared.client)
-    }
-
-    /// How many watch hubs were made on this client before this one: a
-    /// client's hubs share it, so their subscriptions can't clash.
-    pub(crate) fn next_hub(&self) -> u32 {
-        self.shared.hubs.fetch_add(1, Ordering::Relaxed)
     }
 
     /// The limits every request waits for.

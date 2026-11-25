@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use bacnet_types::primitives::{PropertyValue, StatusFlags};
-use futures_util::{FutureExt, StreamExt};
+use futures_util::FutureExt;
 
 use super::State;
 use super::hub::*;
@@ -254,7 +254,11 @@ async fn the_client_hub_keeps_one_range_however_often_it_is_made() {
         assert!(!own_hub(&lab), "the hub went with its last watch");
         assert!(lab.table().await.is_empty(), "cancelled");
     }
-    assert_eq!(lab.client.next_hub(), 2, "two ranges taken in all");
+    let held = lab.client.shared.ranges.lock().unwrap().held();
+    assert_eq!(
+        held, 2,
+        "two ranges held in all: the lab's hub's and the client's"
+    );
     drop(device);
     lab.stop().await;
 }
@@ -358,25 +362,6 @@ async fn a_reused_identifier_takes_no_late_notification() {
         );
     }
     drop((again, device));
-    settle().await;
-    lab.stop().await;
-}
-
-/// Another hub made on the client never takes the client hub's range,
-/// however many are made and however the ranges wrap.
-#[tokio::test(start_paused = true)]
-async fn other_hubs_skip_the_client_hubs_range() {
-    let lab = Lab::start(WatchOptions::default()).await;
-    let device = lab_device(&lab).await;
-    let mut watch = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
-    until(&mut watch, |u| u.state == State::Subscribed).await;
-    let ranges = super::hub::PROCESS_RANGES;
-    let taken: Vec<u32> = (0..2 * ranges).map(|_| lab.client.hub_range()).collect();
-    assert!(
-        taken.iter().all(|range| range % ranges != 1),
-        "the client hub took range 1"
-    );
-    drop((watch, device));
     settle().await;
     lab.stop().await;
 }

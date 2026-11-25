@@ -90,7 +90,7 @@ fn object_type(item: &Bound<'_, PyAny>) -> PyResult<ObjectType> {
 
 /// A TypeError for a str or bytes where a list of them is meant, since
 /// iterating one would read it a character at a time.
-fn refuse_text(value: &Bound<'_, PyAny>, name: &str, example: &str) -> PyResult<()> {
+pub(super) fn refuse_text(value: &Bound<'_, PyAny>, name: &str, example: &str) -> PyResult<()> {
     if value.is_instance_of::<PyString>() || value.is_instance_of::<PyBytes>() {
         return Err(PyTypeError::new_err(format!(
             "{name} is a list such as {example}, not {}: put one in a list",

@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
-async fn running_client() -> ClientInner {
+pub(super) async fn running_client() -> ClientInner {
     pyo3::Python::initialize();
     let state = Arc::new(ClientState::default());
     *state.client.write().await = Some(Started::new(
