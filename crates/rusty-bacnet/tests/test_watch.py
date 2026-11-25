@@ -450,6 +450,8 @@ class ArgumentTests(Lab):
             dev = await c.device(self.address)
             for points, error, text in (
                 ("ai:1", TypeError, "put one in a list"),
+                (b"ai:1", TypeError, "not bytes: put one in a list"),
+                (bytearray(b"ai:1"), TypeError, "not bytearray: put one in a list"),
                 ([], ValueError, "points is empty"),
                 ([1.5], TypeError, ""),
                 (["zz:1"], ValueError, ""),
