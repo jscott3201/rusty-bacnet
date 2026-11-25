@@ -73,6 +73,58 @@ pub(super) async fn receive_confirmed_audit_notification(
     .await
 }
 
+/// Answer `call`'s ConfirmedAuditNotification once it is stored, starting
+/// the forwarding its commit allows; `None` for a retransmission already
+/// stored, which draws no answer. Moved out of the general handler's body
+/// (#2558).
+pub(super) async fn confirmed_response<T: TransportPort + 'static>(
+    call: &super::other_services::ServiceCall<'_, T>,
+    provenance: bacnet_transport::port::TransportProvenance,
+) -> Option<Apdu> {
+    let super::other_services::ServiceCall {
+        services,
+        req,
+        source_mac,
+        source_network,
+        invoke_id,
+        service_choice,
+        ..
+    } = *call;
+    let RequestServices {
+        db,
+        network,
+        notification_transactions,
+        device_bindings,
+        config,
+        ..
+    } = &**services;
+    let response = match receive_confirmed_audit_notification(
+        db,
+        config,
+        source_mac,
+        source_network.as_ref(),
+        provenance,
+        req,
+    )
+    .await
+    {
+        Ok((Stored, forward)) => {
+            if let Some(forward) = forward {
+                forward.start(
+                    network,
+                    notification_transactions,
+                    device_bindings,
+                    u32::from(config.device.max_apdu_length()),
+                );
+            }
+            simple_ack(invoke_id, service_choice)
+        }
+        Ok((Duplicate, _)) => return None,
+        Err(error) => bacnet_device_core::reply::error_apdu(invoke_id, service_choice, &error),
+    };
+    Some(response)
+}
+
 /// Store an authorized batch in `sink` with its commit staged, so the commit
 /// runs while the database guard is dropped (#1270). The batch reaches
 /// memory, and a confirmed one's acknowledgment goes out, only once the

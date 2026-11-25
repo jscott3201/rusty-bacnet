@@ -13145,8 +13145,9 @@ request jobs: `Reader`, `Halt`, `RpmFailure`, `rpm_failure`, `rpm_rows`,
 ### Watching points
 
 `client.watch(points)` watches many points at once (#2560) and returns a
-`Watch`, a `futures_core::Stream` of `Update`s (read it with
-`futures_util::StreamExt::next`). It is the one way an application
+`Watch` of `Update`s: read it with its own `next()`, which is cancel
+safe (an update leaves the watch only on the poll that returns it), or as
+the `futures_core::Stream` it also is. It is the one way an application
 watches; `watch::hub` is the layer under it. A point comes from a handle:
 `device.point("ai:1")`, `device.point("bv:3 pv")` or
 `device.point("ao:2 priority-array[8]")`, in the grammar `Device::read`
@@ -13157,7 +13158,6 @@ property, or an element, by SubscribeCOVProperty.
 
 ```rust
 use bacnet_ops::watch::{State, Why};
-use futures_util::StreamExt;
 
 let ahu = client.device("192.168.1.10").await?;
 let mut watch = client.watch([ahu.point("ai:1")?, ahu.point("bv:3 pv")?])?;
@@ -13205,6 +13205,24 @@ polled with the device's other polled points, every 10 s at most; at most
 `OpsError::Watch(WatchError::Full { .. })` refuses points that would pass
 it, taking none and sending nothing, and `WatchError::NoRuntime` a call
 outside a Tokio runtime.
+
+A front end that picks its own settings makes a `watch::hub::Hub` with
+its `WatchOptions` and takes a `Watch` from it with `Hub::stream(points)`:
+the same updates, refused with `WatchError::Full` past its `max_points`
+or `WatchError::Shut` once `Hub::shutdown` has run. The Python bindings
+run one such hub per watch, which their client's stop shuts down (#2561).
+Each hub alive on a client holds a range of subscriber process
+identifiers of its own, so no two share an identifier and neither's
+cancel can end the other's subscription: `Hub::new` takes the next free
+range of 256, going round from the one taken last, so a range given back
+is taken again only after the other free ones, and the hub gives it back
+once it is gone, its last clone dropped and its tasks ended, cancels
+included; the client's own hub keeps its range for the client's life.
+`Hub::new` returns `WatchError::Hubs` when every range is held,
+`WatchError::NoRuntime` outside a Tokio runtime and
+`WatchError::Settings` for options `WatchOptions::validate` refuses,
+taking nothing. `Hub::watch` and `Hub::stream` start a device's
+scheduler task, so they panic outside a Tokio runtime.
 
 The latest value of each point wins: a consumer that falls behind gets one
 update a point with its latest value and state (`Watch::folded` counts the
@@ -13363,12 +13381,14 @@ several sessions and pick their settings): `Hub::new(client, options)`
 with `WatchOptions`, `Reads`, `Backoff`, `Fallback`, `MissingDevice` and
 `Lifetime`; `Hub::watch(point)` for a `Lease` with its `Snapshot` (the
 hub's own `hub::Phase` and `hub::Source`), its change signal (`Changes`)
-and `samples()` (`Samples`, `Sample`); `peek`, `seq`, `stats`
+and `samples()` (`Samples`, `Sample`); `Hub::stream(points)` for a
+`Watch`, as an application reads one; `peek`, `seq`, `stats`
 (`HubStats`) and `shutdown`; `renewal_margin`, `first` and the poll and
 row constants.
 
 | Was | Now |
 |---|---|
+| `Hub::new(..) -> Result<Hub, String>`, subscriber ranges handed out in turn, wrapping after 256 hubs made | `Result<Hub, WatchError>` (`Settings`, `NoRuntime`, `Hubs`); the next range no live hub holds, going round, given back once the hub is gone (#2561) |
 | `watch::Point { device: u32, .. }`, `Copy` | `watch::Point { device: DeviceAddress, .. }`, `Clone`, from `Device::point`; entries, schedulers and subscription targets key on the address, never an instance lookup |
 | `watch::{Hub, Lease, Changes, Snapshot, Samples, Sample, WatchOptions, Reads, Backoff, Fallback, MissingDevice, Lifetime, HubStats, renewal_margin, first, POINT_PROPERTIES, MISSING, MIN_POLL, POLL_FLOOR, MAX_ROWS, MAX_SAMPLES}` | the same names under `watch::hub` |
 | `watch::{State, Source}` (the snapshot's) | `watch::hub::{Phase, Source}`; `watch::State` is the update's one state with its reason |

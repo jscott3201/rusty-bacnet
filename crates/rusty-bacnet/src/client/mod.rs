@@ -355,9 +355,11 @@ mod handles;
 mod routed;
 mod seated;
 mod state;
+mod watches;
 
 pub(crate) use handles::DeviceTie;
 pub(crate) use state::{Held, Liveness, close};
+pub(crate) use watches::{END_WAIT, WatchTie};
 
 // ---------------------------------------------------------------------------
 // Helpers
