@@ -1916,10 +1916,11 @@ lock panic. Where a half-done update must not be used, it fails closed
 instead and says why on the site: `// lock-poison: fail-closed (<why>)`. A
 wanted panic would be marked `// lock-poison: allow (<why>)`.
 `check-lock-poison.py` fails on an unwrapped lock, `get_mut()` or Condvar
-wait, hand-written `PoisonError::into_inner` outside that module, and a lock
-result looked at (`.ok()`, `.map_err(..)`, `if let Ok`, `match` and the
-like) without the fail-closed marker; it prints how many marked sites there
-are. It reads every tracked `.rs` file the workspace builds or ships as a
+wait, hand-written `PoisonError::into_inner` or `TryLockError::Poisoned`
+outside that module (`try_locked()` is the poison-tolerant `try_lock`), and
+a lock result looked at (`.ok()`, `.map_err(..)`, `?`, `if let Ok`, `match`
+and the like) without the fail-closed marker; it lists each marked site
+with its reason. It reads every tracked `.rs` file the workspace builds or ships as a
 sample: the crates with their examples and build scripts, the benchmark
 tools, `examples/`, `firmware/` and `website/examples/`. Tests, benches, fuzz
 targets and the archived `benchmarks/results/` are left out, and so is test

@@ -10,7 +10,7 @@
 //! holding it, which is the rule this type relies on.
 
 use bacnet_types::sync::MutexExt;
-use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::sync::{Mutex, MutexGuard};
 
 /// A `std::sync::Mutex` whose lock ignores poisoning. A panic while holding
 /// it leaves the state as the panicking step left it, which is what the
@@ -30,11 +30,8 @@ impl<T> SyncMutex<T> {
     }
     /// Lock it unless another thread holds it now. A `Drop` impl uses this,
     /// as it did with the async mutex, so a drop never waits.
+    #[inline]
     pub(crate) fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
-        match self.0.try_lock() {
-            Ok(guard) => Some(guard),
-            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
-            Err(TryLockError::WouldBlock) => None,
-        }
+        self.0.try_locked()
     }
 }

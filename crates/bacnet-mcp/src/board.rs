@@ -12,7 +12,7 @@
 use bacnet_types::sync::MutexExt;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use rmcp::ErrorData;
@@ -115,11 +115,7 @@ impl Board {
     /// `None` when none were, or when a session holds the lock this
     /// moment (the caller asks again later rather than wait).
     pub fn calls_since(&self, seq: u64) -> Option<Calls> {
-        let log = match self.inner.log.try_lock() {
-            Ok(log) => log,
-            Err(TryLockError::Poisoned(log)) => log.into_inner(),
-            Err(TryLockError::WouldBlock) => return None,
-        };
+        let log = self.inner.log.try_locked()?;
         (log.seq != seq).then(|| Calls {
             rows: log.rows.iter().rev().cloned().collect(),
             dropped: log.dropped,

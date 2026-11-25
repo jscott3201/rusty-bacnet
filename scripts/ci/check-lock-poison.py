@@ -19,15 +19,14 @@ lines just above it. The script fails on:
   `read` and `write` are async, so none of these can type-check on a tokio
   lock and the patterns need no type information; `.lock().await` never
   matches, and `try_lock` isn't looked at.
-- `PoisonError::into_inner`, `|e| e.into_inner()` closures and
-  `Err(e) => .. e.into_inner()` arms: the helpers written out, which belong
-  in `bacnet_types::sync` only.
+- `PoisonError::into_inner`, `|e| e.into_inner()` closures,
+  `Err(e) => .. e.into_inner()` arms and `TryLockError::Poisoned`: the
+  helpers written out, which belong in `bacnet_types::sync` only.
 - a lock result looked at instead of taken, unless marked fail-closed with a
   reason: a Result method (`.ok()`, `.map_err(..)`, `.is_ok_and(..)` and the
   like) or `?` after the call, or the call as the scrutinee of `if let Ok`,
-  `let Ok(..) else` or `match`. For `.read()` and `.write()`, `?` and `match`
-  are not checked: the durable files' own `read()` returns a Result, and the
-  script can't tell them apart.
+  `let Ok(..) else` or `match`. The marked sites are listed with their
+  reasons.
 
 It reads every tracked `.rs` file the workspace builds or ships as a sample
 (crates, their examples and build scripts, the benchmark tools, examples/,
@@ -46,6 +45,8 @@ unwrap.
 Exit status: 0 when clean, 1 on a finding or when there was nothing to read.
 """
 
+import contextlib
+import io
 import re
 import subprocess
 import sys
@@ -294,15 +295,14 @@ BOUND = re.compile(r"\blet\s+(?:mut\s+)?(?P<name>\w+)\s*(?::[^=;]*)?=[^;]*?" + L
 REBIND = re.compile(r"\blet\s+(?:mut\s+)?$")
 HAND = [
     re.compile(r"PoisonError\s*::\s*into_inner\b"),
+    re.compile(r"\bTryLockError\s*::\s*Poisoned\b"),
     re.compile(r"\|\s*(\w+)\s*\|\s*\1\s*\.\s*into_inner\(\s*\)\s*\)"),
     re.compile(r"\bErr\s*\(\s*(\w+)\s*\)\s*=>[^,;{}]*?\b\1\s*\.\s*into_inner\(\s*\)"),
 ]
 ERR_ARM_BLOCK = re.compile(r"\bErr\s*\(\s*(?P<name>\w+)\s*\)\s*=>\s*\{")
 # A lock result looked at instead of taken: a Result method or `?` after the
 # call, or the call as an `if let Ok(..)`, `let Ok(..) else` or `match`
-# scrutinee. `?` and `match` count for `.lock()` only: the durable files'
-# own `read()` returns a Result, and `?` on a poisoned RwLock would need a
-# From<PoisonError> that no error type here has.
+# scrutinee.
 RESULT_METHOD = re.compile(
     r"\s*\.\s*(?:ok|err|is_ok|is_err|is_ok_and|is_err_and|map|map_err|map_or|map_or_else"
     r"|and_then|or_else|unwrap_or|unwrap_or_default|unwrap_or_else|inspect|inspect_err)\b"
@@ -347,14 +347,14 @@ def _marked(raw_lines, code_lines, line, marker):
 
 def findings(path, raw, blanked=None):
     """([(line, message)] for the bad spellings in non-test code of `raw`,
-    the number of fail-closed sites marked with a reason)."""
+    [(line, reason)] for the fail-closed sites marked with one)."""
     if blanked is None:
         blanked = blank_comments_and_strings(raw)
     code, _ = strip_test_items(blanked, raw)
     raw_lines, code_lines = raw.splitlines(), code.splitlines()
     helper = str(path) == HELPER
     found = {}
-    closed = 0
+    closed = []
 
     def report(offset, message, marker=ALLOW):
         line = code.count("\n", 0, offset) + 1
@@ -410,19 +410,18 @@ def findings(path, raw, blanked=None):
                 report(m.start(), HAND_WRITTEN)
     for m in re.finditer(LOCK, code):
         after = m.end()
-        lock_only = m.group("method") == "lock"
         inspected = (
             RESULT_METHOD.match(code, after) and not INTO_INNER_AFTER.match(code, after)
-        ) or (lock_only and QUESTION.match(code, after))
+        ) or QUESTION.match(code, after)
         if not inspected and SCRUTINEE_END.match(code, after):
             before = code[_statement_start(code, m.start()) : m.start()]
-            inspected = LET_OK.search(before) or (lock_only and MATCH.search(before))
+            inspected = LET_OK.search(before) or MATCH.search(before)
         if not inspected:
             continue
         line = code.count("\n", 0, m.start()) + 1
         mark = _marked(raw_lines, code_lines, line, FAIL_CLOSED)
         if mark and mark.group("why"):
-            closed += 1
+            closed.append((line, mark.group("why")))
         elif mark:
             found.setdefault(
                 line, "fail-closed marker without a reason: `// lock-poison: fail-closed (<why>)`"
@@ -450,18 +449,21 @@ def tracked_sources():
 
 
 def check(paths):
-    """(findings printed, fail-closed sites marked)."""
+    """(files read, findings printed, ["file:line: reason"] of the marked
+    fail-closed sites)."""
     tests = test_files(tracked_sources())
-    bad = closed = 0
+    read = bad = 0
+    closed = []
     for p in sorted(paths):
         if p in tests:
             continue
+        read += 1
         found, marked = findings(p, *lexed(p))
-        closed += marked
+        closed += [f"{p}:{line}: {why}" for line, why in marked]
         for line, message in found:
             print(f"{p}:{line}: {message}")
             bad += 1
-    return bad, closed
+    return read, bad, closed
 
 
 GOOD = """
@@ -496,9 +498,12 @@ fn h(m: &Mutex<u8>) -> Result<(), Error> {
     Ok(())
 }
 fn persisted(file: &Durable) -> Result<(), Error> {
-    let Some(octets) = file.read()? else { return Ok(()) };
-    let _ = match file.read() { Ok(x) => x, Err(e) => return Err(e) };
+    let Some(octets) = file.read_octets()? else { return Ok(()) };
+    let _ = match file.read_octets() { Ok(x) => x, Err(e) => return Err(e) };
     Ok(())
+}
+fn try_take(m: &Mutex<u8>) -> Option<MutexGuard<'_, u8>> {
+    m.try_locked()
 }
 #[cfg(test)]
 mod tests {
@@ -550,6 +555,11 @@ BAD_SAMPLES = [
     "fn f(m: &Mutex<u8>) -> Result<(), E> { let _a = m.lock().map_err(|_| E)?; Ok(()) }",
     "fn f(m: &Mutex<u8>) -> bool { m.lock().is_ok_and(|g| *g > 0) }",
     "fn f(m: &RwLock<u8>) -> bool { m.read().map_or(false, |g| *g > 0) }",
+    "fn f(m: &RwLock<u8>) -> Result<u8, E> { Ok(*m.read()?) }",
+    "fn f(m: &RwLock<u8>) {\n    match m.write() {\n        Ok(g) => drop(g),\n        Err(_) => {}\n    }\n}",
+    "fn f(m: &Mutex<u8>) -> Option<MutexGuard<'_, u8>> {\n    match m.try_lock() {\n"
+    "        Ok(g) => Some(g),\n        Err(TryLockError::Poisoned(p)) => Some(p.into_inner()),\n"
+    "        Err(TryLockError::WouldBlock) => None,\n    }\n}",
     "fn f(m: &Mutex<u8>) {\n    if let Ok(mut g) = m.lock() {\n        *g += 1;\n    }\n}",
     "fn f(m: &RwLock<u8>) {\n    let Ok(g) = m.write() else {\n        return;\n    };\n}",
     "fn f(m: &Mutex<u8>) {\n    match m.lock() {\n        Ok(g) => drop(g),\n        Err(_) => {}\n    }\n}",
@@ -572,8 +582,11 @@ def self_test():
     if good:
         print(f"self-test: the good sample was flagged: {good}")
         failures += 1
-    if closed != 2:
-        print(f"self-test: counted {closed} fail-closed sites in the good sample, not 2")
+    if [why for _, why in closed] != [
+        "a half-done lease could repeat an ID",
+        "poisoned acts closed",
+    ]:
+        print(f"self-test: the good sample's fail-closed sites read {closed}")
         failures += 1
     for sample in BAD_SAMPLES:
         if not findings(Path("bad.rs"), sample)[0]:
@@ -584,7 +597,9 @@ def self_test():
     tracked = tracked_sources
     tracked_sources = list
     try:
-        if main([]) != 1:
+        with contextlib.redirect_stdout(io.StringIO()):
+            empty = main([])
+        if empty != 1:
             print("self-test: an empty scan passed")
             failures += 1
     finally:
@@ -600,7 +615,7 @@ def main(argv):
     if not paths:
         print("error: no Rust files to check (did the pathspec change?)")
         return 1
-    bad, closed = check(paths)
+    read, bad, closed = check(paths)
     if bad:
         print(
             f"\n{bad} std lock site(s) (#2559): take the lock through bacnet_types::sync's "
@@ -608,9 +623,12 @@ def main(argv):
             "(<why>)`; or mark a wanted panic `// lock-poison: allow`."
         )
         return 1
+    print(f"{len(closed)} lock site(s) fail closed on poison:")
+    for site in closed:
+        print(f"  {site}")
     print(
-        f"OK: {len(paths)} files; std locks are taken poisoned or not (bacnet_types::sync), "
-        f"{closed} marked fail-closed."
+        f"OK: {read} files read; std locks are taken poisoned or not (bacnet_types::sync), "
+        f"or fail closed where marked."
     )
     return 0
 

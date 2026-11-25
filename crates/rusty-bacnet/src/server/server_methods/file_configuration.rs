@@ -305,6 +305,34 @@ mod tests {
         );
     }
 
+    /// A panic under the pending-objects lock leaves configuration working:
+    /// the lock is taken as the panic left it, where it once raised
+    /// `RuntimeError` "lock poisoned" (#2559).
+    #[test]
+    fn a_poisoned_pending_lock_still_configures_files() {
+        Python::initialize();
+        let server = test_server();
+        server
+            .push_pending(Box::new(file(9, "FILE", b"kept")))
+            .unwrap();
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = server.pending_objects.lock();
+            panic!("poison the pending objects");
+        }));
+        assert!(unwound.is_err());
+        assert!(server.pending_objects.is_poisoned());
+        Python::attach(|py| {
+            server
+                .set_file_data(9, &PyBytes::new(py, b"changed"))
+                .unwrap();
+            assert_eq!(server.get_file_data(py, 9).unwrap().as_bytes(), b"changed");
+        });
+        server
+            .push_pending(Box::new(file(10, "SECOND", b"two")))
+            .unwrap();
+        assert_eq!(server.lock_pending().len(), 2);
+    }
+
     #[test]
     fn missing_wrong_capability_invalid_method_and_mode_errors_are_atomic() {
         Python::initialize();

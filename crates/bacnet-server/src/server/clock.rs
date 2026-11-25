@@ -352,8 +352,9 @@ impl ServerClock {
         self
     }
 
-    /// The state, poisoned or not: it is one `Copy` value, which each
-    /// writer assigns whole (#2559).
+    /// The state, poisoned or not (#2559): of its two fields, a zone change
+    /// assigns `config` and a synchronization `synchronized_utc`, each as
+    /// the writer's last step, so a panic leaves no half-written value.
     fn lock(&self) -> MutexGuard<'_, ClockState> {
         #[cfg(test)]
         self.holds
@@ -390,7 +391,17 @@ impl ServerClock {
     /// The UTC instant a synchronization anchored, if one did.
     #[cfg(test)]
     pub(super) fn synchronized_at(&self) -> Option<(i128, Instant)> {
-        self.state.lock().unwrap().synchronized_utc
+        self.state.locked().synchronized_utc
+    }
+
+    /// Poison the state, as a panic under its lock would.
+    #[cfg(test)]
+    pub(super) fn poison_for_test(&self) {
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = self.state.locked();
+            panic!("poison the clock");
+        }));
+        assert!(unwound.is_err() && self.state.is_poisoned());
     }
 
     /// [`synchronize_within`](Self::synchronize_within) any step.

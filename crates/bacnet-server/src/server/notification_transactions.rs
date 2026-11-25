@@ -622,7 +622,7 @@ impl NotificationCore {
     }
 
     pub(super) fn close(&self) {
-        // lock-poison: fail-closed (poisoned acts closed)
+        // lock-poison: fail-closed (poisoned: returns without waking parked waiters)
         let (pending, waiters) = match self.state.lock() {
             Ok(mut state) => {
                 if state.closed {

@@ -52,6 +52,26 @@ fn local(clock: &ServerClock) -> (Date, Time) {
     (frame.local_date, frame.local_time)
 }
 
+/// A panic under the clock's lock leaves the clock working (#2559): it
+/// still reads, checks and takes a zone, and synchronizes, where it once hid
+/// the Device's clock properties and refused zone writes and synchronization.
+#[tokio::test(start_paused = true)]
+async fn a_poisoned_clock_keeps_reading_and_taking_writes() {
+    let clock = synced(zone(0, false), time(10, 0, 0, 0));
+    clock.poison_for_test();
+    assert_eq!(local(&clock).1, time(10, 0, 0, 0));
+    assert_eq!(clock.zone(), zone(0, false));
+    clock.check_zone(-60, false).unwrap();
+    clock.write_zone(-60, false).unwrap();
+    assert_eq!(clock.zone(), zone(-60, false));
+    assert_eq!(local(&clock).1.hour, 11);
+    clock.set_zone(zone(0, false)).unwrap();
+    clock
+        .synchronize(date(2024, 7, 4, 4), time(12, 0, 0, 0), true)
+        .unwrap();
+    assert_eq!(local(&clock).1, time(12, 0, 0, 0));
+}
+
 fn reader(clock: &Arc<ServerClock>) -> Option<Arc<dyn ClockReader>> {
     Some(Arc::clone(clock) as Arc<dyn ClockReader>)
 }

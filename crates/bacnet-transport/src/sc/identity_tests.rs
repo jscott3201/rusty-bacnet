@@ -104,6 +104,28 @@ fn assert_untouched(
     assert_eq!(transport.device_uuid, uuid);
 }
 
+/// A restore goodbye left in a poisoned slot is still joined by a stop, and
+/// once (#2559): the stop takes the slot as the panic left it, where it once
+/// left the task running.
+#[tokio::test(start_paused = true)]
+async fn stop_joins_a_restore_goodbye_in_a_poisoned_slot() {
+    let (transport, _hub, _counts) = fixture(VMAC);
+    let slot = Arc::clone(&transport.restore_disconnect_task);
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _held = slot.lock();
+        panic!("poison the restore slot");
+    }));
+    assert!(unwound.is_err() && slot.is_poisoned());
+    let runs = Arc::new(AtomicUsize::new(0));
+    let run = Arc::clone(&runs);
+    *slot.locked() = Some(tokio::spawn(async move {
+        run.fetch_add(1, Ordering::SeqCst);
+    }));
+    transport.stop().await.unwrap();
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    assert!(slot.locked().is_none());
+}
+
 async fn reject_identity(vmac: Vmac, uuid: Option<[u8; 16]>, expected: &str) {
     let (mut transport, hub, counts) = fixture(vmac);
     if let Some(uuid) = uuid {

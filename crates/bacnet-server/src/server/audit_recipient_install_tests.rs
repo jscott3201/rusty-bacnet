@@ -42,7 +42,9 @@ fn database(device: bool, recipient: bool, reporter: bool) -> ObjectDatabase {
     db
 }
 
-/// The text of `install`'s refusal over `db`.
+/// The text of `install`'s refusal over `db`, after checking it left `db`
+/// and the notification transactions as they were: the Device's recipient,
+/// the Reporter's configuration epoch, and no Audit routes or batch queue.
 fn refusal(mut db: ObjectDatabase) -> String {
     let config = ServerConfig {
         device: identity(),
@@ -52,18 +54,38 @@ fn refusal(mut db: ObjectDatabase) -> String {
         ..Default::default()
     };
     let network = Arc::new(NetworkLayer::new(TestTransport::builder().build()));
+    let transactions = NotificationTransactions::new();
+    let before = observed(&mut db);
     let installed = TargetAudit::install(
         &mut db,
         &config,
         Arc::new(super::super::audit_recipient_routes::AuditRoutes::default()),
         &network,
-        &NotificationTransactions::new(),
+        &transactions,
     );
-    match installed {
+    let text = match installed {
         Err(Error::Encoding(text)) => text,
         Err(other) => panic!("unexpected refusal {other:?}"),
         Ok(_) => panic!("install accepted an incomplete database"),
-    }
+    };
+    assert_eq!(observed(&mut db), before, "a refusal changed the database");
+    assert!(transactions.audit_routes.get().is_none());
+    assert!(transactions.audit_batch.get().is_none());
+    text
+}
+
+/// The Device's provisioned recipient and the Reporter's configuration
+/// epoch, where `db` has them.
+fn observed(db: &mut ObjectDatabase) -> (Option<BACnetRecipient>, Option<u64>) {
+    let recipient = db
+        .get_mut(&ObjectIdentifier::new(ObjectType::DEVICE, 10).unwrap())
+        .and_then(|device| device.device_authority_internal())
+        .and_then(|authority| authority.provisioned_audit_recipient().cloned());
+    let epoch = db
+        .get(&reporter_oid())
+        .and_then(|object| object.audit_reporter())
+        .map(|reporter| reporter.status_internal().configuration_epoch());
+    (recipient, epoch)
 }
 
 #[tokio::test]

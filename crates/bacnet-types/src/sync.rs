@@ -29,7 +29,7 @@
 
 use std::sync::{
     Condvar, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard,
-    WaitTimeoutResult,
+    TryLockError, WaitTimeoutResult,
 };
 use std::time::Duration;
 
@@ -46,6 +46,9 @@ mod sealed {
 pub trait MutexExt<T: ?Sized>: sealed::Sealed {
     /// [`Mutex::lock`], poisoned or not.
     fn locked(&self) -> MutexGuard<'_, T>;
+    /// [`Mutex::try_lock`], poisoned or not: `None` only while another
+    /// thread holds the lock.
+    fn try_locked(&self) -> Option<MutexGuard<'_, T>>;
     /// [`Mutex::get_mut`], poisoned or not.
     fn get_mut_locked(&mut self) -> &mut T;
 }
@@ -54,6 +57,15 @@ impl<T: ?Sized> MutexExt<T> for Mutex<T> {
     #[inline]
     fn locked(&self) -> MutexGuard<'_, T> {
         self.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    #[inline]
+    fn try_locked(&self) -> Option<MutexGuard<'_, T>> {
+        match self.try_lock() {
+            Ok(guard) => Some(guard),
+            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
     }
 
     #[inline]
@@ -154,6 +166,28 @@ mod tests {
             mutex.is_poisoned(),
             "taking the lock doesn't clear the poison"
         );
+    }
+
+    #[test]
+    fn a_try_lock_takes_a_free_lock_poisoned_or_not_and_never_a_held_one() {
+        let mutex = Mutex::new(1);
+        assert_eq!(mutex.try_locked().as_deref(), Some(&1));
+        let held = mutex.locked();
+        assert!(mutex.try_locked().is_none());
+        drop(held);
+        panic_in(|| {
+            let mut guard = mutex.lock().unwrap();
+            *guard = 2;
+            panic!("poison the mutex mid-update");
+        });
+        assert!(mutex.is_poisoned());
+        assert_eq!(mutex.try_locked().as_deref(), Some(&2));
+        let held = mutex.locked();
+        assert!(
+            mutex.try_locked().is_none(),
+            "held and poisoned is still held"
+        );
+        drop(held);
     }
 
     #[test]

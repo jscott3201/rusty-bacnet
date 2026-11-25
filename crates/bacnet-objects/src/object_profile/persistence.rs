@@ -210,7 +210,7 @@ impl FileTagsPersistence {
 #[cfg(feature = "std")]
 impl TagsPersistence for FileTagsPersistence {
     fn load(&self, object: ObjectIdentifier) -> Result<Option<TagsSnapshot>, Error> {
-        let octets = match self.file.read() {
+        let octets = match self.file.read_octets() {
             Ok(Some(octets)) => octets,
             Ok(None) => return Ok(None),
             Err(error) => return Err(self.named(error)),

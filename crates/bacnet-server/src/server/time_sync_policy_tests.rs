@@ -351,6 +351,33 @@ fn limits_are_independent_and_monotonic_time_does_not_refill_backwards() {
     }
 }
 
+/// A panic in the clock code under the limiter's lock poisons it; the
+/// limiter takes it as it was left and admits no more than its policy, where
+/// it once refused every request (#2559).
+#[test]
+fn a_poisoned_limiter_admits_no_more_than_its_policy() {
+    let limiter = TimeSyncLimiter::new(TimeSyncPolicy {
+        global_rate: Some(rate(3)),
+        ..Default::default()
+    });
+    let now = runtime_clock::now();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        limiter.apply_at(&received(&[1], None), None, now, || {
+            panic!("the clock code panics")
+        })
+    }));
+    assert!(unwound.is_err());
+    assert!(limiter.state.is_poisoned());
+    let admitted = (0..10u8)
+        .filter(|source| {
+            limiter
+                .apply_at(&received(&[*source], None), None, now, || Ok(()))
+                .is_ok()
+        })
+        .count();
+    assert_eq!(admitted, 3, "the panicking request spent no token");
+}
+
 #[test]
 fn concurrent_time_sync_admission_is_bounded_and_check_apply_is_serialized() {
     let limiter = Arc::new(TimeSyncLimiter::new(TimeSyncPolicy {

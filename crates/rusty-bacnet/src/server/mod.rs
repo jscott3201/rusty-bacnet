@@ -200,8 +200,10 @@ type ForwarderSaveCounterEntry = (
 );
 
 impl BACnetServer {
-    /// Lock the pending_objects mutex, poisoned or not: a panic under it
-    /// leaves whole objects, each pushed or drained in one step (#2559).
+    /// Lock the pending_objects mutex, poisoned or not (#2559): objects are
+    /// pushed or drained in one step, and the in-place edits (file
+    /// contents, Audit settings) go through the object's own validated
+    /// setters, so a panic under the lock leaves whole objects.
     fn lock_pending(&self) -> std::sync::MutexGuard<'_, Vec<Box<dyn BACnetObject + Send>>> {
         self.pending_objects.locked()
     }
