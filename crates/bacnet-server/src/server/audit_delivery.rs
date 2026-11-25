@@ -1,5 +1,6 @@
 //! Shared one-attempt wire delivery and configuration-fenced health.
 use super::*;
+use bacnet_types::sync::MutexExt;
 
 pub(in crate::server) fn encode_notification(
     notification: &BACnetAuditNotification,
@@ -101,7 +102,7 @@ pub(in crate::server) async fn deliver_observed<T: TransportPort + 'static>(
     }
     let local = std::sync::Mutex::new(local);
     let send = || async {
-        let _local = local.lock().unwrap().take();
+        let _local = local.locked().take();
         match (&route.local_target, &route.remote) {
             (Some(mac), None) => {
                 network

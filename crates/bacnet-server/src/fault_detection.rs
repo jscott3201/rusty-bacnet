@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use bacnet_device_core::event::{ReliabilityChange, fault_pass};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::sync::MutexExt;
 
 /// Fault detection engine.
 ///
@@ -29,10 +30,7 @@ impl FaultDetector {
     }
 
     fn should_warn_internal_failure(&self, oid: ObjectIdentifier, error: &str) -> bool {
-        let mut warned = self
-            .warned_internal_failures
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut warned = self.warned_internal_failures.locked();
         if warned.get(&oid).is_some_and(|previous| previous == error) {
             false
         } else {
@@ -42,16 +40,12 @@ impl FaultDetector {
     }
 
     fn clear_internal_failure(&self, oid: &ObjectIdentifier) {
-        self.warned_internal_failures
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(oid);
+        self.warned_internal_failures.locked().remove(oid);
     }
 
     fn noted_internal_failures(&self) -> Vec<ObjectIdentifier> {
         self.warned_internal_failures
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .locked()
             .keys()
             .copied()
             .collect()

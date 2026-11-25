@@ -18,6 +18,7 @@
 //! by newer ones, is forwarded again, as it would be without the record. It
 //! is in memory only: a restart clears it.
 
+use bacnet_types::sync::MutexExt;
 use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hasher};
 use std::sync::Mutex;
@@ -66,10 +67,7 @@ impl ConfirmedEventRepeats {
         let digest = hasher.finish();
         // Never held across an await; a poisoned lock only means a panic
         // elsewhere, and the record stays usable.
-        let mut entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut entries = self.entries.locked();
         let now = now();
         let live = |entry: &Entry| now.saturating_duration_since(entry.at) < RECORD_WINDOW;
         while entries.front().is_some_and(|entry| !live(entry)) {

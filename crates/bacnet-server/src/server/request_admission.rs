@@ -7,6 +7,7 @@ use super::request_peer::CanonicalRequester;
 
 use bacnet_types::error::Error;
 use bacnet_types::map_hash::BuildMapHasher;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::Semaphore;
 
 #[path = "recovery_classifier.rs"]
@@ -281,7 +282,7 @@ impl Drop for Guard {
         // `held.fetch_sub` at the end then releases the pool slot. This lock
         // never acquires the task owner's lock.
         if let Some(peer) = &self.peer {
-            let mut peers = self.pool.peers.lock().unwrap_or_else(|e| e.into_inner());
+            let mut peers = self.pool.peers.locked();
             let count = peers.get_mut(peer).expect("live peer registration");
             *count -= 1;
             if *count == 0 {
@@ -371,7 +372,7 @@ impl Admission {
         let peer = if matches!(class, Class::Abort) {
             None
         } else {
-            let mut peers = pool.peers.lock().unwrap_or_else(|e| e.into_inner());
+            let mut peers = pool.peers.locked();
             // One lookup for the check and the registration.
             let count = peers.entry(peer.clone()).or_insert(0);
             if *count >= pool.peer_limit {

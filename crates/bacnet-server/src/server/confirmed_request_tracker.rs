@@ -5,6 +5,7 @@ use super::request_peer::{CanonicalRequester, canonical_requester};
 use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_transport::port::{DirectScIdentity, TransportProvenance};
+use bacnet_types::sync::MutexExt;
 
 // Local detection bounds, not transaction lifetimes. Above the entry bound,
 // Clause 5.3.5.3 permits normal service when exact duplicate detection is unavailable.
@@ -101,10 +102,7 @@ impl ConfirmedRequestTracker {
         let requester = canonical_requester(source_mac, source_network);
         let direct_identity = provenance.direct_sc_identity();
         let invoke_id = request.invoke_id;
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.state.locked();
         // Nothing more for a request with no entry under its key pending.
         if let Some(first) = state
             .entries
@@ -221,11 +219,7 @@ impl ConfirmedRequestTracker {
     /// `#[inline]`: every confirmed request's guard ends its entry here.
     #[inline]
     pub(super) fn end(&self, id: u64) {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .entries
-            .retain(|entry| entry.id != id);
+        self.state.locked().entries.retain(|entry| entry.id != id);
     }
 }
 

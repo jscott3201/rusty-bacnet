@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 use bacnet_encoding::constructed::decode_event_notification_tolerant;
 use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::RwLock;
 use tracing::debug;
 
@@ -134,10 +135,7 @@ impl ReceivedEventLog {
     fn admit(&self, source: &CanonicalPeer, now: Instant) -> bool {
         // Never held across an await; a poisoned lock only means a panic
         // elsewhere, and the allowances stay usable.
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take(source, now)
+        self.0.locked().take(source, now)
     }
 }
 

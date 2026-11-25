@@ -1,5 +1,6 @@
 use super::{BipServerBuilder, ServerBuilder, TransportPort, runtime_clock};
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -66,7 +67,7 @@ impl Bucket {
     }
 
     pub(super) fn admit(&self) -> bool {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         // Read time under the lock: concurrent callers cannot move last backwards.
         let now = runtime_clock::now();
         state.credit = state

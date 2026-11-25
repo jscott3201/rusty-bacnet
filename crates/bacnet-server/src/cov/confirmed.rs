@@ -6,9 +6,10 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use bacnet_device_core::cov::{CovSubscriptionKey, MultipleContextKey};
+use bacnet_types::sync::MutexExt;
 use tokio::sync::Notify;
 use tokio::sync::futures::Notified;
 
@@ -177,7 +178,7 @@ impl CovRevisits {
 
     fn pending(&self) -> MutexGuard<'_, Pending> {
         // A panic while holding this lock leaves only keys and places.
-        self.pending.lock().unwrap_or_else(PoisonError::into_inner)
+        self.pending.locked()
     }
 
     /// Store how many references hold a place, under the lock.

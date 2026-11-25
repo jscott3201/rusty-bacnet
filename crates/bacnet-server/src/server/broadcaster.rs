@@ -1,5 +1,6 @@
 //! Local sends share the server's admission seal and joined request lifetime.
 use super::*;
+use bacnet_types::sync::MutexExt;
 use std::sync::{Mutex as SyncMutex, Weak};
 
 pub(super) struct BroadcasterState<T: TransportPort> {
@@ -39,12 +40,12 @@ impl<T: TransportPort> BroadcasterState<T> {
     pub(super) fn seal(&self) {
         // Serializes with clone + registration, including callers that already
         // upgraded a weak handle on another thread. Never held across await.
-        self.network.lock().unwrap().take();
+        self.network.locked().take();
         self.capacity.close();
     }
 
     pub(super) fn is_open(&self) -> bool {
-        self.network.lock().unwrap().is_some()
+        self.network.locked().is_some()
     }
 }
 
@@ -53,7 +54,7 @@ impl<T: TransportPort + 'static> BroadcasterState<T> {
         &self,
         limiter: Option<Arc<DiscoveryLimiter>>,
     ) -> Result<oneshot::Receiver<Result<(), Error>>, Error> {
-        let slot = self.network.lock().unwrap();
+        let slot = self.network.locked();
         let network = Arc::clone(slot.as_ref().ok_or_else(stopped)?);
         let permit = Arc::clone(&self.capacity)
             .try_acquire_owned()

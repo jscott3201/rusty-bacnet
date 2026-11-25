@@ -21,7 +21,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, TryLockError};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::task::{Context, Poll};
 
 use bacnet_encoding::primitives::encode_property_value;
@@ -31,6 +31,7 @@ use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::{BACnetActionCommand, BACnetDeviceObjectPropertyReference};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::sync::MutexExt;
 use bytes::BytesMut;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
@@ -105,7 +106,7 @@ impl Future for Driver {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let mut runs = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut runs = self.0.locked();
         let Some(future) = runs.as_mut() else {
             return Poll::Ready(());
         };

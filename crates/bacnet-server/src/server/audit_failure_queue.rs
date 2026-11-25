@@ -1,5 +1,6 @@
 //! One bounded coalescer shared by source and target callers, with private routes.
 use super::*;
+use bacnet_types::sync::MutexExt;
 
 #[doc(hidden)]
 pub struct AuditFailureContext<R> {
@@ -160,7 +161,7 @@ pub(in crate::server) struct ContextReservation<R> {
 }
 impl<R> ContextReservation<R> {
     pub(in crate::server) fn publish(mut self) {
-        let mut state = self.queue.state.lock().unwrap();
+        let mut state = self.queue.state.locked();
         let entry = self.entry.take().unwrap();
         state.reserved -= 1;
         state.current = Some(entry.epoch);
@@ -173,7 +174,7 @@ impl<R> ContextReservation<R> {
 impl<R> Drop for ContextReservation<R> {
     fn drop(&mut self) {
         if self.entry.is_some() {
-            self.queue.state.lock().unwrap().reserved -= 1;
+            self.queue.state.locked().reserved -= 1;
         }
     }
 }
@@ -181,7 +182,7 @@ impl<R> Drop for ContextReservation<R> {
 impl<R> AuditFailureQueue<R> {
     pub(super) fn target(budget: Arc<tokio::sync::Semaphore>, epoch: u64, eligible: bool) -> Self {
         let queue = Self::default();
-        queue.state.lock().unwrap().historical = Some(budget);
+        queue.state.locked().historical = Some(budget);
         queue
             .prepare_context(epoch, eligible)
             .expect("validated at most 64 baseline contexts")
@@ -193,7 +194,7 @@ impl<R> AuditFailureQueue<R> {
         epoch: u64,
         eligible: bool,
     ) -> Result<ContextReservation<R>, Error> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         state.prune();
         let denied = || {
             Error::protocol(
@@ -225,7 +226,7 @@ impl<R> AuditFailureQueue<R> {
         })
     }
     pub(super) fn has_pending(&self) -> bool {
-        let state = self.state.lock().unwrap();
+        let state = self.state.locked();
         state.owned || state.entries.iter().any(|e| e.pending.is_some())
     }
     #[cfg(test)]
@@ -249,7 +250,7 @@ impl<R> AuditFailureQueue<R> {
 impl<R: PartialEq> AuditFailureQueue<R> {
     /// Current-only source profiles retire old contexts; target contexts remain pinned.
     pub fn recipient_changed(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         if state.historical.is_none() {
             state.entries.clear();
             state.current = None;
@@ -259,7 +260,7 @@ impl<R: PartialEq> AuditFailureQueue<R> {
     }
     /// Capture original admission order before queueing or any subsequent drop callback.
     pub fn observe(&self, context: AuditFailureContext<R>) -> Option<AuditFailureTicket<R>> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         if state.historical.is_none() {
             if !context.enabled() {
                 return None;
@@ -298,7 +299,7 @@ impl<R: PartialEq> AuditFailureQueue<R> {
         timestamp: BACnetTimeStamp,
         count: u64,
     ) -> Option<AuditFailureWorker<R>> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.locked();
         state.lost = state.lost.saturating_add(count);
         if owner.audit_permits.is_closed() || !state.eligible(&ticket.context) {
             return None;
@@ -352,7 +353,7 @@ pub struct AuditFailureWorker<R> {
 }
 impl<R: PartialEq> AuditFailureWorker<R> {
     fn finish_if_empty(&mut self) -> bool {
-        let mut state = self.failures.lock().unwrap();
+        let mut state = self.failures.locked();
         if state.historical.is_none() {
             for entry in &mut state.entries {
                 if entry.pending.as_ref().is_some_and(|b| !b.context.enabled()) {
@@ -371,7 +372,7 @@ impl<R: PartialEq> AuditFailureWorker<R> {
     }
     /// Restore only the captured eligible context; never recursively count a summary.
     pub fn restore(&mut self, batch: AuditFailureBatch<R>) {
-        let mut state = self.failures.lock().unwrap();
+        let mut state = self.failures.locked();
         if !state.eligible(&batch.context) {
             return;
         }
@@ -403,16 +404,19 @@ impl<R: PartialEq> AuditFailureWorker<R> {
             released.as_mut().enable();
             changed.as_mut().enable();
             let ready = {
-                let mut state = self.failures.lock().unwrap();
+                let mut state = self.failures.locked();
                 let historical = state.historical.is_some();
-                let Some(entry) = state.entries.iter_mut().find(|e| e.pending.is_some()) else {
+                // The first pending batch, taken out: put back only if it waits.
+                let Some((entry, batch)) = state
+                    .entries
+                    .iter_mut()
+                    .find_map(|entry| entry.pending.take().map(|batch| (entry, batch)))
+                else {
                     state.owned = false;
                     self.active = false;
                     return None;
                 };
-                let batch = entry.pending.as_ref().unwrap();
                 if !historical && !batch.context.enabled() {
-                    entry.pending = None;
                     None
                 } else {
                     let reserved = if batch.context.confirmed {
@@ -426,12 +430,12 @@ impl<R: PartialEq> AuditFailureWorker<R> {
                         Ok(None)
                     };
                     match reserved {
-                        Ok(reserved) => Some((entry.pending.take().unwrap(), reserved)),
-                        Err(NotificationReserveError::Coordinator(ReserveError::Exhausted)) => None,
-                        Err(_) => {
-                            entry.pending = None;
+                        Ok(reserved) => Some((batch, reserved)),
+                        Err(NotificationReserveError::Coordinator(ReserveError::Exhausted)) => {
+                            entry.pending = Some(batch);
                             None
                         }
+                        Err(_) => None,
                     }
                 }
             };
@@ -448,7 +452,7 @@ impl<R: PartialEq> AuditFailureWorker<R> {
 impl<R> Drop for AuditFailureWorker<R> {
     fn drop(&mut self) {
         if self.active {
-            let mut state = self.failures.lock().unwrap();
+            let mut state = self.failures.locked();
             for entry in &mut state.entries {
                 entry.pending = None;
             }
