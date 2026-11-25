@@ -928,21 +928,37 @@ class Runner(unittest.TestCase):
                 perf_counts.plan(self.args(workloads="rp", noise_floors=[path], hash_seed="2"))
 
     def test_a_seeded_run_whose_harness_drew_random_keys_stops(self):
-        seeded = {perf_counts.HASH_SEED_VAR: "1"}
+        seeded = {"environment": {perf_counts.HASH_SEED_VAR: "1"}}
+
+        def run(state, check=None, manifest=seeded, name="rpm-ct-01-A1-1000"):
+            perf_counts.check_hash_keys(manifest, {"name": name, "hash_keys": state, "hash_check": check})
+
         with self.assertRaisesRegex(RuntimeError, "random hash-map keys"):
-            perf_counts.check_hash_keys("rpm-ct-01-A1-1000", "random", seeded)
-        # Fixed as asked; a harness before #2591 (no field); no seed asked.
-        perf_counts.check_hash_keys("rpm-ct-01-A1-1000", "fixed", seeded)
-        perf_counts.check_hash_keys("rpm-ct-01-A1-1000", None, seeded)
-        perf_counts.check_hash_keys("rpm-ct-01-A1-1000", "random", {})
+            run("random")
+        with self.assertRaisesRegex(RuntimeError, "random hash-map keys"):
+            run("fixed")  # fixed but no check value
+        # A harness before #2591 (no field); no seed asked.
+        run(None)
+        run("random", manifest={"environment": {}})
+
+    def test_a_seeded_run_whose_keys_differ_from_the_first_stops(self):
+        manifest = {"environment": {perf_counts.HASH_SEED_VAR: "1"}}
+        record = {"name": "rpm-ct-01-A1-1000", "hash_keys": "fixed", "hash_check": "00000000deadbeef"}
+        perf_counts.check_hash_keys(manifest, record)
+        self.assertEqual(manifest["hash_check"], "00000000deadbeef")
+        perf_counts.check_hash_keys(manifest, dict(record, name="rpm-ct-02-B1-1000"))
+        with self.assertRaisesRegex(RuntimeError, "rpm-ct-03-P1-1000: hash-map keys check 00000000feedface, not"):
+            perf_counts.check_hash_keys(manifest, dict(record, name="rpm-ct-03-P1-1000",
+                                                       hash_check="00000000feedface"))
 
 
-def with_keys(m, state, labels=("A", "P", "B")):
+def with_keys(m, state, labels=("A", "P", "B"), check="0123456789abcdef"):
     """Marks the runs of `labels` with the hash-map keys their harness
-    reported (`fixed`, `random` or None)."""
+    reported (`fixed`, `random` or None) and, when fixed, `check`."""
     for run in m["runs"]:
         if run["label"] in labels:
             run["hash_keys"] = state
+            run["hash_check"] = check if state == "fixed" else None
     return m
 
 
@@ -1033,14 +1049,22 @@ class HashKeys(unittest.TestCase):
         self.assertTrue(all(r["verdict"] == "PASS" for r in s["rows"]))
         self.assertEqual(s["hash_keys"], ca.MIXED_KEYS)
         self.assertFalse(s["accepted"])
-        self.assertTrue(any("rp/ct some runs fixed their hash-map keys" in p for p in s["coverage_problems"]))
+        self.assertTrue(any("rp/ct the runs' hash-map keys differ" in p for p in s["coverage_problems"]))
+        # Fixed in every run, but to other keys in B.
+        m = with_keys(manifest(Gates.A, list(Gates.P), slopes_p=Gates.P, cells=ALL_ROUND_TRIPS), "fixed")
+        s = ca.analyze(with_keys(m, "fixed", ("B",), check="fedcba9876543210"), None, ("none",))
+        self.assertEqual(s["hash_keys"], ca.MIXED_KEYS)
+        self.assertFalse(s["accepted"])
 
     def test_result_line_reports_the_keys(self):
         line = ("RESULT workload=rpm runtime=ct n=1000 warmup=200 allocs=1 bytes=2 allocs_per_iter=0.001000 "
-                "bytes_per_iter=0.002000 hash_keys={}\n")
-        self.assertEqual(ca.parse_result(line.format("fixed"))["hash_keys"], "fixed")
-        self.assertEqual(ca.parse_result(line.format("random"))["hash_keys"], "random")
-        self.assertIsNone(ca.parse_result(line.replace(" hash_keys={}", ""))["hash_keys"])
+                "bytes_per_iter=0.002000 {}\n")
+        fixed = ca.parse_result(line.format("hash_keys=fixed hash_check=0123456789abcdef"))
+        self.assertEqual((fixed["hash_keys"], fixed["hash_check"]), ("fixed", "0123456789abcdef"))
+        random = ca.parse_result(line.format("hash_keys=random"))
+        self.assertEqual((random["hash_keys"], random["hash_check"]), ("random", None))
+        older = ca.parse_result(line.format(""))
+        self.assertEqual((older["hash_keys"], older["hash_check"]), (None, None))
 
     def test_a_partial_run_says_why_it_is_not_accepted(self):
         s = ca.analyze(manifest(Gates.A, list(Gates.P), slopes_p=Gates.P), None, ("none",))

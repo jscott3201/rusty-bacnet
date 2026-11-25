@@ -1209,7 +1209,7 @@ interleaved matrix compare.
   per process, and the server keeps its objects in such a map. About one
   process in twelve drew keys under which a looked-up object shares its
   probe group with another, so each lookup checked more slots: that
-  process's ReadPropertyMultiple cost 30 to 66 more instructions per
+  process's ReadPropertyMultiple cost about 30 to 70 more instructions per
   request, and its WriteProperty 80 to 290 more. Whether such a process was
   among the twelve baseline values decided those rows' noise floors, which
   for unchanged code ranged from 6 to 300 instructions per request
@@ -1220,7 +1220,12 @@ interleaved matrix compare.
   script passes (`--hash-seed`, 1 by default), it hands out the same bytes
   every time, so every run of every build draws the same keys. Like the
   allocator settings, this is a measurement setting only: no library of the
-  stack changes, and production builds keep their random keys. Any seed
+  stack changes, the harness isn't published, and production builds keep
+  their random keys. Tokio's scheduling choices, which it seeds from the
+  same keys, repeat too. Since the hook relies on how the standard library
+  looks the function up, the script stops a count whose runs report random
+  keys, or keys unlike the first run's, rather than let it run on random
+  keys. Any seed
   serves for a comparison; another seed can move a row's absolute count by
   a few dozen instructions per request, and so can a change to what the
   benchmark database holds, which `attribute` shows as hash-table lines in

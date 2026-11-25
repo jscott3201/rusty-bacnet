@@ -97,16 +97,16 @@ pub const WARMUP: u64 = 200;
 
 /// Prints the line `scripts/perf/perf_counts.py` reads: the workload, the
 /// loop length, the counted loop's allocator totals and whether the
-/// hash-map keys were fixed ([`hash_keys::state`]).
+/// hash-map keys were fixed ([`hash_keys::report_fields`]).
 pub fn report(workload: &str, runtime: &str, n: u64, counted: AllocSnapshot) {
     eprintln!(
         "RESULT workload={workload} runtime={runtime} n={n} warmup={WARMUP} allocs={} bytes={} \
-         allocs_per_iter={:.6} bytes_per_iter={:.6} hash_keys={}",
+         allocs_per_iter={:.6} bytes_per_iter={:.6} {}",
         counted.calls,
         counted.bytes,
         counted.calls as f64 / n as f64,
         counted.bytes as f64 / n as f64,
-        hash_keys::state(),
+        hash_keys::report_fields(),
     );
 }
 

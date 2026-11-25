@@ -363,8 +363,8 @@ def run_matrix(manifest, out, save):
                     result = ca.parse_result((raw / f"{name}.err").read_text())
                     if (result["workload"], result["runtime"], result["n"]) != (workload, runtime, n):
                         raise RuntimeError(f"{name}: RESULT line doesn't match the run")
-                    record["hash_keys"] = result["hash_keys"]
-                    check_hash_keys(name, result["hash_keys"], manifest.get("environment") or {})
+                    record.update(hash_keys=result["hash_keys"], hash_check=result["hash_check"])
+                    check_hash_keys(manifest, record)
                     cg_text = (raw / f"{name}.cg").read_text()
                     files, object_edges = {}, {}
                     _lines, functions, edges = ca.parse_callgrind(cg_text, files, object_edges)
@@ -381,15 +381,25 @@ def run_matrix(manifest, out, save):
                     log("RUN", name, record["instructions"], record["allocator_ir"], record["allocs"], record["bytes"])
 
 
-def check_hash_keys(name, state, environment):
-    """A run given a hash seed whose harness knows the seed (it reports
-    its keys) but drew random ones means `std` stopped asking the harness's
-    `getrandom`: refuse it, or the rows would quietly go back to
-    per-process keys. A harness from before #2591 reports nothing, and its
-    rows say so."""
-    if HASH_SEED_VAR in environment and state == "random":
+def check_hash_keys(manifest, record):
+    """Stops a seeded matrix whose harness knows the seed (it reports its
+    keys) but didn't fix them alike in every process: random keys mean
+    `std` never asked the harness's `getrandom`, and a check value unlike
+    the first run's means it drew the keys some other way (a toolchain
+    whose `std` changed). Either would let the rows go back to per-process
+    keys unnoticed. A harness from before #2591 reports nothing, and its
+    rows say so. The first run's check value goes into the manifest."""
+    name, state, check = record["name"], record.get("hash_keys"), record.get("hash_check")
+    if HASH_SEED_VAR not in (manifest.get("environment") or {}) or state is None:
+        return
+    source = "benchmarks/counts/src/hash_keys.rs"
+    if state != "fixed" or check is None:
         raise RuntimeError(f"{name}: the harness was given {HASH_SEED_VAR} but reports random hash-map keys, so std "
-                           "didn't take them from the harness's getrandom (benchmarks/counts/src/hash_keys.rs)")
+                           f"didn't take them from the harness's getrandom ({source})")
+    first = manifest.setdefault("hash_check", check)
+    if check != first:
+        raise RuntimeError(f"{name}: hash-map keys check {check}, not the first run's {first}: the processes drew "
+                           f"different keys from one seed, so std no longer takes them from the harness ({source})")
 
 
 CALLER_DEPTH = 8

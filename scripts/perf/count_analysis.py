@@ -164,14 +164,16 @@ def parse_summary(cg_text):
 
 
 RESULT_RE = re.compile(r"^RESULT workload=(\S+) runtime=(\S+) n=(\d+) warmup=(\d+) allocs=(\d+) bytes=(\d+)", re.M)
-# The harness's hash-map keys (#2591); a harness before it prints no field.
+# The harness's hash-map keys (#2591), and with fixed keys one hash under
+# the main thread's first keys; a harness before #2591 prints neither.
 HASH_KEYS_RE = re.compile(r"^RESULT .*\bhash_keys=(fixed|random)\b", re.M)
+HASH_CHECK_RE = re.compile(r"^RESULT .*\bhash_check=([0-9a-f]{16})\b", re.M)
 
 
 def parse_result(stderr_text):
-    """The harness's RESULT line: workload, runtime, n, allocs, bytes, and
-    the hash-map keys (`fixed`, `random`, or None from a harness before
-    #2591)."""
+    """The harness's RESULT line: workload, runtime, n, allocs, bytes, the
+    hash-map keys (`fixed`, `random`, or None from a harness before #2591)
+    and, with fixed keys, their check value."""
     match = RESULT_RE.search(stderr_text)
     if not match:
         raise ValueError("no RESULT line in the harness's stderr")
@@ -183,6 +185,7 @@ def parse_result(stderr_text):
         "allocs": int(match[5]),
         "bytes": int(match[6]),
         "hash_keys": keys[1] if (keys := HASH_KEYS_RE.search(stderr_text)) else None,
+        "hash_check": check[1] if (check := HASH_CHECK_RE.search(stderr_text)) else None,
     }
 
 
@@ -752,10 +755,12 @@ FIXED_KEYS, PER_PROCESS, MIXED_KEYS = "fixed", "per process", "mixed"
 
 def hash_keys(runs):
     """How a row's runs drew their hash-map keys (#2591): FIXED_KEYS when the
-    harness fixed them in every run, PER_PROCESS when none did (a harness
-    before #2591, or a run without a seed), MIXED_KEYS otherwise."""
-    states = {FIXED_KEYS if r.get("hash_keys") == "fixed" else PER_PROCESS for r in runs}
-    return states.pop() if len(states) == 1 else MIXED_KEYS
+    harness fixed them in every run, to the same keys (one check value),
+    PER_PROCESS when none did (a harness before #2591, or a run without a
+    seed), MIXED_KEYS otherwise."""
+    states = {(FIXED_KEYS, r.get("hash_check")) if r.get("hash_keys") == "fixed" else (PER_PROCESS, None)
+              for r in runs}
+    return states.pop()[0] if len(states) == 1 else MIXED_KEYS
 
 
 def allocator_notes(rows):
@@ -843,8 +848,9 @@ def analyze(manifest, recorded_floors=None, aimed=("rp",)):
         summary["baseline_builds_identical"] = binaries[0] == binaries[1]
     if not noise:
         problems = coverage_problems(rows, aimed)
-        problems += [f"on {r['workload']}/{r['runtime']} some runs fixed their hash-map keys and some didn't, so "
-                     "the builds didn't probe the object map alike" for r in rows if r["hash_keys"] == MIXED_KEYS]
+        problems += [f"on {r['workload']}/{r['runtime']} the runs' hash-map keys differ (fixed in some and not "
+                     "in others, or fixed to different keys), so the builds didn't probe the object map alike"
+                     for r in rows if r["hash_keys"] == MIXED_KEYS]
         if summary.get("baseline_builds_identical") is False:
             problems.append("the baseline's two builds (A and A') differ, so the build isn't reproducible")
         summary["aimed"] = list(aimed)
