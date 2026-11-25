@@ -352,8 +352,8 @@ async fn start_refuses_unlimited_recovery_under_one_second() {
         });
     let state = transport.connection_state_changes();
     match transport.start().await {
-        Err(Error::OutOfRange(message)) => {
-            assert!(message.contains("at least 1000"), "{message}")
+        Err(Error::InvalidConfig(message)) => {
+            assert!(message.to_string().contains("at least 1000"), "{message}")
         }
         other => panic!("expected the unlimited floor, got {:?}", other.err()),
     }

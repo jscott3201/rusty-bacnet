@@ -92,7 +92,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use bacnet_bip_core::LocalSubnet;
 use bacnet_types::bip_port::IpMulticast;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bacnet_types::sync::MutexExt;
 use tokio::sync::Notify;
 use tracing::{info, warn};
@@ -228,7 +228,7 @@ pub(super) fn subnet(multicast: Option<BipMulticast>, subnet: SocketAddrV4) -> L
 }
 
 fn config(message: String) -> Error {
-    Error::Encoding(message)
+    Error::InvalidConfig(Refusal::text(message))
 }
 
 /// Why a node bound to `interface` at `transport_port` (0 for a port the

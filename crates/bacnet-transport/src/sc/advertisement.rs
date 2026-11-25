@@ -123,13 +123,14 @@ impl<W: WebSocketPort> super::ScTransport<W> {
     ) -> Result<(Self, crate::sc_tls::DirectListener), bacnet_types::error::Error> {
         let unstarted = self.ws.get_mut_locked().is_some();
         if !unstarted || self.direct_intake.npdus.is_some() {
-            return Err(bacnet_types::error::Error::Encoding(
-                "SC direct listener requires an unstarted, unregistered transport".into(),
+            return Err(bacnet_types::error::Error::state(
+                bacnet_types::error::Lifecycle::AlreadyStarted,
+                "SC direct listener requires an unstarted, unregistered transport",
             ));
         }
         if !config.matches_identity(self.local_vmac, self.device_uuid) {
-            return Err(bacnet_types::error::Error::Encoding(
-                "SC direct listener identity does not match transport".into(),
+            return Err(bacnet_types::error::Error::invalid_config(
+                "SC direct listener identity does not match transport",
             ));
         }
         let (listener, rx) =

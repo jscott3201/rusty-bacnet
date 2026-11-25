@@ -31,7 +31,7 @@
 use std::collections::HashMap;
 
 use bacnet_types::MacAddr;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use tokio::time::Instant;
 
 use crate::port::ScPrincipal;
@@ -75,11 +75,13 @@ impl ScControlRateLimit {
     /// Check the limit before any transport I/O or state change.
     pub fn validate(&self) -> Result<(), Error> {
         if self.burst == 0 || self.burst > 4096 || self.per_second == 0 {
-            return Err(Error::OutOfRange(format!(
-                "BACnet/SC control-message rate needs a burst in 1..=4096 and a \
-                 nonzero rate, got burst {} at {}/s",
-                self.burst, self.per_second
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new(
+                    "BACnet/SC control-message rate needs a burst in 1..=4096 and a \
+                     nonzero rate, got burst {} at {}/s",
+                )
+                .with_values(self.burst.into(), self.per_second.into()),
+            ));
         }
         Ok(())
     }

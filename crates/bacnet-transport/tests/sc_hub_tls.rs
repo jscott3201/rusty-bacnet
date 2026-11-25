@@ -181,7 +181,7 @@ async fn local_hub_identity_rejected_before_bind_on_every_start_api() {
                 .err()
                 .expect("invalid local identity must fail");
             assert!(
-                matches!(error, bacnet_types::error::Error::Encoding(ref text) if text == expected),
+                matches!(error, bacnet_types::error::Error::InvalidConfig(ref text) if text.to_string() == expected),
                 "API {api}, expected {expected}, got {error}"
             );
         }

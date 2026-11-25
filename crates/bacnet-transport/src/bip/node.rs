@@ -33,7 +33,7 @@ use bacnet_bip_core::node::{
     LocalFailure, Mode, Node, NodeCounters, Policy, RegistrationEvent, Response, SendRefusal,
 };
 use bacnet_time::HostClock;
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error, Lifecycle, Refusal};
 use bacnet_types::sync::{MutexExt, RwLockExt};
 use bytes::{Bytes, BytesMut};
 use tokio::sync::{Notify, oneshot};
@@ -803,14 +803,36 @@ fn refused(decode: Option<BvllError>, policy: Option<Error>) -> Error {
     match (decode, policy) {
         (Some(error), _) => bvll_error(error),
         (None, Some(error)) => error,
-        (None, None) => Error::Encoding("BVLC response refused".into()),
+        (None, None) => {
+            DecodeError::new(DecodingKind::InvalidEncoding, 0, "BVLC response refused").into()
+        }
     }
 }
 
+/// A configuration the node engine refused: [`Error::Unsupported`] for a
+/// change only a foreign device can make, [`Error::InvalidConfig`] for the
+/// rest, in the engine's words.
 pub(super) fn config_error(error: ConfigError) -> Error {
-    Error::Encoding(error.to_string())
+    let text = Refusal::text(error.to_string());
+    match error {
+        ConfigError::NotForeign => Error::Unsupported(text),
+        _ => Error::InvalidConfig(text),
+    }
 }
 
+/// A send the node engine refused, in its words: a group address given as
+/// a unicast's destination is [`Error::InvalidArgument`], no room to hold
+/// a broadcast or a full socket is [`Error::LimitReached`], and a foreign
+/// device's BBMD not known yet is [`Error::State`] with
+/// [`Lifecycle::NotConnected`]. An NPDU too long for B/IP and a socket's
+/// own failure stay [`Error::Encoding`] until #1833 decides their form
+/// ([`Error::SendTooLong`] and [`Error::Transport`]).
 fn send_refusal(refusal: SendRefusal) -> Error {
-    Error::Encoding(refusal.to_string())
+    let text = || Refusal::text(refusal.to_string());
+    match refusal {
+        SendRefusal::GroupDestination => Error::InvalidArgument(text()),
+        SendRefusal::HoldFull | SendRefusal::SocketFull => Error::LimitReached(text()),
+        SendRefusal::NoBbmd => Error::State(Lifecycle::NotConnected, text()),
+        _ => Error::Encoding(refusal.to_string()),
+    }
 }

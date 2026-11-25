@@ -257,7 +257,7 @@ fn secure_path_without_must_understand_is_rejected_before_state_mutation() {
         .unwrap_err();
 
     match err {
-        Error::Encoding(message) => assert!(message.contains("Must Understand")),
+        Error::InvalidArgument(message) => assert!(message.to_string().contains("Must Understand")),
         other => panic!("expected encoding error, got {other}"),
     }
     assert_eq!(conn.next_message_id, message_id_before);
@@ -281,7 +281,7 @@ fn secure_path_with_header_data_is_rejected_before_state_mutation() {
         .unwrap_err();
 
     match err {
-        Error::Encoding(message) => assert!(message.contains("Header Data")),
+        Error::InvalidArgument(message) => assert!(message.to_string().contains("Header Data")),
         other => panic!("expected encoding error, got {other}"),
     }
     assert_eq!(conn.next_message_id, message_id_before);
@@ -318,7 +318,9 @@ async fn invalid_secure_path_options_are_rejected_before_websocket_emission() {
             .unwrap_err();
 
         match err {
-            Error::Encoding(message) => assert!(message.contains(expected_message)),
+            Error::InvalidArgument(message) => {
+                assert!(message.to_string().contains(expected_message))
+            }
             other => panic!("expected encoding error, got {other}"),
         }
         assert!(

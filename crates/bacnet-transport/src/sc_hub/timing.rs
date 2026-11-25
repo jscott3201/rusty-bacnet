@@ -1,6 +1,6 @@
 //! The accepting Hub's optional probe policy and one monotonic time origin.
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -116,9 +116,9 @@ impl ScHubProbePolicy {
             validate_milliseconds(&format!("probe {name}"), value)?;
         }
         if self.liveness_bound > SC_HUB_PROBE_MAX_LIVENESS_BOUND {
-            return Err(Error::Encoding(format!(
+            return Err(Error::InvalidConfig(Refusal::text(format!(
                 "Hub probe liveness bound must be at most {SC_HUB_PROBE_MAX_LIVENESS_BOUND:?}"
-            )));
+            ))));
         }
         Ok(())
     }
@@ -186,9 +186,9 @@ pub(super) fn validate_milliseconds(name: &str, value: Duration) -> Result<(), E
         || value.as_millis() > i64::MAX as u128
         || Instant::now().checked_add(value).is_none()
     {
-        return Err(Error::Encoding(format!(
+        return Err(Error::InvalidConfig(Refusal::text(format!(
             "Hub {name} must be whole milliseconds in 1..=i64::MAX and representable by the monotonic clock"
-        )));
+        ))));
     }
     Ok(())
 }

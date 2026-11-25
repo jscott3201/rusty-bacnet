@@ -222,8 +222,8 @@ async fn a_given_up_read_frees_its_slot_at_once() {
     assert!(rows.unwrap().is_empty());
     // Given up while it waited: the given-up error, not a stop's.
     let given_up = |error: BvlcExchangeError| match error {
-        BvlcExchangeError::Transport(Error::Encoding(message)) => {
-            assert!(message.contains("given up"), "{message}");
+        BvlcExchangeError::Transport(Error::State(Lifecycle::Closed, message)) => {
+            assert!(message.to_string().contains("given up"), "{message}");
         }
         other => panic!("not the given-up error: {other}"),
     };

@@ -260,14 +260,14 @@ impl ScHub {
         // One local-identity enforcement point for all four public startup APIs.
         // This deliberately does not change remote peer admission or UUID shape.
         if hub_uuid == [0; 16] {
-            return Err(bacnet_types::error::Error::Encoding(
-                "hub device UUID must not be all zero".into(),
+            return Err(bacnet_types::error::Error::invalid_config(
+                "hub device UUID must not be all zero",
             ));
         }
         if hub_vmac == crate::sc_frame::UNKNOWN_VMAC || hub_vmac == crate::sc_frame::BROADCAST_VMAC
         {
-            return Err(bacnet_types::error::Error::Encoding(
-                "hub VMAC must not be UNKNOWN or BROADCAST".into(),
+            return Err(bacnet_types::error::Error::invalid_config(
+                "hub VMAC must not be UNKNOWN or BROADCAST",
             ));
         }
         // Admission bounds are validated before binding, like the broadcast

@@ -22,8 +22,10 @@ fn bounds_reject_zero_and_overflow_in_every_field() {
                 &mut p.global_per_second,
             ];
             *fields.into_iter().nth(index).unwrap() = invalid;
-            assert!(matches!(HubBudget::new(p), Err(Error::Encoding(message))
-                if message.starts_with("hub broadcast ")));
+            assert!(
+                matches!(HubBudget::new(p), Err(Error::InvalidConfig(message))
+                if message.to_string().starts_with("hub broadcast "))
+            );
         }
     }
     let maximum = u64::MAX / TOKEN;

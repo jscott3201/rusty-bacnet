@@ -192,7 +192,7 @@ fn foreign_config() -> ForeignDeviceConfig {
 }
 
 fn assert_refused_as_both(error: Error) {
-    assert!(matches!(error, Error::Encoding(_)), "{error:?}");
+    assert!(matches!(error, Error::InvalidConfig(_)), "{error:?}");
     assert!(
         error
             .to_string()

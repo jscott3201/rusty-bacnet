@@ -1,6 +1,6 @@
 //! Validated phase budgets for accepting hub connections.
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use std::time::Duration;
 
 /// Independent absolute budgets for TCP-to-TLS, TLS-to-WebSocket, and
@@ -21,7 +21,7 @@ pub struct ScHubHandshakeTimeouts {
 
 impl ScHubHandshakeTimeouts {
     /// Construct checked phase budgets. Invalid or excessive durations return
-    /// [`Error::Encoding`] before any socket is opened.
+    /// [`Error::InvalidConfig`] before any socket is opened.
     pub fn new(
         tls: Duration,
         websocket_upgrade: Duration,
@@ -37,9 +37,9 @@ impl ScHubHandshakeTimeouts {
             ("Connect-Request", connect_request, Duration::from_secs(5)),
         ] {
             if value < minimum || value > Duration::from_secs(300) {
-                return Err(Error::Encoding(format!(
+                return Err(Error::InvalidConfig(Refusal::text(format!(
                     "Hub {name} timeout must be between {minimum:?} and 300s"
-                )));
+                ))));
             }
         }
         Ok(Self {

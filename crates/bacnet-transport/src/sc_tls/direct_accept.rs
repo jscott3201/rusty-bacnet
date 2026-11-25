@@ -282,18 +282,15 @@ impl DirectListener {
         config: DirectAcceptConfig,
         membership: Arc<DirectMembership>,
     ) -> Result<(Self, mpsc::Receiver<ReceivedNpdu>), Error> {
-        config.max_established_peers.checked_mul(2).ok_or_else(|| {
-            Error::Encoding("direct accepted-peer limit overflows physical socket capacity".into())
-        })?;
+        let refused = |label| Err(Error::invalid_config(label));
+        if config.max_established_peers.checked_mul(2).is_none() {
+            return refused("direct accepted-peer limit overflows physical socket capacity");
+        }
         if config.device_uuid == [0; 16] {
-            return Err(Error::Encoding(
-                "direct accept device UUID is all-zero".into(),
-            ));
+            return refused("direct accept device UUID is all-zero");
         }
         if config.local_vmac == [0; 6] || config.local_vmac == [0xFF; 6] {
-            return Err(Error::Encoding(
-                "direct accept VMAC is zero or broadcast".into(),
-            ));
+            return refused("direct accept VMAC is zero or broadcast");
         }
         config.npdu_admission_policy.validate()?;
         validate_timeout(

@@ -306,7 +306,7 @@ async fn every_startup_rejects_invalid_policy_before_bind() {
                     }
                 };
                 assert!(
-                    matches!(result, Err(Error::Encoding(message)) if message.starts_with("hub broadcast "))
+                    matches!(result, Err(Error::InvalidConfig(message)) if message.to_string().starts_with("hub broadcast "))
                 );
             }
         }

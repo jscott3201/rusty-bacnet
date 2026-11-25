@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use bacnet_types::bip_port::{BipPortMode, ForeignRegistration};
 use bacnet_types::data_link::DataLink;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle};
 use bacnet_types::sync::MutexExt;
 use bytes::BytesMut;
 use tokio::sync::mpsc;
@@ -547,8 +547,9 @@ impl TransportPort for Bip6Transport {
             || self.tasks.is_running()
             || held.is_some()
         {
-            return Err(Error::Encoding(
-                "registered B/IPv6 lease requires an unstarted transport".into(),
+            return Err(Error::state(
+                Lifecycle::AlreadyStarted,
+                "registered B/IPv6 lease requires an unstarted transport",
             ));
         }
         *held = Some(lease);

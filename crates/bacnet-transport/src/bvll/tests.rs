@@ -159,11 +159,12 @@ fn error_mapping_covers_every_codec_error() {
             available: 0,
         },
     ];
+    // An encoder's refusal, with the codec's own text.
     for error in encoding {
-        assert!(
-            matches!(bvll_error(error), Error::Encoding(ref message) if *message == error.to_string()),
-            "{error:?}"
-        );
+        match bvll_error(error) {
+            Error::Encode(refused) => assert_eq!(refused.message().to_string(), error.to_string()),
+            other => panic!("{error:?} mapped to {other:?}"),
+        }
     }
 }
 
@@ -173,14 +174,14 @@ fn encode_refusals_leave_the_buffer_alone() {
     let npdu = vec![0; u16::MAX as usize - 3];
     assert!(matches!(
         encode_bvll(&mut buf, &Bvll::OriginalUnicastNpdu(&npdu)),
-        Err(Error::Encoding(_))
+        Err(Error::Encode(_))
     ));
     assert!(matches!(
         encode_bvll(
             &mut buf,
             &Bvll::BvlcResult(BvlcResultCode::from_raw(0x0070))
         ),
-        Err(Error::Encoding(_))
+        Err(Error::Encode(_))
     ));
     assert_eq!(&buf[..], b"keep");
 

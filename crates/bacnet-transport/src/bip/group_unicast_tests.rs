@@ -39,7 +39,10 @@ async fn unicast_group_destinations_are_rejected_before_encoding_or_send() {
         [239, 1, 2, 3, 0xBA, 0xC0],
     ] {
         let error = ctx.node.send_unicast(&npdu, &group).await.unwrap_err();
-        assert!(matches!(error, Error::Encoding(_)), "{group:?}: {error:?}");
+        assert!(
+            matches!(error, Error::InvalidArgument(_)),
+            "{group:?}: {error:?}"
+        );
         assert!(error.to_string().contains("group address"), "{error}");
     }
     assert!(sink.take().is_empty(), "nothing went out");

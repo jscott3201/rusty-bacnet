@@ -63,7 +63,10 @@ async fn direct_response_negotiated_npdu_and_complete_bvlc_limits() {
     let (_, _member, route, mut recv) = route((6, 2));
     assert!(matches!(
         route.send(&[1, 0, 0], &scope).await,
-        Err(Error::Encoding(_))
+        Err(Error::SendTooLong {
+            length: 3,
+            limit: 2
+        })
     ));
     assert!(recv.try_recv().is_err());
     let mut send = Box::pin(route.send(&[1, 0], &scope));
@@ -79,7 +82,10 @@ async fn direct_response_negotiated_npdu_and_complete_bvlc_limits() {
     let (_registry, _small_member, small, mut receiver) = self::route((5, 2));
     assert!(matches!(
         small.send(&[1, 0], &scope).await,
-        Err(Error::Encoding(_))
+        Err(Error::SendTooLong {
+            length: 6,
+            limit: 5
+        })
     ));
     assert!(receiver.try_recv().is_err());
 }

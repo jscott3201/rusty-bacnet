@@ -25,7 +25,7 @@
 //!   joining it and keeps per-station statistics.
 
 use bacnet_mstp_core::{ConfigError, Duration as CoreDuration, MstpCoreConfig};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 
 pub use bacnet_mstp_codec as codec;
 mod adapter;
@@ -104,13 +104,13 @@ impl Echo {
     ///
     /// # Errors
     ///
-    /// [`Error::Encoding`] for [`Echo::Full`] with a zero grace, in which no
-    /// echo could arrive.
+    /// [`Error::InvalidConfig`] for [`Echo::Full`] with a zero grace, in
+    /// which no echo could arrive.
     pub fn validate(&self) -> Result<(), Error> {
         match self {
-            Self::Full { grace } if grace.is_zero() => Err(Error::Encoding(
-                "MS/TP echo grace must not be zero".to_string(),
-            )),
+            Self::Full { grace } if grace.is_zero() => {
+                Err(Error::invalid_config("MS/TP echo grace must not be zero"))
+            }
             Self::None | Self::Full { .. } => Ok(()),
         }
     }
@@ -363,7 +363,7 @@ impl MstpConfig {
     ///
     /// # Errors
     ///
-    /// [`Error::Encoding`] naming the field: `max_master` above 127,
+    /// [`Error::InvalidConfig`] naming the field: `max_master` above 127,
     /// `this_station` above `max_master`, `max_info_frames` of zero, a
     /// `baud_rate` of zero or too low for Clause 9 timing, a `usage_timeout`
     /// or `reply_timeout` outside what Clause 9.5.3 allows, or a
@@ -411,11 +411,11 @@ impl MstpConfig {
         // token or a poll late however quick the rest of the host is.
         let pad = CoreDuration::saturating_from_core(self.transmit_latency_pad);
         if pad > config.t_usage_delay {
-            return Err(Error::Encoding(format!(
+            return Err(Error::InvalidConfig(Refusal::text(format!(
                 "MS/TP transmit_latency_pad {:?} exceeds T_usage_delay ({:?})",
                 self.transmit_latency_pad,
                 std::time::Duration::from(config.t_usage_delay)
-            )));
+            ))));
         }
         // A padded frame must complete inside the watchdog too, or the core
         // would abort a frame still on its way out: give it the pad.
@@ -425,21 +425,31 @@ impl MstpConfig {
         Ok(config)
     }
 
+    /// The core's refusal of this configuration as [`Error::InvalidConfig`],
+    /// worded with this configuration's field names.
     fn config_error(&self, error: ConfigError) -> Error {
         let message = match error {
             ConfigError::MaxMasterOutOfRange { value } => {
-                format!("MS/TP max_master {value} exceeds MAX_MASTER (127)")
+                return Error::InvalidConfig(
+                    Refusal::new("MS/TP max_master {} exceeds MAX_MASTER (127)")
+                        .with_value(value.into()),
+                );
             }
             ConfigError::StationExceedsMaxMaster {
                 station,
                 max_master,
             } => {
-                format!("MS/TP this_station {station} exceeds configured max_master ({max_master})")
+                return Error::InvalidConfig(
+                    Refusal::new("MS/TP this_station {} exceeds configured max_master ({})")
+                        .with_values(station.into(), max_master.into()),
+                );
             }
             ConfigError::MaxInfoFramesOutOfRange { .. } => {
-                "MS/TP max_info_frames must be in 1..=255".to_string()
+                return Error::invalid_config("MS/TP max_info_frames must be in 1..=255");
             }
-            ConfigError::ZeroBaudRate => "MS/TP baud_rate must not be zero".to_string(),
+            ConfigError::ZeroBaudRate => {
+                return Error::invalid_config("MS/TP baud_rate must not be zero");
+            }
             ConfigError::UsageTimeoutOutOfRange {
                 minimum, maximum, ..
             } => format!(
@@ -461,7 +471,7 @@ impl MstpConfig {
                 self.baud_rate
             ),
         };
-        Error::Encoding(message)
+        Error::InvalidConfig(Refusal::text(message))
     }
 }
 

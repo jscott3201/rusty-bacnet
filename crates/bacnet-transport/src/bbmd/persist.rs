@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex};
 use bytes::BytesMut;
 use tracing::{debug, warn};
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bacnet_types::sync::MutexExt;
 
 use super::{BbmdState, BdtEntry, encode_bdt_entries};
@@ -82,7 +82,11 @@ pub(crate) fn decode_file(data: &[u8]) -> Result<(Vec<BdtEntry>, Option<Persiste
     if data.len() % 10 == NAT_TRAILER % 10 && data.len() >= NAT_TRAILER {
         let (rows, trailer) = data.split_at(data.len() - NAT_TRAILER);
         let nat = PersistedNat::decode(trailer).ok_or_else(|| {
-            Error::Encoding("persisted BDT: unknown trailer after the rows".into())
+            Error::from(DecodeError::new(
+                DecodingKind::InvalidEncoding,
+                rows.len(),
+                "persisted BDT: unknown trailer after the rows",
+            ))
         })?;
         return Ok((BbmdState::decode_bdt(rows)?, Some(nat)));
     }

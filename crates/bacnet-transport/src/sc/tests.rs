@@ -223,7 +223,8 @@ fn build_disconnect_before_connect_returns_error() {
     let mut conn = ScConnection::new([0x01; 6], [0u8; 16]);
     // hub_vmac is None — not connected yet
     let result = conn.build_disconnect_request();
-    assert!(result.is_err());
+    let not_connected = bacnet_types::error::Lifecycle::NotConnected;
+    assert!(matches!(result, Err(Error::State(state, _)) if state == not_connected));
     // State should not have changed
     assert_eq!(conn.state, ScConnectionState::Disconnected);
 }

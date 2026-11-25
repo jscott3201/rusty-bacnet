@@ -216,7 +216,10 @@ impl TokioSerialPort {
         delay_after_send_us: u32,
     ) -> Result<(), Error> {
         let stream = self.inner.try_lock().map_err(|_| {
-            Error::Encoding("Cannot enable RS-485: serial port is in use".to_string())
+            Error::state(
+                bacnet_types::error::Lifecycle::AlreadyStarted,
+                "Cannot enable RS-485: serial port is in use",
+            )
         })?;
 
         kernel_rs485::configure(

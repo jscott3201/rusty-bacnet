@@ -50,8 +50,11 @@ fn vmac_text_refuses_other_text() {
         "bip6:99999999999999999999",
     ] {
         match parse_vmac_text(text) {
-            Err(Error::OutOfRange(message)) => {
-                assert!(message.contains("0..=4194303"), "{text}: {message}")
+            Err(Error::InvalidArgument(message)) => {
+                assert!(
+                    message.to_string().contains("0..=4194303"),
+                    "{text}: {message}"
+                )
             }
             other => panic!("{text}: {other:?}"),
         }
@@ -72,9 +75,9 @@ fn vmac_text_refuses_other_text() {
         "1234",
     ] {
         match parse_vmac_text(text) {
-            Err(Error::Encoding(message)) => {
+            Err(Error::InvalidArgument(message)) => {
                 assert!(
-                    message.contains("bip6:0x<6 hex digits>"),
+                    message.to_string().contains("bip6:0x<6 hex digits>"),
                     "{text}: {message}"
                 )
             }

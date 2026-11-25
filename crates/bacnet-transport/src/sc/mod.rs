@@ -23,7 +23,7 @@ use crate::sc_frame::{BROADCAST_VMAC, ScFunction, Vmac, decode_sc_message, encod
 use crate::sc_frame::{ScMessage, decode_sc_bvlc_result};
 use bacnet_npdu::NpduLimits;
 use bacnet_types::data_link::DataLink;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle};
 use bacnet_types::sync::MutexExt;
 
 mod address_resolution;
@@ -180,8 +180,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         // A stop, before a start or after one, lets go of the hub sockets
         // the transport was given (#2617).
         if self.stop_gate.is_stopped() {
-            return Err(Error::Encoding(
-                "BACnet/SC transport was stopped: a stopped SC transport cannot start again".into(),
+            return Err(Error::state(
+                Lifecycle::Closed,
+                "BACnet/SC transport was stopped: a stopped SC transport cannot start again",
             ));
         }
         if let Some(config) = &self.reconnect_config {
@@ -202,10 +203,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         self.npdu_admission_policy.validate()?;
 
         if self.device_uuid == [0; 16] {
-            return Err(Error::Encoding("SC device UUID is all-zero".into()));
+            return Err(Error::invalid_config("SC device UUID is all-zero"));
         }
         if self.local_vmac == [0; 6] || self.local_vmac == BROADCAST_VMAC {
-            return Err(Error::Encoding("SC VMAC is zero or broadcast".into()));
+            return Err(Error::invalid_config("SC VMAC is zero or broadcast"));
         }
 
         // The capacity is the admission's aggregate cap (256, as on B/IP).
@@ -219,11 +220,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         let conn = Arc::new(Mutex::new(connection));
         self.connection = Some(conn.clone());
 
-        let primary_ws = self
-            .ws
-            .get_mut_locked()
-            .take()
-            .ok_or_else(|| Error::Encoding("BACnet/SC transport already started".into()))?;
+        let primary_ws = self.ws.get_mut_locked().take().ok_or(Error::state(
+            Lifecycle::AlreadyStarted,
+            "BACnet/SC transport already started",
+        ))?;
 
         // Every hub socket goes through the frame tap (tap.rs).
         let tap = &self.frame_tap;

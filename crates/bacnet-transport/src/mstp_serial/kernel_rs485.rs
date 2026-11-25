@@ -1,4 +1,4 @@
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 
 const SER_RS485_ENABLED: u32 = 1;
 const SER_RS485_RTS_ON_SEND: u32 = 1 << 1;
@@ -14,10 +14,13 @@ pub(super) fn configure(
     mut ioctl: impl FnMut(Request, &mut SerialRs485) -> std::io::Result<()>,
 ) -> Result<(), Error> {
     if !delay_before_send_us.is_multiple_of(1_000) || !delay_after_send_us.is_multiple_of(1_000) {
-        return Err(Error::Encoding(format!(
-            "Kernel RS-485 delays must be multiples of 1000 microseconds: \
-             delay_before_send_us={delay_before_send_us}, delay_after_send_us={delay_after_send_us}"
-        )));
+        return Err(Error::InvalidArgument(
+            Refusal::new(
+                "Kernel RS-485 delays must be multiples of 1000 microseconds: \
+                 delay_before_send_us={}, delay_after_send_us={}",
+            )
+            .with_values(delay_before_send_us.into(), delay_after_send_us.into()),
+        ));
     }
 
     let requested = SerialRs485 {
@@ -48,12 +51,12 @@ pub(super) fn configure(
         || effective.delay_rts_before_send != requested.delay_rts_before_send
         || effective.delay_rts_after_send != requested.delay_rts_after_send
     {
-        return Err(Error::Encoding(format!(
+        return Err(Error::Unsupported(Refusal::text(format!(
             "RS-485 readback mismatch: effective flags={:#010x}, \
              delay_before_send_ms={}, delay_after_send_ms={}; \
              hardware configuration may have changed; no rollback was attempted",
             effective.flags, effective.delay_rts_before_send, effective.delay_rts_after_send
-        )));
+        ))));
     }
     tracing::info!(
         flags = effective.flags,

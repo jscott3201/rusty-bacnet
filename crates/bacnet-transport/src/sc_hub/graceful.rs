@@ -59,7 +59,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, Notify, watch};
@@ -90,7 +90,7 @@ const GRACEFUL_DISCONNECT_ID: u16 = 0;
 ///
 /// All values are validated before any socket opens (via
 /// [`super::ScHubTlsConfig::with_graceful_timeouts`] at startup) and again
-/// by [`Self::new`]. Invalid bounds return [`Error::Encoding`].
+/// by [`Self::new`]. Invalid bounds return [`Error::InvalidConfig`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScHubGracefulTimeouts {
     disconnect_ack: Duration,
@@ -111,15 +111,15 @@ impl ScHubGracefulTimeouts {
             ("Graceful overall", overall, Duration::from_secs(2)),
         ] {
             if value < minimum || value > Duration::from_secs(300) {
-                return Err(Error::Encoding(format!(
+                return Err(Error::InvalidConfig(Refusal::text(format!(
                     "Hub {name} timeout must be between {minimum:?} and 300s"
-                )));
+                ))));
             }
         }
         if overall < disconnect_ack.saturating_add(ws_close) {
-            return Err(Error::Encoding(format!(
+            return Err(Error::InvalidConfig(Refusal::text(format!(
                 "Hub graceful overall timeout ({overall:?}) must cover ack ({disconnect_ack:?}) + close ({ws_close:?})"
-            )));
+            ))));
         }
         Ok(Self {
             disconnect_ack,

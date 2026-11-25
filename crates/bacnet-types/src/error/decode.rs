@@ -13,6 +13,8 @@
 //! - `{:#x}`: the number in hexadecimal, lower case, without padding;
 //! - `{:#04X}`: an octet in hexadecimal, upper case and zero-padded to two
 //!   digits, such as `0x0B` (#1803); a wider number prints all its digits;
+//! - `{:#06X}`: a 16-bit number the same way, zero-padded to four digits,
+//!   such as `0x0060` (#1833);
 //! - `{t}`: the name of the application datatype the number is the tag of
 //!   (Clause 20.2.1.4), such as `Unsigned` for 2. The names live in the
 //!   display code, so one label serves every type.
@@ -300,7 +302,7 @@ pub(super) fn write_label(
     while let Some(at) = rest.find('{') {
         let (before, from) = rest.split_at(at);
         f.write_str(before)?;
-        let placeholder = ["{}", "{:#x}", "{:#04X}", "{t}"]
+        let placeholder = ["{}", "{:#x}", "{:#04X}", "{:#06X}", "{t}"]
             .into_iter()
             .find(|placeholder| from.starts_with(placeholder));
         match placeholder.zip(next.clone().next()) {
@@ -309,6 +311,7 @@ pub(super) fn write_label(
                 match placeholder {
                     "{:#x}" => write!(f, "{value:#x}")?,
                     "{:#04X}" => write!(f, "{value:#04X}")?,
+                    "{:#06X}" => write!(f, "{value:#06X}")?,
                     "{t}" => f.write_str(datatype_name(value))?,
                     _ => write!(f, "{value}")?,
                 }
@@ -347,6 +350,11 @@ mod tests {
         assert_eq!(
             display("type {:#04X}, function {:#04X}", [0x0B, 0x1FF]),
             "decoding error at offset 3: type 0x0B, function 0x1FF"
+        );
+        // A 16-bit number pads to four.
+        assert_eq!(
+            display("code {:#06X}, wider {:#06X}", [0x60, 0x12345]),
+            "decoding error at offset 3: code 0x0060, wider 0x12345"
         );
         assert_eq!(
             display("no placeholder", [7, 8]),

@@ -1,7 +1,7 @@
 use tokio::sync::{Mutex, mpsc};
 
 use super::WebSocketPort;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle};
 
 /// In-memory loopback WebSocket for unit testing.
 pub struct LoopbackWebSocket {
@@ -32,13 +32,14 @@ impl WebSocketPort for LoopbackWebSocket {
         self.tx
             .send(data.to_vec())
             .await
-            .map_err(|_| Error::Encoding("loopback ws send failed".into()))
+            .map_err(|_| Error::state(Lifecycle::Closed, "loopback ws send failed"))
     }
 
     async fn recv(&self) -> Result<Vec<u8>, Error> {
         let mut rx = self.rx.lock().await;
-        rx.recv()
-            .await
-            .ok_or_else(|| Error::Encoding("loopback ws channel closed".into()))
+        rx.recv().await.ok_or(Error::state(
+            Lifecycle::Closed,
+            "loopback ws channel closed",
+        ))
     }
 }

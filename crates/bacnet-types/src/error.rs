@@ -8,7 +8,11 @@
 //! [`DecodeError`], an encoder's [`EncodeError`], a constructor's
 //! [`RangeError`] and a segmenter's [`SegmentationError`] carry static
 //! labels or numbers and build their text when displayed (#1646, #1802).
-//! The variants holding a `String` or a `Box` need `alloc`.
+//! The local refusals ([`Error::State`], [`Error::InvalidConfig`],
+//! [`Error::InvalidArgument`], [`Error::Unsupported`] and
+//! [`Error::LimitReached`], #1833) are there too, with a static
+//! [`Refusal`]; only their owned text needs `alloc`. The other variants
+//! holding a `String` or a `Box` need `alloc`.
 
 #[cfg(all(feature = "alloc", not(feature = "std")))]
 use alloc::{boxed::Box, string::String, vec::Vec};
@@ -28,11 +32,13 @@ mod decode;
 mod encode;
 #[cfg(feature = "std")]
 mod network_reject;
+mod refusal;
 mod remote;
 pub use decode::{DecodeError, DecodingKind, RangeError};
 pub use encode::{EncodeError, SegmentationError};
 #[cfg(feature = "std")]
 pub use network_reject::NetworkReject;
+pub use refusal::{Lifecycle, Refusal};
 #[cfg(feature = "alloc")]
 use remote::ProtocolText;
 pub use remote::RemoteError;
@@ -276,6 +282,37 @@ pub enum Error {
         /// The corresponding bound when this send was refused.
         limit: usize,
     },
+
+    /// A call its component's lifecycle state turns down (#1833), such as
+    /// a second start, or a send on a transport that is not running or not
+    /// connected. Nothing was done. The [`Lifecycle`] says which state; the
+    /// [`Refusal`] is text for a person.
+    #[error("{1}")]
+    State(Lifecycle, Refusal),
+
+    /// A configuration value, option or builder setting refused before
+    /// anything ran (#1833), such as a timeout outside its range or two
+    /// modes that can't run together.
+    #[error("{0}")]
+    InvalidConfig(Refusal),
+
+    /// An argument to a call refused before anything was sent (#1833), such
+    /// as an address or MAC of the wrong form for the link, or a send's
+    /// options the link can't carry.
+    #[error("{0}")]
+    InvalidArgument(Refusal),
+
+    /// What was asked isn't offered here (#1833): not on this platform, not
+    /// in this build, or not by this kind of component. A data link that
+    /// can't carry an operation is [`Error::UnsupportedTransport`], which
+    /// names both links.
+    #[error("{0}")]
+    Unsupported(Refusal),
+
+    /// A resource cap was reached (#1833): a table is full, a counter has
+    /// run out, or a configuration asks for more than the cap allows.
+    #[error("{0}")]
+    LimitReached(Refusal),
 
     /// Error encoding a PDU, with a formatted message. Only with `alloc`;
     /// [`Error::Encode`] is the static form, which the codec crates return.
@@ -790,6 +827,32 @@ impl Error {
     /// Create a buffer-too-short error.
     pub fn buffer_too_short(need: usize, have: usize) -> Self {
         Self::BufferTooShort { need, have }
+    }
+
+    /// Create an [`Error::State`] for `state`, described by a static
+    /// `label`.
+    pub const fn state(state: Lifecycle, label: &'static str) -> Self {
+        Self::State(state, Refusal::new(label))
+    }
+
+    /// Create an [`Error::InvalidConfig`] described by a static `label`.
+    pub const fn invalid_config(label: &'static str) -> Self {
+        Self::InvalidConfig(Refusal::new(label))
+    }
+
+    /// Create an [`Error::InvalidArgument`] described by a static `label`.
+    pub const fn invalid_argument(label: &'static str) -> Self {
+        Self::InvalidArgument(Refusal::new(label))
+    }
+
+    /// Create an [`Error::Unsupported`] described by a static `label`.
+    pub const fn unsupported(label: &'static str) -> Self {
+        Self::Unsupported(Refusal::new(label))
+    }
+
+    /// Create an [`Error::LimitReached`] described by a static `label`.
+    pub const fn limit_reached(label: &'static str) -> Self {
+        Self::LimitReached(Refusal::new(label))
     }
 }
 

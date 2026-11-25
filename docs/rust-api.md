@@ -361,6 +361,23 @@ decode that way. A decoder that names a fault the table doesn't, such as
 GetEnrollmentSummary's undefined enumerations, returns its `Error::reject(reason)`
 itself. A decoding error met once a service runs keeps its Error PDU.
 
+A call the stack turns down on its own side, before or without any exchange
+with a peer, is a local refusal with a variant per kind (#1833), so a caller
+matches the kind without reading text: `Error::State(Lifecycle, Refusal)` for
+a lifecycle state (`AlreadyStarted`, `NotRunning`, `NotConnected`, `Closed`),
+`Error::InvalidConfig` for a configuration value or option,
+`Error::InvalidArgument` for a call's argument (an address or MAC of the wrong
+form for the link), `Error::Unsupported` for what this platform, build or
+component doesn't offer, and `Error::LimitReached` for a resource cap. A
+`Refusal` is the text for a person: a static label with up to two numbers,
+built when displayed, or with `alloc` owned text where it names a run-time
+value; `Refusal::label()` gives the static label. Each displays as its text
+alone. `Error::state`, `Error::invalid_config`, `Error::invalid_argument`,
+`Error::unsupported` and `Error::limit_reached` build one from a static
+label. `bacnet-transport` reports its refusals this way; the other hosted
+crates still report theirs as `Error::Encoding` or `Error::OutOfRange` text
+until #1833 reaches them.
+
 `Error::UnsupportedTransport { required, actual }` reports an operation the
 endpoint's data link cannot carry, such as a BBMD request through an
 `AnyTransport` that is not B/IP. Both fields are a
@@ -1424,7 +1441,7 @@ I-Am could bind a device to a group, and the answer to a request would go to
 every node in it.
 
 `send_unicast` to one of those group destinations fails with
-`Error::Encoding` and sends nothing (#1677). An Original-Unicast-NPDU goes to
+`Error::InvalidArgument` and sends nothing (#1677, #1833). An Original-Unicast-NPDU goes to
 one node's own address, and a receiver that checks where a datagram was sent,
 as this transport does, drops one sent to a group, so the caller finds out
 instead of losing the message; `send_broadcast` reaches the link, and
@@ -1787,7 +1804,7 @@ Production BACnet/SC transports validate heartbeat settings at `start()`: the in
 **Raw transport startup migration:** `new(ws, vmac)` remains two-argument and
 infallible, with a zero UUID placeholder while unstarted. `with_device_uuid` is
 required before `start()`: omitted/all-zero UUIDs and reserved all-zero/all-ff
-local VMACs return clear `Error::Encoding` configuration errors. Error precedence
+local VMACs return clear `Error::InvalidConfig` configuration errors. Error precedence
 is reconnect configuration, heartbeat timing, then identity. No UUID version or
 variant bits, EUI-48 shape, or Random-48 shape are enforced by this guard.
 
@@ -2389,7 +2406,7 @@ retired with no public unchecked escape.
 **Hub identity source/runtime break:** `ScHub::start(bind, tls, vmac, uuid)` now
 requires the fourth UUID argument. All four public starts reject an all-zero
 16-byte UUID or reserved UNKNOWN (all-zero)/BROADCAST (all-ff) local VMAC with
-`Error::Encoding` before `TcpListener::bind`, through one shared enforcement point.
+`Error::InvalidConfig` before `TcpListener::bind`, through one shared enforcement point.
 The other three method names, argument order and return contracts are unchanged.
 No UUID version/variant or general VMAC bit-shape policy is added. Provision the
 hosting device UUID before deployment and durably reuse it for its lifetime
@@ -2532,7 +2549,7 @@ match ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key") {
 text, in `Debug` or `Display`, and a path's control characters are escaped in the
 text; the key and its PEM text are not zeroized, as with DER.
 `From<ScTlsConfigError>` is implemented for `bacnet_types::error::Error` (as
-`Error::Encoding` with the text) and, with `sc-tls`, for `bacnet_ops::OpsError` (as
+`Error::InvalidConfig` with the text) and, with `sc-tls`, for `bacnet_ops::OpsError` (as
 the typed `OpsError::Tls`), so `?` works in functions returning either.
 `bacnet_ops` re-exports `ScNodeTlsConfig`, `ScTlsConfigError` and the types its
 variants name, so an application on `bacnet_ops` alone loads the files:

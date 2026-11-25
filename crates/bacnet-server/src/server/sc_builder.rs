@@ -425,7 +425,7 @@ mod tests {
                         .err()
                         .expect("invalid reconnect must fail");
                     assert!(
-                        matches!(&error, Error::OutOfRange(message) if message.contains("reconnect")),
+                        matches!(&error, Error::InvalidConfig(message) if message.to_string().contains("reconnect")),
                         "expected reconnect error before TLS/bindings, got {error:?}"
                     );
                 }
@@ -519,7 +519,9 @@ mod tests {
                 .map_err(Error::from)
                 .err()
                 .unwrap();
-            assert!(matches!(error, Error::OutOfRange(m) if m.contains("reconnect")));
+            assert!(
+                matches!(error, Error::InvalidConfig(m) if m.to_string().contains("reconnect"))
+            );
         }
     }
 
@@ -554,7 +556,9 @@ mod tests {
                 .map_err(Error::from)
                 .err()
                 .unwrap();
-            assert!(matches!(error, Error::OutOfRange(m) if m.contains("reconnect")));
+            assert!(
+                matches!(error, Error::InvalidConfig(m) if m.to_string().contains("reconnect"))
+            );
         }
     }
 
