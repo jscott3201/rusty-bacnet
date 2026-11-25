@@ -104,11 +104,12 @@
 
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use bacnet_network::layer::{NetworkLayer, ReceivedApdu, ReceivedNetworkControl};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::{Notify, mpsc};
 
 use crate::coordinator::OutboundTransactionCoordinator;
@@ -175,7 +176,7 @@ pub struct SeatHolds {
 
 impl SeatHolds {
     fn role(&self) -> std::sync::MutexGuard<'_, SeatedRole> {
-        self.role.lock().unwrap_or_else(PoisonError::into_inner)
+        self.role.locked()
     }
 
     /// A hold for one task, or `None` once the endpoint is stopping.
@@ -302,7 +303,7 @@ impl std::fmt::Debug for NodeDcc {
 
 impl NodeDcc {
     fn state(&self) -> std::sync::MutexGuard<'_, NodeDccState> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.0.locked()
     }
 
     /// Whether the node's server has restricted initiation now.
@@ -552,7 +553,7 @@ pub(crate) struct Attached {
 
 impl Attached {
     fn seated(&self) -> std::sync::MutexGuard<'_, SeatedRole> {
-        self.seated.lock().unwrap_or_else(PoisonError::into_inner)
+        self.seated.locked()
     }
 
     /// Whether the seat still has, or may still get, a role: its queue is
@@ -641,7 +642,7 @@ impl SeatSlot {
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.locked()
     }
 
     pub(crate) fn number(&self) -> &SeatNumber {

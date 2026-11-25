@@ -8,8 +8,9 @@
 //! drop between checking the queue and awaiting cannot lose a wakeup.
 
 use bacnet_npdu::NetworkPriority;
+use bacnet_types::sync::MutexExt;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use tokio::sync::Notify;
 use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
@@ -39,7 +40,7 @@ struct Shared {
 
 impl Shared {
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.locked()
     }
 
     fn backlog(&self) -> Backlog {

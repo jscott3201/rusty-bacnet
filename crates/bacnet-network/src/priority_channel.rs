@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Notify;
 
 use bacnet_npdu::NetworkPriority;
+use bacnet_types::sync::MutexExt;
 
 /// An item tagged with a BACnet network priority.
 #[derive(Debug, Clone)]
@@ -101,7 +102,7 @@ impl<T> PrioritySender<T> {
     /// The method is async for API consistency but does not block.
     pub async fn send(&self, item: PrioritizedItem<T>) -> Result<(), PrioritizedItem<T>> {
         {
-            let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
+            let mut queues = self.queues.locked();
             let idx = priority_index(item.priority);
             let q = &mut queues[idx];
             if q.len() >= self.capacity {
@@ -123,7 +124,7 @@ impl<T> PriorityReceiver<T> {
         loop {
             // Try to dequeue in priority order (index 0 = highest).
             {
-                let mut queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
+                let mut queues = self.queues.locked();
                 for q in queues.iter_mut() {
                     if let Some(item) = q.pop_front() {
                         return Some(item);
@@ -133,7 +134,7 @@ impl<T> PriorityReceiver<T> {
 
             // All queues empty — check if senders are gone.
             if self.sender_token.strong_count() == 0 {
-                let queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
+                let queues = self.queues.locked();
                 if queues.iter().all(|q| q.is_empty()) {
                     return None;
                 }

@@ -72,6 +72,7 @@ use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::sync::MutexExt;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -351,9 +352,7 @@ struct SessionShared {
 
 impl SessionShared {
     fn counters(&self) -> std::sync::MutexGuard<'_, PolicyCounters> {
-        self.counters
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.counters.locked()
     }
 }
 
