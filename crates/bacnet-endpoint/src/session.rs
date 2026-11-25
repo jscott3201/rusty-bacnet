@@ -844,8 +844,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         }
         if self.stop_exit.is_none() {
             self.stop_exit = Some(match self.dispatch_task.as_mut() {
-                Some(task) => task.await.map_err(|error| {
-                    Error::Encoding(format!("endpoint session dispatch failed: {error}"))
+                // A dispatch task that panicked or was aborted: the session
+                // is shut for good, as every stopped one is.
+                Some(task) => task.await.map_err(|join| {
+                    Error::State(
+                        error::Lifecycle::Closed,
+                        Refusal::text(format!("endpoint session dispatch failed: {join}")),
+                    )
                 }),
                 None => Ok(SessionExit::ReceiversClosed),
             });
@@ -1031,13 +1036,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// from [`server_config`](crate::identity::server_config).
     /// Transport-dependent: B/IP reaches the local subnet broadcast; SC
     /// relays via the hub as a broadcast NPDU. Fails with [`Error::State`]
-    /// when the session is not running, with [`Error::Unsupported`] for a
+    /// when the session is not running, with [`Error::InvalidConfig`] for a
     /// session with no identity or database, and with
     /// [`Error::InitiationDisabled`] while the session's
     /// server ([`with_server`](Self::with_server)) holds a DeviceCommunicationControl
     /// DISABLE_INITIATION: this I-Am answers no Who-Is (Clause 16.1).
     pub async fn broadcast_i_am(&self) -> Result<(), Error> {
-        let identity = self.identity.as_ref().ok_or(Error::unsupported(
+        let identity = self.identity.as_ref().ok_or(Error::invalid_config(
             "endpoint I-Am requires a composed identity",
         ))?;
         if self
@@ -1052,10 +1057,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         if !self.is_running() {
             return Err(self.not_running());
         }
-        let database = self
-            .database
-            .as_ref()
-            .ok_or(Error::unsupported("endpoint I-Am has no Device database"))?;
+        let database = self.database.as_ref().ok_or(Error::invalid_config(
+            "endpoint I-Am has no Device database",
+        ))?;
         // The guard covers only this check, never the send below (#2199),
         // and is never waited for in the caller's task (#2772): with the
         // database busy, a task of the session's waits and checks.

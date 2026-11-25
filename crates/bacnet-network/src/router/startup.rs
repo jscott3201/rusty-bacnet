@@ -14,6 +14,11 @@ fn config_error(error: ConfigError) -> Error {
         ConfigError::TooManyPorts { .. }
         | ConfigError::RouteCap { .. }
         | ConfigError::TableTooSmall => Error::LimitReached(text),
+        // NoPorts, DuplicateNetwork, ReservedNetwork, Limit, ZeroSweep,
+        // NoDuplicateRecord and Congestion. The core's error is
+        // `#[non_exhaustive]`, so a wildcard is needed, and it also takes a
+        // refusal the core adds later as configuration; the mapping's test
+        // lists the variants known today.
         _ => Error::InvalidConfig(text),
     }
 }

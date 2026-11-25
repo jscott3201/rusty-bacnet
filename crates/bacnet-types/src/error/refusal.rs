@@ -31,10 +31,11 @@ use super::decode::{placeholder_count, write_label};
 /// system or a socket reported is `Error::Transport`, as is a send on a
 /// transport that has stopped.
 ///
-/// The transport reports `AlreadyStarted`, `NotConnected` and `Closed`. The
-/// endpoint's session and ingress report all but `NotConnected`, deciding
-/// between `NotRunning`, `Stopping` and `Closed` from their own state; the
-/// server's and client's refusals move to this type after them.
+/// The transport reports `AlreadyStarted`, `NotConnected` and `Closed`, and
+/// the network layer and the router's application port `AlreadyStarted`.
+/// The endpoint's session and ingress report all but `NotConnected`,
+/// deciding between `NotRunning`, `Stopping` and `Closed` from their own
+/// state; the server's and client's refusals move to this type after them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Lifecycle {

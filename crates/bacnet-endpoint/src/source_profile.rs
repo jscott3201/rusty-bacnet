@@ -59,7 +59,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             return Err(Error::state(self.not_running_state(), UNAVAILABLE));
         }
         let (Some(source), Some(runtime)) = (&self.source_audit, &self.source_recipient) else {
-            return Err(Error::unsupported(UNAVAILABLE));
+            return Err(Error::invalid_config(UNAVAILABLE));
         };
         // The session can't stop while this call borrows it, so under the
         // guard the owner is what may have gone.

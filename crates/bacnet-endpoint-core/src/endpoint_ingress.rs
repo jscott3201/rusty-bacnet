@@ -6,7 +6,7 @@ use bacnet_network::layer::{NetworkLayer, ReceivedApdu, RoutedTarget};
 use bacnet_npdu::NetworkPriority;
 use bacnet_transport::port::{DataAttribute, TransportPort};
 use bacnet_types::MacAddr;
-use bacnet_types::error::{self, Error};
+use bacnet_types::error::{self, Error, Refusal};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -548,9 +548,12 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         let result = match self.session_task.as_mut() {
             Some(task) => match task.await {
                 Ok(result) => result,
-                Err(error) => Err(Error::Encoding(format!(
-                    "endpoint ingress session failed: {error}"
-                ))),
+                // The task panicked or was aborted: whatever it held is
+                // gone with it, and the ingress never starts again.
+                Err(join) => Err(Error::State(
+                    error::Lifecycle::Closed,
+                    Refusal::text(format!("endpoint ingress session failed: {join}")),
+                )),
             },
             // Only a stop takes the task: this one found it gone.
             None => Err(Error::state(

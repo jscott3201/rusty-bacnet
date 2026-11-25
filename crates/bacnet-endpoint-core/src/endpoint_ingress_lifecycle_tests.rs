@@ -66,6 +66,15 @@ async fn ingress_canceled_stop_retains_join_and_actual_post_start_bip_fact() {
         tokio::select! {result=&mut stop=>panic!("stop completed prematurely: {result:?}"), _=entered.notified()=>{}}
     }
     assert_eq!(complete.load(Ordering::SeqCst), 0);
+    // The stop that was dropped is still under way.
+    assert!(matches!(
+        endpoint.client_seat(
+            Arc::new(crate::coordinator::OutboundTransactionCoordinator::new()),
+            crate::seat::SeatRoles::new(false),
+            4,
+        ),
+        Err(Error::State(error::Lifecycle::Stopping, _))
+    ));
     gate.add_permits(1);
     assert!(matches!(
         timeout(WAIT, endpoint.stop()).await.unwrap().unwrap(),
@@ -84,4 +93,20 @@ async fn ingress_canceled_stop_retains_join_and_actual_post_start_bip_fact() {
     ));
     drop(receivers);
     drop(handle);
+}
+
+/// A session task that ended under the ingress, here aborted, leaves it
+/// shut for good: its stop says so, with the task's end (#1833).
+#[tokio::test]
+async fn a_session_task_that_ended_stops_the_ingress_closed() {
+    let (inner, _handle) = test_transport();
+    let mut endpoint = EndpointIngress::new(inner, 4);
+    let _receivers = endpoint.start().await.unwrap();
+    endpoint.session_task.as_ref().unwrap().abort();
+    let stopped = timeout(WAIT, endpoint.stop()).await.unwrap().unwrap_err();
+    assert!(
+        matches!(&stopped, Error::State(error::Lifecycle::Closed, text)
+            if text.to_string().starts_with("endpoint ingress session failed: ")),
+        "{stopped:?}"
+    );
 }

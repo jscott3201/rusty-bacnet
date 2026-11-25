@@ -13940,7 +13940,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Unsupported(Refusal)` | Not offered on this platform, in this build, or by this kind of component |
 | `Error::LimitReached(Refusal)` | A resource cap reached: a full table, a counter run out, a one-holder resource another holds |
 | `Error::SendTooLong { length, limit }` | A send refused for its length before anything was written |
-| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (client, server, objects), and, until their own change, the transport's I/O failures as text, the MS/TP and Ethernet NPDU-length refusals, B/IP's refusals of an NPDU too long, a socket that can't take the datagram now and a socket's own failure, and an endpoint's send that waited past its deadline or a task of its stop that failed |
+| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (client, server, objects), and, until their own change, the transport's I/O failures as text, the MS/TP and Ethernet NPDU-length refusals, B/IP's refusals of an NPDU too long, a socket that can't take the datagram now and a socket's own failure, and an endpoint's send that waited past its deadline |
 | `Error::Transport(io_error)` | Transport I/O failure, and a stopped transport's send (`NotConnected`) |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
 | `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles) |

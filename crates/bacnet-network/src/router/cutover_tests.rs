@@ -296,6 +296,29 @@ async fn start_refuses_a_reserved_network_before_any_transport_starts() {
     }
 }
 
+/// Two ports on one network are refused as configuration before any
+/// transport starts (#1833).
+#[tokio::test]
+async fn start_refuses_two_ports_on_one_network_before_any_transport_starts() {
+    use super::driven_port::driven;
+    use std::sync::atomic::Ordering;
+
+    let (first, first_handle) = driven(1, 1497);
+    let (second, second_handle) = driven(2, 1497);
+    let ports = vec![RouterPort::new(first, 2), RouterPort::new(second, 2)];
+    let error = BACnetRouter::start(ports, RouterOptions::new())
+        .await
+        .err()
+        .expect("a duplicate network");
+    assert!(
+        matches!(&error, Error::InvalidConfig(refusal)
+            if refusal.to_string() == "Duplicate network number 2 in router ports"),
+        "{error:?}"
+    );
+    assert!(!first_handle.started.load(Ordering::SeqCst));
+    assert!(!second_handle.started.load(Ordering::SeqCst));
+}
+
 /// The engine's 65,556-octet scratch bounds what it writes, and no port's
 /// limit reaches it: a port carries at most 65,535 octets, so with R1 an
 /// NPDU routed toward one network draws reason 4 before its rewrite is
