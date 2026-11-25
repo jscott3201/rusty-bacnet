@@ -291,10 +291,11 @@ Failures are data here, not exceptions:
   `BacnetTransportError` a single read would have raised.
 - A later request the client's own link fails (a route lost, a send
   refused) ends the read the same way, with that error in `stopped`.
-- A read raises only when nothing could be read: a bad item (`TypeError` or
-  `ValueError`, ALL, REQUIRED and OPTIONAL included, when the call is
-  made), a device that can't be placed (`BacnetLookupError`), and a link
-  that fails the first request (what a single read raises for it).
+- A read raises only when nothing could be read: a bad argument (`TypeError`
+  or `ValueError` when the call is made, `properties` given as one str or
+  bytes and an item of ALL, REQUIRED or OPTIONAL among them), a device that
+  can't be placed (`BacnetLookupError`), and a link that fails the first
+  request (what a single read raises for it).
 
 A value's text names its object's units, and its state by the object's
 Active_Text and Inactive_Text or State_Text, when the same call reads them.
@@ -302,9 +303,10 @@ Active_Text and Inactive_Text or State_Text, when the same call reads them.
 #### `read_object(object, properties=None) -> Readings`
 
 One object's properties in one ReadPropertyMultiple: every property, or
-those listed. A property the device refused has its `error` set. A device
-that stops answering raises `BacnetTimeoutError` and keeps nothing, since an
-object's rows go together.
+those listed (`["pv", "units"]`; one str or bytes raises `TypeError` when
+the call is made). A property the device refused has its `error` set. A
+device that stops answering raises `BacnetTimeoutError` and keeps nothing,
+since an object's rows go together.
 
 #### `objects() -> ObjectList` and `summary() -> DeviceSummary`
 
