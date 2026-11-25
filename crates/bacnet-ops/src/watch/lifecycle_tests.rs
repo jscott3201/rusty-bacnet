@@ -87,8 +87,8 @@ async fn a_row_too_large_alone_is_read_property_by_property() {
     let from = Instant::now();
     tokio::time::sleep(Duration::from_secs(11)).await;
     assert_eq!(lab.sent(RPM, from), 1);
-    // And, once, the device's restart time: with no answer to the poll's
-    // question of which device answers, that read names it.
+    // And, once, the device's name by the wildcard instance: the poll's
+    // question of which device answers had no answer.
     assert_eq!(lab.sent(RP, from), POINT_PROPERTIES.len() + 1);
     let snapshot = lease.snapshot();
     assert_eq!((snapshot.polls, snapshot.state), (1, Phase::Live));

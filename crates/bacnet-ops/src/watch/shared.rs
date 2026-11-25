@@ -261,13 +261,16 @@ impl Shared {
     /// The device at the address named itself `found`: the point's device
     /// from now on unless the device itself had named another for it, which
     /// is returned (another device is there now).
-    pub(super) fn named(&self, found: u32) -> Option<u32> {
+    pub(super) fn named(&self, found: u32, confirm: bool) -> Option<u32> {
         let mut entry = self.lock();
         match entry.identity {
             Some(own) if own != found && entry.confirmed => Some(own),
-            _ => {
+            own => {
+                if own != Some(found) {
+                    entry.confirmed = false;
+                }
                 entry.identity = Some(found);
-                entry.confirmed = true;
+                entry.confirmed |= confirm;
                 None
             }
         }

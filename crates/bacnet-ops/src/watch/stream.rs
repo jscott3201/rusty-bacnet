@@ -68,6 +68,9 @@ pub enum State {
     ///
     /// - [`Why::Refused`]: the device said no (or refused the service for
     ///   an earlier point); not asked again.
+    /// - [`Why::ForeignSender`]: its notifications name a device that
+    ///   can't be told from another at its address; subscribed again when
+    ///   the point starts again.
     /// - [`Why::NoAnswer`]: the first read or the subscription had no
     ///   answer; subscribed again after a backoff.
     /// - [`Why::Full`]: the device's subscription table was full;

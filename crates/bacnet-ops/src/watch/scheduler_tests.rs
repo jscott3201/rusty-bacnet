@@ -99,8 +99,8 @@ async fn a_device_refusing_rpm_is_polled_by_readproperty() {
     let from = Instant::now();
     tokio::time::sleep(Duration::from_secs(10)).await;
     assert_eq!(lab.sent(RPM, from), 0, "{:?}", lab.services());
-    // One property a point, and once the restart time, which names the
-    // device for polls that can't ask which device answers.
+    // One property a point, and once the device's name by the wildcard
+    // instance, as these polls can't ask which device answers.
     assert_eq!(lab.sent(RP, from), 3, "one property a point");
     lab.stop().await;
 }
@@ -120,8 +120,9 @@ async fn a_failed_batch_is_read_one_property_at_a_time() {
     // Asked again without the question of which device answers, in case
     // that was what failed it, then one property at a time.
     assert_eq!(lab.sent(RPM, from), 2);
-    // And the restart time once, which names the device.
-    assert_eq!(lab.sent(RP, from), 3 * POINT_PROPERTIES.len() + 1);
+    // The device isn't asked its name: failing the row, it was taken as
+    // refusing the wildcard.
+    assert_eq!(lab.sent(RP, from), 3 * POINT_PROPERTIES.len());
     assert!(!lab.client.refused_rpm(&lab_at()));
     for lease in &leases {
         let snapshot = lease.snapshot();
@@ -315,8 +316,8 @@ async fn the_value_reads_name_units_and_state_texts_first() {
     settle().await;
     assert_eq!(
         lab.services(),
-        [RPM, RPM, SUBSCRIBE_COV, RPM, SUBSCRIBE_COV, RP],
-        "texts for the binary object only; the device's restart time once"
+        [RPM, RPM, SUBSCRIBE_COV, RP, RPM, SUBSCRIBE_COV, RP],
+        "texts for the binary object only; the device's name and restart time once"
     );
     let has = |lease: &Lease, property| lease.snapshot().rows.iter().any(|(p, _)| *p == property);
     for property in [

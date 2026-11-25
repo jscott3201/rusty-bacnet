@@ -193,6 +193,9 @@ pub(crate) fn why_body(why: Option<&Why>) -> Value {
         }
         Some(Why::Moved { to }) => json!({ "kind": "moved", "to": to }),
         Some(Why::Refused(_)) => kind("refused"),
+        Some(Why::ForeignSender { sender }) => {
+            json!({ "kind": "foreign-sender", "sender": sender })
+        }
         Some(Why::NoAnswer(_)) => kind("no-answer"),
         Some(Why::Full(_)) => kind("full"),
         Some(Why::Lapsed(_)) => kind("lapsed"),

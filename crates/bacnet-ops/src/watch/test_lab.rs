@@ -113,6 +113,14 @@ pub(super) struct Quirks {
     /// A ReadProperty of any Device object's Object_Identifier is answered,
     /// as by a gateway that answers for every instance.
     pub(super) any_device: AtomicBool,
+    /// A ReadProperty of another Device object's Object_Identifier is
+    /// answered with the device's own, as by a device that ignores the
+    /// instance asked for.
+    pub(super) self_device: AtomicBool,
+    /// A ReadProperty of another Device object draws a property error, not
+    /// unknown-object, as from a device that answers a missing instance
+    /// with another error.
+    pub(super) deny_missing: AtomicBool,
 }
 
 /// Device,4194303 as a context-tagged object identifier in a request.
@@ -279,10 +287,15 @@ fn faked(quirks: &Quirks, request: &ReadPropertyRequest) -> Option<Vec<u8>> {
             if device.object_type() == ObjectType::DEVICE
                 && device.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE
                 && device.instance_number() != LAB
-                && quirks.any_device.load(Ordering::Relaxed) =>
+                && (quirks.any_device.load(Ordering::Relaxed)
+                    || quirks.self_device.load(Ordering::Relaxed)) =>
         {
+            let answered = match quirks.any_device.load(Ordering::Relaxed) {
+                true => device,
+                false => oid(ObjectType::DEVICE, LAB),
+            };
             let mut value = BytesMut::new();
-            bacnet_encoding::primitives::encode_app_object_id(&mut value, &device);
+            bacnet_encoding::primitives::encode_app_object_id(&mut value, &answered);
             Some(value.to_vec())
         }
         PropertyIdentifier::OBJECT_IDENTIFIER
@@ -340,6 +353,18 @@ fn forwards(
                     answer_routed(handle, vec![0x50, invoke, service, 0x91, class, 0x91, code]);
                 }
             }
+            return false;
+        }
+        if service == READ_PROPERTY
+            && quirks.deny_missing.load(Ordering::Relaxed)
+            && let Ok(request) = ReadPropertyRequest::decode(&apdu[4..])
+            && request.object_identifier.object_type() == ObjectType::DEVICE
+            && ![LAB, ObjectIdentifier::WILDCARD_INSTANCE]
+                .contains(&request.object_identifier.instance_number())
+        {
+            let class = ErrorClass::PROPERTY.to_raw() as u8;
+            let code = ErrorCode::UNKNOWN_PROPERTY.to_raw() as u8;
+            answer(handle, vec![0x50, invoke, service, 0x91, class, 0x91, code]);
             return false;
         }
         if service == READ_PROPERTY

@@ -393,9 +393,9 @@ async fn announcements_fighting_over_an_address_are_asked_ever_less_often() {
 }
 
 /// A forged announcement of another device at the watched address is
-/// refuted by the device there, though the table goes on naming the other.
-/// A watch started there afterwards takes what the device said, not the
-/// table's row, and works: subscribed, taking its values, over the
+/// refuted by the device there, and repeated, so the table goes on naming
+/// the other. A watch started there afterwards takes what the device says,
+/// not the table's row, and works: subscribed, taking its values, over the
 /// lifetime and its renewal.
 #[tokio::test(start_paused = true)]
 async fn a_watch_started_after_a_refuted_claim_takes_the_device_there() {
@@ -404,6 +404,11 @@ async fn a_watch_started_after_a_refuted_claim_takes_the_device_there() {
     let first = first.unwrap();
     lab.bus.i_am(2, N + 1);
     tokio::time::sleep(Duration::from_secs(5)).await;
+    // The forged announcement again, after the refutation.
+    for _ in 0..2 {
+        lab.bus.i_am(2, N + 1);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
     drop(lab.watch);
     settle().await;
     let mut watch = lab

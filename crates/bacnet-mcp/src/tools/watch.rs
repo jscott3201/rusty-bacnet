@@ -110,10 +110,11 @@ fn output() -> Value {
                     "why": {
                         "type": ["object", "null"],
                         "description": "Why the point isn't live, as data: kind (replaced, \
-                                        moved, refused, no-answer, full, lapsed, missing); \
-                                        a replaced point names the instances watched and \
-                                        found at its address, a moved one where it answers \
-                                        now (to)",
+                                        moved, refused, foreign-sender, no-answer, full, \
+                                        lapsed, missing, other); a replaced point names the \
+                                        instances watched and found at its address, a moved \
+                                        one where it answers now (to), a foreign-sender one \
+                                        the sender its notifications name",
                     },
                     "seq": { "type": "integer" },
                     "age_ms": { "type": ["integer", "null"] },

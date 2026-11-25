@@ -320,7 +320,7 @@ fn moved_away(lab: &Lab, instance: u32) {
 /// given-up point back no more than any other start would: the table must
 /// name the point's instance there when the start is answered. Its own
 /// point began with the old instance, which an answer had named for the
-/// address (the first point's restart-time read): the device there is
+/// address (the first point's name read): the device there is
 /// asked, names the other (#2603), and the point is given up for it.
 #[tokio::test(start_paused = true)]
 async fn a_start_from_before_the_move_does_not_revive() {
@@ -328,7 +328,7 @@ async fn a_start_from_before_the_move_does_not_revive() {
     let device = lab_device(&lab).await;
     let mut first = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
     until(&mut first, |u| u.state == State::Subscribed).await;
-    // Its restart-time read, which names the device.
+    // Its name read, which names the device.
     tokio::time::sleep(Duration::from_secs(1)).await;
     latest(&mut first).await;
     lab.quirks.slow_rpm_ack.store(true, Ordering::Relaxed);
@@ -393,7 +393,7 @@ async fn each_moved_point_comes_back_for_its_own_instance() {
     let device = lab_device(&lab).await;
     let mut first = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
     until(&mut first, |u| u.state == State::Subscribed).await;
-    // Its restart-time read, which names the device, before the move.
+    // Its name read, which names the device, before the move.
     tokio::time::sleep(Duration::from_secs(1)).await;
     moved_away(&lab, LAB);
     until(&mut first, |u| matches!(u.state, State::Gone { .. })).await;

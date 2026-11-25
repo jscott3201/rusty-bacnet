@@ -148,9 +148,9 @@ pub(super) async fn start<T: TransportPort + 'static>(
     shared.lock().target = Some(target.clone());
     let first = read(&inner, point, address, before).await;
     let read_at = Some((Instant::now(), SystemTime::now()));
-    // The point's device, from what answered at its address, unless the
-    // device refused that read before.
-    let unknown = shared.identity().is_none() && !client.wildcard_refused(address);
+    // The point's device, from what answered at its address, unless an
+    // answer named it already or the device refused that read before.
+    let unknown = shared.confirmed().is_none() && !client.wildcard_refused(address);
     let (before, vouched) = match before {
         None if unknown && first.is_ok() => (client.ask_instance(address).await.ok(), true),
         known => (known, said.is_some()),
@@ -424,8 +424,11 @@ pub(super) async fn verify<T: TransportPort + 'static>(
 /// What the device at an address said of itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Answer {
-    /// It is this instance.
+    /// It named itself this instance, read by the wildcard instance.
     Is(u32),
+    /// It has this Device object, read by its instance: no proof of which
+    /// device it is, as a gateway may answer for any instance.
+    Has(u32),
     /// It has no Device object of the instance asked for.
     Not,
     /// It answered with another error, which says neither.
@@ -458,9 +461,22 @@ pub(super) async fn confirm<T: TransportPort + 'static>(
     probe(inner, address, watched).await
 }
 
+/// The instance the device at `address` names itself, read by the
+/// wildcard instance (one request), unless it refused that read before.
+pub(super) async fn name<T: TransportPort + 'static>(
+    inner: Arc<Inner<T>>,
+    address: DeviceAddress,
+) -> Option<u32> {
+    let client = &inner.client;
+    if client.wildcard_refused(&address) {
+        return None;
+    }
+    client.ask_instance(&address).await.ok()
+}
+
 /// Whether the device at `address` has device `instance`'s Device object:
-/// one ReadProperty of its Object_Identifier, which only that device
-/// answers ([`Answer::Is`]); another answers that it has no such object
+/// one ReadProperty of its Object_Identifier ([`Answer::Has`], with the
+/// instance the answer holds); another answers that it has no such object
 /// ([`Answer::Not`]). Through the device's gate and the client's rate.
 pub(super) async fn probe<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
@@ -477,7 +493,7 @@ pub(super) async fn probe<T: TransportPort + 'static>(
         .await
         .map_err(device_error)
     {
-        Ok(raw) => named(&[(property, Ok(raw))]).map_or(Answer::Unclear, Answer::Is),
+        Ok(raw) => named(&[(property, Ok(raw))]).map_or(Answer::Unclear, Answer::Has),
         Err(error) => silence(&error).unwrap_or(match error.remote() {
             Some(RemoteError::Error { code, .. }) if code == ErrorCode::UNKNOWN_OBJECT => {
                 Answer::Not
@@ -506,21 +522,20 @@ pub(super) enum Restart {
     At(Vec<u8>),
     /// The device has no such property, or wouldn't give it.
     Absent,
+    /// The device has no Device object of the instance read.
+    NoDevice,
     /// No answer.
     Silent,
 }
 
-/// Read device `instance`'s Time_Of_Device_Restart at `address`, once;
-/// with whether the device there answered as that Device object (any
-/// answer but one saying it has no such object): its own word that it is
-/// `instance`.
+/// Read device `instance`'s Time_Of_Device_Restart at `address`, once.
 pub(super) async fn restart_time<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     address: DeviceAddress,
     instance: u32,
-) -> (Restart, bool) {
+) -> Restart {
     let Ok(device) = ObjectIdentifier::new(ObjectType::DEVICE, instance) else {
-        return (Restart::Absent, false);
+        return Restart::NoDevice;
     };
     let property = PropertyIdentifier::TIME_OF_DEVICE_RESTART;
     let reader = inner.client.reader(&address, Some(instance));
@@ -529,16 +544,14 @@ pub(super) async fn restart_time<T: TransportPort + 'static>(
         .await
         .map_err(device_error)
     {
-        Ok(raw) => (Restart::At(raw), true),
-        Err(error) if unreachable(&error) || failed_locally(&error) => (Restart::Silent, false),
-        Err(error) => {
-            let there = match error.remote() {
-                Some(RemoteError::Error { code, .. }) => code != ErrorCode::UNKNOWN_OBJECT,
-                Some(_) => true,
-                None => false,
-            };
-            (Restart::Absent, there)
-        }
+        Ok(raw) => Restart::At(raw),
+        Err(error) if unreachable(&error) || failed_locally(&error) => Restart::Silent,
+        Err(error) => match error.remote() {
+            Some(RemoteError::Error { code, .. }) if code == ErrorCode::UNKNOWN_OBJECT => {
+                Restart::NoDevice
+            }
+            _ => Restart::Absent,
+        },
     }
 }
 

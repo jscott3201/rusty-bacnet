@@ -86,10 +86,8 @@ impl fmt::Display for Point {
 pub enum Why {
     /// The device refused the subscription, with its error; or it refused
     /// the service itself for another point before, so it wasn't asked
-    /// again ([`CovSupport::Refused`](super::CovSupport::Refused)); or its
-    /// notifications name another device that answers at its address too,
-    /// so they can't be told from that device's (#2603), and the note names
-    /// it. Not asked again.
+    /// again ([`CovSupport::Refused`](super::CovSupport::Refused)). Not
+    /// asked again.
     Refused(String),
     /// The first read or the subscription had no answer, with the error:
     /// subscribed again after a backoff.
@@ -125,9 +123,20 @@ pub enum Why {
     /// address, and starts again when its address answers for `watched`
     /// again.
     Replaced {
-        /// The instance the point's device had when its watch started.
+        /// The instance an earlier answer named for the point.
         watched: u32,
-        /// The instance the address names now.
+        /// The instance the device there answers for now.
         found: u32,
+    },
+    /// The device's COV notifications name device `sender` as their
+    /// sender, and a read at its address couldn't tell that name from
+    /// another device there (one answers for it, or the device couldn't
+    /// say), so they aren't taken (#2603): the point is polled instead, its
+    /// subscription cancelled. Nothing is remembered of the device's COV
+    /// service: the point is subscribed and the name read again when it
+    /// starts again, as is another watch of the device.
+    ForeignSender {
+        /// The instance the notifications name.
+        sender: u32,
     },
 }
