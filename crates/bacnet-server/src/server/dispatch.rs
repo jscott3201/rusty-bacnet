@@ -185,89 +185,61 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // window resends byte-identical bytes with a single execution.
                 // Pending in-flight duplicates preserve DISCARD. This is a
                 // local service-specific extension, not a Standard mandate.
-                if req.service_choice == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION {
-                    // Never the request a segmented answer answers: during
-                    // one under its requester and invoke ID, it draws the
-                    // Abort and ends that answer (#2770).
-                    if confirmed_request_tracker.supersede_answer(
-                        source_mac,
-                        received.source_network.as_ref(),
-                        &received.provenance,
-                        req.invoke_id,
-                    ) {
-                        return;
-                    }
-                    let lso_pending = match confirmed_request_tracker.lso.begin(
-                        source_mac,
-                        received.source_network.as_ref(),
-                        received.provenance.clone(),
-                        req.clone(),
-                    ) {
-                        LsoAdmission::Replay(bytes) => {
-                            let reply_tx = received.reply_tx.take();
-                            let replay_mac = MacAddr::from_slice(source_mac);
-                            let replay_network = received.source_network.clone();
-                            requests::confirmed_response::send_replay_bytes(
-                                network,
-                                &bytes,
-                                &replay_mac,
-                                replay_network.as_ref(),
-                                &route,
-                                reply_tx,
-                            )
-                            .await;
+                // Either admission ends in the one spawn below, which hands
+                // the handler the ownership it took.
+                let ownership =
+                    if req.service_choice == ConfirmedServiceChoice::LIFE_SAFETY_OPERATION {
+                        // Never the request a segmented answer answers: during
+                        // one under its requester and invoke ID, it draws the
+                        // Abort and ends that answer (#2770).
+                        if confirmed_request_tracker.supersede_answer(
+                            source_mac,
+                            received.source_network.as_ref(),
+                            &received.provenance,
+                            req.invoke_id,
+                        ) {
                             return;
                         }
-                        LsoAdmission::DuplicatePending => return,
-                        LsoAdmission::New(pending) => pending,
-                    };
-                    let invoke_id = req.invoke_id;
-                    let mut reply_tx = received.reply_tx.take();
-                    let services = services.clone();
-                    let requester_mac = MacAddr::from_slice(source_mac);
-                    let source_network = received.source_network.clone();
-                    let descendants = request_tasks.spawner();
-                    let peer = super::request_peer::canonical_requester(
-                        &requester_mac,
-                        source_network.as_ref(),
-                    );
-                    let class = super::request_admission::confirmed_class(
-                        req.service_choice,
-                        &req.service_request,
-                    );
-                    let result = request_tasks.try_spawn(class, peer, || {
-                        let reply_tx = reply_tx.take();
-                        async move {
-                            Self::handle_admitted_confirmed_request(
-                                &services,
-                                &descendants,
-                                RequestOrigin {
-                                    mac: &requester_mac,
-                                    network: source_network,
-                                    route,
-                                },
-                                req,
-                                reply_tx,
-                                Some(ConfirmedRequestOwnership::LifeSafety(lso_pending)),
-                            )
-                            .await;
+                        match confirmed_request_tracker.lso.begin(
+                            source_mac,
+                            received.source_network.as_ref(),
+                            received.provenance.clone(),
+                            req.clone(),
+                        ) {
+                            LsoAdmission::Replay(bytes) => {
+                                let reply_tx = received.reply_tx.take();
+                                let replay_mac = MacAddr::from_slice(source_mac);
+                                let replay_network = received.source_network.clone();
+                                requests::confirmed_response::send_replay_bytes(
+                                    network,
+                                    &bytes,
+                                    &replay_mac,
+                                    replay_network.as_ref(),
+                                    &route,
+                                    reply_tx,
+                                )
+                                .await;
+                                return;
+                            }
+                            LsoAdmission::DuplicatePending => return,
+                            LsoAdmission::New(pending) => {
+                                ConfirmedRequestOwnership::LifeSafety(pending)
+                            }
                         }
-                    });
-                    if result == Err(Rejection::Overloaded) {
-                        Self::spawn_overload_abort(ctx, source_mac, &received, invoke_id, reply_tx);
-                    }
-                    return;
-                }
-                let pending = match confirmed_request_tracker.begin(
-                    source_mac,
-                    received.source_network.as_ref(),
-                    received.provenance.clone(),
-                    req.clone(),
-                ) {
-                    ConfirmedRequestAdmission::Duplicate
-                    | ConfirmedRequestAdmission::AbortsAnswer => return,
-                    ConfirmedRequestAdmission::New(pending) => pending,
-                };
+                    } else {
+                        match confirmed_request_tracker.begin(
+                            source_mac,
+                            received.source_network.as_ref(),
+                            received.provenance.clone(),
+                            req.clone(),
+                        ) {
+                            ConfirmedRequestAdmission::Duplicate
+                            | ConfirmedRequestAdmission::AbortsAnswer => return,
+                            ConfirmedRequestAdmission::New(pending) => {
+                                ConfirmedRequestOwnership::Generic(pending)
+                            }
+                        }
+                    };
                 let invoke_id = req.invoke_id;
                 let mut reply_tx = received.reply_tx.take();
                 let services = services.clone();
@@ -291,7 +263,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         route,
                         req,
                         reply_tx: reply_tx.take(),
-                        ownership: Some(ConfirmedRequestOwnership::Generic(pending)),
+                        ownership: Some(ownership),
                     })
                 });
                 if result == Err(Rejection::Overloaded) {
@@ -510,3 +482,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "life_safety_dispatch_tests.rs"]
+mod life_safety_dispatch_tests;
