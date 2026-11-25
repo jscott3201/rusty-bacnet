@@ -48,11 +48,11 @@ pub enum CovSupport {
 /// goes to make room, and is learned again.
 const REMEMBERED: usize = 4096;
 
-/// What a client knows of one address's two COV services and of how its
-/// device names itself, and of which device: it goes when the discovery
-/// table loses its row at the address or a device there announces another
-/// instance (#2603), as the instance read for the address does, and all of
-/// it when the client missed a burst of the table's changes
+/// What a client knows of one address's two COV services and whether its
+/// device takes the wildcard instance, and of which device: it goes when
+/// the discovery table loses its row at the address or a device there
+/// announces another instance (#2603), as the instance read for the address
+/// does, and all of it when the client missed a burst of the table's changes
 /// ([`Client::forget_cov`]).
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct CovMemory {
@@ -63,10 +63,6 @@ pub(crate) struct CovMemory {
     object: Known,
     /// SubscribeCOVProperty, a property watch's.
     property: Known,
-    /// The instance the device's COV notifications name as their sender
-    /// although a read showed it is `instance` (a gateway naming itself,
-    /// say): its notifications are taken all the same.
-    initiator: Option<u32>,
     /// The device answered a read by the wildcard instance with an error:
     /// it isn't asked so again.
     no_wildcard: bool,
@@ -182,27 +178,6 @@ impl<T: TransportPort + 'static> Client<T> {
     /// instance with an error.
     pub(crate) fn refuse_wildcard(&self, device: &DeviceAddress) {
         self.cov_remember(device, |memory| memory.no_wildcard = true);
-    }
-
-    /// The instance the COV notifications of the device at `device` name
-    /// as their sender in place of its own, once a read showed that.
-    pub(crate) fn initiator(&self, device: &DeviceAddress) -> Option<u32> {
-        self.forget_stale();
-        lock(&self.shared.cov)
-            .get(device)
-            .and_then(|memory| memory.initiator)
-    }
-
-    /// Note that the device at `device`, which a read showed is
-    /// `instance`, names `initiator` as the sender of its notifications.
-    pub(crate) fn accept_initiator(&self, device: &DeviceAddress, instance: u32, initiator: u32) {
-        self.cov_remember(device, |memory| {
-            if memory.instance.is_some_and(|known| known != instance) {
-                *memory = CovMemory::default();
-            }
-            memory.instance = Some(instance);
-            memory.initiator = Some(initiator);
-        });
     }
 
     /// Forget what the discovery table's `changed` addresses (each with

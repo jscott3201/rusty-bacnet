@@ -1,52 +1,71 @@
 //! Which device a point's values come from, and when it restarted (#2603).
 //!
-//! A point's device is the instance its address named when its watch
-//! started: the discovery table's row there, else an instance read there
-//! earlier by the wildcard, else one read so once the first read was
-//! answered, else the first one announced there. Every COV notification
-//! names the device that sent it, and the receiver drops one naming another
-//! than its point's. A poll by ReadPropertyMultiple asks the device which it
-//! is in the same request. Those are the device's own word: a poll naming
-//! another instance gives the points of the old one up ([`Why::Replaced`])
-//! at once. Anything else saying another device is at the address (an
-//! announcement there, the table once a start or poll there is answered, a
-//! notification naming another sender) is a claim: before a point is given
-//! up for it, or one given up comes back, the device there is asked which
-//! it is, by one read of its Device object (by the wildcard instance, or,
-//! for a device that refused that, by the watched one). It answers as the
-//! watched device: the claim is ignored, and a sender its notifications
-//! named is taken as its own from then on (a gateway naming itself, say).
-//! It answers as another: the points are given up. It doesn't answer: the
-//! device is unreachable, as for any unanswered request. One such read at
-//! most a lifetime ([`WatchOptions::lifetime`]) an address, revivals
-//! included, so a stray or forged announcement, or two devices fighting
-//! over an address, cost one read a lifetime: a later claim waits for it.
-//! A given-up point's renewals stop and nothing more is sent for it, cancels
-//! included; its values are dropped, as they may be the other device's. Its
-//! instance announcing itself at another address has its scheduler look
-//! there, sending nothing, and found there alone the point is reported
-//! [`Why::Moved`]. A point started at the address later watches the device
-//! there then. Not caught: a device that never announces itself taking the
-//! address of a point polled by ReadProperty alone.
+//! A point's device is what the device at its address last named itself to
+//! the client (a read by the wildcard instance, a poll's own answer, a
+//! notification's sender; the client keeps it per address until the
+//! discovery table changes there), else the instance the table named at
+//! the address when the watch started, else the first sender its
+//! notifications name. Once the device itself has named the point's
+//! instance during its watch, the point is confirmed; until then the
+//! device's first word of another instance replaces what the table said,
+//! as a stale or forged row is no evidence from the device.
+//!
+//! Every COV notification names the device that sent it: one naming
+//! another than a confirmed point's device is dropped, and a poll by
+//! ReadPropertyMultiple asks the device which it is in the same request.
+//! That answer is the device's own word: a confirmed point of another
+//! instance is given up ([`Why::Replaced`]) at once. Anything else saying
+//! another device is at the address (an announcement there, the table once
+//! a start or poll there is answered, unless the device's last word says
+//! otherwise, a notification's sender) is a claim, and before a point is
+//! given up for it, or one given up comes back, the device there is asked
+//! which it is, by one read of its Device object (by the wildcard instance,
+//! or, for a device that refused that, by the watched one). It answers as
+//! the watched device: the claim is ignored. It answers as another: the
+//! points of the watched one are given up. It doesn't answer: the device is
+//! unreachable, as for any unanswered request. The first claim is asked at
+//! once, the next after 60 s, the wait doubling up to the subscription
+//! lifetime ([`WatchOptions::lifetime`]); a claim waiting puts a note on
+//! the points. A given-up point's renewals stop and nothing more is sent
+//! for it, cancels included; its values are dropped, as they may be the
+//! other device's. Its instance announcing itself at another address has
+//! the scheduler look there, sending nothing, and found there alone the
+//! point is reported [`Why::Moved`].
+//!
+//! A device whose notifications name another sender than itself (a
+//! gateway naming itself, say) keeps its watch: once it said which it is,
+//! one read of the sender's Device object at the address that finds none
+//! there has that name taken for its points until a lifetime passes, a
+//! device of that name announces itself there, or the points are given up
+//! or come back. A device of that name taking the address silently within
+//! that lifetime is taken for the watched one until then.
+//!
+//! Not caught: a device that never announces itself taking the address of
+//! a point polled by ReadProperty alone, and one taking the address before
+//! the watched device ever named itself in the watch (it is taken as the
+//! point's device, as the table said nothing the device confirmed).
 //!
 //! A device announcing itself again for its own instance may have restarted
-//! and lost its subscriptions. Its Time_Of_Device_Restart is read then (one
-//! request, at most once a lifetime): when it moved since the last read,
-//! the subscribed points are read and subscribed again, and those polled
-//! after a failure tried again; unchanged, nothing is sent. The first read
-//! only learns it, and a device without the property is taken as maybe
-//! restarted on the announcement alone: subscribed again at most once a
-//! lifetime counted from its first subscription, so a Who-Is answered once
-//! a lifetime costs such a device one more read and subscription a point a
-//! lifetime, and a device with the property one read. A restart
-//! notification the device sends (Clause 19.3) is taken at its word. Every
-//! check and re-subscription waits a part of [`SPREAD`] set by the address,
-//! so devices answering one Who-Is don't ask at once, and goes through the
-//! device's gate and the client's rate.
+//! and lost its subscriptions. Its Time_Of_Device_Restart, read once when
+//! its points are first subscribed (one request a device), is read again
+//! then, at most once a lifetime: when it moved, the subscribed points are
+//! read and subscribed again, and those polled after a failure tried
+//! again; unchanged, nothing more is sent. A device without the property
+//! costs nothing more after that first read, and is recovered at its next
+//! renewal, as is one whose restart time doesn't move (no clock); a
+//! restart notification it sends (Clause 19.3) for its own instance is
+//! taken at its word, at most once a lifetime without a time and once in
+//! [`QUIET`] with one. A restart check or re-subscription waits a part of
+//! [`SPREAD`] set by the address and the hub, so devices answering one
+//! Who-Is are asked one after another; it and each read go through the
+//! device's gate and the client's rate. Asks of which device answers are
+//! paced by their own wait, not spread.
 //!
 //! When announcements may have been missed, the scheduler reads the table
 //! at the address, which sends nothing. Nothing here awaits: the reads are
-//! jobs, which the scheduler polls beside its wake-up and its tick.
+//! jobs, which the scheduler polls beside its wake-up and its tick, and the
+//! receiver wakes it only for news, so a flood of one notification or
+//! announcement can't keep a job unpolled.
 //!
 //! [`WatchOptions::lifetime`]: super::super::hub::WatchOptions::lifetime
 
@@ -62,14 +81,18 @@ use tokio::time::Instant;
 
 use super::super::Why;
 use super::super::jobs::{self, Answer, Outcome, Polled, Restart, Started};
+use super::super::shared::Alias;
 use super::{Device, Done, Job, Mode, Op, Row};
 use crate::device::{DeviceAddress, QUIET};
 use crate::limits::charged;
 
-/// The longest a check or re-subscription waits after an announcement: a
-/// part of it set by the device's address, so devices answering one Who-Is
-/// are asked one after another, not together.
+/// The longest a restart check or re-subscription waits after an
+/// announcement: a part of it set by the device's address and the hub.
 pub(super) const SPREAD: Duration = Duration::from_secs(10);
+
+/// The wait after one ask of which device answers before the next, which
+/// doubles each time up to the subscription lifetime.
+const ASK_AGAIN: Duration = Duration::from_secs(60);
 
 /// A check a scheduler runs as a job.
 pub(super) enum Check {
@@ -78,6 +101,9 @@ pub(super) enum Check {
     /// Ask the device at the address which instance it is: another,
     /// `claimed`, was said to be there while the points watch `watched`.
     Confirm { watched: u32, claimed: u32 },
+    /// Whether device `sender`'s Device object answers at the address,
+    /// whose device `device` names itself so in its notifications.
+    Alias { device: u32, sender: u32 },
     /// Read device `instance`'s Time_Of_Device_Restart, for an
     /// announcement.
     RestartTime { instance: u32 },
@@ -91,6 +117,11 @@ pub(super) enum Checked {
         claimed: u32,
         answer: Answer,
     },
+    Alias {
+        device: u32,
+        sender: u32,
+        answer: Answer,
+    },
     RestartTime(Restart),
 }
 
@@ -98,23 +129,18 @@ pub(super) enum Checked {
 /// its restarts.
 #[derive(Debug, Default)]
 pub(super) struct Ids {
-    /// The address's sender name was loaded from the client's memory.
-    loaded: bool,
     /// A table read is queued or running.
     reading: bool,
     /// A confirm is queued or running.
     confirming: bool,
-    /// When the device was last asked which it is: once a lifetime at most.
+    /// When the device was last asked which it is, and the wait before the
+    /// next ask.
     checked: Option<Instant>,
-    /// A claim waiting for the next confirm.
+    wait: Duration,
+    /// The latest claim waiting for the next ask.
     deferred: Option<u32>,
-    /// Instances claimed at the address since the device last said which
-    /// it is.
-    claims: BTreeSet<u32>,
-    /// Claims the device refuted: the table still naming one is no claim.
-    refuted: BTreeSet<u32>,
-    /// Senders notifications named since the last confirm.
-    senders: BTreeSet<u32>,
+    /// The sender a notification named, raising the claim being asked.
+    sender: Option<u32>,
     /// A refuted claim was logged.
     logged: bool,
     /// When the points were first subscribed, or last subscribed again.
@@ -125,9 +151,9 @@ pub(super) struct Ids {
     timing: bool,
     /// When the restart time was last read for an announcement.
     gated: Option<Instant>,
-    /// When to check for a restart, and whether it is certain (the
-    /// device said so).
-    restart_due: Option<(Instant, bool)>,
+    /// When to look for a restart: a read of the restart time (`None`), or
+    /// a re-subscription the device told of, not within the gap given.
+    restart_due: Option<(Instant, Option<Duration>)>,
 }
 
 /// Whether `row` is watched and not starting: a start in flight decides by
@@ -141,22 +167,34 @@ fn given_up_for(row: &Row, instance: u32) -> bool {
     !row.removing && matches!(row.mode, Mode::Gone) && row.moved == Some(instance)
 }
 
-/// The part of [`SPREAD`] the device at `address` waits.
-fn spread(address: &DeviceAddress) -> Duration {
+/// The part of [`SPREAD`] the device at `address` waits in the hub whose
+/// process identifiers start at `hub`.
+fn spread(address: &DeviceAddress, hub: u32) -> Duration {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    address.hash(&mut hasher);
+    (address, hub).hash(&mut hasher);
     SPREAD.mul_f64((hasher.finish() % 1000) as f64 / 1000.0)
 }
 
 impl<T: TransportPort + 'static> Device<T> {
-    fn budget(&self) -> Duration {
+    fn lifetime(&self) -> Duration {
         self.inner.options.lifetime.duration()
+    }
+
+    fn spread(&self) -> Duration {
+        spread(&self.address, self.inner.registry.process_base)
     }
 
     /// The instance the points watch, if any is known.
     fn watched(&self) -> Option<u32> {
         let mut live = self.rows.values().filter(|row| live(row));
         live.find_map(|row| row.shared.identity())
+    }
+
+    /// Whether the table naming `found` at the address is stale: the
+    /// device's last word there names another.
+    fn stale(&self, found: u32) -> bool {
+        let said = self.inner.client.said(&self.address);
+        said.is_some_and(|said| said != found)
     }
 
     /// The job for `check`, charged to the hub as any request.
@@ -176,6 +214,14 @@ impl<T: TransportPort + 'static> Device<T> {
                     answer,
                 })
             }),
+            Check::Alias { device, sender } => Box::pin(async move {
+                let answer = charged(account, jobs::probe(inner, address, sender)).await;
+                Done::Checked(Checked::Alias {
+                    device,
+                    sender,
+                    answer,
+                })
+            }),
             Check::RestartTime { instance } => Box::pin(async move {
                 let time = charged(account, jobs::restart_time(inner, address, instance)).await;
                 Done::Checked(Checked::RestartTime(time))
@@ -187,8 +233,8 @@ impl<T: TransportPort + 'static> Device<T> {
         match checked {
             Checked::Table(found) => {
                 self.ids.reading = false;
-                if let Some(found) = found {
-                    self.named(found, false);
+                if let Some(found) = found.filter(|found| !self.stale(*found)) {
+                    self.named(found);
                 }
             }
             Checked::Confirmed {
@@ -196,26 +242,27 @@ impl<T: TransportPort + 'static> Device<T> {
                 claimed,
                 answer,
             } => self.confirmed(watched, claimed, answer),
+            Checked::Alias {
+                device,
+                sender,
+                answer,
+            } => self.aliased(device, sender, answer),
             Checked::RestartTime(time) => self.timed(time),
         }
     }
 
     /// Take in what the receiver noted at the address since the last look.
     pub(super) fn heard(&mut self) {
-        if !std::mem::replace(&mut self.ids.loaded, true) {
-            let sender = self.inner.client.initiator(&self.address);
-            self.slot.set_alias(sender);
-        }
         let notes = self.slot.take_notes();
         for (found, fresh) in notes.announced {
             self.announced(found, fresh);
         }
         for sender in notes.senders {
-            self.ids.senders.insert(sender);
+            self.ids.sender = Some(sender);
             self.claim(sender);
         }
-        if let Some(time) = notes.restart {
-            self.restart_notice(time);
+        if let Some((instance, time)) = notes.restart {
+            self.restart_notice(instance, time);
         }
         for instance in notes.elsewhere {
             if self.rows.values().any(|row| given_up_for(row, instance)) {
@@ -234,26 +281,20 @@ impl<T: TransportPort + 'static> Device<T> {
     /// A device at the address announced itself as `found`, by an I-Am
     /// newer than any seen there when `fresh`.
     fn announced(&mut self, found: u32, fresh: bool) {
-        self.ids.refuted.remove(&found);
-        for row in self.rows.values() {
-            if live(row) && !matches!(row.mode, Mode::Queued) {
-                row.shared.learn(Some(found));
-            }
+        // A device of the name a gateway's notifications use may be here.
+        if self.slot.alias().is_some_and(|alias| alias.sender == found) {
+            self.slot.set_alias(None);
         }
-        if !self.named(found, true) && fresh && self.ids.restart_due.is_none() {
-            let due = Instant::now() + spread(&self.address);
-            self.ids.restart_due = Some((due, false));
+        if !self.named(found) && fresh && self.ids.restart_due.is_none() {
+            let due = Instant::now() + self.spread();
+            self.ids.restart_due = Some((due, None));
         }
     }
 
-    /// The address is said to hold `found` (by an announcement when
-    /// `heard`, else by the table): if that would change any point (one of
-    /// another instance, or one given up for it), the device there is asked
-    /// which it is. Whether it is.
-    fn named(&mut self, found: u32, heard: bool) -> bool {
-        if !heard && self.ids.refuted.contains(&found) {
-            return false;
-        }
+    /// The address is said to hold `found`: if that would change any point
+    /// (one of another instance, or one given up for it), the device there
+    /// is asked which it is. Whether it is.
+    fn named(&mut self, found: u32) -> bool {
         let rows = || self.rows.values();
         let other = |row: &Row| live(row) && row.shared.identity().is_some_and(|i| i != found);
         let changes = rows().any(other) || rows().any(|row| given_up_for(row, found));
@@ -265,27 +306,59 @@ impl<T: TransportPort + 'static> Device<T> {
 
     /// A start was answered while the table named `found` at the address.
     pub(super) fn answered_at(&mut self, found: Option<u32>) {
-        if let Some(found) = found {
-            self.named(found, false);
+        if let Some(found) = found.filter(|found| !self.stale(*found)) {
+            self.named(found);
         }
     }
 
     /// Ask the device at the address which it is, for a claim of `claimed`
-    /// there: now, or once the last ask is a lifetime old.
+    /// there: now, or once the wait since the last ask is over.
     fn claim(&mut self, claimed: u32) {
-        self.ids.claims.insert(claimed);
+        self.doubt(claimed);
         let now = Instant::now();
-        let budget = self.budget();
-        let spent = self.ids.checked.is_some_and(|at| now < at + budget);
+        let spent = self.ids.checked.is_some_and(|at| now < at + self.ids.wait);
         if self.ids.confirming || spent {
             self.ids.deferred = Some(claimed);
             return;
         }
-        let watched = self.watched().unwrap_or(claimed);
+        let cap = self.lifetime();
+        let first = ASK_AGAIN.min(cap);
+        self.ids.wait = match self.ids.checked {
+            Some(at) if now < at + cap => (self.ids.wait * 2).clamp(first, cap),
+            _ => first,
+        };
         self.ids.checked = Some(now);
         self.ids.confirming = true;
+        let watched = self.watched().unwrap_or(claimed);
         let check = Check::Confirm { watched, claimed };
         self.ops.push_front(Op::Check(check));
+    }
+
+    /// Note on the points of other instances that `claimed` is said to be
+    /// at the address, until the device there says which it is.
+    fn doubt(&self, claimed: u32) {
+        let at = &self.address;
+        let note = format!(
+            "device {claimed} is said to answer at {at}; what it sends isn't taken \
+             until the device there is asked which it is"
+        );
+        let seq = &self.inner.registry.seq;
+        for row in self.rows.values().filter(|row| live(row)) {
+            if row.shared.identity().is_some_and(|own| own != claimed) {
+                row.shared.doubt(seq, note.clone());
+            }
+        }
+    }
+
+    /// The claims are settled: the points' own notes come back.
+    fn undoubt(&self) {
+        if self.ids.confirming || self.ids.deferred.is_some() {
+            return;
+        }
+        let seq = &self.inner.registry.seq;
+        for row in self.rows.values() {
+            row.shared.undoubt(seq);
+        }
     }
 
     /// What the device at the address answered, asked about `claimed`
@@ -293,10 +366,13 @@ impl<T: TransportPort + 'static> Device<T> {
     fn confirmed(&mut self, watched: u32, claimed: u32, answer: Answer) {
         self.ids.confirming = false;
         match answer {
-            Answer::Is(found) => self.settle(found, true),
+            Answer::Is(found) => {
+                self.ids.deferred = None;
+                self.settle(found, Some(claimed));
+            }
             // It has no Device object `watched`: another device is there.
             Answer::Not => {
-                self.ids.claims.clear();
+                self.ids.sender = None;
                 self.replaced(watched, claimed);
             }
             Answer::Unclear => {
@@ -304,49 +380,74 @@ impl<T: TransportPort + 'static> Device<T> {
                     "device at {} couldn't say which it is; device {claimed} there is ignored",
                     self.address
                 );
-                self.release_held();
+                self.ids.sender = None;
             }
             Answer::Silent => {
+                self.ids.sender = None;
                 if !self.backing_off() {
                     self.back_off();
                 }
                 self.locate_all();
-                self.release_held();
             }
         }
+        self.release_held();
+        self.undoubt();
     }
 
-    /// The device at the address said it is `found`: asked (`asked`), when
-    /// the points given up for it start again, or in a poll's own answer,
-    /// which may predate a move and brings none back. Every other instance
-    /// claimed there since the last answer is refuted.
-    fn settle(&mut self, found: u32, asked: bool) {
-        self.ids.deferred = None;
-        for doubt in std::mem::take(&mut self.ids.claims) {
-            if doubt != found && self.ids.refuted.insert(doubt) {
-                let count = self.inner.registry.refuted.fetch_add(1, Ordering::Relaxed) + 1;
-                if !std::mem::replace(&mut self.ids.logged, true) {
-                    tracing::info!(
-                        "device {found} at {} says so itself: device {doubt} said to be there is \
-                         ignored ({count} so far; later ones aren't logged)",
-                        self.address
-                    );
-                }
+    /// The device at the address said it is `found`: asked about a claim
+    /// of `claimed`, when the points given up for it start again, or in a
+    /// poll's own answer (`None`), which may predate a move, brings none
+    /// back and leaves a waiting claim to its ask.
+    fn settle(&mut self, found: u32, claimed: Option<u32>) {
+        if let Some(claimed) = claimed.filter(|claimed| *claimed != found) {
+            let count = self.inner.registry.refuted.fetch_add(1, Ordering::Relaxed) + 1;
+            if !std::mem::replace(&mut self.ids.logged, true) {
+                tracing::info!(
+                    "device {found} at {} says so itself: device {claimed} said to be there is \
+                     ignored ({count} so far; later ones aren't logged)",
+                    self.address
+                );
             }
         }
-        let senders = std::mem::take(&mut self.ids.senders);
-        let here = self.watched() == Some(found);
-        if let Some(sender) = senders.into_iter().find(|sender| here && *sender != found) {
-            self.inner
-                .client
-                .accept_initiator(&self.address, found, sender);
-            self.slot.set_alias(Some(sender));
+        let sender = match claimed {
+            Some(_) => self.ids.sender.take(),
+            None => None,
+        };
+        if let Some(sender) = sender.filter(|sender| *sender != found)
+            && self.watched() == Some(found)
+        {
+            let check = Check::Alias {
+                device: found,
+                sender,
+            };
+            self.ops.push_front(Op::Check(check));
         }
         self.check(found);
-        if asked {
+        if claimed.is_some() {
             self.answered_for(Some(found));
         }
         self.release_held();
+        self.undoubt();
+    }
+
+    /// Whether the name `sender` the notifications of device `device` use
+    /// is no device at the address: then it is taken for `device`'s points
+    /// until a lifetime passes.
+    fn aliased(&mut self, device: u32, sender: u32, answer: Answer) {
+        if answer != Answer::Not || self.watched() != Some(device) {
+            return;
+        }
+        tracing::info!(
+            "device {device} at {} names itself {sender} in its notifications; \
+             they are taken as its own",
+            self.address
+        );
+        let until = Instant::now() + self.lifetime();
+        self.slot.set_alias(Some(Alias {
+            device,
+            sender,
+            until,
+        }));
     }
 
     /// Start again the points held for a claim the device settled.
@@ -359,15 +460,16 @@ impl<T: TransportPort + 'static> Device<T> {
         }
     }
 
-    /// The address names `found` now, by the device's own word: give up
-    /// the points of every other instance.
+    /// The device at the address named itself `found`: a point whose device
+    /// hadn't named itself takes it, and a point of another instance the
+    /// device had named is given up for it.
     fn check(&mut self, found: u32) {
+        self.inner.client.note_said(&self.address, found);
         let others: BTreeSet<u32> = self
             .rows
             .values()
             .filter(|row| live(row))
-            .filter_map(|row| row.shared.identity())
-            .filter(|watched| *watched != found)
+            .filter_map(|row| row.shared.named(found))
             .collect();
         for watched in others {
             self.replaced(watched, found);
@@ -398,6 +500,7 @@ impl<T: TransportPort + 'static> Device<T> {
         self.ops
             .retain(|op| !matches!(op, Op::Start(process) if gone.contains(process)));
         if !gone.is_empty() {
+            self.slot.set_alias(None);
             self.inner.registry.index_replaced(watched, &self.address);
             self.locate(watched);
         }
@@ -453,6 +556,7 @@ impl<T: TransportPort + 'static> Device<T> {
             }
         }
         if revived {
+            self.slot.set_alias(None);
             self.inner
                 .registry
                 .unindex_replaced(Some(instance), &self.address);
@@ -464,20 +568,24 @@ impl<T: TransportPort + 'static> Device<T> {
     }
 
     /// Whether `started`, the start of `process`, was answered while the
-    /// table named another instance at the address than the one its
-    /// point's watch started with (and no read refuted that). Then nothing
-    /// of the start is the point's (its subscription, if it made one, isn't
-    /// kept), and the point waits for the device there to say which it is.
+    /// table named another instance at the address than the point's (and
+    /// the device's last word doesn't say otherwise). Then nothing of the
+    /// start is the point's (its subscription, if it made one, isn't kept),
+    /// and the point waits for the device there to say which it is.
     pub(super) fn started_elsewhere(&mut self, process: u32, started: &Started) -> bool {
-        let refuted = &self.ids.refuted;
+        let stale = started.instance.is_some_and(|found| self.stale(found));
         let Some(row) = self.rows.get_mut(&process) else {
             return false;
         };
-        let identity = row.shared.learn(started.before.or(started.instance));
+        let (learned, vouched) = match started.before {
+            Some(before) => (Some(before), started.vouched),
+            None => (started.instance, false),
+        };
+        let identity = row.shared.learn(learned, vouched);
         let (Some(watched), Some(found)) = (identity, started.instance) else {
             return false;
         };
-        if watched == found || refuted.contains(&found) {
+        if watched == found || stale {
             return false;
         }
         if row.removing || row.shared.is_stopped() {
@@ -492,19 +600,16 @@ impl<T: TransportPort + 'static> Device<T> {
     }
 
     /// What a poll said of which device answered, before its rows are
-    /// taken: the points of another instance than the device's own answer
-    /// are given up; without one, those of another than the table names
-    /// there (unless refuted) are skipped, and the device is asked. The
-    /// points skipped.
+    /// taken: the device's own answer settles which it is; without one, the
+    /// points of another instance than the table names there (unless the
+    /// device's last word says otherwise) are skipped, and the device is
+    /// asked. The points skipped.
     pub(super) fn poll_identity(&mut self, polled: &Polled) -> BTreeSet<u32> {
         if let Some(found) = polled.answered {
-            self.settle(found, false);
+            self.settle(found, None);
             return BTreeSet::new();
         }
-        let Some(found) = polled
-            .table
-            .filter(|found| !self.ids.refuted.contains(found))
-        else {
+        let Some(found) = polled.table.filter(|found| !self.stale(*found)) else {
             return BTreeSet::new();
         };
         let skipped: BTreeSet<u32> = polled
@@ -521,89 +626,101 @@ impl<T: TransportPort + 'static> Device<T> {
     }
 
     /// A point of the device was subscribed: the first time, its restart
-    /// clock starts.
+    /// clock starts and its Time_Of_Device_Restart is read once, so its
+    /// first restart can be told from it.
     pub(super) fn subscribed(&mut self) {
         self.ids.restarted.get_or_insert_with(Instant::now);
+        if self.ids.restart_time.is_none() && !self.ids.timing {
+            self.read_restart_time();
+        }
     }
 
-    /// Run the identity checks due by `now`: a claim that waited for the
-    /// last confirm to be a lifetime old, and a restart check.
+    /// Read the device's Time_Of_Device_Restart.
+    fn read_restart_time(&mut self) {
+        let instance = self
+            .watched()
+            .unwrap_or(ObjectIdentifier::WILDCARD_INSTANCE);
+        self.ids.timing = true;
+        self.ops
+            .push_back(Op::Check(Check::RestartTime { instance }));
+    }
+
+    /// Run the identity checks due by `now`: a claim whose wait is over,
+    /// and a restart check.
     pub(super) fn identity_due(&mut self, now: Instant) {
-        let budget = self.budget();
-        let ready = self.ids.checked.is_none_or(|at| now >= at + budget);
+        let ready = self.ids.checked.is_none_or(|at| now >= at + self.ids.wait);
         if !self.ids.confirming
             && ready
             && let Some(claimed) = self.ids.deferred.take()
         {
             self.claim(claimed);
         }
-        if let Some((at, sure)) = self.ids.restart_due
+        if let Some((at, told)) = self.ids.restart_due
             && at <= now
         {
             self.ids.restart_due = None;
-            match sure {
-                true => self.resubscribe(QUIET),
-                false => self.restart_check(),
+            match told {
+                Some(gap) => self.resubscribe(gap),
+                None => self.restart_check(),
             }
         }
     }
 
-    /// The device said it restarted, with its Time_Of_Device_Restart when
-    /// it gave one: subscribe again, unless that time is known already.
-    fn restart_notice(&mut self, time: Option<Vec<u8>>) {
-        if let Some(time) = time {
-            if matches!(&self.ids.restart_time, Some(Restart::At(known)) if *known == time) {
-                return;
-            }
-            self.ids.restart_time = Some(Restart::At(time));
+    /// Device `instance` at the address said it restarted, with its
+    /// Time_Of_Device_Restart when it gave one: subscribe again, unless it
+    /// is another device than the points', or that time is known already.
+    fn restart_notice(&mut self, instance: u32, time: Option<Vec<u8>>) {
+        if self.watched().is_some_and(|watched| watched != instance) {
+            return;
         }
-        let due = Instant::now() + spread(&self.address);
-        self.ids.restart_due = Some((due, true));
+        let gap = match time {
+            Some(time) => {
+                if matches!(&self.ids.restart_time, Some(Restart::At(known)) if *known == time) {
+                    return;
+                }
+                self.ids.restart_time = Some(Restart::At(time));
+                QUIET
+            }
+            None => self.lifetime(),
+        };
+        let due = Instant::now() + self.spread();
+        self.ids.restart_due = Some((due, Some(gap)));
     }
 
-    /// The device announced itself again: ask when it restarted (at most
-    /// once a lifetime), or, without that property, subscribe again (at
-    /// most once a lifetime).
+    /// The device announced itself again: read when it restarted, at most
+    /// once a lifetime. A device without that property is recovered at its
+    /// next renewal.
     fn restart_check(&mut self) {
         let now = Instant::now();
-        let budget = self.budget();
-        if self.ids.restart_time == Some(Restart::Absent) {
-            self.resubscribe(budget);
-            return;
+        let read = self.ids.gated.is_some_and(|at| now < at + self.lifetime());
+        let lacks = self.ids.restart_time == Some(Restart::Absent);
+        if !lacks && !read && !self.ids.timing {
+            self.ids.gated = Some(now);
+            self.read_restart_time();
         }
-        let read = self.ids.gated.is_some_and(|at| now < at + budget);
-        if read || self.ids.timing {
-            return;
-        }
-        let instance = self
-            .watched()
-            .unwrap_or(ObjectIdentifier::WILDCARD_INSTANCE);
-        self.ids.gated = Some(now);
-        self.ids.timing = true;
-        self.ops
-            .push_back(Op::Check(Check::RestartTime { instance }));
     }
 
-    /// The device's Time_Of_Device_Restart, read for an announcement. The
-    /// first read only learns it, and the device is taken as maybe
-    /// restarted, as without the property.
+    /// The device's Time_Of_Device_Restart, read once its points were first
+    /// subscribed, then for an announcement: when it moved since the last
+    /// read, the device restarted. The first read only learns it.
     fn timed(&mut self, time: Restart) {
         self.ids.timing = false;
         if time == Restart::Silent {
             return;
         }
-        match (self.ids.restart_time.replace(time.clone()), time) {
-            (Some(Restart::At(before)), Restart::At(now)) if before == now => {}
-            (Some(Restart::At(_)), Restart::At(_)) => self.resubscribe(QUIET),
-            _ => self.resubscribe(self.budget()),
+        let before = self.ids.restart_time.replace(time.clone());
+        if let (Some(Restart::At(before)), Restart::At(now)) = (before, time)
+            && before != now
+        {
+            self.resubscribe(QUIET);
         }
     }
 
-    /// Subscribe the points again: the device restarted, or may have. A
-    /// subscription held is dropped, so it stops renewing (the start's own
-    /// takes its place on the device, which keeps one a subscriber and
-    /// object), and may still be cancelled. Not within `gap` of the last
-    /// time, or of the first subscription.
+    /// Subscribe the points again: the device restarted. A subscription
+    /// held is dropped, so it stops renewing (the start's own takes its
+    /// place on the device, which keeps one a subscriber and object), and
+    /// may still be cancelled. Not within `gap` of the last time, or of the
+    /// first subscription.
     fn resubscribe(&mut self, gap: Duration) {
         let now = Instant::now();
         if self
@@ -630,7 +747,7 @@ impl<T: TransportPort + 'static> Device<T> {
             return;
         }
         tracing::info!(
-            "device at {} may have restarted; subscribing its {} points again",
+            "device at {} restarted; subscribing its {} points again",
             self.address,
             again.len()
         );

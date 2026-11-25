@@ -51,8 +51,10 @@ pub(crate) struct BatchRow<K> {
     /// How many of `wanted`, from the first, are read one by one by
     /// ReadProperty when RPM isn't used. None for a row that only rides in
     /// a ReadPropertyMultiple with other rows (the watch hub's question of
-    /// which device answers, #2603): it is never asked alone, so it costs
-    /// no request of its own, and a batch it doesn't fit in goes without it.
+    /// which device answers, #2603): put first, it joins the first batch
+    /// without counting toward its limits and is never asked alone, so it
+    /// costs no request of its own; a batch the device fails with it is
+    /// asked once without it ([`Batched::riders_refused`]).
     pub(crate) one_by_one: usize,
 }
 
@@ -83,6 +85,9 @@ pub(crate) struct Batched<K> {
     /// property: the rows after `rows` weren't read, and the last of `rows`
     /// may be `partial`.
     pub(crate) cancelled: bool,
+    /// A batch the device failed with its rows that only ride was read
+    /// without them: the device doesn't take them (#2603).
+    pub(crate) riders_refused: bool,
     /// Some rows were read by ReadPropertyMultiple.
     by_rpm: bool,
     /// Some rows were read by ReadProperty.
@@ -147,15 +152,20 @@ pub(crate) async fn read_until<K: Copy, T: TransportPort + 'static>(
         partial: false,
         too_large: false,
         cancelled: false,
+        riders_refused: false,
         by_rpm: false,
         by_rp: false,
     };
     let mut batches: VecDeque<&[BatchRow<K>]> = batches(rows).collect();
+    // A batch asked again without its riders, after failing with them.
+    let mut retrying = false;
     'batches: while let Some(batch) = batches.pop_front() {
         if rpm {
+            let again = std::mem::take(&mut retrying);
             match rpm_batch(client, limits, (device, path), batch).await {
                 Ok(rows) => {
                     read.by_rpm = true;
+                    read.riders_refused |= again;
                     read.rows.extend(rows);
                     continue;
                 }
@@ -173,6 +183,16 @@ pub(crate) async fn read_until<K: Copy, T: TransportPort + 'static>(
                     read.stopped = Some(error);
                     break;
                 }
+                // The riders may be why: asked once without them, so they
+                // never cost the device's RPM.
+                Err(error)
+                    if riding(batch) > 0
+                        && !matches!(rpm_failure(&error), RpmFailure::TooLarge) =>
+                {
+                    retrying = true;
+                    batches.push_front(&batch[riding(batch)..]);
+                    continue;
+                }
                 Err(error) => match rpm_failure(&error) {
                     RpmFailure::Refused => {
                         tracing::info!(
@@ -180,20 +200,18 @@ pub(crate) async fn read_until<K: Copy, T: TransportPort + 'static>(
                         );
                         rpm = false;
                     }
-                    // Rows that only ride with others don't count: one
-                    // row with them is read as one row alone would be.
-                    RpmFailure::TooLarge
-                        if batch.iter().filter(|row| row.one_by_one > 0).count() > 1 =>
-                    {
+                    // Riders don't count: they stay with the first row, and
+                    // one row with them is read as one row alone would be.
+                    RpmFailure::TooLarge if batch.len() - riding(batch) > 1 => {
                         tracing::debug!(
                             "device {device}: batch answer too large ({error}); reading it a row at a time"
                         );
                         read.too_large = true;
-                        for at in (0..batch.len()).rev() {
-                            if batch[at].one_by_one > 0 {
-                                batches.push_front(&batch[at..=at]);
-                            }
+                        let first = riding(batch);
+                        for at in (first + 1..batch.len()).rev() {
+                            batches.push_front(&batch[at..=at]);
                         }
+                        batches.push_front(&batch[..=first]);
                         continue;
                     }
                     RpmFailure::TooLarge | RpmFailure::Other => tracing::debug!(
@@ -251,27 +269,35 @@ fn answers(object: ObjectIdentifier, result: &ReadAccessResult) -> bool {
 /// `rows` in batches of at most [`MAX_BATCH`] rows and
 /// [`MAX_BATCH_PROPERTIES`] properties; a row asking for more is a batch of
 /// its own. Rows that only ride with others ([`BatchRow::one_by_one`] 0)
-/// left over at the end make no batch.
+/// count toward neither, join the batch they start, and left over at the
+/// end make no batch.
 fn batches<K>(rows: &[BatchRow<K>]) -> impl Iterator<Item = &[BatchRow<K>]> {
     let mut start = 0;
     std::iter::from_fn(move || {
         if rows[start..].iter().all(|row| row.one_by_one == 0) {
             return None;
         }
-        let mut end = start;
-        let mut properties = 0;
-        while end < rows.len() && end - start < MAX_BATCH {
+        let mut end = start + riding(&rows[start..]);
+        let (mut real, mut properties) = (0, 0);
+        while end < rows.len() && real < MAX_BATCH {
             let more = rows[end].wanted.len();
-            if end > start && properties + more > MAX_BATCH_PROPERTIES {
+            if real > 0 && properties + more > MAX_BATCH_PROPERTIES {
                 break;
             }
             properties += more;
+            real += 1;
             end += 1;
         }
         let batch = &rows[start..end];
         start = end;
         Some(batch)
     })
+}
+
+/// How many rows that only ride with others ([`BatchRow::one_by_one`] 0)
+/// `batch` starts with.
+fn riding<K>(batch: &[BatchRow<K>]) -> usize {
+    batch.iter().take_while(|row| row.one_by_one == 0).count()
 }
 
 /// Why a row read property by property ended before its last property.

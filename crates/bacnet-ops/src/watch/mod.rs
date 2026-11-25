@@ -29,23 +29,27 @@
 //! ([`Why::Full`]). A subscription a device lost (it restarted, say) is
 //! made again by its next renewal, which goes before each lifetime ends,
 //! or sooner when the device announces itself and its
-//! Time_Of_Device_Restart moved, or it lacks one (at most once a lifetime
-//! then), or it sends a restart notification (#2603). After
+//! Time_Of_Device_Restart (read once when it is first subscribed) moved,
+//! or it sends a restart notification (#2603). After
 //! an outage, the points' new subscriptions and polls take the device's
 //! gate and the client's rate like every other request, so they come back
 //! no faster than the limits allow.
 //!
-//! A point's device is its address and the instance the address named
-//! when its watch started (the discovery table, an instance read there by
-//! the wildcard, else the first one announced there). A notification naming
+//! A point's device is its address and the instance the device there last
+//! named itself to the client, else the discovery table's row there, else
+//! the first sender its notifications name; until the device itself names
+//! an instance for the point, its first word (a notification's sender, a
+//! poll's answer) replaces the table's. After, a notification naming
 //! another sender is dropped, and a poll by ReadPropertyMultiple asks the
 //! device which it is in the same request. Another device said to be at the
 //! address (an I-Am there, the table, a notification's sender) is checked
-//! by asking the device there once, at most once a lifetime: when it is
-//! another, the point is given up ([`Why::Replaced`]) until its instance
-//! answers there again; found at one other address, it is reported
-//! [`Why::Moved`]. A device that never announces itself taking the address
-//! of a point polled by ReadProperty alone goes unnoticed.
+//! by asking the device there, at once and then after a wait that doubles
+//! from 60 s up to a lifetime: when it is another, the point is given up
+//! ([`Why::Replaced`]) until its instance answers there again; found at one
+//! other address, it is reported [`Why::Moved`]. A device that never
+//! announces itself taking the address of a point polled by ReadProperty
+//! alone goes unnoticed, as does one taking it before the watched device
+//! first named itself.
 //!
 //! When the device behind a point stops answering (a poll or a first read
 //! fails; a point whose renewal failed goes to the next poll), the

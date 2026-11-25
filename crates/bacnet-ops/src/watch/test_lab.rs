@@ -95,11 +95,22 @@ pub(super) struct Quirks {
     /// (an Unsigned, which the hub only compares); `None` for its server's
     /// answer, which has no such property.
     pub(super) restart_time: Mutex<Option<u8>>,
-    /// The instance the device names itself when its Device object is read
-    /// by the wildcard instance, in place of [`LAB`]: another device there,
-    /// as far as a check of who answers goes.
+    /// The instance the device names itself, in place of [`LAB`], when its
+    /// Device object is read by the wildcard instance and as the sender of
+    /// its COV notifications: another device there, as far as which device
+    /// answers goes.
     pub(super) named: Mutex<Option<u32>>,
+    /// A ReadProperty of the Device object by the wildcard instance draws
+    /// an unknown-object error, as from a device without the wildcard.
+    pub(super) refuse_wildcard: AtomicBool,
+    /// An RPM asking for the Device object by the wildcard instance is
+    /// rejected as an unknown service, as some devices answer a request
+    /// they can't take whole.
+    pub(super) reject_wildcard_rpm: AtomicBool,
 }
+
+/// Device,4194303 as a context-tagged object identifier in a request.
+const WILDCARD_DEVICE: [u8; 5] = [0x0C, 0x02, 0x3F, 0xFF, 0xFF];
 
 /// Whether `npdu` acknowledges a SubscribeCOV.
 fn is_cov_ack(npdu: &ReceivedNpdu) -> bool {
@@ -113,6 +124,27 @@ fn is_ack_of(npdu: &ReceivedNpdu, kind: u8, service: u8) -> bool {
         let apdu = &decoded.payload;
         apdu.len() >= 3 && apdu[0] >> 4 == kind && apdu[2] == service
     })
+}
+
+/// `npdu`, an unconfirmed COV notification the lab device sent, naming
+/// device `named` as its sender in place of [`LAB`].
+fn renamed(mut npdu: ReceivedNpdu, named: u32) -> ReceivedNpdu {
+    // Context tag 1, four octets: the initiating device's identifier.
+    let sender = |instance: u32| {
+        let mut value = BytesMut::new();
+        let device = oid(ObjectType::DEVICE, instance);
+        bacnet_encoding::primitives::encode_app_object_id(&mut value, &device);
+        [&[0x1C][..], &value[1..]].concat()
+    };
+    let (from, to) = (sender(LAB), sender(named));
+    let mut bytes = npdu.npdu.to_vec();
+    if bytes.get(..4) == Some(&[1, 0, 0x10, 0x02][..])
+        && let Some(at) = bytes.windows(from.len()).position(|w| w == from.as_slice())
+    {
+        bytes[at..at + to.len()].copy_from_slice(&to);
+        npdu.npdu = Bytes::from(bytes);
+    }
+    npdu
 }
 
 fn take(counter: &AtomicU8) -> bool {
@@ -162,6 +194,11 @@ pub(super) fn link(
         .on_inbound(move |npdu| {
             let quirks = Arc::clone(&inbound_quirks);
             let late = late.clone();
+            let named = *quirks.named.lock().unwrap();
+            let npdu = match named {
+                Some(named) => renamed(npdu, named),
+                None => npdu,
+            };
             async move {
                 if quirks.slow_cov_ack.load(Ordering::Relaxed) && is_cov_ack(&npdu) {
                     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -310,6 +347,18 @@ fn forwards(
             .encode(&mut ack)
             .unwrap();
             answer(handle, ack.to_vec());
+            return false;
+        }
+        let wildcard = apdu.windows(5).any(|bytes| bytes == WILDCARD_DEVICE);
+        if service == READ_PROPERTY && wildcard && quirks.refuse_wildcard.load(Ordering::Relaxed) {
+            let class = ErrorClass::OBJECT.to_raw() as u8;
+            let code = ErrorCode::UNKNOWN_OBJECT.to_raw() as u8;
+            answer(handle, vec![0x50, invoke, service, 0x91, class, 0x91, code]);
+            return false;
+        }
+        if service == RPM && wildcard && quirks.reject_wildcard_rpm.load(Ordering::Relaxed) {
+            let reason = RejectReason::UNRECOGNIZED_SERVICE.to_raw();
+            answer(handle, vec![0x60, invoke, reason]);
             return false;
         }
         if service == RPM {

@@ -104,6 +104,22 @@ impl<T: TransportPort + 'static> Client<T> {
         self.sweep();
     }
 
+    /// The instance the device at `address` last named itself in an answer
+    /// to this client (a read by the wildcard instance, or the watch hub's
+    /// question of which device answers): what it said, not what the
+    /// discovery table holds. It goes when the table loses its row there or
+    /// a device there announces another instance (#2603). Sends nothing.
+    pub(crate) fn said(&self, address: &DeviceAddress) -> Option<u32> {
+        self.remembered(address)
+    }
+
+    /// Note that the device at `address` named itself `instance`.
+    pub(crate) fn note_said(&self, address: &DeviceAddress, instance: u32) {
+        if self.remembered(address) != Some(instance) {
+            self.remember(address.clone(), instance);
+        }
+    }
+
     /// Where the device that was at `from`, claiming `instance`, answers
     /// now, after a request to it went unanswered, when that is certain.
     /// When a handle follows the instance at `from`, as that handle would

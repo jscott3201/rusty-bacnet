@@ -25,7 +25,9 @@ use tokio::time::Instant;
 
 use super::hub::*;
 use super::shared::{DeviceSlot, Registry, Shared};
-use super::test_lab::{LAB, Lab, READ_PROPERTY, SUBSCRIBE_COV, ai, lab_at, object, oid, settle};
+use super::test_lab::{
+    LAB, Lab, READ_PROPERTY, RPM, SUBSCRIBE_COV, ai, lab_at, object, oid, settle,
+};
 use super::*;
 
 /// AI 1's Present_Value as `lease` holds it.
@@ -73,8 +75,9 @@ fn refuted(lab: &Lab) -> u64 {
 
 /// A stray or forged I-Am names another device at the address: the device
 /// there is asked once, says it is still the watched one, and the watch
-/// goes on, subscribed, taking its values; the same claim again within the
-/// lifetime sends nothing.
+/// goes on, subscribed, taking its values. The same claim again within 60 s
+/// waits for the next ask, with a note on the point meanwhile, and is
+/// asked once the wait is over.
 #[tokio::test(start_paused = true)]
 async fn a_forged_announcement_costs_one_read_and_ends_nothing() {
     let lab = Lab::start(WatchOptions::default()).await;
@@ -91,25 +94,29 @@ async fn a_forged_announcement_costs_one_read_and_ends_nothing() {
     );
     set(&lab, 33.0).await;
     wait_for(&lease, |_| present(&lease) == Some(33.0)).await;
-    // Its own announcement costs one read of its restart time; the claim
-    // again waits a lifetime.
+    // Its own announcement costs nothing (it has no restart time); the
+    // claim again waits 60 s, noted on the point.
     lab.announce(LAB);
     lab.announce(LAB + 1);
     tokio::time::sleep(Duration::from_secs(20)).await;
-    assert_eq!(
-        lab.sent(READ_PROPERTY, from),
-        2,
-        "the next waits a lifetime"
-    );
-    assert_eq!(lease.snapshot().state, Phase::Live);
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1, "the next waits");
+    let snapshot = lease.snapshot();
+    assert_eq!(snapshot.state, Phase::Live);
+    let note = snapshot.note.unwrap_or_default();
+    assert!(note.contains("is said to answer"), "{note}");
+    tokio::time::sleep(Duration::from_secs(45)).await;
+    assert_eq!(lab.sent(READ_PROPERTY, from), 2, "asked after the wait");
+    assert_eq!(refuted(&lab), 2);
+    assert_eq!(lease.snapshot().note, None, "the note goes");
     drop(lease);
     lab.stop().await;
 }
 
 /// A device whose notifications name another device as their sender (a
 /// gateway naming itself, say): the first is dropped and the device asked
-/// once; it answers as the watched device, so its notifications are taken
-/// from then on, and the client remembers that for the address.
+/// once; it answers as the watched device, and one read finds no device of
+/// the sender's instance there, so its notifications are taken from then
+/// on.
 #[tokio::test(start_paused = true)]
 async fn a_device_naming_another_sender_keeps_its_watch_after_one_read() {
     const GATEWAY: u32 = LAB + 7;
@@ -120,13 +127,16 @@ async fn a_device_naming_another_sender_keeps_its_watch_after_one_read() {
     lab.notify(process, GATEWAY, ai(1), 55.0);
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_ne!(present(&lease), Some(55.0), "dropped until the device says");
-    assert_eq!(lab.sent(READ_PROPERTY, from), 1);
+    assert_eq!(
+        lab.sent(READ_PROPERTY, from),
+        2,
+        "which it is, and the name"
+    );
     lab.notify(process, GATEWAY, ai(1), 56.0);
     settle().await;
     assert_eq!(present(&lease), Some(56.0));
-    assert_eq!(lab.client.initiator(&lab_at()), Some(GATEWAY));
     assert_eq!(lease.snapshot().state, Phase::Live);
-    assert_eq!(lab.sent(READ_PROPERTY, from), 1);
+    assert_eq!(lab.sent(READ_PROPERTY, from), 2);
     drop(lease);
     lab.stop().await;
 }
@@ -208,17 +218,17 @@ async fn missed_announcements_are_caught_up_from_the_table() {
     lab.stop().await;
 }
 
-/// A device with Time_Of_Device_Restart, read once for an announcement (at
-/// most once a lifetime). The first read only learns it, within the first
-/// subscription's lifetime: nothing is subscribed again. A lifetime on,
-/// changed (it restarted), its point is.
+/// A device with Time_Of_Device_Restart: read once when its point is
+/// first subscribed, then once for an announcement (at most once a
+/// lifetime). Unchanged, nothing is subscribed again; changed (it
+/// restarted), its point is.
 #[tokio::test(start_paused = true)]
 async fn the_restart_time_decides_whether_an_announcement_resubscribes() {
     let start = Instant::now();
     let lab = Lab::start(WatchOptions::default()).await;
     *lab.quirks.restart_time.lock().unwrap() = Some(1);
     let lease = subscribed(&lab).await;
-    assert_eq!(lab.sent(READ_PROPERTY, start), 0, "nothing until announced");
+    assert_eq!(lab.sent(READ_PROPERTY, start), 1, "read once, subscribed");
     let from = Instant::now();
     lab.announce(LAB);
     tokio::time::sleep(Duration::from_secs(20)).await;
@@ -311,6 +321,7 @@ async fn a_receiver_behind_on_the_table_still_drops_another_senders_notification
     {
         let mut entry = shared.lock();
         entry.identity = Some(LAB);
+        entry.confirmed = true;
         entry.target = Some(Station::local(&[2]));
     }
     {
@@ -349,4 +360,76 @@ async fn a_receiver_behind_on_the_table_still_drops_another_senders_notification
     stop_tx.send_replace(true);
     task.await.unwrap();
     drop(events_tx);
+}
+
+/// A device that refuses a read by the wildcard instance is asked by the
+/// watched instance instead: the first ask costs two reads (the refusal is
+/// remembered for the address), a later one, after the wait, one.
+#[tokio::test(start_paused = true)]
+async fn a_device_refusing_the_wildcard_is_asked_by_its_instance() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    lab.quirks.refuse_wildcard.store(true, Ordering::Relaxed);
+    let lease = subscribed(&lab).await;
+    let from = Instant::now();
+    lab.announce(LAB + 1);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(lab.sent(READ_PROPERTY, from), 2);
+    assert_eq!(refuted(&lab), 1);
+    assert!(lab.client.wildcard_refused(&lab_at()));
+    let from = Instant::now();
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    lab.announce(LAB + 1);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1, "by its instance only");
+    assert_eq!(refuted(&lab), 2);
+    assert_eq!(lease.snapshot().state, Phase::Live);
+    drop(lease);
+    lab.stop().await;
+}
+
+/// A device that rejects an RPM asking which device it is keeps its RPM:
+/// the poll is asked again without that row, the row isn't asked again,
+/// and later polls are one request each.
+#[tokio::test(start_paused = true)]
+async fn a_device_rejecting_the_identity_row_keeps_its_rpm() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    lab.quirks.refuse_cov.store(true, Ordering::Relaxed);
+    lab.quirks
+        .reject_wildcard_rpm
+        .store(true, Ordering::Relaxed);
+    let lease = lab.hub.watch(object(ai(1))).unwrap();
+    wait_for(&lease, |s| s.polls >= 1).await;
+    assert!(!lab.client.refused_rpm(&lab_at()), "its RPM kept");
+    assert!(lab.client.wildcard_refused(&lab_at()));
+    let from = Instant::now();
+    let polls = lease.snapshot().polls;
+    wait_for(&lease, |s| s.polls >= polls + 2).await;
+    assert_eq!(lab.sent(RPM, from), 2, "one request a poll");
+    drop(lease);
+    lab.stop().await;
+}
+
+/// Restart notifications: one from another device than the points' is
+/// ignored; one with no time, past a lifetime, subscribes the point again
+/// once, and another soon after doesn't.
+#[tokio::test(start_paused = true)]
+async fn restart_notifications_are_checked_and_bounded() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    let lease = subscribed(&lab).await;
+    tokio::time::sleep(Duration::from_secs(301)).await;
+    let from = Instant::now();
+    let other = LAB + 5;
+    // Its System_Status alone: no Time_Of_Device_Restart.
+    let status = || vec![(PropertyIdentifier::SYSTEM_STATUS, vec![0x91, 0])];
+    lab.notify_values(0, other, oid(ObjectType::DEVICE, other), status());
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 0, "another device's");
+    lab.notify_values(0, LAB, oid(ObjectType::DEVICE, LAB), status());
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 1, "its own");
+    lab.notify_values(0, LAB, oid(ObjectType::DEVICE, LAB), status());
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 1, "once a lifetime");
+    drop(lease);
+    lab.stop().await;
 }

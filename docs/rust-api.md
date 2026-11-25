@@ -13213,28 +13213,41 @@ instance, or answers a start while the discovery table names it there.
 The hub doesn't follow a device on its own; watch the point at `to`,
 which a following handle's `point` now gives.
 
-A watched device is its address and the instance the address named when
-the point's watch started (#2603): the discovery table's row there, else
-an instance read there earlier by the wildcard instance, else one such
-read once the first read is answered, else the first instance announced
-there. Every COV notification names the device that sent it, and one
-naming another device than the point's is dropped, whatever process
-identifier it carries; a poll by ReadPropertyMultiple asks the device
-which it is in the same request, at no extra request. A poll naming
-another instance gives the point up at once
+A watched device is its address and an instance (#2603): the one the
+device at the address last named itself to the client (a read by the
+wildcard instance, a poll's answer; kept until the discovery table loses
+its row there or a device there announces another instance), else the
+table's row there when the watch started, else one read by the wildcard
+instance once the first read is answered, else the first sender its
+notifications name. Until the device itself names an instance for the
+point, its first word (a notification's sender, a poll's answer, the
+answer to a check) is taken in place of the table's, which a stale row or
+a forged I-Am may have wrong. Every COV notification names the device
+that sent it; once the point's device named itself, one naming another
+device is dropped, whatever process identifier it carries. A poll by
+ReadPropertyMultiple asks the device which it is in the same request, at
+no extra request: the question rides with the first batch, counted toward
+none of its limits, and a device that fails the batch with it is asked
+once without it, and not again (its RPM is kept). A poll naming another
+instance gives the point up at once
 (`State::Gone { why: Why::Replaced { watched, found } }`). Anything else
 saying another device is there (an I-Am at the address, the table once a
-start or poll there is answered, a notification naming another sender) is
-a claim: the device there is asked once which it is, by one ReadProperty
-of its Device object (by the wildcard instance, or by the watched instance
-for a device that refused the wildcard), through the device's gate and the
-client's rate. Answered as the watched device, the claim is ignored (a
-stray or forged I-Am ends nothing), and a sender its notifications named is
-taken as its own from then on, remembered for the address (a gateway that
-names itself, say). Answered as another, the point is given up. Not
-answered, the device is unreachable, as for any unanswered request. One
-such read a lifetime an address at most, revivals included; a later claim
-waits for it. A given-up point's renewals stop and nothing more is sent
+start or poll there is answered, unless the device's last word says
+otherwise, a notification naming another sender) is a claim: the device
+there is asked which it is, by one ReadProperty of its Device object (by
+the wildcard instance, or by the watched instance for a device that
+refused the wildcard), through the device's gate and the client's rate.
+Answered as the watched device, the claim is ignored: a stray or forged
+I-Am ends nothing. Answered as another, the point is given up. Not
+answered, the device is unreachable, as for any unanswered request. The
+first claim is asked at once, the next after 60 s, the wait doubling up
+to a lifetime; meanwhile the points carry a note saying a claim waits. A
+sender a notification named in place of the watched device (a gateway
+that names itself, say) is taken as the device's own once the device said
+which it is and one more read finds no Device object of the sender's
+instance at the address; that lasts a lifetime, until a device of that
+instance announces itself there, or until the points are given up. A
+given-up point's renewals stop and nothing more is sent
 for it, cancels included, since the new device never held its
 subscription, and its values are dropped. It becomes `Why::Moved` once its
 instance announces itself at one other address (that sends nothing), and
@@ -13243,25 +13256,28 @@ points stay given up until then; a following handle moves by its own
 rule, and its `point` gives the point at the new address to watch. Not
 caught: a device that never announces itself taking the address of a
 point polled by ReadProperty alone, which would take a request per device
-and lifetime to find.
+and lifetime to find, and one taking it before the watched device first
+named itself in the watch, which is then taken as the point's device.
 
 A watched device announcing itself again at its address, for its own
 instance, may have restarted and lost its subscriptions. Its
-Time_Of_Device_Restart is read then, once a lifetime at most: when it moved
-since the last read, its subscribed points are read and subscribed again,
-and those polled after a failure (`NoAnswer`, `Full`, `Lapsed`, `Missing`)
-tried again, rather than at their next renewal or retry; unchanged,
-nothing more is sent. The first read only learns it, and a device without
-the property is taken as maybe restarted on the announcement alone:
-subscribed again at most once a lifetime counted from its first
-subscription (five minutes for a client's own hub). So a Who-Is answered
-by every device once a lifetime costs a device with the property one read
-a lifetime, and one without it one read and subscription a point a
-lifetime. A restart notification the device sends (process identifier 0,
-about its Device object) is taken at its word. Each check and
-re-subscription waits up to 10 s, a part set by the device's address, so
-devices answering one Who-Is are asked one after another, and goes
-through the device's gate and the client's rate. A burst of
+Time_Of_Device_Restart, read once when its points are first subscribed
+(one request a device), is read again then, once a lifetime at most: when
+it moved, its subscribed points are read and subscribed again, and those
+polled after a failure (`NoAnswer`, `Full`, `Lapsed`, `Missing`) tried
+again, rather than at their next renewal or retry; unchanged, nothing
+more is sent. A device without the property is sent nothing more for its
+announcements, and like one whose restart time never moves (it has no
+clock), is recovered at its next renewal. So a Who-Is answered by every
+device costs a device with the property one read a lifetime, and one
+without it nothing. A restart notification the device sends (process
+identifier 0, about its own Device object) is taken at its word, at most
+once a lifetime when it gives no restart time, and once in 30 s when it
+gives a new one; one naming another device than the points' is ignored.
+Each check and re-subscription waits up to 10 s, a part set by the
+device's address and the hub, so devices answering one Who-Is are asked
+one after another, and goes through the device's gate and the client's
+rate. A burst of
 announcements the hub's receiver fell behind on makes each device's
 scheduler read the discovery table at its address, which sends nothing.
 
