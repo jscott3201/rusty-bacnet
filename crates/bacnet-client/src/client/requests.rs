@@ -796,3 +796,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 #[cfg(test)]
 #[path = "requests_tests.rs"]
 mod transmittable_length_tests;
+
+#[cfg(test)]
+#[path = "request_send_tests.rs"]
+mod send_tests;

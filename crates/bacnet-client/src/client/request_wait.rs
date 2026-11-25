@@ -254,3 +254,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "request_wait_tests.rs"]
+mod tests;
