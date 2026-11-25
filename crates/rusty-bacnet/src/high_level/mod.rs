@@ -13,11 +13,13 @@
 mod device;
 mod discovered;
 mod errors;
+mod points;
 mod preview;
 mod priorities;
 mod readings;
 mod specs;
 mod value;
+mod walk;
 
 use std::sync::Arc;
 
@@ -172,6 +174,9 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<readings::PyObjectList>()?;
     m.add_class::<readings::PyDeviceSummary>()?;
     m.add_class::<preview::PyWritePreview>()?;
+    m.add_class::<points::PyPoint>()?;
+    m.add_class::<points::PyInventory>()?;
+    m.add_class::<walk::PyPointIterator>()?;
     errors::register(m)
 }
 

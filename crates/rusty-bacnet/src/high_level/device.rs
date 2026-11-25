@@ -11,18 +11,21 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
+use bacnet_ops::PropertyRef;
 use bacnet_ops::client::Wanted;
 use bacnet_ops::target::AddressStyle;
-use bacnet_ops::{CovSupport, PropertyRef};
 use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::prelude::*;
 
 use super::errors::ops_err;
+use super::points::{PyInventory, cov_label, objects_arg, once_each, options};
 use super::preview::PyWritePreview;
 use super::priorities::{PyWritten, priority_arg};
 use super::readings::{PyDeviceSummary, PyObjectList, PyReadings};
 use super::specs::{Named, object_arg, property_arg, property_item, value_arg};
 use super::value::PyValue;
+use super::walk::PyPointIterator;
 use super::{OpsClient, OpsDevice};
 use crate::client::{DeviceTie, Held};
 use crate::py_async::{attach, future_into_py};
@@ -46,8 +49,9 @@ impl Seen {
     }
 }
 
-/// A `Device`'s state, shared with its calls' futures.
-struct Core {
+/// A `Device`'s state, shared with its calls' futures and its point
+/// iterators.
+pub(super) struct Core {
     tie: DeviceTie,
     named: Named,
     seen: Mutex<Seen>,
@@ -61,6 +65,27 @@ impl Core {
         let style = held.device.client().address_style();
         self.see(Seen::of(&held.device));
         Ok((held, style))
+    }
+
+    /// Run `call` on the handle, held with the client's lease for it.
+    pub(super) async fn run<F, R>(
+        &self,
+        call: impl FnOnce(OpsDevice, AddressStyle) -> F,
+    ) -> PyResult<R>
+    where
+        F: Future<Output = PyResult<R>>,
+    {
+        // Boxed, as the deepest async chain in this crate runs through
+        // here: a station lookup down to a link's send. Unboxed, the
+        // crate needs rustc's full default recursion limit, 128 (127
+        // fails); boxed, 109 (108 fails). One allocation per Python
+        // Device call, off the Rust request path.
+        let (held, style) = Box::pin(self.hold()).await?;
+        // The call's own clone goes before the lease does: `held`
+        // outlives the call's future.
+        let result = call(held.device.clone(), style).await;
+        self.see(Seen::of(&held.device));
+        result
     }
 
     fn see(&self, seen: Seen) {
@@ -131,19 +156,7 @@ impl PyDevice {
         R: for<'a> IntoPyObject<'a> + Send + 'static,
     {
         let core = Arc::clone(&self.core);
-        future_into_py(py, async move {
-            // Boxed, as the deepest async chain in this crate runs through
-            // here: a station lookup down to a link's send. Unboxed, the
-            // crate needs rustc's full default recursion limit, 128 (127
-            // fails); boxed, 109 (108 fails). One allocation per Python
-            // Device call, off the Rust request path.
-            let (held, style) = Box::pin(core.hold()).await?;
-            // The call's own clone goes before the lease does: `held`
-            // outlives the call's future.
-            let result = call(held.device.clone(), style).await;
-            core.see(Seen::of(&held.device));
-            result
-        })
+        future_into_py(py, async move { core.run(call).await })
     }
 }
 
@@ -188,13 +201,7 @@ impl PyDevice {
     /// a watch made). `"unknown"` while the client is stopped.
     fn cov_support(&self) -> &'static str {
         let support = self.core.tie.peek(OpsDevice::cov_support);
-        match support.unwrap_or_default() {
-            CovSupport::NotOffered => "not-offered",
-            CovSupport::Offered => "offered",
-            CovSupport::Accepted => "accepted",
-            CovSupport::Refused => "refused",
-            _ => "unknown",
-        }
+        cov_label(support.unwrap_or_default())
     }
 
     /// Read one property: one ReadProperty, as a `Value`.
@@ -449,6 +456,90 @@ impl PyDevice {
         })
     }
 
+    /// The device's objects as point records, as an `Inventory`: the
+    /// device's summary, its Object_List, then the objects of `types` (all
+    /// by default; `ObjectType`s or text such as `"ai"`) in batches of
+    /// ReadPropertyMultiple, up to 16 objects or 32 properties a request
+    /// (ReadProperty each once the device has refused that). Each record
+    /// holds the object's name, description, units or state texts and
+    /// whether it takes commands; `values` adds its Present_Value,
+    /// Status_Flags, Event_State, Reliability and priority in control,
+    /// `settings` its COV_Increment, range, Relinquish_Default and
+    /// Polarity, `details` its Device_Type and Profile_Name.
+    ///
+    /// A property the device can't give is a problem on its record, never
+    /// raised. A device that goes silent while its objects are read ends
+    /// the read with the records read so far: `Inventory.stopped` says why
+    /// and `Inventory.unread` lists the rest. Raised: a bad argument
+    /// TypeError or ValueError, before the Future is made; on await a
+    /// device that can't be placed BacnetLookupError, and one that doesn't
+    /// answer the summary or the Object_List, or refuses the list, what a
+    /// single read raises (a list read element by element that fails at
+    /// one element names it).
+    #[pyo3(signature = (*, types=None, values=false, settings=false, details=false))]
+    fn inventory<'py>(
+        &self,
+        py: Python<'py>,
+        types: Option<&Bound<'py, PyAny>>,
+        values: bool,
+        settings: bool,
+        details: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let options = options(types, values, settings, details)?;
+        self.call(py, move |device, style| async move {
+            let read = device.inventory(&options).await;
+            let read = read.map_err(|error| ops_err(error, style))?;
+            attach(|py| PyInventory::new(py, read, style))
+        })
+    }
+
+    /// The device's points as an async iterator, read as they are
+    /// iterated: a `PointIterator` of `Point` records, as `inventory`
+    /// reads them. The await reads the Object_List (whole, or element by
+    /// element), keeping the objects of `types`, each once; or, with
+    /// `objects` (`ObjectIdentifier`s or text), takes those of `types`,
+    /// each once, in order, and reads nothing. Iterating reads the next
+    /// batch of objects whenever the last batch's points are out: one
+    /// ReadPropertyMultiple while the device takes them, so a large
+    /// device's first points come at once and an `async for` broken off
+    /// reads no more.
+    ///
+    /// A device that stops answering raises from `__anext__`, once the
+    /// points read before it are out; iterating again tries the first
+    /// object not read again. A cancelled `__anext__` stops its request,
+    /// and the next reads that batch again, so no point is lost. Raised: a
+    /// bad argument TypeError or ValueError, before the Future is made; on
+    /// await what `inventory` raises for the Object_List, and BacnetError
+    /// for a list read element by element that stopped part way, naming
+    /// the element.
+    #[pyo3(signature = (objects=None, *, types=None, values=false, settings=false, details=false))]
+    fn points<'py>(
+        &self,
+        py: Python<'py>,
+        objects: Option<&Bound<'py, PyAny>>,
+        types: Option<&Bound<'py, PyAny>>,
+        values: bool,
+        settings: bool,
+        details: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let options = options(types, values, settings, details)?;
+        let named = objects
+            .filter(|objects| !objects.is_none())
+            .map(objects_arg)
+            .transpose()?;
+        let core = Arc::clone(&self.core);
+        future_into_py(py, async move {
+            let listed = match named {
+                // The lease, as every call takes it: a stopped client
+                // raises here, with nothing sent.
+                Some(named) => core.run(|_, _| async move { Ok(named) }).await?,
+                None => core.run(list).await?,
+            };
+            let objects = once_each(listed, |object| options.reads(object.object_type()));
+            Ok(PyPointIterator::new(core, objects, options))
+        })
+    }
+
     /// The device instance: as known (`instance`), or from one read of the
     /// Device object by the wildcard instance, remembered afterwards.
     fn resolve_instance<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -481,6 +572,21 @@ impl PyDevice {
     /// [`crate::types::not_picklable`].
     fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {
         Err(crate::types::not_picklable(slf.as_any()))
+    }
+}
+
+/// The device's Object_List, whole: a list read element by element that
+/// stopped part way raises BacnetError naming the element, since part of a
+/// list is not the device's objects.
+async fn list(device: OpsDevice, style: AddressStyle) -> PyResult<Vec<ObjectIdentifier>> {
+    let read = device.list_objects().await;
+    let read = read.map_err(|error| ops_err(error, style))?;
+    match read.stopped {
+        None => Ok(read.objects),
+        Some(why) => Err(crate::errors::BacnetError::new_err(format!(
+            "the Object_List, read element by element, stopped at {why}; the device's \
+             objects aren't known: try again, or name the objects"
+        ))),
     }
 }
 
