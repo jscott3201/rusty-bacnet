@@ -1205,6 +1205,30 @@ interleaved matrix compare.
   depended on how the tasks interleaved, and the ReadPropertyMultiple
   counts of one binary spread over hundreds of instructions; with these
   settings they spread over tens, and ReadProperty's count is unchanged.
+- **Fixed hash-map keys.** Rust's standard hash maps take random keys once
+  per process, and the server keeps its objects in such a map. About one
+  process in twelve drew keys under which a looked-up object shares its
+  probe group with another, so each lookup checked more slots: that
+  process's ReadPropertyMultiple cost 30 to 66 more instructions per
+  request, and its WriteProperty 80 to 290 more. Whether such a process was
+  among the twelve baseline values decided those rows' noise floors, which
+  for unchanged code ranged from 6 to 300 instructions per request
+  ([#2591](https://github.com/jscott3201/rusty-bacnet/issues/2591)). The
+  harness therefore fixes the keys. The standard library reaches the C
+  library's `getrandom` function through a symbol a measurement may
+  replace, and the harness's binaries supply their own: given the seed the
+  script passes (`--hash-seed`, 1 by default), it hands out the same bytes
+  every time, so every run of every build draws the same keys. Like the
+  allocator settings, this is a measurement setting only: no library of the
+  stack changes, and production builds keep their random keys. Any seed
+  serves for a comparison; another seed can move a row's absolute count by
+  a few dozen instructions per request, and so can a change to what the
+  benchmark database holds, which `attribute` shows as hash-table lines in
+  the database lookups. The harness comes from the candidate, so an older
+  candidate brings a harness without this, and its runs keep per-process
+  keys; every row names the keys its runs had, and the workflow's
+  `harness: workflow` input builds the current harness into both trees
+  instead.
 - **Older figures don't compare.** Counts from before
   [perf-s0b](benchmarks/results/perf-s0b/README.md) used the default release
   profile and glibc's default allocator settings, so they aren't comparable
@@ -1263,9 +1287,14 @@ interleaved matrix compare.
   the baseline twice (A and A') and the candidate once (B), and runs them in
   the order A B A' A' B A, three times, so each build gets six values per
   workload and runtime. Every run first checks its binary's SHA-256.
-- **Noise floor.** The range of the twelve A and A' values of the gated
-  figure per workload and runtime, from the same matrix as the verdict. Two
-  clean builds of one commit give byte-identical binaries. A noise run
+- **Noise floor.** The range (the highest minus the lowest) of the twelve
+  A and A' values of the gated figure per workload and runtime, in
+  instructions per request, from the same matrix as the verdict. Two clean
+  builds of one commit give byte-identical binaries, and each value comes
+  from its own pair of processes, so the range measures how far one
+  commit's count moves from process to process. With the hash-map keys
+  fixed, what is left is timer work that follows wall time, and on the
+  multi-thread runtime the order in which its workers meet. A noise run
   (`--noise`) measures only this.
 - **Gates.** A comparison is accepted only when it covers `rp`, `wp` and
   `rpm` on both runtimes and every row passes. The aimed workload (`rp`
@@ -1278,7 +1307,11 @@ interleaved matrix compare.
   only inside the system allocator doesn't count as one. Requested bytes
   and the allocator's instructions are reported, not gated. Wire bytes must stay
   identical; the existing test suites check that. The script exits non-zero
-  when a comparison isn't accepted.
+  when a comparison isn't accepted. A run of fewer round trips, such as
+  `rpm` alone, judges its rows but can't be accepted however they come out;
+  its summary says when every row passed, then why the run can't accept.
+  Runs whose hash-map keys differ (fixed in some, per process in others)
+  aren't accepted either.
 - **No-regression check.** A change that isn't an optimization, such as a
   refactor or a feature, runs with `--aim none` (the workflow's `aim`
   input). It is accepted when no row rises by more than its noise floor and

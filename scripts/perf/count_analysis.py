@@ -44,6 +44,15 @@ Definitions (all per request, or per iteration for the codec workloads):
   builds of the baseline (A and A') in the same matrix as the verdict.
   Counts differ between machines and sessions, so a floor from another run
   is used only when asked for (quick mode), and each row names its source.
+- hash-map keys (#2591): the harness fixes them from a seed in every run
+  (its `hash_keys` module; perf_counts.py sets the seed), so the server's
+  object map probes alike in every process. With per-process keys, as
+  production has them, about one process in twelve paid 30 to 290 more
+  instructions per request on ReadPropertyMultiple or WriteProperty, and
+  whether one landed among the twelve set those rows' floors anywhere from
+  6 to 300. Each run records the state its harness reported (`fixed`, or
+  `random` / none from a harness before #2591); a row says which it had,
+  and a comparison whose runs differ isn't accepted.
 
 Gates (#1979 decision, 2026-11-02; the gated figure from #2555's,
 2026-11-14), for a comparison (A, A' and B):
@@ -67,7 +76,9 @@ Gates (#1979 decision, 2026-11-02; the gated figure from #2555's,
   adding calls (a size crossing a bin) is reported only, with a note under
   the table when the allocator's change exceeds the total's own floor;
 - acceptance needs every row to pass, rp, wp and rpm on both runtimes when
-  any round trip runs, and only known, requested aimed workloads.
+  any round trip runs, only known, requested aimed workloads, and the same
+  hash-map keys in every run. A run of fewer round trips judges its rows
+  but can't accept a change, however they come out.
 
 The allocator's functions are glibc's, as the image scripts/perf/Dockerfile
 pins names them: its valgrind package depends on libc6-dbg, which gives the
@@ -153,10 +164,14 @@ def parse_summary(cg_text):
 
 
 RESULT_RE = re.compile(r"^RESULT workload=(\S+) runtime=(\S+) n=(\d+) warmup=(\d+) allocs=(\d+) bytes=(\d+)", re.M)
+# The harness's hash-map keys (#2591); a harness before it prints no field.
+HASH_KEYS_RE = re.compile(r"^RESULT .*\bhash_keys=(fixed|random)\b", re.M)
 
 
 def parse_result(stderr_text):
-    """The harness's RESULT line: workload, runtime, n, allocs, bytes."""
+    """The harness's RESULT line: workload, runtime, n, allocs, bytes, and
+    the hash-map keys (`fixed`, `random`, or None from a harness before
+    #2591)."""
     match = RESULT_RE.search(stderr_text)
     if not match:
         raise ValueError("no RESULT line in the harness's stderr")
@@ -167,6 +182,7 @@ def parse_result(stderr_text):
         "warmup": int(match[4]),
         "allocs": int(match[5]),
         "bytes": int(match[6]),
+        "hash_keys": keys[1] if (keys := HASH_KEYS_RE.search(stderr_text)) else None,
     }
 
 
@@ -731,6 +747,17 @@ def check_floors_figure(figure, source):
                          f"not the gated one ({GATED_FIGURE}); measure them again with a noise run")
 
 
+FIXED_KEYS, PER_PROCESS, MIXED_KEYS = "fixed", "per process", "mixed"
+
+
+def hash_keys(runs):
+    """How a row's runs drew their hash-map keys (#2591): FIXED_KEYS when the
+    harness fixed them in every run, PER_PROCESS when none did (a harness
+    before #2591, or a run without a seed), MIXED_KEYS otherwise."""
+    states = {FIXED_KEYS if r.get("hash_keys") == "fixed" else PER_PROCESS for r in runs}
+    return states.pop() if len(states) == 1 else MIXED_KEYS
+
+
 def allocator_notes(rows):
     """One line per row whose system-allocator share rose by more than the
     total's own A vs A' floor: a dearer allocation (a size moving to a
@@ -793,6 +820,7 @@ def analyze(manifest, recorded_floors=None, aimed=("rp",)):
         # The total's own floor, for comparison with the gated figure's
         # (reported only; quick mode has no A' and no such floor).
         row["total_noise_floor"] = noise_floor(metrics["A"], metrics["P"], "total") if "P" in metrics else None
+        row["hash_keys"] = hash_keys([r for r in runs if (r["workload"], r["runtime"]) == (workload, runtime)])
         row["metrics"] = metrics
         rows.append(row)
     summary = {
@@ -804,14 +832,19 @@ def analyze(manifest, recorded_floors=None, aimed=("rp",)):
         # Floors of the gated figure; quick mode refuses floors of another.
         "figure": GATED_FIGURE,
         "noise_floors": {f"{r['workload']}/{r['runtime']}": r["noise_floor"] for r in rows},
-        # The allocator settings the floors hold for; quick mode checks them.
+        # The run settings (allocator, hash seed) the floors hold for; quick
+        # mode checks them.
         "environment": manifest.get("environment", {}),
+        # Whether the harness fixed the hash-map keys, over every run.
+        "hash_keys": hash_keys(runs),
     }
     binaries = [manifest["variants"][label].get("binaries") for label in ("A", "P") if label in manifest["variants"]]
     if len(binaries) == 2:
         summary["baseline_builds_identical"] = binaries[0] == binaries[1]
     if not noise:
         problems = coverage_problems(rows, aimed)
+        problems += [f"on {r['workload']}/{r['runtime']} some runs fixed their hash-map keys and some didn't, so "
+                     "the builds didn't probe the object map alike" for r in rows if r["hash_keys"] == MIXED_KEYS]
         if summary.get("baseline_builds_identical") is False:
             problems.append("the baseline's two builds (A and A') differ, so the build isn't reproducible")
         summary["aimed"] = list(aimed)
@@ -891,7 +924,8 @@ def verdict_table(summary):
         total_floor = row.get("total_noise_floor")
         rows.append([
             row["workload"], row["runtime"], fmt(row["a_median"]), fmt(row["b_median"]), fmt(row["delta"]),
-            f"{fmt(row['noise_floor'])} ({row['noise_floor_source']})", change_over_floor(row),
+            f"{fmt(row['noise_floor'])} ({row['noise_floor_source']}; hash keys {row.get('hash_keys', PER_PROCESS)})",
+            change_over_floor(row),
             f"{lower} of {len(row['pair_deltas'])}",
             f"{fmt(row['a_allocator'])} / {fmt(row['b_allocator'])}", fmt(row["allocator_delta"]),
             f"{fmt(row['a_total'])} / {fmt(row['b_total'])}",

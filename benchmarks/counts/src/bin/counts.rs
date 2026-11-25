@@ -125,6 +125,8 @@ async fn verify(client: &BACnetClient<BipTransport>, workload: Workload, r: &Req
 }
 
 fn main() {
+    // Before the runtime or anything else builds a hash map.
+    bacnet_counts::hash_keys::fix_from_env();
     let mut args = std::env::args().skip(1);
     let (workload, name) = match args.next().as_deref() {
         Some("rp") => (Workload::Rp, "rp"),
