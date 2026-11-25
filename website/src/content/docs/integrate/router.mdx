@@ -5,6 +5,7 @@ description: "Join BACnet networks with BACnetRouter, give each port a network n
 
 import { Code, Tabs, TabItem } from '@astrojs/starlight/components';
 import { release, repository } from '../../../lib/site.mjs';
+import SampleNote from '../../../components/SampleNote.astro';
 import routerSource from '../../../../examples/rust/bip-router/src/main.rs?raw';
 import routerManifest from '../../../../examples/rust/bip-router/Cargo.toml?raw';
 import routerPython from '../../../../examples/python/bip_router.py?raw';
@@ -90,7 +91,9 @@ All three share 127.0.0.1, so a B/IP broadcast from one would reach none of the 
 
 <TabItem label="Rust">
 
-The Rust manifest pins **v{release}**, whose minimum Rust version is **1.95**. Put [Cargo.toml](/rusty-bacnet/examples/rust/bip-router/Cargo.toml) in a new directory and [main.rs](/rusty-bacnet/examples/rust/bip-router/src/main.rs) in its `src` subdirectory, then run `cargo run` there.
+<SampleNote sample="bip-router" />
+
+Put [Cargo.toml](/rusty-bacnet/examples/rust/bip-router/Cargo.toml) in a new directory and [main.rs](/rusty-bacnet/examples/rust/bip-router/src/main.rs) in its `src` subdirectory, then run `cargo run` there.
 
 <Code code={routerManifest} lang="toml" title="Cargo.toml" />
 
@@ -99,7 +102,9 @@ The Rust manifest pins **v{release}**, whose minimum Rust version is **1.95**. P
 </TabItem>
 <TabItem label="Python">
 
-The Python program runs with the v{release} `rusty-bacnet` package; [install it in a virtual environment](/rusty-bacnet/start/python/) first. Save [bip_router.py](/rusty-bacnet/examples/bip_router.py) and run it with that environment's interpreter.
+<SampleNote sample="bip_router.py" />
+
+Save [bip_router.py](/rusty-bacnet/examples/bip_router.py) and run it with that environment's interpreter.
 
 <Code code={routerPython} lang="python" title="bip_router.py" />
 

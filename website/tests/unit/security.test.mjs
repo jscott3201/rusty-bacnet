@@ -5,9 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { frontmatter, plainBody } from '../../scripts/content.mjs';
 import { release } from '../../src/lib/site.mjs';
 import { repo, splitDevSection } from './dev-section.mjs';
+import { assertManifestSource, assertSampleNotes } from './sample-notes.mjs';
 
 const root = new URL('../../', import.meta.url);
-test('security page shows the exact release-pinned policy program and no dev section', async () => {
+test('security page shows the exact policy program and says it follows dev', async () => {
   const file = fileURLToPath(new URL('src/content/docs/integrate/security.mdx', root));
   const source = await readFile(file, 'utf8');
   const program = await readFile(new URL('examples/rust/sc-operator-policy/src/main.rs', root), 'utf8');
@@ -34,10 +35,9 @@ test('security page shows the exact release-pinned policy program and no dev sec
     'Example: writes and DCC from one certificate name',
     'Next steps',
   ]) assert.ok(body.includes(`\n## ${heading}\n`), heading);
-  // Everything is release-scoped: no dev section and no dev links.
-  const { onDev } = splitDevSection(body, 'integrate/security');
-  assert.equal(onDev, '', 'everything on the page is in the release');
-  assert.ok(!body.includes('on-dev-after-the-release'));
+  // The prose links the release; the sample's note says it follows dev (#2648).
+  splitDevSection(body, 'integrate/security');
+  await assertSampleNotes(body, ['sc-operator-policy'], 'integrate/security');
   for (const doc of ['mutation-policy', 'dcc-policy', 'time-sync-policy', 'local-access-authorization']) {
     assert.ok(body.includes(`${repo}/blob/v${release}/docs/${doc}.md`), doc);
   }
@@ -47,13 +47,9 @@ test('security page shows the exact release-pinned policy program and no dev sec
   for (const name of ['certificate()', 'subject_alt_names()', 'authorize_device_communication_control', 'sc_control_rate_limit', 'server is read-only']) {
     assert.ok(body.includes(name), name);
   }
-  // The manifest pins the site release, and the page says so.
-  for (const crate of ['bacnet-transport', 'bacnet-types']) {
-    assert.ok(manifest.includes(`${crate} = "=${release}"`), crate);
-  }
-  assert.ok(manifest.includes(`bacnet-server = { version = "=${release}", features = ["sc-tls"] }`));
-  assert.ok(!manifest.includes('branch = '));
-  assert.ok(body.includes(`The manifest pins **v${release}**, whose minimum Rust version is **1.95**.`));
+  // The manifest shown takes the BACnet crates from dev, or pins the release.
+  assertManifestSource(manifest, 'sc-operator-policy');
+  assert.ok(manifest.includes('features = ["sc-tls"] }'));
   assert.ok(body.includes('`mutation_policy="permissive"`'));
   assert.ok(body.includes('Don\'t match by suffix.'));
 });

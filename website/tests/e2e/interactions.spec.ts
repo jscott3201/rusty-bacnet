@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { readFile } from 'node:fs/promises';
-import { selectTheme, expectContainedPage } from './helpers';
+import { selectTheme, expectContainedPage, expectSampleNote } from './helpers';
 const base = '/rusty-bacnet/';
 
 test('nested installation deep links reveal native OS tabs and focus the destination', async ({ page }) => {
@@ -194,4 +194,33 @@ test('native code copy writes the displayed code to the clipboard', async ({ pag
   await page.locator('details .expressive-code').getByRole('button', { name: /Copy/ }).click();
   const source = await readFile(new URL('../../examples/python/loopback_lab.py', import.meta.url), 'utf8');
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(source.trimEnd());
+});
+
+// The start and PICS pages' programs are files under examples/ (#2648): each
+// page says which release they need, shows them byte for byte and serves them.
+test('the start and PICS pages say which release their programs need and show them as their files', async ({ page, request }) => {
+  for (const [path, name, files] of [
+    ['start/local-lab/', 'loopback_lab.py', []],
+    ['integrate/pics/', 'pics', [
+      ['rust/pics/Cargo.toml', 'examples/rust/pics/Cargo.toml'],
+      ['rust/pics/src/main.rs', 'examples/rust/pics/src/main.rs'],
+    ]],
+    ['start/python/', 'first_read.py', [['python/first_read.py', 'examples/first_read.py']]],
+    ['start/rust/', 'first-read', [
+      ['rust/first-read/Cargo.toml', 'examples/rust/first-read/Cargo.toml'],
+      ['rust/first-read/src/main.rs', 'examples/rust/first-read/src/main.rs'],
+    ]],
+  ] as const) {
+    await page.goto(base + path);
+    const main = page.locator('.sl-markdown-content');
+    await expectSampleNote(main, name);
+    for (const [source, href] of files) {
+      const text = await readFile(new URL('../../examples/' + source, import.meta.url), 'utf8');
+      await expect(main.locator('pre code').filter({ hasText: text.split('\n')[0] })).toHaveText(text.trimEnd(), { useInnerText: true });
+      await expect(main.locator(`a[href="${base + href}"]`)).toHaveCount(1);
+      const download = await request.get(base + href);
+      expect(download.status()).toBe(200);
+      expect(await download.text()).toBe(text);
+    }
+  }
 });

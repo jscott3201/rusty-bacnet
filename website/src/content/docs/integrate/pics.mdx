@@ -3,7 +3,11 @@ title: "Generate a PICS for your device"
 description: "Draft a PICS (Annex A) for a device built on BACnetServer: what the generator reads from your configured server, what you fill in yourself, and how to read the result."
 ---
 
+import { Code } from '@astrojs/starlight/components';
 import { release, repository } from '../../../lib/site.mjs';
+import SampleNote from '../../../components/SampleNote.astro';
+import picsSource from '../../../../examples/rust/pics/src/main.rs?raw';
+import picsManifest from '../../../../examples/rust/pics/Cargo.toml?raw';
 
 [Build and integrate](/rusty-bacnet/integrate/overview/) / Generate a PICS
 
@@ -19,63 +23,15 @@ The draft describes the configuration you built and nothing more. It is not a te
 
 ## Generate one in Rust
 
-This program builds a server with a Device and two objects on 127.0.0.1, drafts its PICS, stops the server and prints the PICS as Markdown. It uses the crates from the [server guide's Cargo.toml](/rusty-bacnet/examples/rust/server-device/Cargo.toml); put it in `src/main.rs` and run `cargo run`. CI compiles this exact program against v{release}.
+This program builds a server with a Device and two objects on 127.0.0.1, drafts its PICS, stops the server and prints the PICS as Markdown. Put [Cargo.toml](/rusty-bacnet/examples/rust/pics/Cargo.toml) in a new directory and [main.rs](/rusty-bacnet/examples/rust/pics/src/main.rs) in its `src` subdirectory, then run `cargo run` there. CI compiles this exact program in the workspace.
+
+<SampleNote sample="pics" />
 
 The product details go on the Device object, and the PICS reads them there along with the protocol version and revision, so `PicsConfig` holds only what the server can't report about itself.
 
-```rust
-use bacnet_objects::DeviceIdentity;
-use bacnet_objects::analog::AnalogInputObject;
-use bacnet_objects::binary::BinaryOutputObject;
-use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::device::{DeviceConfig, DeviceObject};
-use bacnet_server::pics::{DataLinkSupport, DeviceProfile, PicsConfig};
-use bacnet_server::server::BACnetServer;
-use bacnet_types::enums::EngineeringUnits;
-use std::net::Ipv4Addr;
+<Code code={picsManifest} lang="toml" title="Cargo.toml" />
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Your product's details, on the Device object; the PICS reads them there.
-    let version = "2.1.0";
-    // Vendor 0 is a placeholder: use the identifier ASHRAE assigned you.
-    let identity = DeviceIdentity::new(1001, 0)?.with_name("Example air handler");
-    let mut database = ObjectDatabase::new();
-    database.add(Box::new(DeviceObject::new(DeviceConfig {
-        identity: identity.clone(),
-        vendor_name: "Example Controls".into(),
-        model_name: "AHU-100".into(),
-        firmware_revision: version.into(),
-        application_software_version: version.into(),
-        ..DeviceConfig::default()
-    })?))?;
-    let celsius = EngineeringUnits::DEGREES_CELSIUS;
-    database.add(Box::new(AnalogInputObject::new(1, "Supply air", celsius)?))?;
-    database.add(Box::new(BinaryOutputObject::new(1, "Supply fan")?))?;
-
-    let mut server = BACnetServer::bip_builder()
-        .device(identity)
-        .interface(Ipv4Addr::LOCALHOST)
-        .port(0)
-        .broadcast_address(Ipv4Addr::LOCALHOST)
-        .database(database)
-        .build()
-        .await?;
-
-    // What the server can't report about itself: the profile you claim,
-    // and the data links and network roles you ship.
-    let pics_config = PicsConfig {
-        // Claim an Annex L profile only if the product meets it.
-        device_profile: DeviceProfile::Custom("None claimed".into()),
-        data_link_layers: vec![DataLinkSupport::BipV4],
-        ..PicsConfig::default()
-    };
-    let pics = server.generate_pics(&pics_config).await;
-    server.stop().await?;
-    println!("{}", pics.generate_markdown());
-    Ok(())
-}
-```
+<Code code={picsSource} lang="rust" title="src/main.rs" />
 
 Generate the PICS from the configuration you ship: the same objects, the same identity and the same transport choices. The program binds a port the operating system picks and stops the server once the PICS is drafted; `generate_pics` also works after `stop()`. If the PICS needs different text from what the Device reports, edit the generated document.
 

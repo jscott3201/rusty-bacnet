@@ -2116,6 +2116,28 @@ To release:
      build-from-source link sits in `docs/rust-api.md` and
      `docs/python-api.md`. Then `curl -sI` every
      `jscott3201.github.io/rusty-bacnet/` link in the README for a 200.
+
+   **Website samples (#2648).** The samples under `website/examples`
+   (`website/src/data/samples.json`) stay on the last release while their
+   files are its files; one changed since then follows the `dev` branch (a
+   Rust manifest takes the BACnet crates from `dev`, a Python sample has
+   `"follows": "dev"`), and its page's note (`website/src/lib/samples.mjs`)
+   says so and links the release's copy. The website tests hold each state
+   to the tag. After a release nothing changes until a sample diverges from
+   it: the PR that changes one, or whose API change breaks one, moves it to
+   `dev` with `python3 scripts/release/website_samples.py --follow-dev
+   <sample>`. In the release PR, after `site.mjs` names the new release, put
+   them all on it: `--pin` gives each crate its own version at that release
+   (`bacnet-time` versions on its own), and the tag then carries the pinned
+   manifests the next cycle's notes link. Pinning to a release not tagged
+   yet also removes the `since` and `tagPage` keys, since that release ships
+   each sample as a file (the website tests fail on a leftover). Rewrite
+   `start/python.mdx`'s sentence that its calls are newer than the release
+   (a test ties it to the script's state):
+
+   ```bash
+   python3 scripts/release/website_samples.py --pin 0.16.0
+   ```
 2. Optionally, dispatch a dry run on the release branch first: it runs
    everything the release does short of publishing.
 3. Tag a commit on `main`'s or `dev`'s first-parent history (a merge commit,
@@ -2126,8 +2148,28 @@ To release:
    git push origin v0.15.0
    ```
 
-The tag push also starts CI's heavy jobs on the tagged commit, and the release
-waits for them (see [CI gate](#ci-gate)).
+   The tag push also starts CI's heavy jobs on the tagged commit, and the
+   release waits for them (see [CI gate](#ci-gate)).
+4. Once `release.yml` has published the crates and the wheels, check every
+   website sample from the tag against them, outside the workspace. `--build`
+   copies each Rust sample to a new temporary directory and builds it there
+   with a target directory of its own; `--build-python` makes a virtual
+   environment there, installs the release's wheel from PyPI
+   (`--only-binary=:all:`) and runs each Python program (the first-read
+   script through its test). Both remove what they made, run every sample and
+   list each one that failed; a failure is a sample the release's readers
+   can't use, to fix forward:
+
+   ```bash
+   git checkout --detach v0.16.0
+   python3 scripts/release/website_samples.py --build --build-python 0.16.0   # --build needs CMake for BACnet/SC's aws-lc
+   ```
+
+   Dispatch Pages (`docs-pages.yml`, publish) only after both pass, so the
+   site never says a sample pins a release before that is checked. A
+   dispatch between releases publishes `dev`'s page text under the release's
+   version claims; until the release audit of the pages' prose is done, keep
+   to dispatches at a release.
 
 ### Jobs
 
