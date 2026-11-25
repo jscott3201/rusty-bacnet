@@ -318,7 +318,9 @@ fn moved_away(lab: &Lab, instance: u32) {
 /// A start in flight when its device's points are given up, answered after
 /// the table came to name another instance at the address, brings the
 /// given-up point back no more than any other start would: the table must
-/// name the point's instance there when the start is answered.
+/// name the point's instance there when the start is answered. Its own
+/// point began with the old instance, so the answer may be the other
+/// device's, and it is given up for it (#2603).
 #[tokio::test(start_paused = true)]
 async fn a_start_from_before_the_move_does_not_revive() {
     let lab = Lab::start(WatchOptions::default()).await;
@@ -341,7 +343,13 @@ async fn a_start_from_before_the_move_does_not_revive() {
     moved_away(&lab, LAB);
     until(&mut first, |u| matches!(u.state, State::Gone { .. })).await;
     lab.quirks.slow_rpm_ack.store(false, Ordering::Relaxed);
-    until(&mut late, |u| u.state == State::Subscribed).await;
+    let replaced = Why::Replaced {
+        watched: LAB,
+        found: LAB + 1,
+    };
+    let update = until(&mut late, |u| matches!(u.state, State::Gone { .. })).await;
+    assert_eq!(update.state, State::Gone { why: replaced });
+    assert_eq!(number(&update), None, "its first read isn't taken");
     tokio::time::sleep(Duration::from_secs(5)).await;
     let after = latest(&mut first).await;
     assert!(after.is_none(), "revived by a stale start: {after:?}");

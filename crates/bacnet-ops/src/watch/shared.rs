@@ -2,9 +2,9 @@
 //! receiver share: the entry's snapshot and signals, and the hub's table
 //! of entries and devices. Every lock here is a std mutex held for a few
 //! field updates, never across an await. The order is the table's, then a
-//! device inbox's, then an entry's, then a [`Watch`](super::Watch)'s
-//! mailbox, which takes no other. A watch is woken only once the entry's
-//! lock is let go ([`release`]).
+//! device's inbox or what it heard ([`Heard`]), then an entry's, then a
+//! [`Watch`](super::Watch)'s mailbox, which takes no other. A watch is
+//! woken only once the entry's lock is let go ([`release`]).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -21,7 +21,7 @@ use super::hub::{Phase, Snapshot, Source};
 use super::options::MAX_ROWS;
 use super::sample::{Sample, Via};
 use super::stream::Listener;
-use super::{Point, dispatch};
+use super::{Point, Why, dispatch};
 use crate::device::DeviceAddress;
 use crate::format::{PropertyError, RawRow};
 
@@ -60,6 +60,11 @@ pub(super) struct EntryState {
     pub(super) failure: Option<PropertyError>,
     /// When the values last changed, by the wall clock, for an update.
     pub(super) wall: Option<SystemTime>,
+    /// The instance of the point's device: what its address named when
+    /// the watch started (the discovery table, or one read by the wildcard
+    /// instance), else the first instance announced there. Nothing from
+    /// the address counts as the point's while it names another (#2603).
+    pub(super) identity: Option<u32>,
     /// The [`Watch`](super::Watch)es told of each signalled change: at
     /// most one a watch holding the point, and those dropped until the
     /// next change prunes them.
@@ -74,6 +79,12 @@ impl EntryState {
     /// a revival by the scheduler ([`Shared::revive`]), leaves it.
     fn ended(&self) -> bool {
         matches!(self.snapshot.state, Phase::Gone | Phase::Stopped)
+    }
+
+    /// Whether `now`, the instance the address names now, is another
+    /// device than the point's.
+    fn foreign(&self, now: Option<u32>) -> bool {
+        matches!((self.identity, now), (Some(own), Some(now)) if own != now)
     }
 }
 
@@ -105,6 +116,7 @@ impl Shared {
                 pending: false,
                 failure: None,
                 wall: None,
+                identity: None,
                 listeners: Vec::new(),
                 wakers: Vec::new(),
             }),
@@ -209,6 +221,39 @@ impl Shared {
         }
         snapshot.state = state;
         snapshot.note = note;
+        self.changed(&mut entry, seq, Duration::ZERO);
+        release(entry);
+    }
+
+    /// The instance of the point's device, `found` when none was known.
+    pub(super) fn learn(&self, found: Option<u32>) -> Option<u32> {
+        let mut entry = self.lock();
+        if entry.identity.is_none() {
+            entry.identity = found;
+        }
+        entry.identity
+    }
+
+    /// The instance of the point's device, if known.
+    pub(super) fn identity(&self) -> Option<u32> {
+        self.lock().identity
+    }
+
+    /// Give the watch up `why`, unless it stopped: its notifications are
+    /// no longer taken (nothing from its address is the point's now), and
+    /// a point given up before takes the newer reason.
+    pub(super) fn gone(&self, seq: &AtomicU64, why: Why, note: String) {
+        let mut entry = self.lock();
+        entry.target = None;
+        let snapshot = &entry.snapshot;
+        let same = snapshot.state == Phase::Gone && snapshot.why.as_ref() == Some(&why);
+        if same || snapshot.state == Phase::Stopped {
+            return;
+        }
+        let snapshot = &mut entry.snapshot;
+        snapshot.state = Phase::Gone;
+        snapshot.why = Some(why);
+        snapshot.note = Some(note);
         self.changed(&mut entry, seq, Duration::ZERO);
         release(entry);
     }
@@ -355,8 +400,31 @@ pub(super) struct Arrival {
     pub(super) running: Running,
 }
 
+/// Announcements a scheduler keeps between two looks, each once in a row:
+/// more mark the rest missed, and the scheduler reads the table instead.
+const HEARD_KEPT: usize = 8;
+
+/// What the notification receiver heard at a device's address, for its
+/// scheduler and for the notifications it lets through.
+#[derive(Debug, Default)]
+pub(super) struct Heard {
+    /// The instance the address names now: the last announced there, or
+    /// what the discovery table named once a request there was answered,
+    /// when no announcement came while the request was out.
+    now: Option<u32>,
+    /// Counts the announcements, so a table read before one can't
+    /// overwrite it.
+    generation: u64,
+    /// Instances announced since the scheduler last looked, in order.
+    pending: Vec<u32>,
+    /// Announcements were missed: the receiver fell behind, or more came
+    /// between two looks than are kept.
+    missed: bool,
+}
+
 /// A device's scheduler, as the table knows it: entries not yet taken,
-/// where a handle following its instance moved it to, and its wake-up.
+/// where a handle following its instance moved it to, what was announced
+/// at its address, and its wake-up.
 pub(super) struct DeviceSlot {
     pub(super) inbox: Mutex<Vec<Arrival>>,
     /// Set by the notification receiver when a handle following an
@@ -366,8 +434,8 @@ pub(super) struct DeviceSlot {
     /// [`ClientEvent::Moved`]: crate::device::ClientEvent::Moved
     pub(super) moved: Mutex<Option<(u32, DeviceAddress)>>,
     /// Set by the notification receiver when a device at the address
-    /// announces itself: the instance it named.
-    pub(super) announced: Mutex<Option<u32>>,
+    /// announces itself.
+    heard: Mutex<Heard>,
     pub(super) wake: Notify,
 }
 
@@ -376,7 +444,7 @@ impl DeviceSlot {
         Self {
             inbox: Mutex::new(Vec::new()),
             moved: Mutex::new(None),
-            announced: Mutex::new(None),
+            heard: Mutex::new(Heard::default()),
             wake: Notify::new(),
         }
     }
@@ -385,12 +453,55 @@ impl DeviceSlot {
         self.inbox.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The instance a device at the address last announced, once.
-    pub(super) fn take_announced(&self) -> Option<u32> {
-        self.announced
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
+    fn heard(&self) -> MutexGuard<'_, Heard> {
+        self.heard.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A device at the address announced itself as `instance`.
+    fn hear(&self, instance: u32) {
+        let mut heard = self.heard();
+        heard.now = Some(instance);
+        heard.generation += 1;
+        if heard.pending.last() != Some(&instance) {
+            if heard.pending.len() == HEARD_KEPT {
+                heard.pending.remove(0);
+                heard.missed = true;
+            }
+            heard.pending.push(instance);
+        }
+    }
+
+    /// Announcements at the address may have been missed.
+    fn miss(&self) {
+        self.heard().missed = true;
+    }
+
+    /// The instances announced since the last look, in order, and whether
+    /// any were missed.
+    pub(super) fn take_heard(&self) -> (Vec<u32>, bool) {
+        let mut heard = self.heard();
+        let missed = std::mem::take(&mut heard.missed);
+        (std::mem::take(&mut heard.pending), missed)
+    }
+
+    /// The announcements counted so far, for a request about to go.
+    pub(super) fn generation(&self) -> u64 {
+        self.heard().generation
+    }
+
+    /// The discovery table named `instance` at the address once a request
+    /// that went at `generation` was answered: what the address names now,
+    /// unless an announcement came since.
+    pub(super) fn confirm(&self, generation: u64, instance: u32) {
+        let mut heard = self.heard();
+        if heard.generation == generation {
+            heard.now = Some(instance);
+        }
+    }
+
+    /// The instance the address names now, if known.
+    fn now(&self) -> Option<u32> {
+        self.heard().now
     }
 
     /// The instance a following handle moved from the device's address,
@@ -510,14 +621,22 @@ impl Registry {
     }
 
     /// A device at `at` announced itself as `instance`: tell that address's
-    /// scheduler, if it has one.
+    /// scheduler, if it has one. From then on a notification from there
+    /// reaches only points of that instance (or of none known yet).
     pub(super) fn announced(&self, at: &DeviceAddress, instance: u32) {
         let device = self.table().devices.get(at).cloned();
         if let Some(device) = device {
-            *device
-                .announced
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Some(instance);
+            device.hear(instance);
+            device.wake.notify_one();
+        }
+    }
+
+    /// Announcements may have been missed (the receiver fell behind): every
+    /// scheduler reads the discovery table at its address again.
+    pub(super) fn missed(&self) {
+        let devices: Vec<Arc<DeviceSlot>> = self.table().devices.values().cloned().collect();
+        for device in devices {
+            device.miss();
             device.wake.notify_one();
         }
     }
@@ -532,9 +651,21 @@ impl Registry {
     ) -> Option<(Instant, Arc<Shared>)> {
         let received = event.object()?;
         let process = received.notification.subscriber_process_identifier;
-        let shared = Arc::clone(self.table().by_process.get(&process)?);
+        let (shared, now) = {
+            let table = self.table();
+            let shared = Arc::clone(table.by_process.get(&process)?);
+            let now = table
+                .devices
+                .get(&shared.point.device)
+                .and_then(|device| device.now());
+            (shared, now)
+        };
         let mut state = shared.lock();
-        if !dispatch::belongs(&shared.point, state.target.as_ref(), event, own) {
+        // Another device answers at the address now (#2603): what it
+        // sends, under this process identifier or not, isn't the point's.
+        if state.foreign(now)
+            || !dispatch::belongs(&shared.point, state.target.as_ref(), event, own)
+        {
             return None;
         }
         let merged = dispatch::merge(

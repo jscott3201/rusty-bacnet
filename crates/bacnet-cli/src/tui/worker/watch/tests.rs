@@ -119,6 +119,20 @@ fn a_snapshot_reads_as_the_row_source() {
                 "the device answers at mstp:9 now; watch it there".into(),
             )),
         ),
+        // Another device at the address now: the row fails, naming both.
+        (
+            snapshot(
+                poll,
+                Some(Why::Replaced {
+                    watched: 1001,
+                    found: 1002,
+                }),
+                Some("device 1002 answers at mstp:9 now, not device 1001"),
+            ),
+            Some(Source::Failed(
+                "device 1002 answers at mstp:9 now, not device 1001".into(),
+            )),
+        ),
         // Between the steps of a change: no source yet.
         (snapshot(poll, None, Some("timeout")), None),
         (

@@ -36,8 +36,9 @@ pub enum Phase {
     Stopped,
     /// Nothing watches it any more: no route to its address is known and
     /// [`WatchOptions::missing`](super::WatchOptions::missing) says not to
-    /// wait ([`Why::Missing`]), or its device answers at another address
-    /// now ([`Why::Moved`]). See [`Snapshot::note`].
+    /// wait ([`Why::Missing`]), its device answers at another address now
+    /// ([`Why::Moved`]), or another device answers at its address
+    /// ([`Why::Replaced`]). See [`Snapshot::note`].
     Gone,
 }
 

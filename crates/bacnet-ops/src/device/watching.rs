@@ -23,10 +23,13 @@ impl<T: TransportPort + 'static> Device<T> {
     /// by SubscribeCOVProperty.
     ///
     /// The point is at the device's address now
-    /// ([`address`](Self::address)). A following handle that moves later
-    /// makes its points at the new address, and a watch of the old one
-    /// reports the move ([`Why::Moved`](crate::watch::Why::Moved)). Sends
-    /// nothing.
+    /// ([`address`](Self::address)), and a watch of it follows the device
+    /// that address names when the watch starts. A following handle that
+    /// moves later makes its points at the new address, and a watch of the
+    /// old one reports the move ([`Why::Moved`](crate::watch::Why::Moved));
+    /// another device taking the address is reported too
+    /// ([`Why::Replaced`](crate::watch::Why::Replaced)), and never watched
+    /// as this one. Sends nothing.
     ///
     /// # Errors
     ///
@@ -65,6 +68,24 @@ impl<T: TransportPort + 'static> Client<T> {
             Some(row) => Some(row.object_identifier.instance_number()),
             None => self.remembered(address),
         }
+    }
+
+    /// The instance the device at `address` claims, by one ReadProperty of
+    /// the Device object's Object_Identifier by the wildcard instance,
+    /// remembered for the address as a handle's
+    /// ([`Device::resolve_instance`]) is; `None` when the device doesn't
+    /// answer it with one.
+    pub(crate) async fn read_instance(&self, address: &DeviceAddress) -> Option<u32> {
+        let mut reader = self.reader(address, None);
+        let instance = reader.instance().await.ok()?;
+        self.remember(address.clone(), instance);
+        Some(instance)
+    }
+
+    /// Forget what the discovery table's changes made stale, before what
+    /// is learned of an address is read or noted (`Client::sweep`).
+    pub(crate) fn forget_stale(&self) {
+        self.sweep();
     }
 
     /// Where the device that was at `from`, claiming `instance`, answers

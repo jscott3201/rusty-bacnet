@@ -48,9 +48,16 @@ pub enum CovSupport {
 /// goes to make room, and is learned again.
 const REMEMBERED: usize = 4096;
 
-/// What a client knows of one address's two COV services.
+/// What a client knows of one address's two COV services, and of which
+/// device: it goes when the discovery table loses its row at the address
+/// or a device there announces another instance (#2603), as the instance
+/// read for the address does, and all of it when the client missed a
+/// burst of the table's changes ([`Client::forget_cov`]).
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct CovMemory {
+    /// The instance of the device it was learned from, when known; else
+    /// the first one announced at the address after.
+    instance: Option<u32>,
     /// SubscribeCOV, an object watch's.
     object: Known,
     /// SubscribeCOVProperty, a property watch's.
@@ -117,6 +124,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// What this client knows of the COV service `watched` sends at
     /// `device`. Sends nothing.
     pub(crate) fn cov_known(&self, device: &DeviceAddress, watched: &Watched) -> CovSupport {
+        self.forget_stale();
         lock(&self.shared.cov)
             .get_mut(device)
             .map_or(CovSupport::Unknown, |memory| memory.of(watched).support())
@@ -132,15 +140,57 @@ impl<T: TransportPort + 'static> Client<T> {
         });
     }
 
-    /// Note that `device` took the subscription `watched` sends
-    /// (`accepted`), or refused that service itself.
-    pub(super) fn cov_observed(&self, device: &DeviceAddress, watched: &Watched, accepted: bool) {
+    /// Note that `device`, instance `instance` when known, took the
+    /// subscription `watched` sends (`accepted`), or refused that service
+    /// itself. What another instance there left is forgotten first.
+    pub(super) fn cov_observed(
+        &self,
+        device: &DeviceAddress,
+        watched: &Watched,
+        accepted: bool,
+        instance: Option<u32>,
+    ) {
         self.cov_remember(device, |memory| {
-            memory.of(watched).observed = Some(accepted)
+            if let Some(instance) = instance {
+                if memory.instance.is_some_and(|known| known != instance) {
+                    *memory = CovMemory::default();
+                }
+                memory.instance = Some(instance);
+            }
+            memory.of(watched).observed = Some(accepted);
         });
     }
 
+    /// Forget what the discovery table's `changed` addresses (each with
+    /// the instance announced there, `None` for a row lost) may have made
+    /// stale: an address's memory goes when its row was lost (aged out, or
+    /// replaced by another device's announcement) or another instance than
+    /// the one it was learned from announced itself there; an address
+    /// whose instance wasn't known takes the one announced. All of it goes
+    /// after a burst of changes the client `missed`. As for the no-RPM
+    /// memory, nothing goes by time alone: a device that keeps announcing
+    /// itself keeps its memory for the client's life.
+    pub(crate) fn forget_cov(&self, changed: &[(DeviceAddress, Option<u32>)], missed: bool) {
+        let mut known = lock(&self.shared.cov);
+        if missed {
+            known.clear();
+        }
+        for (address, named) in changed {
+            let Some(memory) = known.get_mut(address) else {
+                continue;
+            };
+            match (memory.instance, *named) {
+                (None, Some(named)) => memory.instance = Some(named),
+                (Some(learned), Some(named)) if learned == named => {}
+                _ => {
+                    known.remove(address);
+                }
+            }
+        }
+    }
+
     fn cov_remember(&self, device: &DeviceAddress, note: impl FnOnce(&mut CovMemory)) {
+        self.forget_stale();
         let mut known = lock(&self.shared.cov);
         if known.len() >= REMEMBERED
             && !known.contains_key(device)

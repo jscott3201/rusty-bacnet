@@ -23,14 +23,27 @@
 //!
 //! A device that refuses the COV service itself is remembered by its
 //! address ([`CovSupport`]), as an RPM refusal is: its later points are
-//! polled without asking. A full subscription table is no refusal: the
-//! point is polled and asked again after a backoff ([`Why::Full`]). A
-//! subscription a device lost (it restarted, say) is made again by its
-//! next renewal, which goes before each lifetime ends, so it is missed for
-//! at most a lifetime less the renewal margin. After an outage, the
-//! points' new subscriptions and polls take the device's gate and the
-//! client's rate like every other request, so they come back no faster
-//! than the limits allow.
+//! polled without asking, until the discovery table loses its row there
+//! or another device announces itself there. A full subscription table is
+//! no refusal: the point is polled and asked again after a backoff
+//! ([`Why::Full`]). A subscription a device lost (it restarted, say) is
+//! made again by its next renewal, which goes before each lifetime ends,
+//! or at once when the device announces itself (an I-Am at its address,
+//! for its own instance), at most once a lifetime a device (#2603). After
+//! an outage, the points' new subscriptions and polls take the device's
+//! gate and the client's rate like every other request, so they come back
+//! no faster than the limits allow.
+//!
+//! A point's device is its address and the instance the address named
+//! when its watch started (the discovery table, an instance read there by
+//! the wildcard, else the first one announced there). Once the address
+//! names another (an I-Am there, or the table when a start or poll there
+//! is answered), nothing from it is taken as the point's, a notification
+//! under the point's own process identifier included, and the point is
+//! given up ([`Why::Replaced`]) until its instance announces itself there
+//! again; found at one other address, it is reported [`Why::Moved`]. A
+//! device that never announces itself is checked only at each start and
+//! poll, so another such device taking its address goes unnoticed.
 //!
 //! When the device behind a point stops answering (a poll or a first read
 //! fails; a point whose renewal failed goes to the next poll), the
@@ -106,6 +119,8 @@ impl std::fmt::Display for WatchError {
 impl std::error::Error for WatchError {}
 
 #[cfg(test)]
+mod identity_tests;
+#[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]
 mod moves_tests;
@@ -115,6 +130,8 @@ mod scheduler_tests;
 mod state_tests;
 #[cfg(test)]
 mod stream_tests;
+#[cfg(test)]
+mod takeover_tests;
 #[cfg(test)]
 mod test_lab;
 #[cfg(test)]

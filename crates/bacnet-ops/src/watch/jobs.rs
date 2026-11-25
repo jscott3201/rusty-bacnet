@@ -3,7 +3,9 @@
 //! one, polling a batch, and asking where a device that stopped answering
 //! went. Every one goes to the point's address: a local station at its
 //! MAC, a routed one through the router its row in the discovery table
-//! names; none looks the device up by its instance.
+//! names; none looks the device up by its instance. A start and a poll
+//! also say what instance the table names at the address once answered,
+//! and a verify reads only that, sending nothing (#2603).
 //!
 //! Every request takes its turn at the device's gate in the client's
 //! limits, so the hub, the browser and the writes never have more than one
@@ -42,6 +44,10 @@ pub(super) struct Started {
     /// Where the device is; `None` when no route to its address is known,
     /// and then nothing was sent.
     pub(super) target: Option<Station>,
+    /// The instance the address named as the start began: the discovery
+    /// table's, or one read by the wildcard instance, earlier or, when
+    /// neither knew it, once the first read was answered.
+    pub(super) before: Option<u32>,
     /// The instance the discovery table, or a read by the wildcard
     /// instance, names at the address once the start is answered, if
     /// either does: not what it named when the start began, which a
@@ -99,6 +105,9 @@ pub(super) fn poll_row(reads: &Reads, process: u32, point: &Point) -> BatchRow<u
 
 /// Note where `shared`'s device is, read the point once, and subscribe
 /// unless the read had no answer or the device refused the service before.
+/// When neither the discovery table nor an earlier read knows the instance
+/// at the address, it is read once by the wildcard instance after the
+/// first read is answered, and remembered for the address (#2603).
 pub(super) async fn start<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     shared: Arc<Shared>,
@@ -106,14 +115,15 @@ pub(super) async fn start<T: TransportPort + 'static>(
     let (process, point) = (shared.process, &shared.point);
     let address = &point.device;
     let client = &inner.client;
-    let instance = client.instance_at(address).await;
+    let before = client.instance_at(address).await;
     let known = client.cov_known(address, &point.watched);
     let target = path_to(client.low_level(), address).await;
     // No route: nothing is sent, and the point waits for one.
     let Ok(target) = target else {
         return Started {
             target: None,
-            instance,
+            before,
+            instance: before,
             first: None,
             read_at: None,
             outcome: Outcome::NotAsked,
@@ -124,39 +134,43 @@ pub(super) async fn start<T: TransportPort + 'static>(
     // the subscription, before this job is back with the scheduler, and
     // the receiver only takes notifications from where the device is.
     shared.lock().target = Some(target.clone());
-    let first = read(&inner, point, address, instance).await;
+    let first = read(&inner, point, address, before).await;
     let read_at = Some((Instant::now(), SystemTime::now()));
-    let (outcome, cov) = if first.as_ref().is_err_and(unreachable) {
+    // The point's device, from what answered at its address.
+    let before = match before {
+        None if shared.identity().is_none() && first.is_ok() => client.read_instance(address).await,
+        known => known,
+    };
+    let (outcome, observed, cov) = if first.as_ref().is_err_and(unreachable) {
         // Subscribing would only time out too.
-        (Outcome::NotAsked, known)
+        (Outcome::NotAsked, None, known)
     } else if known == CovSupport::Refused {
-        (Outcome::Refused, CovSupport::Refused)
+        (Outcome::Refused, None, CovSupport::Refused)
     } else {
         let outcome = subscribe(&inner, (target.clone(), address), process, point).await;
-        let cov = match &outcome {
-            Ok(_) => {
-                client.cov_observed(address, &point.watched, true);
-                CovSupport::Accepted
-            }
+        let (observed, cov) = match &outcome {
+            Ok(_) => (Some(true), CovSupport::Accepted),
             // Not the device's last word: it is asked again. A request
             // the client itself failed (a link reconnecting, say) is no
             // word of the device's at all.
             Err(error) if unreachable(error) || failed_locally(error) || fills_table(error) => {
-                known
+                (None, known)
             }
-            Err(error) => {
-                if refuses_service(error) {
-                    client.cov_observed(address, &point.watched, false);
-                }
-                CovSupport::Refused
-            }
+            Err(error) => (refuses_service(error).then_some(false), CovSupport::Refused),
         };
-        (Outcome::Asked(outcome), cov)
+        (Outcome::Asked(outcome), observed, cov)
     };
     // What the table names at the address now, once the start is answered.
     let instance = client.instance_at(address).await;
+    // Kept for the address, unless another device may have answered.
+    if let Some(accepted) = observed
+        && (before.is_none() || instance.is_none() || before == instance)
+    {
+        client.cov_observed(address, &point.watched, accepted, before.or(instance));
+    }
     Started {
         target: Some(target),
+        before,
         instance,
         first: Some(first),
         read_at,
@@ -268,6 +282,10 @@ pub(super) struct Polled {
     /// The rows not read, one read only in part included; empty when every
     /// row was.
     pub(super) unread: Vec<u32>,
+    /// The instance the discovery table, or a read by the wildcard
+    /// instance, names at the address once the poll is answered: an answer
+    /// from another device than the points' is none of theirs.
+    pub(super) instance: Option<u32>,
 }
 
 impl Polled {
@@ -310,7 +328,18 @@ pub(super) async fn poll<T: TransportPort + 'static>(
         rows: read_rows,
         stopped,
         unread,
+        instance: client.instance_at(&address).await,
     }
+}
+
+/// The instance the discovery table, or a read by the wildcard instance,
+/// names at `address` now, after announcements there were missed. Sends
+/// nothing.
+pub(super) async fn verify<T: TransportPort + 'static>(
+    inner: Arc<Inner<T>>,
+    address: DeviceAddress,
+) -> Option<u32> {
+    inner.client.instance_at(&address).await
 }
 
 /// Cancel `point`'s subscription, held or possibly made: stop renewing it,

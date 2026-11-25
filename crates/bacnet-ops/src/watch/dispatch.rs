@@ -10,13 +10,19 @@
 //! table's, released before the entry's), and a held-back signal is a
 //! deadline the loop sleeps toward. It also hands each device's scheduler
 //! the moves of handles following the device's instance away from its
-//! address ([`ClientEvent::Moved`]).
+//! address ([`ClientEvent::Moved`]), and the instances announced at its
+//! address (#2603). The discovery table's changes go first: before each
+//! notification, those the client made before it are taken in, so a
+//! device announcing itself at a watched address is known there before
+//! anything it sends next is looked at. A receiver that fell behind on
+//! them has every scheduler read the table again.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use bacnet_client::client::{COVEvent, ReceivedCOVNotification, Station};
 use bacnet_types::constructed::BACnetPropertyValue;
+use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -64,7 +70,12 @@ pub(super) async fn run(
             biased;
             _ = stop.wait_for(|stopped| *stopped) => break,
             received = notifications.recv() => match received {
-                Ok(event @ COVEvent::Object(_)) => held.extend(registry.deliver(&event, own())),
+                Ok(event @ COVEvent::Object(_)) => {
+                    if announcing {
+                        announcing = take_changes(&registry, &mut devices, &*own);
+                    }
+                    held.extend(registry.deliver(&event, own()));
+                }
                 Ok(COVEvent::Multiple(_)) => {
                     registry.cov_multiple_ignored.fetch_add(1, Ordering::Relaxed);
                 }
@@ -86,15 +97,9 @@ pub(super) async fn run(
                 Err(RecvError::Closed) => following = false,
             },
             change = devices.recv(), if announcing => match change {
-                Ok(change) if change.kind != DeviceEventKind::Lost => {
-                    if let Some(at) = DeviceAddress::of(&change.device) {
-                        let instance = change.device.object_identifier.instance_number();
-                        registry.announced(&at.localized(own()), instance);
-                    }
-                }
-                // A loss, or announcements missed: a point given up waits
-                // for the next.
-                Ok(_) | Err(RecvError::Lagged(_)) => {}
+                Ok(change) => note_change(&registry, &change, own()),
+                // Announcements missed: each scheduler reads the table.
+                Err(RecvError::Lagged(_)) => registry.missed(),
                 Err(RecvError::Closed) => announcing = false,
             },
             () = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
@@ -108,6 +113,36 @@ pub(super) async fn run(
                     }
                 });
             }
+        }
+    }
+}
+
+/// Tell the scheduler at a watched address that a device announced itself
+/// there; a loss (a row aged out, or replaced, which an announcement
+/// follows) says nothing of who answers there now.
+fn note_change(registry: &Registry, change: &DeviceEvent, own: Option<u16>) {
+    if change.kind == DeviceEventKind::Lost {
+        return;
+    }
+    if let Some(at) = DeviceAddress::of(&change.device) {
+        let instance = change.device.object_identifier.instance_number();
+        registry.announced(&at.localized(own), instance);
+    }
+}
+
+/// Take in the discovery table's changes waiting now, without waiting for
+/// more; false once the client's channel has closed.
+fn take_changes(
+    registry: &Registry,
+    devices: &mut broadcast::Receiver<DeviceEvent>,
+    own: &dyn Fn() -> Option<u16>,
+) -> bool {
+    loop {
+        match devices.try_recv() {
+            Ok(change) => note_change(registry, &change, own()),
+            Err(TryRecvError::Lagged(_)) => registry.missed(),
+            Err(TryRecvError::Empty) => return true,
+            Err(TryRecvError::Closed) => return false,
         }
     }
 }

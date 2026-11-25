@@ -184,7 +184,8 @@ pub(crate) fn state_name(state: Phase) -> &'static str {
         Phase::Starting => "starting",
         Phase::Live => "live",
         // The hub gives a point up when its device answers at another
-        // address now (the note says where), or under
+        // address now (the note says where), when another device answers
+        // at its address (the note names both instances), or under
         // `MissingDevice::Fail`, which the server doesn't use: a failed
         // watch either way.
         Phase::Failed | Phase::Gone => "failed",

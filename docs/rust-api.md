@@ -13143,6 +13143,9 @@ while let Some(u) = watch.next().await {
     let text = u.value.as_ref().map_or("-", |v| v.text.as_str());
     match &u.state {
         State::Gone { why: Why::Moved { to } } => println!("moved to {to}"),
+        State::Gone { why: Why::Replaced { watched, found } } => {
+            println!("device {found} answers at {} now, not {watched}", u.point.device)
+        }
         state => println!("{} {text} {:?} via {:?}", u.point, state, u.via),
     }
 }
@@ -13156,8 +13159,9 @@ An `Update` (`#[non_exhaustive]`) carries:
   `Refused` (the device said no; not asked again), `NoAnswer` (the first
   read or the subscription had no answer), `Full` (its subscription table
   was full) and `Lapsed` (a renewal failed), each asked again after a
-  backoff, `Missing` for a remote address with no router known, or
-  `Moved { to }`;
+  backoff, `Missing` for a remote address with no router known,
+  `Moved { to }`, or `Replaced { watched, found }` (another device answers
+  at the point's address now);
 - `value` (a `Value`, an object watch's Present_Value, named by the units
   and state texts the first read had) and `error`: `value` alone is
   current; both together, a value read earlier while the latest read
@@ -13201,13 +13205,47 @@ at most every `QUIET`), for the hub's request or one of its own. A row
 merely gone from the discovery table (aged out of a quiet device) is no
 move, nor are the announcement times `Device::moved_to` reports: a
 duplicate starting up while the device misses a request looks the same,
-so the point stays `Unreachable`, polled after its backoff. A given-up point is sent nothing more, though the old
-address may still notify it until its subscription lapses. The move
-doesn't stick: a point started at the address later starts as any other,
-and the given-up points start again once the address announces itself for
-the instance, or answers a start while the discovery table names it
-there. The hub doesn't follow a device on its own; watch the point at
-`to`, which a following handle's `point` now gives.
+so the point stays `Unreachable`, polled after its backoff. A given-up point is sent nothing more, and
+nothing its old address sends is taken as its own. The move doesn't
+stick: a point started at the address later starts as any other, and the
+given-up points start again once the address announces itself for the
+instance, or answers a start while the discovery table names it there.
+The hub doesn't follow a device on its own; watch the point at `to`,
+which a following handle's `point` now gives.
+
+A watched device is its address and the instance the address named when
+the point's watch started (#2603): the discovery table's row there, else
+an instance read there earlier by the wildcard instance, else one such
+read once the first read is answered, else the first instance announced
+there. When the address names another instance (an I-Am there, or the
+table once a start or poll there is answered), nothing from it is taken
+as the point's: a notification under the point's own subscriber process
+identifier included, and a poll answered across the change. The point is
+given up (`State::Gone { why: Why::Replaced { watched, found } }`), its
+renewals stop and nothing more is sent for it, cancels included, since
+the new device never held its subscription. It becomes `Why::Moved` once
+one other address claims `watched`, and starts again when its address
+announces `watched` again. A pinned handle's points stay given up until
+then; a following handle moves by its own rule, and its `point` gives
+the point at the new address to watch. A device that never announces
+itself is checked only at each start and poll, against the table and the
+instance read for its address, so another such device taking its address
+goes unnoticed: finding it would take a request per device and lifetime.
+
+A watched device announcing itself again at its address, for its own
+instance, may have restarted and lost its subscriptions: its subscribed
+points are read and subscribed again at once, and those polled after a
+failure (`NoAnswer`, `Full`, `Lapsed`, `Missing`) are tried again, rather
+than at their next renewal or retry. At most once a lifetime a device (five
+minutes for a client's own hub): a device announcing itself every few
+seconds, or answering every Who-Is, costs at most one more read and
+subscription a point a lifetime, and a second restart within that
+lifetime waits for the renewal, as every restart did before. The starts go
+through the device's gate and the client's rate like any other request,
+so many devices announcing at once come back no faster than the limits
+allow. A burst of announcements the hub's receiver fell behind on makes
+each device's scheduler read the discovery table at its address, which
+sends nothing.
 
 `CovSupport` (`Unknown`, `NotOffered`, `Offered`, `Accepted`, `Refused`;
 `#[non_exhaustive]`) says what is known of COV: `device.cov_support()` for
@@ -13218,7 +13256,11 @@ unknown service, or a services-class denial) is remembered by its address,
 as an RPM refusal is: its later points are polled without asking. A
 refusal for one object stays that point's own, and a full subscription
 table (a resources-class error) is no refusal: the point is polled
-(`Why::Full`) and asked again after a backoff.
+(`Why::Full`) and asked again after a backoff. What the client learned of
+an address's COV goes when the discovery table loses its row there, or a
+device there announces another instance than the one it was learned from,
+as the instance read there does, and all of it when the client missed a
+burst of the table's changes; nothing goes by time alone.
 
 `watch::hub` is the layer under `Watch`, for a front end that runs its own
 hub (the TUI's watch list and the MCP server, which keep a history, serve
