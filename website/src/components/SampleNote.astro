@@ -1,0 +1,15 @@
+---
+// One sample's note (src/lib/samples.mjs, #2648): whether it follows `dev`
+// or pins the release, how to install it, and where readers of the release
+// find it.
+import { Code } from '@astrojs/starlight/components';
+import { noteParts, sampleNote } from '../lib/samples.mjs';
+interface Props { sample: string; }
+const { sample } = Astro.props;
+const files = import.meta.glob('../../examples/rust/*/Cargo.toml', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+const manifests = Object.fromEntries(Object.entries(files).map(([file, text]) => [file.replace(/^\.\.\/\.\.\/examples\/(.*)\/Cargo\.toml$/, '$1'), text]));
+const parts = noteParts(sampleNote(sample, manifests));
+---
+{parts.map((part) => 'block' in part
+  ? <Code code={part.block} lang="sh" />
+  : <p>{part.inline.map((run) => run.href ? <a href={run.href}>{run.text}</a> : run.code ? <code>{run.code}</code> : run.strong ? <strong>{run.strong}</strong> : run.text)}</p>)}

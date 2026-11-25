@@ -82,6 +82,28 @@ displayed `bacnet` command against the CLI's argument definitions without a
 build. The TUI's profile tables and command-bar lines are parsed by the CLI's
 own code in `crates/bacnet-cli/src/tui/site_samples_tests.rs`.
 
+When a change on `dev` breaks a program under `examples/` that is still on the
+release (its `guide-*` bin in `bacnet-integration-tests` fails to compile, or
+its Python test fails), switch it with
+`python3 scripts/release/website_samples.py --follow-dev <sample>`, then update
+the sample.
+
+The programs under `examples/` (#2648) are listed in `src/data/samples.json`.
+The workspace compiles the Rust ones as `bacnet-integration-tests` bins and CI
+runs the Python ones against a development build. A sample whose files are the
+last release's stays on it: its Rust manifest pins each BACnet crate to its
+published version. One changed since follows the `dev` branch: its manifest
+takes the crates from `dev` with a git dependency, or, for Python, its entry
+has `"follows": "dev"`. A page that imports one gives its note with
+`<SampleNote sample="…" />` (`src/lib/samples.mjs`): how to get the release
+from crates.io or PyPI, or that the sample follows `dev`, with the pip line
+and a link to the release's copy. A sample that was inline on a page at the
+release names that page in `tagPage`; one no release has in any form takes
+`since`, and its note says it is new. `scripts/release/website_samples.py
+--follow-dev <sample>` moves a sample a change touches; `--pin` puts samples
+back on a release. `tests/unit/sample-notes.test.mjs` checks the registry, the
+notes, the manifests and, with the tag fetched, each state against the tag.
+
 ## Tutorial validation
 
 `examples/python/loopback_lab.py` is the sole tutorial body: MDX imports it and
@@ -114,12 +136,11 @@ That evidence is for v0.11.0.
 
 ## Displayed Python first-read verification
 
-The binding unittest suite also extracts the sole Python code block from
-`src/content/docs/start/python.md` and executes those exact bytes in a subprocess.
+The binding unittest suite also runs `examples/python/first_read.py`, which
+`src/content/docs/start/python.mdx` imports as it is, in a subprocess.
 It uses the installed extension and an ephemeral loopback server to check typed
-values, instance selection, unknown-object errors and argument bounds. Missing,
-ambiguous, empty or unclosed Python blocks fail instead of silently selecting a
-different sample. Run this check from the repository root:
+values, instance selection, unknown-object errors and argument bounds. Run this
+check from the repository root:
 
 ```sh
 python -m unittest discover -s crates/rusty-bacnet/tests -p test_website_first_read.py -v

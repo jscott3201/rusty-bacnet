@@ -16,9 +16,10 @@
 //! the reads, and so the future itself, alive.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use bacnet_transport::bip::BvlcGiveUp;
+use bacnet_types::sync::MutexExt;
 use pyo3::intern;
 use pyo3::prelude::*;
 
@@ -59,7 +60,7 @@ impl Reads {
 }
 
 fn lock(reads: &Mutex<Reads>) -> MutexGuard<'_, Reads> {
-    reads.lock().unwrap_or_else(PoisonError::into_inner)
+    reads.locked()
 }
 
 /// The reads one endpoint has started; clones share them.

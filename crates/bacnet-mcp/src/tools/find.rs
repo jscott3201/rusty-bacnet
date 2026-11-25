@@ -2,7 +2,6 @@
 //! discovered devices, paged.
 
 use std::collections::HashMap;
-use std::sync::PoisonError;
 
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::client::Wanted;
@@ -10,6 +9,7 @@ use bacnet_ops::parse::{parse_object_specifier, parse_object_type};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::sync::MutexExt;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -287,7 +287,7 @@ fn cached<T: TransportPort + 'static>(
     object: &ObjectIdentifier,
     description: bool,
 ) -> Option<Names> {
-    let names = ctx.names.lock().unwrap_or_else(PoisonError::into_inner);
+    let names = ctx.names.locked();
     let kept = names
         .get(device)
         .filter(|kept| kept.at.elapsed() < crate::context::LIST_TTL)?
@@ -329,7 +329,7 @@ fn remember<T: TransportPort + 'static>(
     object: ObjectIdentifier,
     read: Names,
 ) {
-    let mut names = ctx.names.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut names = ctx.names.locked();
     let entry = names.entry(device.clone()).or_insert_with(|| CachedNames {
         at: Instant::now(),
         objects: HashMap::new(),

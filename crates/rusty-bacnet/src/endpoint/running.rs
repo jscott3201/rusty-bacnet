@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use bacnet_endpoint::session::EndpointSession;
+use bacnet_types::sync::MutexExt;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
@@ -86,10 +87,7 @@ impl Running {
         candidate: Arc<Py<BACnetClient>>,
         state: ClientInner,
     ) -> PyResult<Arc<Py<BACnetClient>>> {
-        let mut slot = self
-            .client
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut slot = self.client.locked();
         if let Some(seated) = slot.as_ref() {
             match seated.state.liveness() {
                 Liveness::Started => return Ok(Arc::clone(&seated.object)),
@@ -164,11 +162,7 @@ impl super::lifecycle::Session for Running {
     /// stop fails keeps its state; the error says the link is released.
     async fn stop(&mut self) -> PyResult<()> {
         let stopped = self.session.stop().await.map(drop).map_err(to_py_err);
-        let seated = self
-            .client
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        let seated = self.client.get_mut_locked().take();
         let closed = match seated {
             Some(seated) => crate::client::close(seated.state).await.map_err(|error| {
                 PyRuntimeError::new_err(format!(

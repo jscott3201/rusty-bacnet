@@ -161,7 +161,7 @@ impl FileLoadControlPersistence {
 #[cfg(feature = "std")]
 impl LoadControlPersistence for FileLoadControlPersistence {
     fn load(&self, object: ObjectIdentifier) -> Result<Option<LoadControlSnapshot>, Error> {
-        let Some(octets) = self.file.read()? else {
+        let Some(octets) = self.file.read_octets()? else {
             return Ok(None);
         };
         Ok(Some(format::decode(object, &octets)?))

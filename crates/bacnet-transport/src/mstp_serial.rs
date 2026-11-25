@@ -28,6 +28,8 @@ use tokio::sync::Mutex;
 use tokio_serial::SerialStream;
 
 use bacnet_types::error::Error;
+#[cfg(feature = "serial-gpio")]
+use bacnet_types::sync::MutexExt;
 
 use crate::mstp::{Echo, SerialPort};
 
@@ -449,8 +451,7 @@ impl<S: SerialPort> DirectionControl for GpioDirectionPort<S> {
             Value::Inactive
         };
         self.gpio
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .locked()
             .set_value(self.line, value)
             .map_err(|e| Error::Encoding(format!("GPIO set TX mode failed: {e}")))
     }
@@ -464,8 +465,7 @@ impl<S: SerialPort> DirectionControl for GpioDirectionPort<S> {
             Value::Active
         };
         self.gpio
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .locked()
             .set_value(self.line, value)
             .map_err(|e| Error::Encoding(format!("GPIO set RX mode failed: {e}")))
     }

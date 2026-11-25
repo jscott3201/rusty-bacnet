@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use tokio::time::Instant;
 
 use super::{HubRelayTarget, ScHub};
@@ -261,7 +262,7 @@ impl SenderBudget {
         }
         // One fixed-shape synchronous critical section, no I/O/await or other
         // lock held. The sender quota limits contention from any single task.
-        if !self.hub.bucket.lock().unwrap().take(now) {
+        if !self.hub.bucket.locked().take(now) {
             increment(&self.hub.global_drops);
             return false;
         }

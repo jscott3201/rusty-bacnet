@@ -25,6 +25,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bacnet_device_core::cov::{CovSubscriptionKey, MultipleContextKey};
+use bacnet_types::sync::MutexExt;
 use tokio::sync::Notify;
 use tracing::{debug, warn};
 
@@ -123,11 +124,7 @@ impl HistoryStore {
     pub(crate) fn lock(&self) -> TimedGuard<'_> {
         TimedGuard {
             // A panic while holding this lock leaves only bounded queue state.
-            histories: self
-                .shared
-                .histories
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner()),
+            histories: self.shared.histories.locked(),
             shared: &self.shared,
         }
     }

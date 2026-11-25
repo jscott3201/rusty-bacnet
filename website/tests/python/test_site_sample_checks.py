@@ -197,15 +197,19 @@ class Inventory(unittest.TestCase):
 class InstallationTable(unittest.TestCase):
     def test_the_installation_table_is_the_rust_quickstarts(self):
         """The installation page's Rust table, a `<Code>` component with the
-        release substituted, is the Rust quickstart's, which
-        first_read_source.rs checks."""
+        release substituted, is the Rust quickstart's dependencies
+        (website/examples/rust/first-read, which first_read_source.rs checks)
+        pinned to the release, the form the release gives them (#2648)."""
         page = (samples.DOCS / "start/installation.mdx").read_text(encoding="utf-8")
         found = re.search(r'<Code lang="toml" code=\{`(\[dependencies\].*?)`\} />', page, re.S)
         self.assertIsNotNone(found, "start/installation.mdx has no [dependencies] component")
         site = (samples.WEBSITE / "src/lib/site.mjs").read_text(encoding="utf-8")
         release = re.search(r"export const release = '([^']+)';", site).group(1)
         table = found.group(1).replace("${release}", release)
-        self.assertEqual(table, block_by_key("start/rust.md::[dependencies]").text)
+        manifest = (samples.WEBSITE / "examples/rust/first-read/Cargo.toml").read_text(encoding="utf-8")
+        quickstart = manifest[manifest.index("[dependencies]\n"):].rstrip("\n")
+        quickstart = re.sub(r'\{ git = "[^"]+", branch = "dev" \}', f'"={release}"', quickstart)
+        self.assertEqual(sorted(table.splitlines()), sorted(quickstart.splitlines()))
 
 
 if __name__ == "__main__":

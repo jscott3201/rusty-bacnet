@@ -6,6 +6,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use bacnet_transport::port::{DirectScIdentity, TransportProvenance};
 use bacnet_types::enums::{AuditOperation, ReinitializedState};
+use bacnet_types::sync::MutexExt;
 
 use super::*;
 use bacnet_device_core::reply::error_apdu;
@@ -146,9 +147,7 @@ struct AfterReplyHooks(Arc<std::sync::Mutex<Vec<AfterReplyHook>>>);
 
 impl AfterReplyHooks {
     fn hooks(&self) -> std::sync::MutexGuard<'_, Vec<AfterReplyHook>> {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.0.locked()
     }
 
     fn take(&self) -> AfterReply {

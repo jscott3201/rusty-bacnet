@@ -1,3 +1,4 @@
+use bacnet_types::sync::MutexExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 use std::time::{Duration, Instant as StdInstant};
@@ -203,9 +204,7 @@ impl RoutedPathLimits {
     }
 
     fn state(&self) -> StdMutexGuard<'_, RoutedPathState> {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.state.locked()
     }
 
     /// See [`BACnetClient::too_long_reject_drops`].

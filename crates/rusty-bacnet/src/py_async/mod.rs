@@ -18,9 +18,10 @@
 //! `pthread_exit`, and its forced unwind drops the thread's Python references
 //! without the GIL while the interpreter is torn down: a segfault at exit.
 
+use bacnet_types::sync::{CondvarExt, MutexExt};
 use std::any::Any;
 use std::future::Future;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::panic::PanicException;
@@ -385,7 +386,7 @@ struct RunOnDone(Mutex<Option<Box<dyn FnOnce() + Send>>>);
 
 impl RunOnDone {
     fn run(&self) {
-        let on_done = self.0.lock().unwrap_or_else(PoisonError::into_inner).take();
+        let on_done = self.0.locked().take();
         if let Some(on_done) = on_done {
             on_done();
         }
@@ -423,7 +424,7 @@ impl ExitGate {
     }
 
     fn lock(&self) -> MutexGuard<'_, GateState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.locked()
     }
 
     /// A pass that lets its holder attach, or `None` once the gate is closed.
@@ -449,10 +450,7 @@ impl ExitGate {
     fn drain(&self) {
         let mut state = self.lock();
         while state.attached > 0 {
-            state = self
-                .idle
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
+            state = self.idle.wait_locked(state);
         }
     }
 }

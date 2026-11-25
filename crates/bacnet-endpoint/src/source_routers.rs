@@ -22,6 +22,7 @@ use bacnet_network::layer::{
 };
 use bacnet_network::network_number::LocalNetworkNumber;
 use bacnet_types::MacAddr;
+use bacnet_types::sync::MutexExt;
 
 use super::recipient::SourceLink;
 
@@ -103,7 +104,7 @@ impl Hop {
     /// another has been learned since.
     pub(crate) fn lost(self) {
         if let Some((routers, network, router)) = self.0 {
-            let mut known = routers.routers.lock().unwrap();
+            let mut known = routers.routers.locked();
             if let Some(slot) = known.get_mut(&network)
                 && slot.as_ref() == Some(&router)
             {
@@ -130,7 +131,7 @@ pub(crate) struct SourceRouters {
 impl SourceRouters {
     /// Track `network`, with no router learned yet.
     pub(crate) fn track(&self, network: u16) {
-        self.routers.lock().unwrap().entry(network).or_default();
+        self.routers.locked().entry(network).or_default();
     }
 
     /// Take the started link's unicast rule, and read the session's own
@@ -146,7 +147,7 @@ impl SourceRouters {
 
     /// Whether any network is tracked: the session has routed bindings.
     pub(crate) fn is_empty(&self) -> bool {
-        self.routers.lock().unwrap().is_empty()
+        self.routers.locked().is_empty()
     }
 
     /// `router` reaches `network`, if a binding names that network and it
@@ -155,7 +156,7 @@ impl SourceRouters {
         if router.is_empty() || Some(network) == self.local_network() {
             return;
         }
-        if let Some(slot) = self.routers.lock().unwrap().get_mut(&network) {
+        if let Some(slot) = self.routers.locked().get_mut(&network) {
             *slot = Some(router.clone());
         }
     }
@@ -203,7 +204,7 @@ impl SourceRouters {
     ) -> Option<(EndpointApduDestination, Hop)> {
         Some(match route {
             SourceRoute::Routed { network, mac, .. } if Some(*network) != self.local_network() => {
-                let router = self.routers.lock().unwrap().get(network).cloned().flatten();
+                let router = self.routers.locked().get(network).cloned().flatten();
                 match router {
                     Some(router) => (
                         EndpointApduDestination::Routed {

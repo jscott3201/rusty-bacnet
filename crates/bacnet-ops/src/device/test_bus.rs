@@ -16,6 +16,7 @@ use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device_identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_server::server::BACnetServer;
+use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::who_has::IHaveRequest;
 use bacnet_services::who_is::IAmRequest;
 use bacnet_transport::port::ReceivedNpdu;
@@ -103,6 +104,9 @@ pub(crate) struct Bus {
     ports: Mutex<Vec<Port>>,
     /// Stations a unicast to fails at the sender.
     broken: Mutex<HashSet<u8>>,
+    /// The Time_Of_Device_Restart each station answers a ReadProperty of
+    /// with, in place of its server, which has none.
+    restart_times: Mutex<std::collections::HashMap<u8, Vec<u8>>>,
 }
 
 impl Bus {
@@ -143,7 +147,7 @@ impl Bus {
                     let broken = bus.broken.lock().unwrap();
                     broken.iter().any(|n| mac(*n) == to)
                 });
-                if !broken {
+                if !broken && !bus.restart_time_answered(&source, &frame.npdu, to) {
                     bus.deliver(&source, &frame.npdu, to);
                 }
                 async move {
@@ -154,6 +158,58 @@ impl Bus {
                 }
             });
         more(builder).build()
+    }
+
+    /// Station `n` answers a ReadProperty of its Device object's
+    /// Time_Of_Device_Restart with `time` (an Unsigned, which tests compare),
+    /// or as its server does, which has none, for `None`.
+    pub(crate) fn restart_time(&self, n: u8, time: Option<u8>) {
+        let mut times = self.restart_times.lock().unwrap();
+        match time {
+            Some(time) => times.insert(n, vec![0x21, time]),
+            None => times.remove(&n),
+        };
+    }
+
+    /// Answer `npdu` from `from` to `to` here when it reads the
+    /// Time_Of_Device_Restart of a station given one: whether it did.
+    fn restart_time_answered(&self, from: &MacAddr, npdu: &[u8], to: Option<&[u8]>) -> bool {
+        let Some(n) = to.and_then(|to| (0..=u8::MAX).find(|n| mac(*n) == to)) else {
+            return false;
+        };
+        let Some(time) = self.restart_times.lock().unwrap().get(&n).cloned() else {
+            return false;
+        };
+        let Ok(decoded) = decode_npdu(Bytes::copy_from_slice(npdu)) else {
+            return false;
+        };
+        let apdu = &decoded.payload;
+        let read = ConfirmedServiceChoice::READ_PROPERTY.to_raw();
+        if apdu.len() < 4 || apdu[0] >> 4 != 0 || apdu[3] != read {
+            return false;
+        }
+        let Ok(request) = ReadPropertyRequest::decode(&apdu[4..]) else {
+            return false;
+        };
+        if request.property_identifier != PropertyIdentifier::TIME_OF_DEVICE_RESTART {
+            return false;
+        }
+        let mut ack = BytesMut::from(&[1u8, 0, 0x30, apdu[2], read][..]);
+        ReadPropertyACK {
+            object_identifier: request.object_identifier,
+            property_identifier: request.property_identifier,
+            property_array_index: None,
+            property_value: time,
+        }
+        .encode(&mut ack)
+        .unwrap();
+        self.deliver(&MacAddr::from_slice(&mac(n)), &ack, Some(from.as_slice()));
+        true
+    }
+
+    /// Send `npdu` from station `n` to station `to`, as that station would.
+    pub(crate) fn send_from(&self, n: u8, npdu: &[u8], to: u8) {
+        self.deliver(&MacAddr::from_slice(&mac(n)), npdu, Some(&mac(to)));
     }
 
     /// Station `n` hears nothing from now on, as a device gone away.

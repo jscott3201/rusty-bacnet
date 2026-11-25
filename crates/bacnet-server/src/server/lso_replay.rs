@@ -54,6 +54,7 @@ use crate::runtime_clock;
 use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_transport::port::{DirectScIdentity, TransportProvenance};
+use bacnet_types::sync::MutexExt;
 
 /// Completed LSO responses are retained for this long after the response time.
 pub(super) const COMPLETED_RETENTION: Duration = Duration::from_secs(60);
@@ -138,10 +139,7 @@ impl LsoReplayCache {
         let requester = canonical_requester(source_mac, source_network);
         let direct_identity = provenance.direct_sc_identity();
         let invoke_id = request.invoke_id;
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.state.locked();
         state.entries.retain(|entry| match entry.completed_at {
             None => true,
             Some(completed_at) => completed_at + COMPLETED_RETENTION > now,
@@ -227,11 +225,7 @@ impl PendingLsoReplay {
 
     fn complete_with_response_at(mut self, response: Bytes, now: Instant) {
         if let Some(id) = self.id {
-            let mut state = self
-                .cache
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut state = self.cache.state.locked();
             if let Some(entry) = state.entries.iter_mut().find(|entry| entry.id == id) {
                 entry.completed_at = Some(now);
                 entry.response = Some(response);
@@ -247,11 +241,7 @@ impl Drop for PendingLsoReplay {
             return;
         }
         if let Some(id) = self.id {
-            let mut state = self
-                .cache
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut state = self.cache.state.locked();
             state.entries.retain(|entry| entry.id != id);
         }
     }

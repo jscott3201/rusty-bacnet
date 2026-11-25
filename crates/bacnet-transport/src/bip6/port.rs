@@ -5,6 +5,7 @@ use std::time::Duration;
 use bacnet_types::bip_port::{BipPortMode, ForeignRegistration};
 use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use bytes::BytesMut;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -540,10 +541,7 @@ impl TransportPort for Bip6Transport {
     }
 
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
-        let held = self
-            .network_port_lease
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let held = self.network_port_lease.get_mut_locked();
         if self.registration_closed
             || self.socket.is_some()
             || self.tasks.is_running()
@@ -601,12 +599,7 @@ impl TransportPort for Bip6Transport {
                 .await
                 .map_err(Error::Transport)?
                 .tapped(self.frame_tap.clone())
-                .leased(
-                    self.network_port_lease
-                        .get_mut()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .clone(),
-                ),
+                .leased(self.network_port_lease.get_mut_locked().clone()),
         );
         let bound = socket.local_address().map_err(Error::Transport)?;
         let local_port = bound.port();
@@ -806,10 +799,7 @@ impl TransportPort for Bip6Transport {
         self.resolver.clear();
         self.resolver.set_own(None);
         // Every task that owned the socket has ended.
-        self.network_port_lease
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        self.network_port_lease.locked().take();
         stopping.finish();
         Ok(())
     }
@@ -828,10 +818,7 @@ impl TransportPort for Bip6Transport {
         drop(self.socket.take());
         self.resolver.clear();
         self.tasks.abort();
-        self.network_port_lease
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        self.network_port_lease.locked().take();
     }
 
     /// A router routes through this port: an NPDU for a VMAC that needs

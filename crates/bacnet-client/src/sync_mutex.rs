@@ -9,7 +9,8 @@
 //! A blocking lock is safe in async code as long as nothing waits while
 //! holding it, which is the rule this type relies on.
 
-use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use bacnet_types::sync::MutexExt;
+use std::sync::{Mutex, MutexGuard};
 
 /// A `std::sync::Mutex` whose lock ignores poisoning. A panic while holding
 /// it leaves the state as the panicking step left it, which is what the
@@ -25,15 +26,12 @@ impl<T> SyncMutex<T> {
 
     /// Lock it. Never hold the guard across an `.await`.
     pub(crate) fn lock(&self) -> MutexGuard<'_, T> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.0.locked()
     }
     /// Lock it unless another thread holds it now. A `Drop` impl uses this,
     /// as it did with the async mutex, so a drop never waits.
+    #[inline]
     pub(crate) fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
-        match self.0.try_lock() {
-            Ok(guard) => Some(guard),
-            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
-            Err(TryLockError::WouldBlock) => None,
-        }
+        self.0.try_locked()
     }
 }

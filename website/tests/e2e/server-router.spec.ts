@@ -1,15 +1,17 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { expectSampleNote } from './helpers';
 const base = '/rusty-bacnet/';
 const example = (path: string) => readFile(new URL('../../examples/' + path, import.meta.url), 'utf8');
 
 // Each page shows the exact example files, serves them as downloads, and
-// keeps them byte for byte in its raw export.
+// keeps them byte for byte in its raw export. Each language's tab says
+// whether its program follows dev, and where the release's copy is (#2648).
 const pages = [
   {
     title: 'Serve objects from your application',
     path: 'integrate/server/',
-    hasDev: false,
+    notes: [['Rust', 'server-device'], ['Python', 'server_device.py']],
     files: [
       ['Cargo.toml', 'rust/server-device/Cargo.toml', 'examples/rust/server-device/Cargo.toml', '[package]', 'toml'],
       ['main.rs', 'rust/server-device/src/main.rs', 'examples/rust/server-device/src/main.rs', 'async fn main()', 'rust'],
@@ -19,7 +21,7 @@ const pages = [
   {
     title: 'Route between networks',
     path: 'integrate/router/',
-    hasDev: false,
+    notes: [['Rust', 'bip-router'], ['Python', 'bip_router.py']],
     files: [
       ['Cargo.toml', 'rust/bip-router/Cargo.toml', 'examples/rust/bip-router/Cargo.toml', '[package]', 'toml'],
       ['main.rs', 'rust/bip-router/src/main.rs', 'examples/rust/bip-router/src/main.rs', 'async fn main()', 'rust'],
@@ -29,7 +31,7 @@ const pages = [
 ] as const;
 
 test('the integration overview links the server and router pages, which show their exact programs', async ({ page, request }) => {
-  for (const { title, path, hasDev, files } of pages) {
+  for (const { title, path, notes, files } of pages) {
     await page.goto(base + 'integrate/overview/');
     await page.locator('main').getByRole('link', { name: title, exact: true }).first().click();
     await expect(page).toHaveURL(base + path);
@@ -51,11 +53,9 @@ test('the integration overview links the server and router pages, which show the
       expect(await download.text()).toBe(text);
       expect(body.match(new RegExp('^```' + lang + '\\n([\\s\\S]*?)^```', 'm'))?.[1]).toBe(text);
     }
-    if (hasDev) {
-      await main.getByRole('link', { name: 'their own section', exact: true }).click();
-      await expect(page).toHaveURL(base + path + '#on-dev-after-the-release');
-    } else {
-      await expect(main.locator('#on-dev-after-the-release')).toHaveCount(0);
+    for (const [tab, sample] of notes) {
+      await main.getByRole('tab', { name: tab, exact: true }).click();
+      await expectSampleNote(main, sample);
     }
   }
 });

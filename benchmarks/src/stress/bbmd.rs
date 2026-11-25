@@ -23,6 +23,7 @@ use bacnet_transport::bbmd::ForeignDevicePolicy;
 use bacnet_transport::bip::{BipTransport, FanoutCounters, FanoutPolicy, ForeignDeviceConfig};
 use bacnet_transport::bvll::decode_bip_mac;
 use bacnet_transport::port::TransportPort;
+use bacnet_types::sync::MutexExt;
 
 use crate::stress::harness::current_rss_kb;
 use crate::stress::output::{DegradationPoint, LatencyRecorder, rate};
@@ -136,13 +137,8 @@ pub async fn run(duration_secs: u64, steps: &[u64]) -> Vec<DegradationPoint> {
 
         // Wait for the registrations, up to 2 seconds.
         let fdt_len = || {
-            bbmd.bbmd_state().map_or(0, |state| {
-                state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .fdt()
-                    .len()
-            })
+            bbmd.bbmd_state()
+                .map_or(0, |state| state.locked().fdt().len())
         };
         let wait_until = Instant::now() + Duration::from_secs(2);
         while fdt_len() < fds.len() && Instant::now() < wait_until {

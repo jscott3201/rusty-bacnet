@@ -43,6 +43,7 @@ use tokio::sync::Semaphore;
 use tokio::sync::{Mutex, oneshot};
 
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use bytes::BytesMut;
 
 use crate::port::DataAttribute;
@@ -282,9 +283,7 @@ struct Waiters {
 /// holds a consistent map, so take it rather than panic, in a Drop least
 /// of all.
 fn lock_waiters(waiters: &StdMutex<Waiters>) -> std::sync::MutexGuard<'_, Waiters> {
-    waiters
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    waiters.locked()
 }
 
 /// Owns one [`Waiters`] entry for the life of a `discover_via_hub` call.
@@ -467,11 +466,11 @@ pub(crate) fn parse_ack_uris(payload: &[u8]) -> Option<Vec<String>> {
 impl<W: WebSocketPort> DirectShared<W> {
     pub(super) fn disable(&self) {
         // Same lock as publication seals in-flight dials before clearing owners.
-        let mut pool = self.pool.lock().unwrap();
+        let mut pool = self.pool.locked();
         self.enabled.store(false, Ordering::Release);
         self.pending_dials.close();
         pool.clear();
-        for task in self.workers.lock().unwrap().iter() {
+        for task in self.workers.locked().iter() {
             task.abort();
         }
     }
@@ -481,12 +480,12 @@ impl<W: WebSocketPort> DirectShared<W> {
     /// (#2520); one still sending then is aborted.
     pub(super) async fn shutdown(&self, deadline: tokio::time::Instant) {
         {
-            let mut pool = self.pool.lock().unwrap();
+            let mut pool = self.pool.locked();
             self.enabled.store(false, Ordering::Release);
             self.pending_dials.close();
             pool.clear();
         }
-        let workers = std::mem::take(&mut *self.workers.lock().unwrap());
+        let workers = std::mem::take(&mut *self.workers.locked());
         for mut worker in workers {
             if tokio::time::timeout_at(deadline, &mut worker)
                 .await
@@ -503,7 +502,7 @@ impl<W: WebSocketPort> DirectShared<W> {
     /// Let go of the transport's NPDU sender, so its receiver can end.
     #[cfg(feature = "sc-tls")]
     pub(super) fn end_intake(&self) {
-        self.intake.lock().unwrap().take();
+        self.intake.locked().take();
     }
 
     #[cfg(feature = "sc-tls")]
@@ -512,7 +511,7 @@ impl<W: WebSocketPort> DirectShared<W> {
         tx: tokio::sync::mpsc::Sender<crate::port::ReceivedNpdu>,
         admission: Arc<super::npdu_admission::ScNpduAdmission>,
     ) {
-        *self.intake.lock().unwrap() = Some(super::direct_pool::DirectIntake { tx, admission });
+        *self.intake.locked() = Some(super::direct_pool::DirectIntake { tx, admission });
     }
 
     pub(super) async fn cached_uris(&self, vmac: &Vmac) -> Option<Vec<String>> {
@@ -785,7 +784,7 @@ impl<W: WebSocketPort> DirectShared<W> {
             };
             let mut socket = Some(ws);
             let pooled: Result<PooledDirect, Failure> = 'pooled: {
-                let mut pool = self.pool.lock().unwrap();
+                let mut pool = self.pool.locked();
                 if !self.enabled.load(Ordering::Acquire) {
                     break 'pooled Err(Failure::Unavailable);
                 }
@@ -819,11 +818,11 @@ impl<W: WebSocketPort> DirectShared<W> {
                     member,
                     physical,
                     #[cfg(feature = "sc-tls")]
-                    self.intake.lock().unwrap().clone(),
+                    self.intake.locked().clone(),
                     local_limits,
                     heartbeat_ms,
                 );
-                let mut workers = self.workers.lock().unwrap();
+                let mut workers = self.workers.locked();
                 workers.retain(|task| !task.is_finished());
                 workers.push(worker);
                 pool.insert(dest, pooled.clone());

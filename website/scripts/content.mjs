@@ -1,15 +1,23 @@
 // Plain-text projection of this site's small, explicit MDX component vocabulary.
 // This is not a general MDX renderer and is not used to build the website HTML.
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { release, repository, releaseAsset } from '../src/lib/site.mjs';
 import { supportTableMarkdown } from '../src/lib/support.mjs';
 import support from '../src/data/support.json' with { type: 'json' };
+import { noteMarkdown, sampleNote } from '../src/lib/samples.mjs';
 export function frontmatter(source) {
   const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) throw new Error('Missing frontmatter');
   const field = (name) => match[1].match(new RegExp(`^${name}:\\s*(.+)$`, 'm'))?.[1].replace(/^['"]|['"]$/g, '');
   return { title: field('title'), description: field('description') || '', body: match[2] };
+}
+const examples = new URL('../examples/', import.meta.url);
+/** Every Rust sample's Cargo.toml, by its path under website/examples, as SampleNote reads them. */
+export async function sampleManifests() {
+  const dirs = (await readdir(new URL('rust/', examples), { withFileTypes: true })).filter(entry => entry.isDirectory());
+  return Object.fromEntries(await Promise.all(dirs.map(async ({ name }) =>
+    [`rust/${name}`, await readFile(new URL(`rust/${name}/Cargo.toml`, examples), 'utf8')])));
 }
 const attr = (tag, name) => tag.match(new RegExp(`${name}="([^"]*)"`))?.[1] || '';
 const fence = /^```[^\n]*\n[\s\S]*?^```\s*$/gm;
@@ -65,6 +73,12 @@ export async function plainBody(body, file, downloads) {
     if (!raws.has(name)) throw new Error(`Unknown raw code import in ${file}`);
     return `\n\n\`\`\`${attr(tag, 'lang')}\n${raws.get(name).trim()}\n\`\`\`\n\n`;
   });
+  // A sample's note (#2648), as the SampleNote component renders it.
+  if (mdx && /^<SampleNote\b/m.test(text)) {
+    const manifests = await sampleManifests();
+    text = outsideFences(text, part => part.replace(/^<SampleNote\s+sample="([^"]+)"\s*\/>$/gm,
+      (_, name) => `\n\n${noteMarkdown(sampleNote(name, manifests))}\n\n`));
+  }
   // The capability tables (project/conformance), from the same rows the page renders.
   text = text.replace(/<SupportTable\s+table="([a-z-]+)"\s*\/>/g, (_, id) => `\n\n${supportTableMarkdown(id, support)}\n\n`);
   text = text.replace(/<DownloadList\s*\/>/g, () => downloads.map(item => `- [${item.os} · ${item.architecture}](${releaseAsset(item.file)}) — \`${item.file}\`; ${item.features}; ${item.runtime}.`).join('\n'));

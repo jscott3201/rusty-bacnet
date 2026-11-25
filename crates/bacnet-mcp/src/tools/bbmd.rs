@@ -24,7 +24,6 @@
 //! Read-Foreign-Device-Table go out (Annex J.2.3 and J.2.7).
 
 use std::net::SocketAddrV4;
-use std::sync::PoisonError;
 use std::time::Duration;
 
 use std::net::Ipv4Addr;
@@ -37,6 +36,7 @@ use bacnet_tool::bbmd::{
 };
 use bacnet_transport::bvll::BvlcResultCode;
 use bacnet_transport::port::TransportPort;
+use bacnet_types::sync::MutexExt;
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
@@ -130,10 +130,7 @@ pub(super) async fn plan<T: TransportPort + 'static>(
         ));
     }
     // Checked and claimed under one lock, so parallel calls can't both go.
-    let mut asked = ctx
-        .bbmd_asked
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let mut asked = ctx.bbmd_asked.locked();
     if let Some(at) = *asked
         && at.elapsed() < BBMD_INTERVAL
     {
@@ -150,9 +147,7 @@ pub(super) async fn plan<T: TransportPort + 'static>(
 
 /// Put the claim back: the call stopped before the survey sent anything.
 pub(super) fn release<T: TransportPort + 'static>(ctx: &Ctx<T>, plan: &Plan) {
-    *ctx.bbmd_asked
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = plan.previous;
+    *ctx.bbmd_asked.locked() = plan.previous;
 }
 
 /// Whether `address` is a B/IP address the server already knows: a device
@@ -164,7 +159,7 @@ async fn known<T: TransportPort + 'static>(
     address: SocketAddrV4,
 ) -> bool {
     let router = {
-        let routers = ctx.routers.lock().unwrap_or_else(PoisonError::into_inner);
+        let routers = ctx.routers.locked();
         routers.heard.as_ref().is_some_and(|(_, found)| {
             found
                 .iter()

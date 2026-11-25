@@ -68,6 +68,9 @@ pub enum State {
     ///
     /// - [`Why::Refused`]: the device said no (or refused the service for
     ///   an earlier point); not asked again.
+    /// - [`Why::ForeignSender`]: its notifications name a device that
+    ///   can't be told from another at its address; subscribed again when
+    ///   the point starts again.
     /// - [`Why::NoAnswer`]: the first read or the subscription had no
     ///   answer; subscribed again after a backoff.
     /// - [`Why::Full`]: the device's subscription table was full;
@@ -87,10 +90,11 @@ pub enum State {
         /// Why it isn't subscribed.
         why: Why,
     },
-    /// Given up: nothing more is sent for it. [`Why::Moved`]: the device
-    /// answers at another address now, so watch the point there; the
-    /// point starts again if its old address answers for the instance
-    /// again.
+    /// Given up: nothing more is sent for it, and nothing its address
+    /// sends is taken as its own. [`Why::Moved`]: the device answers at
+    /// another address now, so watch the point there; [`Why::Replaced`]:
+    /// another device answers at its address now. Either way the point
+    /// starts again if its address answers for its instance again.
     Gone {
         /// Why it was given up.
         why: Why,
@@ -183,8 +187,9 @@ pub struct Update {
 ///
 /// **Ending.** The stream of a watch of no points ends at once. Any other
 /// never ends on its own: a point given up ([`State::Gone`]) sends its last
-/// update and stays, and while its old subscription lapses the device may
-/// still notify it. Drop the watch to stop.
+/// update and stays, taking nothing more from its address while its old
+/// subscription lapses, and starts again if its device comes back there.
+/// Drop the watch to stop.
 pub struct Watch {
     leases: Vec<Lease>,
     mailbox: Arc<Mailbox>,

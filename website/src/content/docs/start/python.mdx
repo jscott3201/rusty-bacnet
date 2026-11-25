@@ -3,56 +3,22 @@ title: "Read with Python"
 description: "Use the asynchronous Python client for a small, read-only integration."
 ---
 
-Install `rusty-bacnet==0.15.0` in a virtual environment first. The distribution name uses a hyphen; the import name uses an underscore.
+import { Code } from '@astrojs/starlight/components';
+import { release, repository } from '../../../lib/site.mjs';
+import SampleNote from '../../../components/SampleNote.astro';
+import firstReadSource from '../../../../examples/python/first_read.py?raw';
+
+<SampleNote sample="first_read.py" />
+
+The distribution name uses a hyphen; the import name uses an underscore.
 
 For a self-contained first run with no external target, use the [local client/server lab](/rusty-bacnet/start/local-lab/). Continue here when you have a known device address and object.
 
 ## A complete first-read script
 
-Save the following as `first_read.py`. It reads analog input 1 by default and makes no property writes.
+Save [first_read.py](/rusty-bacnet/examples/first_read.py). It reads analog input 1 by default and makes no property writes.
 
-```python
-from __future__ import annotations
-
-import argparse
-import asyncio
-import sys
-
-from rusty_bacnet import BACnetClient, BacnetError
-
-
-async def read_one(address: str, instance: int) -> None:
-    # An ephemeral local port is suitable for this directed-read example.
-    # This example does not validate broadcast discovery or COV delivery.
-    async with BACnetClient(port=0) as client:
-        # A handle pinned to the address: making it sends nothing.
-        device = await client.device(address)
-        # "ai:1" is analog input 1; a read with no property is its present value.
-        value = await device.read(f"ai:{instance}")
-        print(f"{value.value.tag}: {value.text}")
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Read one authorized BACnet/IP point")
-    parser.add_argument("address", help="Target IPv4:port, for example 192.168.1.100:47808")
-    parser.add_argument("--instance", type=int, default=1, help="Analog input instance")
-    args = parser.parse_args()
-    if not 0 <= args.instance <= 4194303:
-        parser.error("--instance must be in 0..4194303")
-    try:
-        asyncio.run(read_one(args.address, args.instance))
-    except (BacnetError, ValueError) as error:
-        print(f"BACnet read failed: {error}", file=sys.stderr)
-        return 1
-    except KeyboardInterrupt:
-        return 130
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-```
+<Code code={firstReadSource} lang="python" title="first_read.py" />
 
 Run it against a device and object that you are authorized to read:
 
@@ -86,6 +52,6 @@ Use the [Python reference](/rusty-bacnet/reference/python/) for complete signatu
 
 ## Sources and release scope
 
-These instructions target **v0.15.0**. Source review is not a claim of hardware qualification.
+This page describes the script above, which follows the `dev` branch: `client.device`, `device.read` and `device.read_many` are newer than v{release}. <a href={`${repository}/blob/v${release}/website/src/content/docs/start/python.md`}>The page as published at v{release} (source)</a> describes the release's calls, and the links below point at v{release}'s sources. Source review is not a claim of hardware qualification.
 
-[Python API](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/docs/python-api.md) · [Release client/server example](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/examples/python/bip_client_server.py) · [Type stubs](https://github.com/jscott3201/rusty-bacnet/blob/v0.15.0/crates/rusty-bacnet/rusty_bacnet.pyi).
+<a href={`${repository}/blob/v${release}/docs/python-api.md`}>Python API</a> · <a href={`${repository}/blob/v${release}/examples/python/bip_client_server.py`}>Release client/server example</a> · <a href={`${repository}/blob/v${release}/crates/rusty-bacnet/rusty_bacnet.pyi`}>Type stubs</a>.

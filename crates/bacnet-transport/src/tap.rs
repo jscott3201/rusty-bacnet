@@ -76,11 +76,12 @@
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll};
 use std::time::{Instant, SystemTime};
 
 use bacnet_types::data_link::DataLink;
+use bacnet_types::sync::MutexExt;
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
@@ -366,10 +367,7 @@ impl FrameTap {
     }
 
     fn lock_sinks(&self) -> std::sync::MutexGuard<'_, Vec<Sink>> {
-        self.shared
-            .sinks
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        self.shared.sinks.locked()
     }
 }
 
@@ -446,11 +444,7 @@ impl FrameTapReceiver {
         if let Some(shared) = self.shared.upgrade() {
             // A publisher may have observed Full just before the queue closed.
             // Its increment completes under this lock before the final snapshot.
-            shared
-                .sinks
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .retain(|sink| !sink.tx.is_closed());
+            shared.sinks.locked().retain(|sink| !sink.tx.is_closed());
         }
         self.dropped()
     }

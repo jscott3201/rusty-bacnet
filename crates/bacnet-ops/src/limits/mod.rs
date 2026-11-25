@@ -20,8 +20,9 @@ mod schedule;
 
 pub use self::account::{Account, TokenBucket, charged, refund};
 
+use bacnet_types::sync::MutexExt;
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -123,13 +124,13 @@ impl Networks {
         if interval.is_zero() {
             return None;
         }
-        let mut next = self.next.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut next = self.next.locked();
         Some(next.entry(network).or_default().book(now, interval))
     }
 
     /// Give back `network`'s slot `booking`, unless its instant has come.
     fn release(&self, network: u16, booking: Booking, now: Instant) {
-        let mut next = self.next.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut next = self.next.locked();
         if let Some(schedule) = next.get_mut(&network) {
             schedule.release(booking, now);
         }
@@ -234,15 +235,12 @@ impl RequestLimits {
                 },
             })
         });
-        *self.overlay.lock().unwrap_or_else(PoisonError::into_inner) = layer;
+        *self.overlay.locked() = layer;
     }
 
     /// The overlay in force, if any.
     fn layer(&self) -> Option<Arc<Layer>> {
-        self.overlay
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.overlay.locked().clone()
     }
 
     /// True when requests are spaced per network too.
@@ -253,7 +251,7 @@ impl RequestLimits {
     /// `device`'s gate: one permit, held by whichever request to it is
     /// outstanding. A managed COV subscription takes it for its renewals.
     pub fn gate(&self, device: &DeviceAddress) -> Arc<Semaphore> {
-        let mut gates = self.gates.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut gates = self.gates.locked();
         if let Some(gate) = gates.get(device) {
             return Arc::clone(gate);
         }
@@ -363,7 +361,7 @@ impl RequestLimits {
     /// spacing it goes now (`None`), whatever slots spaced requests left
     /// booked.
     fn reserve(&self, now: Instant, interval: Duration, agent: bool) -> Option<Booking> {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.state.locked();
         let booking = if interval.is_zero() {
             state.schedule.clear(now);
             None
@@ -387,7 +385,7 @@ impl RequestLimits {
     /// Give back the global slot `booking`, and its place on the meter,
     /// unless its instant has come.
     fn release(&self, booking: Booking, now: Instant) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.state.locked();
         if state.schedule.release(booking, now)
             && let Some(i) = state.recent.iter().rposition(|(at, _)| *at == booking.at)
         {
@@ -427,8 +425,7 @@ impl RequestLimits {
             // is exact.
             let next = self
                 .state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                .locked()
                 .schedule
                 .next_free(Instant::now(), interval);
             match next {
@@ -452,7 +449,7 @@ impl RequestLimits {
 
     fn metered(&self, which: impl Fn(bool) -> bool) -> usize {
         let now = Instant::now();
-        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let state = self.state.locked();
         state
             .recent
             .iter()

@@ -9,12 +9,13 @@
 //! `stop()` raises what any call raises then, and the first call after a
 //! restart makes the handle again from what named it.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use bacnet_ops::PropertyRef;
 use bacnet_ops::client::Wanted;
 use bacnet_ops::target::AddressStyle;
 use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::sync::MutexExt;
 use pyo3::prelude::*;
 
 use super::errors::ops_err;
@@ -91,7 +92,7 @@ impl Core {
     }
 
     fn see(&self, seen: Seen) {
-        *self.seen.lock().unwrap_or_else(PoisonError::into_inner) = seen;
+        *self.seen.locked() = seen;
     }
 
     /// What the handle says of itself now, or last said.
@@ -99,7 +100,7 @@ impl Core {
         if let Some(seen) = self.tie.peek(Seen::of) {
             self.see(seen);
         }
-        let seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
+        let seen = self.seen.locked();
         seen.clone()
     }
 }

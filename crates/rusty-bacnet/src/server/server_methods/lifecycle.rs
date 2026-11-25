@@ -2,6 +2,7 @@ use super::super::start_claim::{StartCells, StartClaim};
 use super::super::*;
 use bacnet_objects::object_profile::TagsPersistence;
 use bacnet_transport::port::TransportPort;
+use bacnet_types::sync::MutexExt;
 
 /// The ValueError for an object the database refuses: a duplicate name, or
 /// another refusal such as the reserved instance 4194303 (#2171).
@@ -32,7 +33,7 @@ impl BACnetServer {
         crate::logging_bridge::refresh_at_start(py);
         // Validate the selected sink before TLS/serial/network preparation or
         // ownership transfer. Keep registration stable until it is drained.
-        let mut pending = self.lock_pending()?;
+        let mut pending = self.lock_pending();
         if self.start_in_flight.load(Ordering::Acquire) {
             return Err(PyRuntimeError::new_err("start() is already in progress"));
         }
@@ -46,10 +47,7 @@ impl BACnetServer {
             sink.validate(&pending)?;
         }
         let audit_reporter = self.audit_reporters.clone();
-        let mut recipient_input = self
-            .audit_recipient
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("recipient lock poisoned"))?;
+        let mut recipient_input = self.audit_recipient.locked();
         if let Some(profile) = &audit_reporter {
             for reporter in &profile.reporters {
                 audit_configuration::pending_audit_reporter_index(&pending, *reporter)?;
@@ -177,12 +175,8 @@ impl BACnetServer {
 
         // Taken under the pending lock, with the forwarders they belong to.
         // The last fallible step: nothing is taken until it has passed.
-        let forwarder_save_counters = std::mem::take(
-            &mut *self
-                .pending_forwarder_save_counters
-                .lock()
-                .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))?,
-        );
+        let forwarder_save_counters =
+            std::mem::take(&mut *self.pending_forwarder_save_counters.locked());
         let live_forwarder_save_counters = Arc::clone(&self.forwarder_save_counters);
         // What the start takes goes back if the start is refused before the
         // objects reach the database (#2748).
@@ -397,10 +391,7 @@ impl BACnetServer {
 
             // No fallible step once the server runs: it must reach `inner`.
             let mut published = inner.write().await;
-            *live_forwarder_save_counters
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                claim.take_forwarder_save_counters();
+            *live_forwarder_save_counters.locked() = claim.take_forwarder_save_counters();
             *published = Some(srv);
             drop(published);
             started.store(true, Ordering::Release);

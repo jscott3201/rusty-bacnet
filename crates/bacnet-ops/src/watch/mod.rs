@@ -23,14 +23,34 @@
 //!
 //! A device that refuses the COV service itself is remembered by its
 //! address ([`CovSupport`]), as an RPM refusal is: its later points are
-//! polled without asking. A full subscription table is no refusal: the
-//! point is polled and asked again after a backoff ([`Why::Full`]). A
-//! subscription a device lost (it restarted, say) is made again by its
-//! next renewal, which goes before each lifetime ends, so it is missed for
-//! at most a lifetime less the renewal margin. After an outage, the
-//! points' new subscriptions and polls take the device's gate and the
-//! client's rate like every other request, so they come back no faster
-//! than the limits allow.
+//! polled without asking, until the discovery table loses its row there
+//! or another device announces itself there. A full subscription table is
+//! no refusal: the point is polled and asked again after a backoff
+//! ([`Why::Full`]). A subscription a device lost (it restarted, say) is
+//! made again by its next renewal, which goes before each lifetime ends,
+//! or sooner when the device announces itself or sends a restart
+//! notification and its Time_Of_Device_Restart (read once when it is first
+//! subscribed) moved (#2603). After
+//! an outage, the points' new subscriptions and polls take the device's
+//! gate and the client's rate like every other request, so they come back
+//! no faster than the limits allow.
+//!
+//! A point's device is its address and an instance, which only an answer
+//! to a request the hub sent may set once known, confirm, or change: the
+//! instance the device there last named itself in one, else the one an
+//! answer named for the address's other points, else the discovery
+//! table's row there, else the first sender its notifications name. Until
+//! an answer names it, the first one naming another replaces it. A
+//! notification naming another sender is dropped, an I-Am of another
+//! device there is a cue, and a poll by ReadPropertyMultiple asks the
+//! device which it is in the same request. A cue is checked by asking the
+//! device there, at once and then after a wait that doubles from 60 s up to
+//! a lifetime and stays there: when it is another than an answer had
+//! named, the point is given up ([`Why::Replaced`]) until its instance
+//! answers there again; found at one other address, it is reported
+//! [`Why::Moved`]. A device that never announces itself taking the address
+//! of a point polled by ReadProperty alone goes unnoticed, as does one
+//! taking it before any answer named the watched device.
 //!
 //! When the device behind a point stops answering (a poll or a first read
 //! fails; a point whose renewal failed goes to the next poll), the
@@ -106,15 +126,23 @@ impl std::fmt::Display for WatchError {
 impl std::error::Error for WatchError {}
 
 #[cfg(test)]
+mod identity_tests;
+#[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]
 mod moves_tests;
+#[cfg(test)]
+mod naming_tests;
+#[cfg(test)]
+mod restart_tests;
 #[cfg(test)]
 mod scheduler_tests;
 #[cfg(test)]
 mod state_tests;
 #[cfg(test)]
 mod stream_tests;
+#[cfg(test)]
+mod takeover_tests;
 #[cfg(test)]
 mod test_lab;
 #[cfg(test)]

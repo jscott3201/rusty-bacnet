@@ -28,10 +28,11 @@
 //! still gets the whole interval after the one before it.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use bacnet_types::MacAddr;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::watch;
 use tokio::time::{Duration, Instant};
 
@@ -255,7 +256,7 @@ impl RequestPacer {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Lanes> {
-        self.lanes.lock().unwrap_or_else(PoisonError::into_inner)
+        self.lanes.locked()
     }
 
     /// Make room for one more destination.

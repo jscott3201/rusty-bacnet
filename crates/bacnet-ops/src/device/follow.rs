@@ -457,6 +457,9 @@ impl<T: TransportPort + 'static> Client<T> {
         if missed || changed.iter().any(|(_, named)| named.is_none()) {
             lock(&self.shared.follows).retain(|_, entry| entry.strong_count() > 0);
         }
+
+        // And the COV support learned there, on the same terms (#2603).
+        self.forget_cov(&changed, missed);
     }
 }
 

@@ -9,6 +9,7 @@ use bacnet_encoding::apdu::{AbortPdu, SegmentAck as SegmentAckPdu};
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_transport::port::TransportProvenance;
 use bacnet_types::MacAddr;
+use bacnet_types::sync::MutexExt;
 
 use super::{DEFAULT_APDU_SEGMENT_RETRIES, DEFAULT_APDU_SEGMENT_TIMEOUT};
 
@@ -34,9 +35,7 @@ impl SegmentedSendRegistry {
     pub(super) fn lock(&self) -> MutexGuard<'_, HashMap<SegKey, Arc<SegmentedSendHandle>>> {
         // Map operations preserve their invariants if a caller unwinds. Cleanup
         // must not panic again while dropping an already-panicking worker.
-        self.senders
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.senders.locked()
     }
 }
 

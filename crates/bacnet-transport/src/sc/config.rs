@@ -2,6 +2,7 @@
 //! [`ScTransport`], kept out of the transport loop file to stay within the
 //! file-size cap.
 
+use bacnet_types::sync::MutexExt;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use tokio::sync::watch;
@@ -122,10 +123,7 @@ impl<W: WebSocketPort> ScTransport<W> {
 
     /// Set a failover WebSocket to try if the primary connection fails (builder-style).
     pub fn with_failover(mut self, ws: W) -> Self {
-        *self
-            .failover_ws
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ws);
+        *self.failover_ws.get_mut_locked() = Some(ws);
         self
     }
 

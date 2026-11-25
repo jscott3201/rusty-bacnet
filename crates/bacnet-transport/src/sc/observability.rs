@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::{Mutex, broadcast, watch};
 use tokio::time::Instant;
 
@@ -313,7 +314,7 @@ impl ScObserver {
     }
 
     fn link(&self) -> std::sync::MutexGuard<'_, Link> {
-        self.link.lock().unwrap_or_else(|e| e.into_inner())
+        self.link.locked()
     }
 
     fn emit(&self, event: ScEvent) {

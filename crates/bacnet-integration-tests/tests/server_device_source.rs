@@ -1,13 +1,17 @@
 //! Contract for the server guide's Rust program (#1989): the page shows the
-//! file the integration bin compiles, with a release-pinned manifest.
+//! file the integration bin compiles, with a manifest that follows `dev` or
+//! pins the release (#2648).
 #![forbid(unsafe_code)]
+
+#[path = "support/guide_manifest.rs"]
+mod guide_manifest;
 
 const MANIFEST: &str = include_str!("../../../website/examples/rust/server-device/Cargo.toml");
 const SOURCE: &str = include_str!("../../../website/examples/rust/server-device/src/main.rs");
 const GUIDE: &str = include_str!("../../../website/src/content/docs/integrate/server.mdx");
 
 fn manifest_contract(source: &str) -> Result<(), String> {
-    let actual: toml::Value = toml::from_str(source).map_err(|e| e.to_string())?;
+    let actual = guide_manifest::as_dev(source)?;
     let expected: toml::Value = toml::from_str(
         r#"
 [package]
@@ -18,43 +22,40 @@ rust-version = "1.95"
 publish = false
 [workspace]
 [dependencies]
-bacnet-objects = "=0.15.0"
-bacnet-server = "=0.15.0"
-bacnet-transport = "=0.15.0"
-bacnet-types = "=0.15.0"
+bacnet-objects = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
+bacnet-server = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
+bacnet-transport = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
+bacnet-types = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "time"] }
 "#,
     )
     .unwrap();
     if actual != expected {
-        return Err(format!("standalone release manifest drifted: {actual}"));
+        return Err(format!("standalone manifest drifted: {actual}"));
     }
     Ok(())
 }
 
 #[test]
-fn manifest_is_complete_and_release_pinned() {
-    manifest_contract(MANIFEST).unwrap();
-    assert!(
-        include_str!("../../../website/src/lib/site.mjs")
-            .contains("export const release = '0.15.0';")
-    );
+fn manifest_is_complete_and_follows_dev_or_the_release() {
+    guide_manifest::check_forms(MANIFEST, manifest_contract);
+    let dev = guide_manifest::on_dev(MANIFEST);
     for invalid in [
-        MANIFEST.replace("bacnet-server = \"=0.15.0\"", "bacnet-server = \"0.15\""),
-        MANIFEST.replace("bacnet-types = \"=0.15.0\"\n", ""),
-        MANIFEST.replace(", \"time\"", ""),
-        MANIFEST.replace("[workspace]\n", ""),
-        MANIFEST.replace("rust-version = \"1.95\"", "rust-version = \"1.93\""),
-        format!("{MANIFEST}bacnet-client = \"=0.15.0\"\n"),
+        dev.replace(&format!("{}\n", guide_manifest::dev("bacnet-types")), ""),
+        dev.replace(", \"time\"", ""),
+        format!("{dev}{}\n", guide_manifest::dev("bacnet-client")),
     ] {
         assert!(
             manifest_contract(&invalid).is_err(),
             "accepted drift: {invalid}"
         );
     }
-    assert!(
+    // The page's note says what the manifest builds against (website/src/lib/samples.mjs).
+    assert_eq!(
         GUIDE
-            .contains("These files target **v{release}**, whose minimum Rust version is **1.95**.")
+            .matches("<SampleNote sample=\"server-device\" />")
+            .count(),
+        1
     );
 }
 

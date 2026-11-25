@@ -522,6 +522,11 @@ impl CoordinatorState {
 /// [`new`](Self::new) keeps nothing back: either owner may take the whole
 /// pool.
 pub struct OutboundTransactionCoordinator {
+    /// The slots and their generations. A panic under this lock may leave
+    /// a lease half-recorded, and leasing on from that could give two
+    /// transactions one invoke ID, so a poisoned state fails closed: every
+    /// call reports [`CoordinatorError::StatePoisoned`] or
+    /// [`ReserveError::StatePoisoned`], or sees no lease (#2559).
     state: Mutex<CoordinatorState>,
     released: tokio::sync::Notify,
 }
@@ -590,6 +595,7 @@ impl OutboundTransactionCoordinator {
     /// token, or [`ReserveError::Exhausted`] when none is free that the
     /// lease's owner may take ([`Self::with_reserves`]).
     pub fn reserve(&self, metadata: LeaseMetadata) -> Result<LeaseToken, ReserveError> {
+        // lock-poison: fail-closed (a half-done lease could repeat an invoke ID)
         let mut state = self.state.lock().map_err(|_| ReserveError::StatePoisoned)?;
         let owner = metadata.owner as usize;
         // At its ceiling, the owner leaves the rest to the other's reserve.
@@ -629,6 +635,7 @@ impl OutboundTransactionCoordinator {
         let Some(invoke_id) = response_invoke_id(apdu) else {
             return Ok(AdmissionOutcome::NotOutbound);
         };
+        // lock-poison: fail-closed (a half-done lease could repeat an invoke ID)
         let mut state = self
             .state
             .lock()
@@ -706,6 +713,7 @@ impl OutboundTransactionCoordinator {
         peer: &CanonicalPeer,
         invoke_id: u8,
     ) -> Option<(LeaseHolder, ConfirmedServiceChoice)> {
+        // lock-poison: fail-closed (a half-done lease could repeat an invoke ID)
         let state = self.state.lock().ok()?;
         let active = state.slots[usize::from(invoke_id)].as_ref()?;
         if active.metadata.peer != *peer {
@@ -771,6 +779,7 @@ impl OutboundTransactionCoordinator {
 
     /// Returns the number of device-wide active leases.
     pub fn active_count(&self) -> Result<usize, CoordinatorError> {
+        // lock-poison: fail-closed (a half-done lease could repeat an invoke ID)
         self.state
             .lock()
             .map(|state| state.active())
@@ -780,6 +789,7 @@ impl OutboundTransactionCoordinator {
     /// What a lease of `owner`'s could take now (#2617). Racing work may
     /// take it first; [`Self::reserve`] decides.
     pub fn room(&self, owner: LeaseOwner) -> Result<Room, CoordinatorError> {
+        // lock-poison: fail-closed (a half-done lease could repeat an invoke ID)
         self.state
             .lock()
             .map(|state| state.room(owner))
@@ -787,6 +797,7 @@ impl OutboundTransactionCoordinator {
     }
 
     fn release_token(&self, token: LeaseToken) -> Result<ReleaseOutcome, CoordinatorError> {
+        // lock-poison: fail-closed (a half-done lease could repeat an invoke ID)
         let outcome = self
             .state
             .lock()

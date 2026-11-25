@@ -19,12 +19,13 @@
 //! notification, the client's port keeps the real plan instead.
 
 use std::collections::VecDeque;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 use bacnet_npdu::{Address, NetworkPriority};
 use bacnet_transport::port::DirectResponseScope;
 use bacnet_types::MacAddr;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use bytes::BytesMut;
 use tokio::time::{Duration, Instant};
 
@@ -70,7 +71,7 @@ pub(super) struct Replies {
 
 impl Replies {
     fn saved(&self) -> std::sync::MutexGuard<'_, VecDeque<Saved>> {
-        self.saved.lock().unwrap_or_else(PoisonError::into_inner)
+        self.saved.locked()
     }
 
     /// Keep `response`, the plan of the Confirmed-Request `apdu` from

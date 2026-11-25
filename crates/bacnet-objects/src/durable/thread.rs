@@ -6,9 +6,10 @@
 use alloc::collections::VecDeque;
 use core::time::Duration;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex};
 
 use bacnet_types::error::Error;
+use bacnet_types::sync::{CondvarExt, MutexExt};
 
 use super::{Event, SaveTicket, SaveWait};
 use crate::prelude::*;
@@ -24,7 +25,7 @@ const IDLE_EXIT: Duration = Duration::from_secs(30);
 const IDLE_EXIT: Duration = Duration::ZERO;
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    mutex.locked()
 }
 
 type SaveFn<S> = dyn Fn(&S) -> Result<(), Error> + Send + Sync;
@@ -303,13 +304,12 @@ impl<S: Send + 'static> SaveWriter<S> {
     /// ends well inside that.
     pub(crate) fn thread_ended(&self) -> bool {
         let queue = lock(&self.shared.queue);
-        let (queue, _) = self
-            .shared
-            .ended
-            .wait_timeout_while(queue, Duration::from_secs(10), |queue| {
-                queue.alive || queue.unreleased > 0
-            })
-            .unwrap_or_else(PoisonError::into_inner);
+        let (queue, _) =
+            self.shared
+                .ended
+                .wait_timeout_while_locked(queue, Duration::from_secs(10), |queue| {
+                    queue.alive || queue.unreleased > 0
+                });
         !queue.alive && queue.unreleased == 0
     }
 }
@@ -323,11 +323,7 @@ impl<S: Send + 'static> Drop for SaveWriter<S> {
         queue.closed = true;
         self.shared.work.notify_all();
         while queue.alive {
-            queue = self
-                .shared
-                .ended
-                .wait(queue)
-                .unwrap_or_else(PoisonError::into_inner);
+            queue = self.shared.ended.wait_locked(queue);
         }
     }
 }
@@ -411,12 +407,12 @@ fn run<S>(shared: &Shared<S>) {
                     end(shared, &mut queue);
                     return;
                 }
-                let (waited, timeout) = shared
-                    .work
-                    .wait_timeout_while(queue, shared.idle_exit, |queue| {
-                        queue.jobs.is_empty() && !queue.closed
-                    })
-                    .unwrap_or_else(PoisonError::into_inner);
+                let (waited, timeout) =
+                    shared
+                        .work
+                        .wait_timeout_while_locked(queue, shared.idle_exit, |queue| {
+                            queue.jobs.is_empty() && !queue.closed
+                        });
                 queue = waited;
                 // Ending is decided under the lock that `enqueue` checks, so a
                 // save queued before this sees the thread and wakes it, and

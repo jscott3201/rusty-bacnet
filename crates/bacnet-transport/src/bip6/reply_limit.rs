@@ -28,9 +28,10 @@
 //! Over-quota replies are dropped silently: none of these answers is
 //! retried by the transport, and the requester's own timeout covers the loss.
 
+use bacnet_types::sync::MutexExt;
 use std::collections::HashMap;
 use std::net::Ipv6Addr;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::time::Instant;
@@ -60,10 +61,7 @@ impl ReplyLimiter {
     /// Admit (`true`) or refuse (`false`) one reply to `destination` at
     /// `now`. Only an admitted reply is counted.
     pub(super) fn admit(&self, destination: Ipv6Addr, now: Instant) -> bool {
-        self.window
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .admit(destination, now)
+        self.window.locked().admit(destination, now)
     }
 
     /// [`Self::admit`] at the current Tokio time, which a test can pause.

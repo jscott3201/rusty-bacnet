@@ -5,13 +5,14 @@
 
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use bacnet_bip_codec::{self as codec, BdtEntries, BvlcFunction, BvlcResultCode, Bvll};
 use bacnet_bip_core::Duration as CoreDuration;
 use bacnet_bip_core::node::{ExchangeId, ExchangeRefusal, LocalFailure};
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use bytes::BytesMut;
 use tokio::sync::oneshot;
 
@@ -273,7 +274,7 @@ impl BvlcGiveUp {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, GiveUp> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.0.locked()
     }
 
     /// Whether the read was given up.

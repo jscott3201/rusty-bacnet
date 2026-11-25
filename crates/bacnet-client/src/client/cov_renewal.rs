@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::sync::MutexExt;
 use std::sync::Mutex as StdMutex;
 use tokio::sync::oneshot;
 use tokio::time::{Instant as TokioInstant, sleep_until};
@@ -147,7 +148,7 @@ impl ManagedCOVSubscription {
 
     /// Return the latest observed renewal event, if any.
     pub fn last_event(&self) -> Option<ManagedCOVSubscriptionEvent> {
-        self.last_event.lock().ok().and_then(|event| event.clone())
+        self.last_event.locked().clone()
     }
 
     /// Stop renewing and wait for the renewal task to exit.
@@ -453,9 +454,7 @@ fn publish_managed_cov_event(
     last_event: &StdMutex<Option<ManagedCOVSubscriptionEvent>>,
     event: ManagedCOVSubscriptionEvent,
 ) {
-    if let Ok(mut last_event) = last_event.lock() {
-        *last_event = Some(event.clone());
-    }
+    *last_event.locked() = Some(event.clone());
     let _ = events_tx.send(event);
 }
 

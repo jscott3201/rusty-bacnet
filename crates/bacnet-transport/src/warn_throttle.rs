@@ -7,7 +7,8 @@
 //! [`warn_throttled!`](crate::warn_throttled) logs one event through a
 //! throttle, for a warning a peer can set off once per frame or connection.
 
-use std::sync::{Mutex, PoisonError};
+use bacnet_types::sync::MutexExt;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::time::Instant;
@@ -34,7 +35,7 @@ impl WarnThrottle {
     /// debug instead. The clock is Tokio's, so a test can pause it.
     pub fn note(&self) -> Option<u64> {
         let now = Instant::now();
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.state.locked();
         state.unreported = state.unreported.saturating_add(1);
         let quiet = state
             .last

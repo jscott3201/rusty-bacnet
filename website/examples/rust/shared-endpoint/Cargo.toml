@@ -8,5 +8,5 @@ publish = false
 [workspace]
 
 [dependencies]
-bacnet-endpoint = "=0.15.0"
+bacnet-endpoint = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }

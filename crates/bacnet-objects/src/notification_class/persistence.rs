@@ -111,7 +111,7 @@ impl FileNotificationClassPersistence {
 #[cfg(feature = "std")]
 impl NotificationClassPersistence for FileNotificationClassPersistence {
     fn load(&self, class: ObjectIdentifier) -> Result<Option<NotificationClassSnapshot>, Error> {
-        let Some(octets) = self.file.read()? else {
+        let Some(octets) = self.file.read_octets()? else {
             return Ok(None);
         };
         Ok(Some(format::decode(class, &octets)?))

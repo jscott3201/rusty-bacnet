@@ -40,7 +40,7 @@ pub(crate) mod routed_paths;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, DeviceEvent};
@@ -48,6 +48,7 @@ use bacnet_transport::any::AnyTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::broadcast;
 
 #[cfg(feature = "serial")]
@@ -157,16 +158,19 @@ impl DeviceSummary {
 /// What the client learns of a device it keeps by the device's address,
 /// for every handle and clone: that it refused ReadPropertyMultiple
 /// ([`refused_rpm`](Self::refused_rpm)), which it then reads by
-/// ReadProperty for the client's life; the instance a handle made from the
-/// address read; and the most properties one ReadPropertyMultiple of
+/// ReadProperty for the client's life; the instance the device last named
+/// itself, read by a handle made from the address or in answer to a watch
+/// hub's own reads (#2603); the most properties one ReadPropertyMultiple of
 /// [`Device::point_records`] can ask it for, once it couldn't send a larger
-/// batch's answer ([`rpm_limit`](Self::rpm_limit)). The last two go when
-/// the discovery table loses its row at that address or a device there
-/// announces another instance, since another device may answer there now,
-/// and all of them go when more of the table's changes came at once than
-/// the client's channel holds, as it then can't tell which addresses
-/// changed: each device's next point records cost one refused request to
-/// learn the limit again. Each is kept for at most 4,096 addresses.
+/// batch's answer ([`rpm_limit`](Self::rpm_limit)); and what a watch hub
+/// learned there: that the device refused a COV service, or a read by the
+/// wildcard instance. All but the first go when the discovery table loses
+/// its row at that address or a device there announces another instance,
+/// since another device may answer there now, and when more of the table's
+/// changes came at once than the client's channel holds, as it then can't
+/// tell which addresses changed: each device's next point records cost one
+/// refused request to learn the limit again. Each is kept for at most 4,096
+/// addresses.
 ///
 /// The transport type defaults to [`AnyTransport`], which the connect
 /// builders ([`bip`](Client::bip) and the others) make, so an application
@@ -239,7 +243,7 @@ impl<T: TransportPort + 'static> Clone for Client<T> {
 
 /// Lock `mutex`, past a panic elsewhere.
 pub(crate) fn lock<V>(mutex: &Mutex<V>) -> MutexGuard<'_, V> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    mutex.locked()
 }
 
 impl<T: TransportPort + 'static> Client<T> {

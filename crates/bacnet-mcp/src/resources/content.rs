@@ -1,17 +1,18 @@
 //! What each resource holds.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bacnet_ops::client::Wanted;
 use bacnet_ops::format::{self, RawRow};
 use bacnet_ops::label::kebab;
 use bacnet_ops::limits::charged;
-use bacnet_ops::watch::Watched;
 use bacnet_ops::watch::hub::{Phase, Snapshot, Source};
+use bacnet_ops::watch::{Watched, Why};
 use bacnet_ops::{DeviceAddress, PropertyError, PropertyRef, Reading};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::sync::MutexExt;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
 
@@ -38,13 +39,13 @@ const CACHE_CAP: usize = 64;
 pub(crate) type Cache = Mutex<HashMap<DeviceAddress, (Instant, Value)>>;
 
 fn cached(cache: &Cache, device: &DeviceAddress, ttl: Duration) -> Option<Value> {
-    let cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    let cache = cache.locked();
     let (at, body) = cache.get(device)?;
     (at.elapsed() < ttl).then(|| body.clone())
 }
 
 fn keep(cache: &Cache, cap: usize, device: &DeviceAddress, body: &Value) {
-    let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut cache = cache.locked();
     if cache.len() >= cap.max(CACHE_CAP)
         && !cache.contains_key(device)
         && let Some(oldest) = cache
@@ -160,6 +161,7 @@ pub(crate) fn point_body<T: TransportPort + 'static>(
             });
             body["state"] = json!(state_name(snapshot.state));
             body["note"] = json!(snapshot.note);
+            body["why"] = why_body(snapshot.why.as_ref());
             body["seq"] = json!(snapshot.seq);
             body["age_ms"] = json!(
                 snapshot
@@ -177,12 +179,37 @@ pub(crate) fn point_body<T: TransportPort + 'static>(
     body
 }
 
+/// Why a watched point isn't live, as data beside the note: its kind, with
+/// the instances a replaced point names or the address a moved one does.
+/// Numbers and names only, no device text, so an agent need not read the
+/// note.
+pub(crate) fn why_body(why: Option<&Why>) -> Value {
+    let kind = |kind: &str| json!({ "kind": kind });
+    match why {
+        None => Value::Null,
+        Some(Why::Replaced { watched, found }) => {
+            json!({ "kind": "replaced", "watched": watched, "found": found })
+        }
+        Some(Why::Moved { to }) => json!({ "kind": "moved", "to": to }),
+        Some(Why::Refused(_)) => kind("refused"),
+        Some(Why::ForeignSender { sender }) => {
+            json!({ "kind": "foreign-sender", "sender": sender })
+        }
+        Some(Why::NoAnswer(_)) => kind("no-answer"),
+        Some(Why::Full(_)) => kind("full"),
+        Some(Why::Lapsed(_)) => kind("lapsed"),
+        Some(Why::Missing) => kind("missing"),
+        Some(_) => kind("other"),
+    }
+}
+
 pub(crate) fn state_name(state: Phase) -> &'static str {
     match state {
         Phase::Starting => "starting",
         Phase::Live => "live",
         // The hub gives a point up when its device answers at another
-        // address now (the note says where), or under
+        // address now (the note says where), when another device answers
+        // at its address (the note names both instances), or under
         // `MissingDevice::Fail`, which the server doesn't use: a failed
         // watch either way.
         Phase::Failed | Phase::Gone => "failed",
