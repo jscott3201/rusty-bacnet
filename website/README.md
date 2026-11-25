@@ -82,6 +82,12 @@ displayed `bacnet` command against the CLI's argument definitions without a
 build. The TUI's profile tables and command-bar lines are parsed by the CLI's
 own code in `crates/bacnet-cli/src/tui/site_samples_tests.rs`.
 
+When a change on `dev` breaks a program under `examples/` that is still on the
+release (its `guide-*` bin in `bacnet-integration-tests` fails to compile, or
+its Python test fails), switch it with
+`python3 scripts/release/website_samples.py --follow-dev <sample>`, then update
+the sample.
+
 The programs under `examples/` (#2648) are listed in `src/data/samples.json`.
 The workspace compiles the Rust ones as `bacnet-integration-tests` bins and CI
 runs the Python ones against a development build. A sample whose files are the

@@ -89,6 +89,12 @@ path = "../../examples/rust/readme_server.rs"
 name = "support-tables"
 path = "support_tables_write.rs"
 
+# The website's samples (website/examples, #2648): these bins and
+# src/bin/guide-first-read.rs and guide-pics.rs compile them as displayed.
+# A sample still on the release is its files at the release's tag. When a
+# change on dev breaks one of these bins, switch the sample with
+# `python3 scripts/release/website_samples.py --follow-dev <sample>`, then
+# update the sample.
 # Compile the canonical displayed source directly, without a maintained copy.
 [[bin]]
 name = "guide-shared-endpoint"

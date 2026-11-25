@@ -70,3 +70,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# A local cargo run in a website sample (#2648).
+/website/examples/rust/*/Cargo.lock

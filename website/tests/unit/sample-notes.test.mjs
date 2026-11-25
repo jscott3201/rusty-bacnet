@@ -5,7 +5,7 @@
 // and scripts/content.mjs projects it into the plain export.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { frontmatter, plainBody, sampleManifests } from '../../scripts/content.mjs';
@@ -88,7 +88,8 @@ test('each page\'s plain export carries its notes and files, and each manifest f
 // script rewrites the sentence.
 test('the Python start page says its calls are newer than the release exactly while its script follows dev', async () => {
   const page = await readFile(new URL('start/python.mdx', docs), 'utf8');
-  assert.equal(page.includes('are newer than v{release}'), followsDev('first_read.py', await sampleManifests()));
+  assert.equal(page.includes('are newer than v{release}'), followsDev('first_read.py', await sampleManifests()),
+    'start/python.mdx says its calls are newer than the release exactly while first_read.py follows dev: rewrite its "Sources and release scope" sentence');
 });
 
 test('a note follows its sample: the release, dev, or new since the release', () => {
@@ -110,7 +111,7 @@ test('a note follows its sample: the release, dev, or new since the release', ()
     + '`dev` moves: Cargo builds the commit it first fetches, which it records in `Cargo.lock`, and `cargo update` takes the newest one, '
     + 'which may no longer match the files shown here. ';
   const pythonDev = 'This program follows the `dev` branch. Install `rusty-bacnet` from `dev` in a virtual environment. pip builds it from source, '
-    + 'which takes several minutes and needs Python 3.11 or later, [Rust](https://rustup.rs) 1.95 or later, and CMake and a C toolchain for '
+    + 'which takes several minutes and needs git, Python 3.11 or later, [Rust](https://rustup.rs) 1.95 or later, and CMake and a C toolchain for '
     + "[BACnet/SC's TLS library](/rusty-bacnet/integrate/security/#save-the-program-and-manifest):\n\n```sh\n"
     + `python -m pip install "rusty-bacnet @ git+${repository}@dev#subdirectory=crates/rusty-bacnet"\n\`\`\`\n\n`
     + '`dev` moves: each install builds its newest commit, which may no longer match the program shown here. ';
@@ -159,15 +160,14 @@ test('a note follows its sample: the release, dev, or new since the release', ()
 const git = (...args) => spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
 const fence = (page, language) => [...page.matchAll(new RegExp(`^\`\`\`${language}\\n([\\s\\S]*?)^\`\`\``, 'gm'))].map(match => match[1]);
 
-/** Every file of a sample, by its path under website/examples. */
-async function sampleFiles(sample) {
-  if (sample.language !== 'rust') return [sample.path];
-  const dir = new URL(`${sample.path}/`, examples);
-  const files = [];
-  for (const name of (await readdir(dir, { recursive: true })).map(name => name.replaceAll('\\', '/')).sort()) {
-    if ((await stat(new URL(name, dir))).isFile()) files.push(`${sample.path}/${name}`);
-  }
-  return files;
+/**
+ * Every tracked file of a sample, by its path under website/examples: a local
+ * `cargo run` leaves a target/ and a Cargo.lock that are not the sample's.
+ */
+function sampleFiles(sample) {
+  const listed = git('ls-files', '-z', '--', `website/examples/${sample.path}`);
+  assert.equal(listed.status, 0, listed.stderr);
+  return listed.stdout.split('\0').filter(Boolean).map(file => file.slice('website/examples/'.length)).sort();
 }
 
 /** A manifest as the release pins it: a crate from dev at the version the workspace gives it. */
@@ -190,9 +190,18 @@ test('a sample on the release is its files at the tag; one on dev differs from t
   const manifests = await sampleManifests();
   const tag = `v${release}`;
   if (git('rev-parse', '--verify', '--quiet', `${tag}^{commit}`).status !== 0) {
-    // A release PR pins every sample before its tag exists, and no note links one.
-    if (Object.keys(samples).every(name => !followsDev(name, manifests))) return t.skip(`every sample is on ${release}, whose tag is not made yet`);
-    assert.ok(!process.env.CI, `CI must fetch ${tag} (.github/workflows/docs-pages.yml)`);
+    // A release PR pins every sample before its tag exists, and no note links
+    // one. The Docs workflow fails when the tag exists but its fetch does, so
+    // in CI this branch means the tag isn't made yet.
+    if (Object.keys(samples).every(name => !followsDev(name, manifests))) {
+      for (const [name, sample] of Object.entries(samples)) {
+        assert.ok(sample.tagPage === undefined && sample.since === undefined,
+          `${name}: v${release} ships it as a file, so remove its tagPage and since keys (website_samples.py --pin ${release} removes them)`);
+      }
+      return t.skip(`every sample is on ${release}, whose tag is not made yet`);
+    }
+    assert.ok(!process.env.CI, `${tag} is not in this checkout: if this is the release PR, put every sample on the release with `
+      + `scripts/release/website_samples.py --pin ${release}; otherwise the Docs workflow must fetch ${tag} (.github/workflows/docs-pages.yml)`);
     return t.skip(`${tag} isn't in this clone; git fetch origin tag ${tag}`);
   }
   const atTag = path => {
@@ -202,8 +211,13 @@ test('a sample on the release is its files at the tag; one on dev differs from t
   for (const [name, sample] of Object.entries(samples)) {
     assert.equal(tagUrl(sample), `${repository}/${sample.language === 'rust' ? 'tree' : 'blob'}/${tag}/website/examples/${sample.path}`);
     const onDev = followsDev(name, manifests);
+    // A sample the release doesn't have as a file says where else it was, or that it is new;
+    // otherwise its note's link to the release's copy would lead nowhere.
+    const program = sample.language === 'rust' ? `${sample.path}/src/main.rs` : sample.path;
+    assert.ok(atTag(`website/examples/${program}`) !== undefined || sample.tagPage !== undefined || sample.since !== undefined,
+      `${name} is not at ${tag}: give it "since": "<the next release>" in src/data/samples.json`);
     const same = [];
-    for (const file of await sampleFiles(sample)) {
+    for (const file of sampleFiles(sample)) {
       const released = atTag(`website/examples/${file}`);
       assert.ok(released === undefined || (sample.tagPage === undefined && sample.since === undefined),
         `${name}: ${file} is at ${tag}, so remove its tagPage or since key`);
@@ -218,9 +232,10 @@ test('a sample on the release is its files at the tag; one on dev differs from t
       // The release showed the program inline on that page.
       const page = atTag(`website/src/content/docs/${sample.tagPage}`);
       assert.ok(page !== undefined, `${name}: ${sample.tagPage} at ${tag}`);
-      const program = sample.language === 'rust' ? `${sample.path}/src/main.rs` : sample.path;
       const shown = fence(page, sample.language);
       assert.equal(shown.length, 1, `${name}: one ${sample.language} block on ${sample.tagPage} at ${tag}`);
+      // Only trailing whitespace may differ: a block ended with a blank line
+      // before its closing fence, where a file ends with one newline.
       unchanged = shown[0].trimEnd() === (await readFile(new URL(program, examples), 'utf8')).trimEnd();
     }
     if (onDev) {

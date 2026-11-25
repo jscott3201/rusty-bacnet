@@ -62,15 +62,20 @@ jobs:
           test "$GITHUB_REF" = 'refs/heads/dev'
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
-      # Between releases each sample page links the sample at the release's
-      # tag, and a unit test checks that it is there (#2648). The checkout has
-      # no tags; at a release, before its tag exists, no page links one.
+      # A unit test holds each website sample to the release's tag (#2648);
+      # the checkout has no tags. Only a missing tag is no error: in the
+      # release PR, before the tag exists, every sample is on the release.
       - name: Fetch the site release's tag
         id: release-tag
         run: |
           release=$(sed -n "s/^export const release = '\([0-9.]*\)';$/\1/p" src/lib/site.mjs)
-          git fetch --no-tags --depth=1 origin "refs/tags/v$release:refs/tags/v$release" \
-            || echo "No tag v$release to fetch."
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/v$release" > /dev/null || status=$?
+          case "$status" in
+            0) git fetch --no-tags --depth=1 origin "refs/tags/v$release:refs/tags/v$release" ;;
+            2) echo "No tag v$release yet." ;;
+            *) exit "$status" ;;
+          esac
       - name: Set up Node 24
         id: node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6

@@ -174,11 +174,27 @@ class StateTests(unittest.TestCase):
             python = [name for name, sample in json.loads(original).items() if sample["language"] == "python"]
             for version in ("0.15.0", None):
                 registry = website_samples.load_registry(path)
-                website_samples.set_state(python, version, registry, Path(temp), path, {})
+                website_samples.set_state(python, version, registry, Path(temp), path, {}, untagged=False)
             registry = website_samples.load_registry(path)
             on_dev = [name for name, sample in json.loads(original).items() if sample.get("follows") == "dev"]
-            website_samples.set_state([n for n in python if n not in on_dev], "0.15.0", registry, Path(temp), path, {})
+            website_samples.set_state([n for n in python if n not in on_dev], "0.15.0", registry, Path(temp), path, {}, untagged=False)
             self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_the_release_pr_drops_tag_page_and_since(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = examples(root, MANIFEST, python=["a.py", "b.py"])
+            registry["sample-0"]["tagPage"] = "start/x.md"
+            registry["a.py"].update(follows="dev", since="0.16.0")
+            registry["b.py"]["tagPage"] = "start/b.md"
+            path = root / "samples.json"
+            # A pin to a tagged release keeps them; the untagged one, the release PR, ships each as a file.
+            website_samples.set_state(["sample-0", "b.py"], "0.15.0", registry, root, path, VERSIONS, untagged=False)
+            self.assertEqual(registry["b.py"]["tagPage"], "start/b.md")
+            website_samples.set_state(list(registry), "0.16.0", registry, root, path, VERSIONS, untagged=True)
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            for name in registry:
+                self.assertEqual(set(saved[name]), {"path", "language"}, name)
 
     def test_an_unknown_sample_is_refused(self):
         with self.assertRaisesRegex(SampleError, "no sample named nope"):
@@ -259,7 +275,7 @@ class PythonTests(unittest.TestCase):
             self.assertEqual(calls[1][0], [python, "-m", "pip", "install", "--only-binary=:all:", "rusty-bacnet==0.15.0"])
             scripts = {Path(command[-1]).name: (command, kwargs) for command, kwargs in calls[2:]}
             self.assertEqual(scripts["bip_router.py"][0][:2], [python, "-I"])
-            self.assertEqual(scripts["test_website_first_read.py"][0][1:4], ["-m", "unittest", "discover"])
+            self.assertEqual(scripts["test_website_first_read.py"][0][1:5], ["-I", "-m", "unittest", "discover"])
             for command, kwargs in scripts.values():
                 # stdin at end of input stops server_device.py; every run is bounded.
                 self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)

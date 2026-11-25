@@ -139,7 +139,7 @@ def bacnet_keys(document, path=()):
             yield from bacnet_keys(value, (*path, key))
 
 
-def rewrite(text, versions=None, *, keep=False):
+def rewrite(text, versions=None, *, keep=False, release=None):
     """`text` with every BACnet crate pinned to `versions[crate]`, or on the
     dev branch when `versions` is None, and the state it had: each crate's
     pinned version, or None for dev. `keep` leaves it as it is."""
@@ -155,7 +155,8 @@ def rewrite(text, versions=None, *, keep=False):
             handled[crate], rest = parse(crate, value)
             if not keep:
                 if versions is not None and crate not in versions:
-                    raise SampleError(f"{crate} is not a published workspace crate")
+                    at = f" at v{release}" if release else ""
+                    raise SampleError(f"{crate} is not a published workspace crate{at}")
                 line = f"{crate} = {render(None if versions is None else versions[crate], rest)}"
         out.append(line)
     try:
@@ -185,13 +186,18 @@ def git(*args):
     return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
 
 
+def tagged(version):
+    """Whether this clone has the tag v<version>."""
+    return git("rev-parse", "--verify", "--quiet", f"v{version}^{{commit}}").returncode == 0
+
+
 def crate_versions(version, read=None):
     """Each published workspace crate's version at release `version`: from the
     tag v<version>, or from the working tree when there is no such tag and the
     workspace is at that version (a release PR, before its tag)."""
     if read is None:
         tag = f"v{version}"
-        if git("rev-parse", "--verify", "--quiet", f"{tag}^{{commit}}").returncode == 0:
+        if tagged(version):
             def read(path):
                 return git("show", f"{tag}:{path}").stdout
         else:
@@ -221,11 +227,15 @@ def state(name, sample, examples=EXAMPLES):
     return "dev" if sample.get("follows") == "dev" else "release"
 
 
-def set_state(names, version, registry, examples=EXAMPLES, registry_path=REGISTRY, versions=None):
+def set_state(names, version, registry, examples=EXAMPLES, registry_path=REGISTRY, versions=None, untagged=None):
     """Put the named samples on the release `version`, or on dev when it is
-    None. Nothing is written unless every manifest rewrites."""
+    None. Nothing is written unless every manifest rewrites. Pinning to a
+    release not tagged yet (the release PR) also drops the named samples'
+    `tagPage` and `since` keys: that release ships each of them as a file."""
     if version is not None and versions is None:
         versions = crate_versions(version)
+    if version is not None and untagged is None:
+        untagged = not tagged(version)
     texts = {}
     for name in names:
         sample = registry[name]
@@ -233,7 +243,7 @@ def set_state(names, version, registry, examples=EXAMPLES, registry_path=REGISTR
             continue
         path = examples / sample["path"] / "Cargo.toml"
         try:
-            texts[path] = rewrite(path.read_text(encoding="utf-8"), versions)[0]
+            texts[path] = rewrite(path.read_text(encoding="utf-8"), versions, release=version)[0]
         except SampleError as error:
             raise SampleError(f"{shown(path)}: {error}") from None
     for path, text in texts.items():
@@ -241,6 +251,9 @@ def set_state(names, version, registry, examples=EXAMPLES, registry_path=REGISTR
     changed = False
     for name in names:
         sample = registry[name]
+        if version is not None and untagged:
+            for key in ("tagPage", "since"):
+                changed |= sample.pop(key, None) is not None
         if sample["language"] == "rust":
             continue
         if version is None and sample.get("follows") != "dev":
@@ -305,7 +318,7 @@ def python_command(name, script, python):
     if how is None:
         raise SampleError(f"{name}: add how to run it to PYTHON_RUNS")
     if how[0] == "test":
-        return [str(python), "-m", "unittest", "discover", "-s", str((ROOT / how[1]).parent), "-p", Path(how[1]).name]
+        return [str(python), "-I", "-m", "unittest", "discover", "-s", str((ROOT / how[1]).parent), "-p", Path(how[1]).name]
     return [str(python), "-I", str(script)]
 
 

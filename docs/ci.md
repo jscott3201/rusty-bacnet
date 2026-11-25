@@ -2123,15 +2123,17 @@ To release:
    Rust manifest takes the BACnet crates from `dev`, a Python sample has
    `"follows": "dev"`), and its page's note (`website/src/lib/samples.mjs`)
    says so and links the release's copy. The website tests hold each state
-   to the tag. A PR that changes a sample on the release moves it to `dev`
-   with `python3 scripts/release/website_samples.py --follow-dev <sample>`.
-   In the release PR, after `site.mjs` names the new release, put them all
-   on it: `--pin` gives each crate its own version at that release
+   to the tag. After a release nothing changes until a sample diverges from
+   it: the PR that changes one, or whose API change breaks one, moves it to
+   `dev` with `python3 scripts/release/website_samples.py --follow-dev
+   <sample>`. In the release PR, after `site.mjs` names the new release, put
+   them all on it: `--pin` gives each crate its own version at that release
    (`bacnet-time` versions on its own), and the tag then carries the pinned
-   manifests the next cycle's notes link. Remove the `since` and `tagPage`
-   keys of any sample this release ships for the first time (the website
-   tests name it), and rewrite `start/python.mdx`'s sentence that its calls
-   are newer than the release (a test ties it to the script's state):
+   manifests the next cycle's notes link. Pinning to a release not tagged
+   yet also removes the `since` and `tagPage` keys, since that release ships
+   each sample as a file (the website tests fail on a leftover). Rewrite
+   `start/python.mdx`'s sentence that its calls are newer than the release
+   (a test ties it to the script's state):
 
    ```bash
    python3 scripts/release/website_samples.py --pin 0.16.0

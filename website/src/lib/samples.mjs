@@ -138,7 +138,7 @@ export function sampleNote(name, manifests, { siteRelease = release, registry = 
       { text: ' moves: Cargo builds the commit it first fetches, which it records in ' }, { code: 'Cargo.lock' }, { text: ', and ' },
       { code: 'cargo update' }, { text: ' takes the newest one, which may no longer match the files shown here. ' }]
     : [{ text: 'This program follows the ' }, { code: 'dev' }, { text: ' branch. Install ' }, { code: 'rusty-bacnet' },
-      { text: ' from ' }, { code: 'dev' }, { text: ` in a virtual environment. pip builds it from source, which takes several minutes and needs Python ${pythonMinimum} or later, ` },
+      { text: ' from ' }, { code: 'dev' }, { text: ` in a virtual environment. pip builds it from source, which takes several minutes and needs git, Python ${pythonMinimum} or later, ` },
       { text: 'Rust', href: 'https://rustup.rs' }, { text: ` ${msrv} or later, and CMake and a C toolchain for ` },
       { text: "BACnet/SC's TLS library", href: sitePath('integrate/security/#save-the-program-and-manifest') }, { text: ':' },
       { block: devInstall },
