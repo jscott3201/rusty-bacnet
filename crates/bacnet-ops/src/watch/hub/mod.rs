@@ -282,7 +282,9 @@ pub(crate) struct Inner<T: TransportPort + 'static> {
 
 impl<T: TransportPort + 'static> Drop for Inner<T> {
     /// The hub is gone: its last clone dropped and every task that held it
-    /// ended, cancels included, so no request of its can still go.
+    /// ended, cancels included, so no cancel of its can still go. (A
+    /// renewal of its, aborted without a join, may still finish; it is no
+    /// cancel.)
     fn drop(&mut self) {
         if let (range, true) = self.range {
             self.client.release_range(range);
@@ -304,23 +306,24 @@ impl<T: TransportPort + 'static> Clone for Hub<T> {
 }
 
 impl<T: TransportPort + 'static> Hub<T> {
-    /// A hub over `client`, under checked `options`, in the lowest range of
-    /// subscriber process identifiers no live hub on the client holds; it
-    /// gives the range back once it is gone, its tasks ended. It starts its
-    /// notification receiver.
+    /// A hub over `client`, under checked `options`, in the next range of
+    /// subscriber process identifiers no live hub on the client holds,
+    /// going round from the one taken last; it gives the range back once it
+    /// is gone, its tasks ended. It starts its notification receiver.
     ///
     /// # Errors
     ///
     /// [`WatchError::Settings`] for `options` that
-    /// [`validate`](WatchOptions::validate) refuses, and [`WatchError::Hubs`]
-    /// when every range is held: 256 hubs live on the client,
-    /// its own included, or still cancelling.
-    ///
-    /// # Panics
-    ///
-    /// Outside a Tokio runtime.
+    /// [`validate`](WatchOptions::validate) refuses, [`WatchError::NoRuntime`]
+    /// outside a Tokio runtime, which its tasks need, and
+    /// [`WatchError::Hubs`] when every range is held: 256 hubs live on the
+    /// client, its own included, or still cancelling. Nothing is taken
+    /// then.
     pub fn new(client: Client<T>, options: WatchOptions) -> Result<Self, WatchError> {
         options.validate().map_err(WatchError::Settings)?;
+        if tokio::runtime::Handle::try_current().is_err() {
+            return Err(WatchError::NoRuntime);
+        }
         let range = client.take_range().ok_or(WatchError::Hubs {
             max: PROCESS_RANGES as usize,
         })?;

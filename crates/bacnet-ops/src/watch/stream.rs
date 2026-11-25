@@ -417,8 +417,8 @@ impl<T: TransportPort + 'static> Client<T> {
         hub.stream(points).map_err(OpsError::Watch)
     }
 
-    /// The lowest range of subscriber process identifiers no live hub on
-    /// this client holds, now held until [`release_range`](Self::release_range);
+    /// The next range of subscriber process identifiers no live hub on
+    /// this client holds, going round from the one taken last, now held until [`release_range`](Self::release_range);
     /// `None` when every one is held.
     pub(crate) fn take_range(&self) -> Option<u32> {
         lock(&self.shared.ranges).take()

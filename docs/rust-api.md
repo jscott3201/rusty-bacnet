@@ -13196,13 +13196,16 @@ or `WatchError::Shut` once `Hub::shutdown` has run. The Python bindings
 run one such hub per watch, which their client's stop shuts down (#2561).
 Each hub alive on a client holds a range of subscriber process
 identifiers of its own, so no two share an identifier and neither's
-cancel can end the other's subscription: `Hub::new` takes the lowest free
-range of 256, and the hub gives it back once it is gone, its last clone
-dropped and its tasks ended, cancels included; the client's own hub keeps
-its range for the client's life. `Hub::new` returns `WatchError::Hubs`
-when every range is held, and `WatchError::Settings` for options
-`WatchOptions::validate` refuses. `Hub::new`, `Hub::watch` and
-`Hub::stream` spawn tasks, so they panic outside a Tokio runtime.
+cancel can end the other's subscription: `Hub::new` takes the next free
+range of 256, going round from the one taken last, so a range given back
+is taken again only after the other free ones, and the hub gives it back
+once it is gone, its last clone dropped and its tasks ended, cancels
+included; the client's own hub keeps its range for the client's life.
+`Hub::new` returns `WatchError::Hubs` when every range is held,
+`WatchError::NoRuntime` outside a Tokio runtime and
+`WatchError::Settings` for options `WatchOptions::validate` refuses,
+taking nothing. `Hub::watch` and `Hub::stream` start a device's
+scheduler task, so they panic outside a Tokio runtime.
 
 The latest value of each point wins: a consumer that falls behind gets one
 update a point with its latest value and state (`Watch::folded` counts the
@@ -13368,7 +13371,7 @@ row constants.
 
 | Was | Now |
 |---|---|
-| `Hub::new(..) -> Result<Hub, String>`, subscriber ranges handed out in turn, wrapping after 256 hubs made | `Result<Hub, WatchError>` (`Settings`, `Hubs`); the lowest range no live hub holds, given back once the hub is gone (#2561) |
+| `Hub::new(..) -> Result<Hub, String>`, subscriber ranges handed out in turn, wrapping after 256 hubs made | `Result<Hub, WatchError>` (`Settings`, `NoRuntime`, `Hubs`); the next range no live hub holds, going round, given back once the hub is gone (#2561) |
 | `watch::Point { device: u32, .. }`, `Copy` | `watch::Point { device: DeviceAddress, .. }`, `Clone`, from `Device::point`; entries, schedulers and subscription targets key on the address, never an instance lookup |
 | `watch::{Hub, Lease, Changes, Snapshot, Samples, Sample, WatchOptions, Reads, Backoff, Fallback, MissingDevice, Lifetime, HubStats, renewal_margin, first, POINT_PROPERTIES, MISSING, MIN_POLL, POLL_FLOOR, MAX_ROWS, MAX_SAMPLES}` | the same names under `watch::hub` |
 | `watch::{State, Source}` (the snapshot's) | `watch::hub::{Phase, Source}`; `watch::State` is the update's one state with its reason |
