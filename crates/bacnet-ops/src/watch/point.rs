@@ -102,7 +102,10 @@ pub enum Why {
     Missing,
     /// The device's instance answers at `to` now: the device there named
     /// itself so, answering the hub's read of its Device object by the
-    /// wildcard instance (#2812). That read is cued by the hub's look for a
+    /// wildcard instance (#2812), and it is gone from the point's address:
+    /// that address is failing, or its device, asked once more, isn't that
+    /// one (a device still answering as it there is a second claimant, and
+    /// the point stays watched). That read is cued by the hub's look for a
     /// device that stopped answering (the row at its old address names
     /// another instance and only `to` claims this one) or by a handle
     /// following the instance moving there; neither alone gives the point

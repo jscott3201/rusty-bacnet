@@ -26,7 +26,7 @@ use crate::device::{ClientEvent, DeviceAddress};
 
 /// How the watched point's handle is held while the frames come.
 #[derive(Debug, Clone, Copy)]
-enum Handle {
+pub(super) enum Handle {
     /// A handle following the instance, held.
     Follows,
     /// A handle following the instance, dropped once the point was made.
@@ -38,18 +38,18 @@ enum Handle {
 const HANDLES: [Handle; 3] = [Handle::Pinned, Handle::Dropped, Handle::Follows];
 
 /// Device `N` at station 2, its AI 1 watched and subscribed.
-struct Lab {
-    bus: Arc<Bus>,
-    servers: Vec<BACnetServer<TestTransport>>,
-    client: crate::Client<TestTransport>,
-    sent: SendLog,
-    device: Option<Device<TestTransport>>,
-    watch: Watch,
-    events: broadcast::Receiver<ClientEvent>,
+pub(super) struct Lab {
+    pub(super) bus: Arc<Bus>,
+    pub(super) servers: Vec<BACnetServer<TestTransport>>,
+    pub(super) client: crate::Client<TestTransport>,
+    pub(super) sent: SendLog,
+    pub(super) device: Option<Device<TestTransport>>,
+    pub(super) watch: Watch,
+    pub(super) events: broadcast::Receiver<ClientEvent>,
 }
 
 impl Lab {
-    async fn new(handle: Handle) -> Self {
+    pub(super) async fn new(handle: Handle) -> Self {
         let bus = Bus::new();
         let servers = vec![server(bus.port(2), N, "watched").await];
         let (client, sent) = client(&bus).await;
@@ -81,14 +81,14 @@ impl Lab {
 
     /// Two forged I-Ams: another device at the watched address, and the
     /// watched instance at station 3, where no device answers.
-    fn forge(&self) {
+    pub(super) fn forge(&self) {
         self.bus.i_am(2, N + 1);
         self.bus.i_am(3, N);
     }
 
     /// The watch goes on: no point is given up, and a new value of the
     /// device at station 2 reaches it, subscribed.
-    async fn goes_on(&mut self, value: f32) {
+    pub(super) async fn goes_on(&mut self, value: f32) {
         self.servers[0]
             .set_present_value_local(&ai1(), PropertyValue::Real(value))
             .await
@@ -103,7 +103,7 @@ impl Lab {
     }
 
     /// No update for `minutes` gives a point up.
-    async fn none_given_up(&mut self, minutes: u64) {
+    pub(super) async fn none_given_up(&mut self, minutes: u64) {
         for _ in 0..minutes * 6 {
             tokio::time::sleep(Duration::from_secs(10)).await;
             while let Some(update) = ready(&mut self.watch) {
@@ -112,11 +112,23 @@ impl Lab {
         }
     }
 
-    fn reads_at(&self, station: u8) -> usize {
+    pub(super) fn reads_at(&self, station: u8) -> usize {
         wildcard_reads(&self.sent, station)
     }
 
-    async fn stop(self) {
+    /// Tell the hub that a handle following `N` moved it from station 2 to
+    /// `station`, as one does on the table's rows.
+    pub(super) fn tell(&self, station: u8) {
+        let (from, to) = (at(2), at(station));
+        let moved = ClientEvent::Moved {
+            instance: N,
+            from,
+            to,
+        };
+        self.client.shared.events.send(moved).unwrap();
+    }
+
+    pub(super) async fn stop(self) {
         drop((self.watch, self.device));
         settle().await;
         stop(self.servers).await;
@@ -127,7 +139,7 @@ fn ai1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()
 }
 
-fn moved_to(update: &Update) -> Option<&DeviceAddress> {
+pub(super) fn moved_to(update: &Update) -> Option<&DeviceAddress> {
     match &update.state {
         State::Gone {
             why: Why::Moved { to },
@@ -137,7 +149,7 @@ fn moved_to(update: &Update) -> Option<&DeviceAddress> {
 }
 
 /// Reads of the Device object by the wildcard instance sent to `station`.
-fn wildcard_reads(sent: &SendLog, station: u8) -> usize {
+pub(super) fn wildcard_reads(sent: &SendLog, station: u8) -> usize {
     let wildcard = |request: &bacnet_encoding::apdu::ConfirmedRequest| {
         request.service_choice == ConfirmedServiceChoice::READ_PROPERTY
             && ReadPropertyRequest::decode(&request.service_request).is_ok_and(|read| {

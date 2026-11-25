@@ -13255,9 +13255,22 @@ table's rows alone, which I-Ams nobody asked for fill), is only a cue
 Device object by the wildcard instance through its gate and the client's
 rate, at once and then on the pace of a claim's asks (below). Its points
 are given up (`State::Gone { why: Why::Moved { to } }`) only when that
-answer names their instance. Another instance, no answer, or a device that
-refuses the wildcard read changes nothing for the watch, and a handle that
-moved stays where it moved. A row
+answer names their instance and the device is gone from their address:
+unless the address is failing already (in its poll backoff, or a point
+there unreachable), its device is asked once more, as a claim is checked.
+Still that device, the two addresses are two claimants (a duplicate, or a
+responder on an impostor's own host), and nothing changes, logged as a
+warning once a lifetime; silent, the points are given up as moved; another
+device, they are given up for it (`Why::Replaced`), then say where their
+own went. Another instance at the new address, no answer there, or a
+device that refuses the wildcard read changes nothing for the watch, and a
+handle that moved stays where it moved. The pace and the one slot a cue
+waits in belong to the watched address, whichever addresses cues name: a
+stream of forged cues can hold a real move's read to one a lifetime, or
+take a real cue's slot, until the hub's own look after an unanswered poll
+cues the real address again. The hub's look still moves an application's
+following handle before anything is read there; the hub that follows
+devices (#2795) changes that. A row
 merely gone from the discovery table (aged out of a quiet device) is no
 move, nor are the announcement times `Device::moved_to` reports: a
 duplicate starting up while the device misses a request looks the same,

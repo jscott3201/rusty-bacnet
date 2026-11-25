@@ -52,7 +52,7 @@ use tokio::time::Instant;
 
 use super::Why;
 use super::hub::{Inner, MISSING, Phase, Source};
-use super::jobs::{self, Outcome, Polled, Started};
+use super::jobs::{self, Answer, Outcome, Polled, Started};
 use super::options::MissingDevice;
 use super::sample::Via;
 use super::shared::{Arrival, DeviceSlot, FirstSample, Running, Shared};
@@ -115,6 +115,9 @@ enum Op {
     /// Ask which device answers at an address the device of an instance
     /// is said to have moved to ([`moves`]).
     Arrived(u32, DeviceAddress),
+    /// Ask whether the device of an instance still answers at the address,
+    /// another having named itself so ([`moves`]).
+    Left(u32),
     /// Which device answers at the address, or when it restarted.
     Check(identity::Check),
     Cancel {
@@ -149,6 +152,9 @@ enum Done {
     /// The instance the device at an address named itself, asked for a
     /// move of an instance there.
     Arrived(u32, DeviceAddress, Option<u32>),
+    /// What the device at the address answered, asked whether the device
+    /// of an instance is still there.
+    Left(u32, Answer),
     Checked(identity::Checked),
 }
 
@@ -405,7 +411,10 @@ impl<T: TransportPort + 'static> Device<T> {
                 }))
             }
             Some(Op::Check(check)) => Some(self.check_job(check)),
-            Some(Op::Arrived(instance, to)) => Some(self.arrival_job(instance, to)),
+            Some(Op::Arrived(instance, to)) => {
+                self.arrival_job(instance, to).or_else(|| self.launch())
+            }
+            Some(Op::Left(instance)) => self.left_job(instance).or_else(|| self.launch()),
             Some(Op::Cancel {
                 shared,
                 holder,
@@ -470,6 +479,7 @@ impl<T: TransportPort + 'static> Device<T> {
                 }
             }
             Done::Arrived(instance, to, found) => self.arrived(instance, to, found),
+            Done::Left(instance, answer) => self.left(instance, answer),
             Done::Checked(checked) => self.checked(checked),
         }
     }

@@ -66,7 +66,10 @@
 //! is only a cue (#2812): the device there is asked which it is, by one
 //! read of its Device object by the wildcard instance, paced as a claim's
 //! asks, and the points are given up as moved ([`Why::Moved`]) only when
-//! that answer names their instance. Another instance, no answer, or a
+//! that answer names their instance and the device is gone from their
+//! address: unless that address is failing already, its device is asked
+//! once more, and one still answering as the device there is a second
+//! claimant, which changes nothing. Another instance, no answer, or a
 //! device refusing that read changes nothing. A row merely gone from the
 //! discovery table (aged out of a quiet device) is no move, nor are
 //! announcement times: a duplicate starting up while the device misses a
@@ -150,6 +153,8 @@ impl std::fmt::Display for WatchError {
 
 impl std::error::Error for WatchError {}
 
+#[cfg(test)]
+mod claimants_tests;
 #[cfg(test)]
 mod identity_tests;
 #[cfg(test)]

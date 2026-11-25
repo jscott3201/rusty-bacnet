@@ -60,7 +60,7 @@ pub(super) const READ_PROPERTY: u8 = 12;
 /// How the client's link misbehaves.
 #[derive(Default)]
 pub(super) struct Quirks {
-    /// Nothing sent arrives.
+    /// Nothing sent arrives, but at [`ELSEWHERE`].
     pub(super) muted: AtomicBool,
     /// The link refuses to send a ReadProperty or an RPM: nothing leaves,
     /// and the send fails, as a router's application refuses a station
@@ -367,11 +367,11 @@ fn forwards(
     if !decoded.is_network_message() && apdu.len() >= 4 && apdu[0] >> 4 == 0 {
         let (invoke, service) = (apdu[2], apdu[3]);
         sent.lock().unwrap().push((service, Instant::now()));
-        if quirks.muted.load(Ordering::Relaxed) {
-            return false;
-        }
         if frame.mac.as_slice() == [ELSEWHERE] {
             answer_elsewhere(handle, quirks, apdu);
+            return false;
+        }
+        if quirks.muted.load(Ordering::Relaxed) {
             return false;
         }
         if decoded.destination.is_some() {

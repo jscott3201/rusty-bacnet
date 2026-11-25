@@ -271,8 +271,9 @@ async fn a_following_device_that_moves_is_reported_by_the_hub() {
 }
 
 /// A following handle that moves for a request of its own tells the hub,
-/// which gives up the points at the old address at once, without waiting
-/// for one of its own to fail.
+/// which gives up the points at the old address without waiting for one of
+/// its own to fail, once the new address names the device and the old one,
+/// asked once more, doesn't answer (#2812).
 #[tokio::test(start_paused = true)]
 async fn a_handle_moving_for_its_own_request_tells_the_hub() {
     let bus = Bus::new();
@@ -290,7 +291,7 @@ async fn a_handle_moving_for_its_own_request_tells_the_hub() {
     tokio::time::sleep(Duration::from_secs(5)).await;
     assert!(device.read("ai:1 pv").await.is_ok());
     assert_eq!(device.address(), at(3));
-    let update = latest(&mut watch).await.expect("told of the move");
+    let update = until(&mut watch, |u| matches!(u.state, State::Gone { .. })).await;
     assert_eq!(moved_to(&update), Some(&at(3)), "{update:?}");
     drop((watch, device));
     settle().await;

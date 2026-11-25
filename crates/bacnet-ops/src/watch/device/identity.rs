@@ -64,8 +64,12 @@
 //! What a frame nobody asked for does, by the point's state (cue: one paced
 //! read, a check of which device answers or the restart-time read; cue
 //! there: one paced read by the wildcard instance at the address the
-//! device is said to have moved to, which gives the point up as moved only
-//! when it names the point's device):
+//! device is said to have moved to; when it names the point's device, the
+//! device here is asked once more unless the address is failing: still
+//! that device, nothing changes (two claimants); silent, or not that
+//! device, the point is given up as moved, for another device named here
+//! given up for it first; cue there, no ask: a point given up already
+//! only says where its device went):
 //!
 //! | Frame | No device | Unconfirmed | Confirmed | Name taken | Claim waits | Given up |
 //! |---|---|---|---|---|---|---|
@@ -73,16 +77,19 @@
 //! | Notification, another sender | sender taken, unconfirmed | dropped, cue | dropped, cue | value if the name, else dropped, cue | dropped, waits | dropped |
 //! | I-Am, the point's device here | - | restart cue | restart cue | restart cue | restart cue | cue; back on the answer |
 //! | I-Am, another device here | - | cue | cue | cue; drops the name if it is the name | waits | - |
-//! | I-Am, a given-up device elsewhere | - | - | - | - | - | looked for (no request, or a following handle's paced Who-Is); found, cue there |
-//! | I-Ams moving a handle that follows the device away | cue there | cue there | cue there | cue there | cue there | cue there |
+//! | I-Am, a given-up device elsewhere | - | - | - | - | - | looked for (no request, or a following handle's paced Who-Is); found, cue there, no ask |
+//! | I-Ams moving a handle that follows the device away | cue there | cue there | cue there | cue there | cue there | cue there, no ask |
+//! | I-Am, the point's device elsewhere, answering there too | - | cue there through a handle's move or the scheduler's look: two claimants, nothing | same | same | same | cue there, no ask |
 //! | Restart notification, its own | - | restart cue | restart cue | restart cue | restart cue | - |
 //! | Restart notification, another's | ignored | ignored | ignored | ignored | ignored | ignored |
 //!
-//! Points are given up as moved only on that read's answer (#2812): its
-//! cue is a following handle's move (on the table's rows, or by its own
-//! rule after a timeout), or the new address the scheduler's own look
-//! found after one of its requests went unanswered (the handle's rule, or
-//! the table's positive evidence).
+//! Points are given up as moved only on that read's answer (#2812), and,
+//! while they are watched and the address isn't failing, on the answer
+//! here to one more ask ([`moves`](super::moves)): its cue is a following
+//! handle's move (on the table's rows, or by its own rule after a timeout),
+//! or the new address the scheduler's own look found after one of its
+//! requests went unanswered (the handle's rule, or the table's positive
+//! evidence).
 //!
 //! Not caught: a device taking the address before the watched device named
 //! itself, or at all for a device that refuses the wildcard read (it is
@@ -592,7 +599,7 @@ impl<T: TransportPort + 'static> Device<T> {
     /// instance or in a poll's identity row): asked about a claim of
     /// `claimed`, or unprompted (`None`), which may predate a move, brings
     /// none back and leaves a waiting claim to its ask.
-    fn settle(&mut self, found: u32, claimed: Option<u32>) {
+    pub(super) fn settle(&mut self, found: u32, claimed: Option<u32>) {
         if self.ids.refuted == Some(found) {
             self.ids.refuted = None;
         }

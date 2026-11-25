@@ -173,11 +173,14 @@ async fn a_watch_keeps_its_subscription_renewed() {
     lab.stop().await;
 }
 
-/// A move told while a poll of its device is out is checked once the poll
-/// ends, whether the device answered it or not: the device at the new
-/// address names the point's (#2812), and the point is given up.
+/// A move told while a poll of its device is out is read once the poll
+/// ends, and the device at the new address names the point's (#2812). Left
+/// unanswered, the poll put the device in its backoff, and the point is
+/// given up as moved; answered, the device is asked once more, still
+/// answers as the point's device, and the point goes on polled (two
+/// claimants).
 #[tokio::test(start_paused = true)]
-async fn a_poll_ending_after_a_move_leaves_the_point_given_up() {
+async fn a_move_told_during_a_poll_goes_by_the_polls_answer() {
     for answered in [false, true] {
         let lab = Lab::start(WatchOptions::default()).await;
         lab.quirks.refuse_cov.store(true, Ordering::Relaxed);
@@ -201,15 +204,21 @@ async fn a_poll_ending_after_a_move_leaves_the_point_given_up() {
             to: elsewhere.clone(),
         };
         lab.client.shared.events.send(moved).unwrap();
-        // The read there waits for the poll, which no answer reaches.
-        lab.quirks.muted.store(false, Ordering::Relaxed);
         tokio::time::sleep(Duration::from_secs(5)).await;
-        let last = latest(&mut watch).await.expect("given up");
+        let last = latest(&mut watch).await;
         let gone = State::Gone {
             why: Why::Moved { to: elsewhere },
         };
-        assert_eq!(last.state, gone, "answered {answered}: {last:?}");
+        match answered {
+            false => assert_eq!(last.map(|u| u.state), Some(gone)),
+            true => assert!(
+                last.as_ref()
+                    .is_none_or(|u| !matches!(u.state, State::Gone { .. })),
+                "two claimants: {last:?}"
+            ),
+        }
         drop((watch, device));
+        lab.quirks.muted.store(false, Ordering::Relaxed);
         settle().await;
         lab.stop().await;
     }
@@ -258,14 +267,17 @@ async fn a_move_of_another_instance_leaves_the_points() {
     lab.client.shared.events.send(moved(4242)).unwrap();
     assert!(latest(&mut watch).await.is_none(), "another device's move");
     assert_eq!(lab.sent(RP, from), 0, "nothing read for it");
+    // The device left: asked once more, it doesn't answer.
+    lab.quirks.muted.store(true, Ordering::Relaxed);
     lab.client.shared.events.send(moved(LAB)).unwrap();
-    let update = latest(&mut watch).await.expect("its own move");
+    let update = until(&mut watch, |u| matches!(u.state, State::Gone { .. })).await;
     assert_eq!(
         update.state,
         State::Gone {
             why: Why::Moved { to: elsewhere }
         }
     );
+    lab.quirks.muted.store(false, Ordering::Relaxed);
     drop((watch, device));
     settle().await;
     lab.stop().await;
@@ -318,6 +330,17 @@ const PRESENT: bacnet_types::enums::PropertyIdentifier =
 fn moved_away(lab: &Lab, instance: u32) {
     *lab.quirks.elsewhere.lock().unwrap() = Some(instance);
     told_moved(lab, instance);
+}
+
+/// Tell the hub that the device of `instance` left the lab device's
+/// address for [`ELSEWHERE`] (a device names itself so there, and the lab
+/// device, asked once more, doesn't answer), until `watch` sees its point
+/// given up.
+async fn left_for(lab: &Lab, instance: u32, watch: &mut Watch) {
+    lab.quirks.muted.store(true, Ordering::Relaxed);
+    moved_away(lab, instance);
+    until(watch, |u| matches!(u.state, State::Gone { .. })).await;
+    lab.quirks.muted.store(false, Ordering::Relaxed);
 }
 
 /// Tell the hub that a handle following `instance` moved it from the lab
@@ -391,8 +414,9 @@ async fn a_start_from_before_the_move_does_not_revive() {
 }
 
 /// A move told while the hub doesn't know the device's instance (no row
-/// names it) gives the points up for the instance the move names, so they
-/// still come back once the address answers for it.
+/// names it) gives the points up, once the device left, for the instance
+/// the move names, so they still come back once the address answers for
+/// it.
 #[tokio::test(start_paused = true)]
 async fn a_move_told_before_the_instance_is_known_can_be_undone() {
     let lab = Lab::start(WatchOptions::default()).await;
@@ -400,8 +424,7 @@ async fn a_move_told_before_the_instance_is_known_can_be_undone() {
     lab.client.low_level().clear_devices().await;
     let mut watch = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
     until(&mut watch, |u| u.state == State::Subscribed).await;
-    moved_away(&lab, LAB);
-    until(&mut watch, |u| matches!(u.state, State::Gone { .. })).await;
+    left_for(&lab, LAB, &mut watch).await;
     // The table names the instance at the address again, and a start
     // there is answered.
     lab.client.low_level().add_device(LAB, &[2]).await.unwrap();
@@ -423,8 +446,7 @@ async fn each_moved_point_comes_back_for_its_own_instance() {
     until(&mut first, |u| u.state == State::Subscribed).await;
     // Its name read, which names the device, before the move.
     tokio::time::sleep(Duration::from_secs(1)).await;
-    moved_away(&lab, LAB);
-    until(&mut first, |u| matches!(u.state, State::Gone { .. })).await;
+    left_for(&lab, LAB, &mut first).await;
     // Another device's instance named at the address (and the device there
     // says so when asked, #2603): a point started there now is that
     // device's, and it moves away too.
@@ -438,8 +460,7 @@ async fn each_moved_point_comes_back_for_its_own_instance() {
         latest(&mut first).await.is_none(),
         "not the first's instance"
     );
-    moved_away(&lab, other);
-    until(&mut second, |u| matches!(u.state, State::Gone { .. })).await;
+    left_for(&lab, other, &mut second).await;
     // The address answers for the other instance: only its point is back.
     let mut third = lab.client.watch([device.point("ai:3").unwrap()]).unwrap();
     until(&mut third, |u| u.state == State::Subscribed).await;
