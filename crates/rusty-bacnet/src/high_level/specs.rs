@@ -139,7 +139,9 @@ pub(crate) fn object_arg(object: &Bound<'_, PyAny>) -> PyResult<ObjectIdentifier
 
 /// A property and the element its text names: a `PropertyIdentifier`, or
 /// text such as `"pv"` or `"priority-array[8]"`.
-fn property_part(property: &Bound<'_, PyAny>) -> PyResult<(PropertyIdentifier, Option<u32>)> {
+pub(super) fn property_part(
+    property: &Bound<'_, PyAny>,
+) -> PyResult<(PropertyIdentifier, Option<u32>)> {
     if let Ok(property) = property.cast::<PyPropertyIdentifier>() {
         return Ok((property.get().to_rust(), None));
     }
