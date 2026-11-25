@@ -10,11 +10,13 @@
 //! table's, released before the entry's), and a held-back signal is a
 //! deadline the loop sleeps toward. It also hands each device's scheduler
 //! the moves of handles following the device's instance away from its
-//! address ([`ClientEvent::Moved`]), the instances announced at its address
-//! and a restart its device announced (#2603). A notification is checked
-//! against the device it names as its sender, not against the order the
-//! announcements came in, so a receiver that fell behind on the discovery
-//! table's changes only has every scheduler read the table again.
+//! address ([`ClientEvent::Moved`]), each only a cue to read which device
+//! answers at the new address (#2812), the instances announced at its
+//! address and a restart its device announced (#2603). A notification is
+//! checked against the device it names as its sender, not against the
+//! order the announcements came in, so a receiver that fell behind on the
+//! discovery table's changes only has every scheduler read the table
+//! again.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;

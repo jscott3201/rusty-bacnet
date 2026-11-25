@@ -46,7 +46,8 @@
 //! kept by the address's scheduler, and isn't cued again from the table. A
 //! given-up point's renewals stop and nothing more is sent for it; its
 //! instance announcing itself at another address has the scheduler look
-//! there, and found there alone it is reported [`Why::Moved`].
+//! there, and found there alone, and named there by the device's own
+//! answer, it is reported [`Why::Moved`] ([`moves`](super::moves)).
 //!
 //! A device whose notifications name another sender (a gateway naming
 //! itself, say): once the device was asked which it is, one read of the
@@ -61,7 +62,16 @@
 //! watch of the device starts.
 //!
 //! What a frame nobody asked for does, by the point's state (cue: one paced
-//! read, a check of which device answers or the restart-time read):
+//! read, a check of which device answers or the restart-time read; cue
+//! there: one paced read by the wildcard instance at the address the
+//! device is said to have moved to; when it names the point's device, the
+//! device here is asked once more (not when no route here is known, nor,
+//! here failing, for the scheduler's own look, which followed its own
+//! unanswered request): still that device, nothing changes (two
+//! claimants); timing out (no other failure), or not that device, the
+//! point is given up as moved, for another device named here given up for
+//! it first; cue there, no ask: a point given up already only says where
+//! its device went, a hint for whoever watches it there):
 //!
 //! | Frame | No device | Unconfirmed | Confirmed | Name taken | Claim waits | Given up |
 //! |---|---|---|---|---|---|---|
@@ -69,13 +79,20 @@
 //! | Notification, another sender | sender taken, unconfirmed | dropped, cue | dropped, cue | value if the name, else dropped, cue | dropped, waits | dropped |
 //! | I-Am, the point's device here | - | restart cue | restart cue | restart cue | restart cue | cue; back on the answer |
 //! | I-Am, another device here | - | cue | cue | cue; drops the name if it is the name | waits | - |
-//! | I-Am, a given-up device elsewhere | - | - | - | - | - | looked for (no request, or a following handle's paced Who-Is) |
+//! | I-Am, a given-up device elsewhere | - | - | - | - | - | looked for (no request, or a following handle's paced Who-Is); found, cue there, no ask |
+//! | I-Ams moving a handle that follows the device away | cue there, asked here even while failing | same | same | same | same | cue there, no ask |
+//! | I-Am, the point's device elsewhere, answering there too | - | cue there through a handle's move or the scheduler's look: two claimants, nothing | same | same | same | cue there, no ask |
 //! | Restart notification, its own | - | restart cue | restart cue | restart cue | restart cue | - |
 //! | Restart notification, another's | ignored | ignored | ignored | ignored | ignored | ignored |
 //!
-//! Points are given up as moved only by the pre-existing rule: after a
-//! request of the hub's went unanswered, on the table's positive evidence
-//! or a following handle's own move.
+//! Points are given up as moved only on that read's answer (#2812), and,
+//! while they are watched, on the answer here to one more ask
+//! ([`moves`](super::moves)), skipped only with no route here, or for the
+//! scheduler's own look while here is failing: its cue is a following
+//! handle's move (on the table's rows, or by its own rule after a timeout),
+//! or the new address the scheduler's own look found after one of its
+//! requests went unanswered (the handle's rule, or the table's positive
+//! evidence).
 //!
 //! Not caught: a device taking the address before the watched device named
 //! itself, or at all for a device that refuses the wildcard read (it is
@@ -128,6 +145,36 @@ pub(super) const SPREAD: Duration = Duration::from_secs(10);
 /// The wait after the first ask of which device answers, which doubles at
 /// each ask up to the subscription lifetime and stays there.
 const ASK_AGAIN: Duration = Duration::from_secs(60);
+
+/// When asks of which device answers may go: the first at once, the next
+/// [`ASK_AGAIN`] after it, the wait doubling at each ask up to a cap (the
+/// subscription lifetime) and staying there. A claim's asks keep one, and
+/// so do the reads at an address the device is said to have moved to
+/// (#2812).
+#[derive(Debug, Default)]
+pub(super) struct Pace {
+    /// When the last ask went.
+    asked: Option<Instant>,
+    /// The wait after it.
+    wait: Duration,
+}
+
+impl Pace {
+    /// Whether an ask may go at `now`.
+    pub(super) fn ready(&self, now: Instant) -> bool {
+        self.asked.is_none_or(|at| now >= at + self.wait)
+    }
+
+    /// An ask goes at `now`, which sets the wait before the next.
+    pub(super) fn spend(&mut self, now: Instant, cap: Duration) {
+        let first = ASK_AGAIN.min(cap);
+        self.wait = match self.asked {
+            Some(_) => (self.wait * 2).clamp(first, cap),
+            None => first,
+        };
+        self.asked = Some(now);
+    }
+}
 
 /// A check a scheduler runs as a job.
 pub(super) enum Check {
@@ -182,10 +229,8 @@ pub(super) struct Ids {
     naming: bool,
     /// The device was asked its name unprompted (once).
     named_asked: bool,
-    /// When the device was last asked which it is, and the wait before the
-    /// next ask.
-    checked: Option<Instant>,
-    wait: Duration,
+    /// When the device may next be asked which it is.
+    pace: Pace,
     /// The latest claim waiting for the next ask.
     deferred: Option<u32>,
     /// The last claim the device didn't bear out.
@@ -226,7 +271,7 @@ fn spread(address: &DeviceAddress, hub: u32) -> Duration {
 }
 
 impl<T: TransportPort + 'static> Device<T> {
-    fn lifetime(&self) -> Duration {
+    pub(super) fn lifetime(&self) -> Duration {
         self.inner.options.lifetime.duration()
     }
 
@@ -396,18 +441,11 @@ impl<T: TransportPort + 'static> Device<T> {
     fn claim(&mut self, claimed: u32) {
         self.doubt(claimed);
         let now = Instant::now();
-        let spent = self.ids.checked.is_some_and(|at| now < at + self.ids.wait);
-        if self.ids.confirming || spent {
+        if self.ids.confirming || !self.ids.pace.ready(now) {
             self.ids.deferred = Some(claimed);
             return;
         }
-        let cap = self.lifetime();
-        let first = ASK_AGAIN.min(cap);
-        self.ids.wait = match self.ids.checked {
-            Some(_) => (self.ids.wait * 2).clamp(first, cap),
-            None => first,
-        };
-        self.ids.checked = Some(now);
+        self.ids.pace.spend(now, self.lifetime());
         self.ids.confirming = true;
         let watched = self.watched().unwrap_or(claimed);
         let check = Check::Confirm { watched, claimed };
@@ -564,7 +602,7 @@ impl<T: TransportPort + 'static> Device<T> {
     /// instance or in a poll's identity row): asked about a claim of
     /// `claimed`, or unprompted (`None`), which may predate a move, brings
     /// none back and leaves a waiting claim to its ask.
-    fn settle(&mut self, found: u32, claimed: Option<u32>) {
+    pub(super) fn settle(&mut self, found: u32, claimed: Option<u32>) {
         if self.ids.refuted == Some(found) {
             self.ids.refuted = None;
         }
@@ -722,37 +760,6 @@ impl<T: TransportPort + 'static> Device<T> {
         }
     }
 
-    /// The device of `instance` answers at `to` now: give its points up
-    /// (those of another instance stay), stopping their renewals and
-    /// sending nothing more for them, each noting the instance it was given
-    /// up for; a point given up for that instance already, its address
-    /// taken by another device, now says where it went. A point whose start
-    /// is running decides by its own answer.
-    pub(super) fn moved(&mut self, instance: u32, to: DeviceAddress) {
-        tracing::info!(
-            "device {instance} at {} answers at {to} now; its watches stop",
-            self.address
-        );
-        let seq = &self.inner.registry.seq;
-        let note = format!("the device answers at {to} now; watch it there");
-        let mut gone = Vec::new();
-        for (process, row) in &mut self.rows {
-            let theirs = row.shared.identity().is_none_or(|known| known == instance);
-            let live = match row.mode {
-                Mode::Starting => false,
-                Mode::Gone => row.moved == Some(instance),
-                _ => true,
-            };
-            if theirs && live && !row.removing {
-                let why = Why::Moved { to: to.clone() };
-                give_up(row, why, note.clone(), seq, instance);
-                gone.push(*process);
-            }
-        }
-        self.ops
-            .retain(|op| !matches!(op, Op::Start(process) if gone.contains(process)));
-    }
-
     /// The device at the address answered for `instance`: the points given
     /// up for that instance start again, and those given up for another
     /// stay.
@@ -884,7 +891,7 @@ impl<T: TransportPort + 'static> Device<T> {
     /// Run the identity checks due by `now`: a claim whose wait is over,
     /// and a restart check.
     pub(super) fn identity_due(&mut self, now: Instant) {
-        let ready = self.ids.checked.is_none_or(|at| now >= at + self.ids.wait);
+        let ready = self.ids.pace.ready(now);
         if !self.ids.confirming
             && ready
             && let Some(claimed) = self.ids.deferred.take()

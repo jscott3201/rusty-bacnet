@@ -16,13 +16,15 @@
 //!
 //! When a request goes unanswered (a poll, a first read, a subscription;
 //! a point whose renewal failed goes to the next poll), a job asks where
-//! the device's instance went. A move that is certain there, or one a
-//! following handle made ([`DeviceSlot::moved`]), gives every point up
-//! with [`Why::Moved`]: their renewals stop and nothing more is sent for
-//! them, cancels included, so a subscription still held there lapses with
-//! its lifetime. The move doesn't stick: a point arriving later starts as
-//! any other, and the given-up points start again once the address
-//! answers or announces itself for the instance again.
+//! the device's instance went. The address it finds, or one a following
+//! handle moved to ([`DeviceSlot::moved`]), is a cue ([`moves`]): a job
+//! reads which device answers there, and only one naming the instance
+//! gives every point up with [`Why::Moved`]: their renewals stop and
+//! nothing more is sent for them, cancels included, so a subscription
+//! still held there lapses with its lifetime. The move doesn't stick: a
+//! point arriving later starts as any other, and the given-up points start
+//! again once the address answers or announces itself for the instance
+//! again.
 //!
 //! Cancels go while the device answers. One it leaves unanswered puts the
 //! device in its poll backoff, and while it is there the cancels left are
@@ -34,6 +36,7 @@
 //! and the device announcing itself again is subscribed again early.
 
 mod identity;
+mod moves;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
@@ -49,7 +52,7 @@ use tokio::time::Instant;
 
 use super::Why;
 use super::hub::{Inner, MISSING, Phase, Source};
-use super::jobs::{self, Outcome, Polled, Started};
+use super::jobs::{self, Answer, Outcome, Polled, Started};
 use super::options::MissingDevice;
 use super::sample::Via;
 use super::shared::{Arrival, DeviceSlot, FirstSample, Running, Shared};
@@ -109,6 +112,12 @@ enum Op {
     Start(u32),
     /// Ask where the device of an instance went.
     Locate(u32),
+    /// Ask which device answers at an address the device of an instance
+    /// is said to have moved to ([`moves`]).
+    Arrived(u32, DeviceAddress),
+    /// Ask whether the device of an instance still answers at the address,
+    /// another having named itself so ([`moves`]).
+    Left(u32),
     /// Which device answers at the address, or when it restarted.
     Check(identity::Check),
     Cancel {
@@ -137,8 +146,15 @@ enum Done {
     /// A cancel ended; whether the device answered it.
     Cancelled(Holder, bool),
     Polled(Polled),
-    /// Where the instance looked for answers now, if it moved.
+    /// Where the instance looked for is said to answer now, if anywhere
+    /// else.
     Located(u32, Option<DeviceAddress>),
+    /// The instance the device at an address named itself, asked for a
+    /// move of an instance there.
+    Arrived(u32, DeviceAddress, Option<u32>),
+    /// What the device at the address answered, asked whether the device
+    /// of an instance is still there.
+    Left(u32, Answer),
     Checked(identity::Checked),
 }
 
@@ -155,6 +171,8 @@ struct Device<T: TransportPort + 'static> {
     locating: BTreeSet<u32>,
     /// Which device answers at the address, and when it restarted.
     ids: identity::Ids,
+    /// The reads where the device is said to have moved.
+    moves: moves::Moves,
     rows: BTreeMap<u32, Row>,
     ops: VecDeque<Op>,
     /// The device stopped answering polls: the current backoff, and when
@@ -177,6 +195,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         slot: Arc::clone(&slot),
         locating: BTreeSet::new(),
         ids: identity::Ids::default(),
+        moves: moves::Moves::default(),
         rows: BTreeMap::new(),
         ops: VecDeque::new(),
         backoff: Duration::ZERO,
@@ -190,7 +209,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         let arrivals: Vec<Arrival> = slot.inbox().drain(..).collect();
         device.arrive(arrivals);
         if let Some((instance, to)) = slot.take_moved() {
-            device.moved(instance, to);
+            device.cue_move(instance, to, false);
         }
         device.heard();
         device.reap();
@@ -392,6 +411,10 @@ impl<T: TransportPort + 'static> Device<T> {
                 }))
             }
             Some(Op::Check(check)) => Some(self.check_job(check)),
+            Some(Op::Arrived(instance, to)) => {
+                self.arrival_job(instance, to).or_else(|| self.launch())
+            }
+            Some(Op::Left(instance)) => self.left_job(instance).or_else(|| self.launch()),
             Some(Op::Cancel {
                 shared,
                 holder,
@@ -452,9 +475,11 @@ impl<T: TransportPort + 'static> Device<T> {
             Done::Located(instance, to) => {
                 self.locating.remove(&instance);
                 if let Some(to) = to {
-                    self.moved(instance, to);
+                    self.cue_move(instance, to, true);
                 }
             }
+            Done::Arrived(instance, to, found) => self.arrived(instance, to, found),
+            Done::Left(instance, answer) => self.left(instance, answer),
             Done::Checked(checked) => self.checked(checked),
         }
     }
@@ -740,6 +765,7 @@ impl<T: TransportPort + 'static> Device<T> {
     fn tick(&mut self) {
         let now = Instant::now();
         self.identity_due(now);
+        self.moves_due(now);
         let retry_cov = self.inner.options.retry_cov;
         let seq = &self.inner.registry.seq;
         for (process, row) in &mut self.rows {
