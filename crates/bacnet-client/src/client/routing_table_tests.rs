@@ -345,6 +345,38 @@ async fn a_query_that_cannot_be_sent_is_refused_before_it_goes() {
     client.stop().await.unwrap();
 }
 
+/// A link that refuses the query for its own state, as a BACnet/SC link
+/// with no hub connection does, refuses the call as an invalid argument,
+/// which the bindings raise as `ValueError`, as when the link's refusal was
+/// an untyped encoding error (#1833).
+#[tokio::test(start_paused = true)]
+async fn a_link_refusing_the_query_refuses_the_call() {
+    const NOT_CONNECTED: &str = "BACnet/SC transport not in Connected state";
+    let (_inbound, inbound_rx) = mpsc::channel(1);
+    let transport = TestTransport::builder()
+        .local_mac(&[1])
+        .inbound(inbound_rx)
+        .egress_limit(1486)
+        .on_send(|_| async {
+            Err(Error::state(
+                bacnet_types::error::Lifecycle::NotConnected,
+                NOT_CONNECTED,
+            ))
+        })
+        .build();
+    let mut client = BACnetClient::start(ClientConfig::default(), transport)
+        .await
+        .unwrap();
+    match client
+        .routing_table(&ROUTER, RoutingTableWait::default())
+        .await
+    {
+        Err(RoutingTableError::InvalidArgument(why)) => assert_eq!(why, NOT_CONNECTED),
+        other => panic!("{other:?}"),
+    }
+    client.stop().await.unwrap();
+}
+
 async fn i_am_router(inbound: &mpsc::Sender<ReceivedNpdu>, from: &[u8]) {
     control(
         inbound,

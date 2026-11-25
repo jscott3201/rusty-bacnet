@@ -148,10 +148,10 @@ impl MonitorConfig {
             ));
         }
         if self.record_capacity == 0 || self.record_capacity > usize::MAX / 2 {
-            return Err(Error::InvalidConfig(
-                Refusal::new("MS/TP monitor record_capacity {} is out of range")
-                    .with_value(self.record_capacity as u64),
-            ));
+            return Err(Error::InvalidConfig(Refusal::with_value(
+                "MS/TP monitor record_capacity {} is out of range",
+                self.record_capacity as u64,
+            )));
         }
         Ok(())
     }

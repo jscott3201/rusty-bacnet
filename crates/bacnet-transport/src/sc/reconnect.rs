@@ -88,33 +88,30 @@ impl ScReconnectConfig {
             ));
         }
         if self.initial_delay_ms > self.max_delay_ms {
-            return Err(Error::InvalidConfig(
-                Refusal::new(
-                    "BACnet/SC reconnect initial_delay_ms must not exceed max_delay_ms, \
+            return Err(Error::InvalidConfig(Refusal::with_values(
+                "BACnet/SC reconnect initial_delay_ms must not exceed max_delay_ms, \
                      got initial_delay_ms={} max_delay_ms={}",
-                )
-                .with_values(self.initial_delay_ms, self.max_delay_ms),
-            ));
+                self.initial_delay_ms,
+                self.max_delay_ms,
+            )));
         }
         if self.max_delay_ms > Self::MAX_DELAY_MS {
-            return Err(Error::InvalidConfig(
-                Refusal::new(
-                    "BACnet/SC reconnect max_delay_ms must not exceed {} (10 minutes), \
+            return Err(Error::InvalidConfig(Refusal::with_values(
+                "BACnet/SC reconnect max_delay_ms must not exceed {} (10 minutes), \
                      got max_delay_ms={}",
-                )
-                .with_values(Self::MAX_DELAY_MS, self.max_delay_ms),
-            ));
+                Self::MAX_DELAY_MS,
+                self.max_delay_ms,
+            )));
         }
         if self.max_retries.is_none()
             && self.initial_delay_ms < Self::UNLIMITED_MIN_INITIAL_DELAY_MS
         {
-            return Err(Error::InvalidConfig(
-                Refusal::new(
-                    "BACnet/SC reconnect initial_delay_ms must be at least {} with unlimited \
+            return Err(Error::InvalidConfig(Refusal::with_values(
+                "BACnet/SC reconnect initial_delay_ms must be at least {} with unlimited \
                      retries, got initial_delay_ms={}",
-                )
-                .with_values(Self::UNLIMITED_MIN_INITIAL_DELAY_MS, self.initial_delay_ms),
-            ));
+                Self::UNLIMITED_MIN_INITIAL_DELAY_MS,
+                self.initial_delay_ms,
+            )));
         }
         Ok(())
     }

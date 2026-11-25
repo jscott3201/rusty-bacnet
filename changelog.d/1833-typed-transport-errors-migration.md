@@ -1,8 +1,9 @@
 ---
 section: Migration notes
 ---
-- **Transport errors (Rust API, #1833):** match `Error::State(Lifecycle::..,
-  _)`, `Error::InvalidConfig(_)`, `Error::InvalidArgument(_)`,
-  `Error::Unsupported(_)` or `Error::LimitReached(_)` where code matched a
-  transport's `Error::Encoding` or `Error::OutOfRange`; `to_string()` gives
-  the same text as before, without its prefix.
+- **Transport refusals (Rust API, #1833):** a transport's own refusals are now
+  `Error::State(Lifecycle::.., _)`, `Error::InvalidConfig(_)`,
+  `Error::InvalidArgument(_)`, `Error::Unsupported(_)` or
+  `Error::LimitReached(_)`, with the old text and no prefix. Match those
+  variants: an `Error::Encoding(_)` or `Error::OutOfRange(_)` arm still
+  compiles, but silently stops matching them.

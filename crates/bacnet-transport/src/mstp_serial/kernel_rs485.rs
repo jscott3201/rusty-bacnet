@@ -14,13 +14,13 @@ pub(super) fn configure(
     mut ioctl: impl FnMut(Request, &mut SerialRs485) -> std::io::Result<()>,
 ) -> Result<(), Error> {
     if !delay_before_send_us.is_multiple_of(1_000) || !delay_after_send_us.is_multiple_of(1_000) {
-        return Err(Error::InvalidArgument(
-            Refusal::new(
-                "Kernel RS-485 delays must be multiples of 1000 microseconds: \
+        // The port keeps the delays: configuration, not a one-call argument.
+        return Err(Error::InvalidConfig(Refusal::with_values(
+            "Kernel RS-485 delays must be multiples of 1000 microseconds: \
                  delay_before_send_us={}, delay_after_send_us={}",
-            )
-            .with_values(delay_before_send_us.into(), delay_after_send_us.into()),
-        ));
+            delay_before_send_us.into(),
+            delay_after_send_us.into(),
+        )));
     }
 
     let requested = SerialRs485 {
@@ -87,6 +87,7 @@ mod tests {
                 panic!("invalid delays must not reach the ioctl boundary")
             })
             .unwrap_err();
+            assert!(matches!(error, Error::InvalidConfig(_)), "{error:?}");
             assert!(error.to_string().contains("multiples of 1000 microseconds"));
         }
     }

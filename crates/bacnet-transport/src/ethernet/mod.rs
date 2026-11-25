@@ -713,10 +713,10 @@ mod transport {
             })?;
 
             if mac.len() != 6 {
-                return Err(Error::InvalidArgument(
-                    Refusal::new("Ethernet MAC must be 6 bytes, got {}")
-                        .with_value(mac.len() as u64),
-                ));
+                return Err(Error::InvalidArgument(Refusal::with_value(
+                    "Ethernet MAC must be 6 bytes, got {}",
+                    mac.len() as u64,
+                )));
             }
 
             if npdu.len() > MAX_ETHERNET_NPDU {

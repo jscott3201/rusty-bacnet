@@ -798,7 +798,9 @@ fn owned(function: BvlcFunction, frame: &[u8]) -> BvllMessage {
 }
 
 /// Why a matched response doesn't answer: the codec's error, or the
-/// policy's.
+/// policy's. The policy names every refusal it makes, as a table's decoding
+/// error, so the last arm is only a fallback; it reads as the policy's own
+/// refusals do.
 fn refused(decode: Option<BvllError>, policy: Option<Error>) -> Error {
     match (decode, policy) {
         (Some(error), _) => bvll_error(error),
@@ -820,19 +822,27 @@ pub(super) fn config_error(error: ConfigError) -> Error {
     }
 }
 
-/// A send the node engine refused, in its words: a group address given as
-/// a unicast's destination is [`Error::InvalidArgument`], no room to hold
-/// a broadcast or a full socket is [`Error::LimitReached`], and a foreign
-/// device's BBMD not known yet is [`Error::State`] with
-/// [`Lifecycle::NotConnected`]. An NPDU too long for B/IP and a socket's
-/// own failure stay [`Error::Encoding`] until #1833 decides their form
-/// ([`Error::SendTooLong`] and [`Error::Transport`]).
-fn send_refusal(refusal: SendRefusal) -> Error {
-    let text = || Refusal::text(refusal.to_string());
+/// A send the node engine refused, in the engine's words, which a test
+/// holds these labels to: a group address given as a unicast's destination
+/// is [`Error::InvalidArgument`], no room to hold a broadcast is
+/// [`Error::LimitReached`], and a foreign device's BBMD not known yet is
+/// [`Error::State`] with [`Lifecycle::NotConnected`]. An NPDU too long for
+/// B/IP, a socket that can't take the datagram now and a socket's own
+/// failure stay [`Error::Encoding`] until #1833 gives them the forms whose
+/// handling differs ([`Error::SendTooLong`], and [`Error::Transport`] as a
+/// full MS/TP queue already is).
+pub(super) fn send_refusal(refusal: SendRefusal) -> Error {
     match refusal {
-        SendRefusal::GroupDestination => Error::InvalidArgument(text()),
-        SendRefusal::HoldFull | SendRefusal::SocketFull => Error::LimitReached(text()),
-        SendRefusal::NoBbmd => Error::State(Lifecycle::NotConnected, text()),
+        SendRefusal::GroupDestination => Error::invalid_argument(
+            "a unicast can't go to a group address; send a broadcast instead",
+        ),
+        SendRefusal::HoldFull => {
+            Error::limit_reached("no room to hold a broadcast until registration")
+        }
+        SendRefusal::NoBbmd => Error::state(
+            Lifecycle::NotConnected,
+            "the foreign device's BBMD isn't known yet",
+        ),
         _ => Error::Encoding(refusal.to_string()),
     }
 }

@@ -364,19 +364,27 @@ itself. A decoding error met once a service runs keeps its Error PDU.
 A call the stack turns down on its own side, before or without any exchange
 with a peer, is a local refusal with a variant per kind (#1833), so a caller
 matches the kind without reading text: `Error::State(Lifecycle, Refusal)` for
-a lifecycle state (`AlreadyStarted`, `NotRunning`, `NotConnected`, `Closed`),
-`Error::InvalidConfig` for a configuration value or option,
-`Error::InvalidArgument` for a call's argument (an address or MAC of the wrong
+a lifecycle state (`AlreadyStarted`, `NotRunning`, `Stopping`,
+`NotConnected`, `Closed`), `Error::InvalidConfig` for a value the component
+keeps (a builder setting, an option, a table), `Error::InvalidArgument` for a
+value used for one call or text parsed once (an address or MAC of the wrong
 form for the link), `Error::Unsupported` for what this platform, build or
-component doesn't offer, and `Error::LimitReached` for a resource cap. A
-`Refusal` is the text for a person: a static label with up to two numbers,
-built when displayed, or with `alloc` owned text where it names a run-time
-value; `Refusal::label()` gives the static label. Each displays as its text
-alone. `Error::state`, `Error::invalid_config`, `Error::invalid_argument`,
+component doesn't offer, and `Error::LimitReached` for a resource cap,
+including a one-holder resource (a lock, a lease, a seat) another holds. A
+`Refusal` is the text for a person and not API: a static label with as many
+numbers as it has placeholders (`Refusal::new`, `with_value`, `with_values`),
+built when displayed, or with `std` owned text where it names a run-time
+value (`Refusal::text`). A number or fact a caller acts on has a typed variant
+or field of its own, as `Error::SendTooLong` has. Each displays as its text
+alone; `Error::with_context` puts context in front and keeps the variant.
+`Error::state`, `Error::invalid_config`, `Error::invalid_argument`,
 `Error::unsupported` and `Error::limit_reached` build one from a static
 label. `bacnet-transport` reports its refusals this way; the other hosted
 crates still report theirs as `Error::Encoding` or `Error::OutOfRange` text
-until #1833 reaches them.
+until #1833 reaches them. A stopped transport's send still fails with
+`Error::Transport` of kind `NotConnected`, which the client and the bindings
+treat as a link that is down; it moves to `State(NotRunning)` in a change of
+its own.
 
 `Error::UnsupportedTransport { required, actual }` reports an operation the
 endpoint's data link cannot carry, such as a BBMD request through an
@@ -4226,7 +4234,7 @@ a local broadcast too.
 `send_apdu` sends an Unconfirmed-Request for one of the groups the link's own
 broadcast stands for (`TransportPort::local_broadcast_destinations`) through
 the transport's `send_broadcast` (#1677). B/IP refuses every unicast to one of
-its group addresses with `Error::Encoding`, sending nothing, since its
+its group addresses with `Error::InvalidArgument`, sending nothing, since its
 receivers drop an Original-Unicast-NPDU that wasn't sent to their own address.
 On B/IP those groups are the ones at the link's own UDP port: a group address
 at another port belongs to another B/IP network, so a send there is left to
@@ -13921,8 +13929,14 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::UnsupportedTransport { required, actual }` | The client's data link cannot carry the operation (a BBMD helper on a non-B/IP transport) |
 | `Error::Decoding(DecodeError)` | Malformed received data, with its offset and `DecodingKind` |
 | `Error::Encode(EncodeError)`, `Error::Range(RangeError)` | A value an encoder, validator or constructor refused, with a static label |
-| `Error::Encoding(msg)` | A formatted local encoding or configuration error (transport, network, client and server) |
-| `Error::Transport(io_error)` | Transport I/O failure |
+| `Error::State(Lifecycle, Refusal)` | A call the component's lifecycle state refuses: already started, not running, stopping, not connected to its peer, or closed (#1833) |
+| `Error::InvalidConfig(Refusal)` | A value the component would keep (a builder setting, an option, a table) refused before anything ran |
+| `Error::InvalidArgument(Refusal)` | A value for one call, or text parsed once, refused before anything was sent, such as a MAC of the wrong form for the link |
+| `Error::Unsupported(Refusal)` | Not offered on this platform, in this build, or by this kind of component |
+| `Error::LimitReached(Refusal)` | A resource cap reached: a full table, a counter run out, a one-holder resource another holds |
+| `Error::SendTooLong { length, limit }` | A send refused for its length before anything was written |
+| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (network, endpoint, client, server, objects), and the transport's I/O failures as text and MS/TP and Ethernet NPDU-length refusals until their own change |
+| `Error::Transport(io_error)` | Transport I/O failure, and a stopped transport's send (`NotConnected`) |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
 | `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles) |
 

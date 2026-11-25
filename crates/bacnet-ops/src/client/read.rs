@@ -169,11 +169,12 @@ pub fn unreachable(error: &Error) -> bool {
 ///   have no type to tell them from the refusal this exists for, and each
 ///   ends a read for the same reason: the client, not the property, failed.
 /// - The local refusals #1833 typed out of it: [`Error::State`] (a
-///   BACnet/SC link that isn't connected, a transport that is stopped),
-///   [`Error::InvalidConfig`], [`Error::InvalidArgument`] (a MAC of the
-///   wrong form for the link), [`Error::Unsupported`] and
+///   BACnet/SC link that isn't connected to its hub, a closed loopback
+///   channel), [`Error::InvalidConfig`], [`Error::InvalidArgument`] (a MAC
+///   of the wrong form for the link), [`Error::Unsupported`] and
 ///   [`Error::LimitReached`]. Each is the client's or the link's own
-///   refusal, as the untyped error was.
+///   refusal, as the untyped error was. A stopped transport's send is
+///   [`Error::Transport`], which [`unreachable()`] counts instead.
 ///
 /// A request too long for the link or the routed path
 /// ([`Error::SendTooLong`], [`Error::RoutedPathTooLong`]), or one that

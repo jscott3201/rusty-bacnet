@@ -11,7 +11,7 @@
 //! The local refusals ([`Error::State`], [`Error::InvalidConfig`],
 //! [`Error::InvalidArgument`], [`Error::Unsupported`] and
 //! [`Error::LimitReached`], #1833) are there too, with a static
-//! [`Refusal`]; only their owned text needs `alloc`. The other variants
+//! [`Refusal`]; only their owned text needs `std`. The other variants
 //! holding a `String` or a `Box` need `alloc`.
 
 #[cfg(all(feature = "alloc", not(feature = "std")))]
@@ -167,6 +167,16 @@ impl fmt::Display for Candidates<'_> {
 /// and `Error::UnknownDevice` need `std`, and the variants that hold a
 /// `String` or a `Box` need `alloc`. Without the attribute a
 /// match written against a smaller build would stop compiling (#1604).
+///
+/// A caller tells errors apart by variant, never by text (#1833). The text
+/// of a local refusal ([`Error::State`], [`Error::InvalidConfig`],
+/// [`Error::InvalidArgument`], [`Error::Unsupported`],
+/// [`Error::LimitReached`]) is for a person to read and may change; a
+/// number or fact a caller acts on has a typed variant or field of its own,
+/// as [`Error::SendTooLong`] carries its length and limit. A value a
+/// component keeps (a builder setting, an option, a table it holds) that it
+/// refuses is [`Error::InvalidConfig`]; a value used for one call, or text
+/// parsed once, is [`Error::InvalidArgument`].
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 // Clippy fails if the attribute above goes.
@@ -290,15 +300,15 @@ pub enum Error {
     #[error("{1}")]
     State(Lifecycle, Refusal),
 
-    /// A configuration value, option or builder setting refused before
-    /// anything ran (#1833), such as a timeout outside its range or two
-    /// modes that can't run together.
+    /// A value the component would keep, refused before anything ran
+    /// (#1833): a builder setting, an option or a table, such as a timeout
+    /// outside its range or two modes that can't run together.
     #[error("{0}")]
     InvalidConfig(Refusal),
 
-    /// An argument to a call refused before anything was sent (#1833), such
-    /// as an address or MAC of the wrong form for the link, or a send's
-    /// options the link can't carry.
+    /// A value used for one call, or text parsed once, refused before
+    /// anything was sent (#1833), such as an address or MAC of the wrong
+    /// form for the link, or a send's options the link can't carry.
     #[error("{0}")]
     InvalidArgument(Refusal),
 
@@ -310,7 +320,8 @@ pub enum Error {
     Unsupported(Refusal),
 
     /// A resource cap was reached (#1833): a table is full, a counter has
-    /// run out, or a configuration asks for more than the cap allows.
+    /// run out, a configuration asks for more than the cap allows, or a
+    /// resource one holder takes at a time is held by another.
     #[error("{0}")]
     LimitReached(Refusal),
 
@@ -853,6 +864,22 @@ impl Error {
     /// Create an [`Error::LimitReached`] described by a static `label`.
     pub const fn limit_reached(label: &'static str) -> Self {
         Self::LimitReached(Refusal::new(label))
+    }
+
+    /// This error with `context` and `: ` in front of its text, keeping its
+    /// variant, for a caller that says where a local refusal came from. Any
+    /// other error is returned as it is. Only with `std`.
+    #[cfg(feature = "std")]
+    #[must_use]
+    pub fn with_context(self, context: &str) -> Self {
+        match self {
+            Self::State(state, refusal) => Self::State(state, refusal.with_context(context)),
+            Self::InvalidConfig(refusal) => Self::InvalidConfig(refusal.with_context(context)),
+            Self::InvalidArgument(refusal) => Self::InvalidArgument(refusal.with_context(context)),
+            Self::Unsupported(refusal) => Self::Unsupported(refusal.with_context(context)),
+            Self::LimitReached(refusal) => Self::LimitReached(refusal.with_context(context)),
+            other => other,
+        }
     }
 }
 

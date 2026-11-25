@@ -451,17 +451,18 @@ impl TransportPort for BipTransport {
     }
 
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
-        let held = self.network_port_lease.get_mut_locked().is_some();
-        if self.registration_closed
-            || self.node.is_some()
-            || self.tasks.is_running()
-            || held
-            || self.bip_port().is_none()
-        {
-            return Err(Error::state(
-                Lifecycle::AlreadyStarted,
-                "registered B/IP lease requires an unstarted transport in one B/IP mode",
-            ));
+        // One text, the variant by cause: started (or a start tried), the
+        // lease held already, or no single B/IP mode to lend.
+        const REFUSED: &str =
+            "registered B/IP lease requires an unstarted transport in one B/IP mode";
+        if self.registration_closed || self.node.is_some() || self.tasks.is_running() {
+            return Err(Error::state(Lifecycle::AlreadyStarted, REFUSED));
+        }
+        if self.network_port_lease.get_mut_locked().is_some() {
+            return Err(Error::limit_reached(REFUSED));
+        }
+        if self.bip_port().is_none() {
+            return Err(Error::invalid_config(REFUSED));
         }
         *self.network_port_lease.get_mut_locked() = Some(lease);
         Ok(())

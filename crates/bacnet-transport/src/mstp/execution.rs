@@ -174,10 +174,11 @@ impl MstpThreadConfig {
             ))));
         }
         if let Some(cpu) = self.cpu_affinity.iter().find(|cpu| **cpu >= MAX_CPUS) {
-            return Err(Error::InvalidConfig(
-                Refusal::new("MS/TP thread cpu_affinity names CPU {}; CPUs are numbered 0 to {}")
-                    .with_values(*cpu as u64, (MAX_CPUS - 1) as u64),
-            ));
+            return Err(Error::InvalidConfig(Refusal::with_values(
+                "MS/TP thread cpu_affinity names CPU {}; CPUs are numbered 0 to {}",
+                *cpu as u64,
+                (MAX_CPUS - 1) as u64,
+            )));
         }
         if !cfg!(target_os = "linux") && !self.is_default() {
             return Err(Error::Transport(std::io::Error::new(

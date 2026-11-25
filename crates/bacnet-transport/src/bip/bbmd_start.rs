@@ -341,9 +341,7 @@ pub(super) fn initial_bbmd_state(
     let mut state = match loaded {
         Some(state) => state,
         None => {
-            let config_error = |e: Error| {
-                Error::InvalidConfig(Refusal::text(format!("BDT configuration error: {e}")))
-            };
+            let config_error = |e: Error| e.with_context("BDT configuration error");
             let rows = bbmd::canonical_bdt(config.initial_bdt.clone()).map_err(config_error)?;
             let ip = ctx.own_ip(&rows, BdtSource::Configured, config.nat.is_some())?;
             let mut state = new_state(config, group, ip, ctx.port)?;

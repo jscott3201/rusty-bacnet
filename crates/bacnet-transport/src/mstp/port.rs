@@ -395,9 +395,10 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
         let [destination] = mac else {
-            return Err(Error::InvalidArgument(
-                Refusal::new("MS/TP MAC must be 1 byte, got {}").with_value(mac.len() as u64),
-            ));
+            return Err(Error::InvalidArgument(Refusal::with_value(
+                "MS/TP MAC must be 1 byte, got {}",
+                mac.len() as u64,
+            )));
         };
         self.enqueue(*destination, npdu)
     }

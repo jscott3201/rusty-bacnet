@@ -154,18 +154,18 @@ pub(super) fn build_bvlc_result_nak(
 
 pub(super) fn to_data_options(data_attributes: &[DataAttribute]) -> Result<Vec<ScOption>, Error> {
     if data_attributes.len() > MAX_SC_DATA_ATTRIBUTES {
-        return Err(Error::InvalidArgument(
-            Refusal::new("BACnet/SC Data Options exceed {} attributes")
-                .with_value(MAX_SC_DATA_ATTRIBUTES as u64),
-        ));
+        return Err(Error::InvalidArgument(Refusal::with_value(
+            "BACnet/SC Data Options exceed {} attributes",
+            MAX_SC_DATA_ATTRIBUTES as u64,
+        )));
     }
 
     for attribute in data_attributes {
         if !(1..=31).contains(&attribute.option_type) {
-            return Err(Error::InvalidArgument(
-                Refusal::new("BACnet/SC Data Option type must be 1..31, got {}")
-                    .with_value(attribute.option_type.into()),
-            ));
+            return Err(Error::InvalidArgument(Refusal::with_value(
+                "BACnet/SC Data Option type must be 1..31, got {}",
+                attribute.option_type.into(),
+            )));
         }
         if attribute.option_type == SECURE_PATH_OPTION_TYPE && !attribute.must_understand {
             return Err(Error::invalid_argument(
@@ -178,10 +178,11 @@ pub(super) fn to_data_options(data_attributes: &[DataAttribute]) -> Result<Vec<S
             ));
         }
         if attribute.data.len() > u16::MAX as usize {
-            return Err(Error::InvalidArgument(
-                Refusal::new("BACnet/SC Data Option type {} payload length {} exceeds 65535")
-                    .with_values(attribute.option_type.into(), attribute.data.len() as u64),
-            ));
+            return Err(Error::InvalidArgument(Refusal::with_values(
+                "BACnet/SC Data Option type {} payload length {} exceeds 65535",
+                attribute.option_type.into(),
+                attribute.data.len() as u64,
+            )));
         }
     }
 

@@ -290,6 +290,49 @@ fn datatype_name(number: u64) -> &'static str {
         .unwrap_or("value of a reserved type")
 }
 
+/// The placeholders a label takes (see the module docs).
+const PLACEHOLDERS: [&str; 5] = ["{}", "{:#x}", "{:#04X}", "{:#06X}", "{t}"];
+
+/// How many placeholders `label` holds, for a constructor to check the
+/// numbers it is given against.
+pub(super) const fn placeholder_count(label: &str) -> usize {
+    let bytes = label.as_bytes();
+    let mut count = 0;
+    let mut at = 0;
+    while at < bytes.len() {
+        let mut length = 1;
+        if bytes[at] == b'{' {
+            let mut index = 0;
+            while index < PLACEHOLDERS.len() {
+                let placeholder = PLACEHOLDERS[index].as_bytes();
+                if starts_with_at(bytes, at, placeholder) {
+                    count += 1;
+                    length = placeholder.len();
+                    break;
+                }
+                index += 1;
+            }
+        }
+        at += length;
+    }
+    count
+}
+
+/// Whether `bytes` holds `prefix` from `at` on.
+const fn starts_with_at(bytes: &[u8], at: usize, prefix: &[u8]) -> bool {
+    if bytes.len() - at < prefix.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < prefix.len() {
+        if bytes[at + index] != prefix[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
 /// Write `label` with its placeholders filled from `values` in order (see
 /// the module docs). A placeholder past the second is written as it stands.
 pub(super) fn write_label(
@@ -302,7 +345,7 @@ pub(super) fn write_label(
     while let Some(at) = rest.find('{') {
         let (before, from) = rest.split_at(at);
         f.write_str(before)?;
-        let placeholder = ["{}", "{:#x}", "{:#04X}", "{:#06X}", "{t}"]
+        let placeholder = PLACEHOLDERS
             .into_iter()
             .find(|placeholder| from.starts_with(placeholder));
         match placeholder.zip(next.clone().next()) {
@@ -352,6 +395,8 @@ mod tests {
             "decoding error at offset 3: type 0x0B, function 0x1FF"
         );
         // A 16-bit number pads to four.
+        assert_eq!(placeholder_count("code {:#06X}, wider {:#06X}"), 2);
+        assert_eq!(placeholder_count("{a} {} {:#x} {t} {:#04X} {"), 4);
         assert_eq!(
             display("code {:#06X}, wider {:#06X}", [0x60, 0x12345]),
             "decoding error at offset 3: code 0x0060, wider 0x12345"

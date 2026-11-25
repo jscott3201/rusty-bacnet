@@ -118,3 +118,33 @@ async fn a_wildcard_socket_cannot_limited_broadcast_as_loopback() {
         }
     }
 }
+
+/// The node's send refusals that have a type read as the engine words them,
+/// and the ones whose type waits for #1833's next step stay encoding
+/// errors.
+#[test]
+fn send_refusals_keep_the_engines_words() {
+    use bacnet_bip_core::node::SendRefusal;
+    use bacnet_types::error::Lifecycle;
+    for (refusal, typed) in [
+        (SendRefusal::GroupDestination, "argument"),
+        (SendRefusal::HoldFull, "limit"),
+        (SendRefusal::NoBbmd, "not connected"),
+        (SendRefusal::SocketFull, "encoding"),
+        (SendRefusal::SocketError, "encoding"),
+        (SendRefusal::TooLong { max: 1497 }, "encoding"),
+    ] {
+        let error = super::node::send_refusal(refusal);
+        let kind = match &error {
+            Error::InvalidArgument(_) => "argument",
+            Error::LimitReached(_) => "limit",
+            Error::State(Lifecycle::NotConnected, _) => "not connected",
+            Error::Encoding(_) => "encoding",
+            other => panic!("{refusal:?}: {other:?}"),
+        };
+        assert_eq!(kind, typed, "{refusal:?}");
+        let text = error.to_string();
+        let text = text.strip_prefix("encoding error: ").unwrap_or(&text);
+        assert_eq!(text, refusal.to_string());
+    }
+}

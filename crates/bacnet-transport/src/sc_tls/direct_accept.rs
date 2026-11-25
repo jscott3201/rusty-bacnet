@@ -389,8 +389,8 @@ impl Drop for DirectListener {
 /// computed in every connection task, far from overflowing.
 fn validate_timeout(name: &str, timeout: Duration, max: Duration) -> Result<(), Error> {
     if timeout.is_zero() || timeout > max {
-        return Err(Error::Encoding(format!(
-            "direct accept {name} timeout must be above zero and at most {max:?}"
+        return Err(Error::InvalidConfig(bacnet_types::error::Refusal::text(
+            format!("direct accept {name} timeout must be above zero and at most {max:?}"),
         )));
     }
     Ok(())

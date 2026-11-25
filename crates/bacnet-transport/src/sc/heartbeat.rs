@@ -50,24 +50,21 @@ pub(super) fn ack_matches_outstanding(msg: &ScMessage, expected_message_id: Opti
 
 pub(super) fn validate_heartbeat_timing_ms(interval_ms: u64, timeout_ms: u64) -> Result<(), Error> {
     if !(3_000..=300_000).contains(&interval_ms) {
-        return Err(Error::InvalidConfig(
-            Refusal::new(
-                "BACnet/SC heartbeat interval must be in the configurable Annex AB.6.3 range \
+        return Err(Error::InvalidConfig(Refusal::with_value(
+            "BACnet/SC heartbeat interval must be in the configurable Annex AB.6.3 range \
                  of 3..300 seconds (3000..=300000 ms), got {} ms",
-            )
-            .with_value(interval_ms),
-        ));
+            interval_ms,
+        )));
     }
 
     if timeout_ms <= interval_ms {
-        return Err(Error::InvalidConfig(
-            Refusal::new(
-                "BACnet/SC heartbeat disconnect timeout must be greater than the heartbeat \
+        return Err(Error::InvalidConfig(Refusal::with_values(
+            "BACnet/SC heartbeat disconnect timeout must be greater than the heartbeat \
                  interval so a Heartbeat-ACK can arrive, got interval={} ms \
                  timeout={} ms",
-            )
-            .with_values(interval_ms, timeout_ms),
-        ));
+            interval_ms,
+            timeout_ms,
+        )));
     }
 
     Ok(())
