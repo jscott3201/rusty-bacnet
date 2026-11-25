@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use bacnet_bip_core::Duration as CoreDuration;
 use bacnet_bip_core::node::{ConfigError, Foreign, ForwardedTrust, Groups, Retry};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 
 use super::BipTransport;
 
@@ -49,15 +49,17 @@ impl ForeignDeviceConfig {
         let ttl = Duration::from_secs(u64::from(self.ttl));
         let interval = self.renewal_interval.unwrap_or(ttl / 2);
         if self.ttl == 0 || interval.is_zero() || interval >= ttl {
-            return Err(Error::Encoding(
-                "foreign-device mode needs TTL > 0 and a renewal interval > 0 and < TTL".into(),
+            return Err(Error::invalid_config(
+                "foreign-device mode needs TTL > 0 and a renewal interval > 0 and < TTL",
             ));
         }
         // Limit fast replies, busy slots and local failures to ten attempts per
         // second. This remains below half of the smallest positive wire TTL.
         let interval = interval.max(Duration::from_millis(100));
         CoreDuration::try_from(interval).map_err(|too_long| {
-            Error::Encoding(format!("foreign-device renewal interval: {too_long}"))
+            Error::InvalidConfig(Refusal::text(format!(
+                "foreign-device renewal interval: {too_long}"
+            )))
         })
     }
 
@@ -73,10 +75,10 @@ impl ForeignDeviceConfig {
             ForeignBbmd::Name { host, port } => {
                 return match self.bbmd.name() {
                     Some(_) => Ok(()),
-                    None if *port == 0 => Err(Error::Encoding(ConfigError::BbmdPort.to_string())),
-                    None => Err(Error::Encoding(format!(
+                    None if *port == 0 => Err(super::node::config_error(ConfigError::BbmdPort)),
+                    None => Err(Error::InvalidConfig(Refusal::text(format!(
                         "the BBMD's host name '{host}' isn't in the RFC 1123 form"
-                    ))),
+                    )))),
                 };
             }
         };
@@ -89,7 +91,7 @@ impl ForeignDeviceConfig {
         } else {
             return Ok(());
         };
-        Err(Error::Encoding(refusal.to_string()))
+        Err(super::node::config_error(refusal))
     }
 
     /// The node engine's registration, renewed every `interval`

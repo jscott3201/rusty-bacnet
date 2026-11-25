@@ -21,11 +21,11 @@ async fn token_follows_last_socket_worker() -> std::io::Result<()> {
     let weak = Arc::downgrade(&token);
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     transport.retain_network_port_lease_internal(token).unwrap();
-    assert!(
-        transport
-            .retain_network_port_lease_internal(Arc::new(()))
-            .is_err()
-    );
+    // A lease is held already: another holder of the one.
+    assert!(matches!(
+        transport.retain_network_port_lease_internal(Arc::new(())),
+        Err(Error::LimitReached(_))
+    ));
     let _received = transport.start().await.unwrap();
     let address = transport.bip_port().unwrap().endpoint;
     assert_ne!(address.port(), 0);
@@ -64,11 +64,11 @@ async fn normal_capability_and_joined_stop_release_are_explicit() {
     transport.retain_network_port_lease_internal(token).unwrap();
     let _received = transport.start().await.unwrap();
     assert!(transport.supports_local_nonrouter_number_controls());
-    assert!(
-        transport
-            .retain_network_port_lease_internal(Arc::new(()))
-            .is_err()
-    );
+    // Started, which comes before the lease it holds.
+    assert!(matches!(
+        transport.retain_network_port_lease_internal(Arc::new(())),
+        Err(Error::State(Lifecycle::AlreadyStarted, _))
+    ));
     transport.stop().await.unwrap();
     assert!(weak.upgrade().is_none());
     assert!(
@@ -177,10 +177,11 @@ fn a_bbmd_that_also_registers_as_a_foreign_device_has_no_single_mode() {
         ttl: 60,
     });
     assert!(both.bip_port().is_none());
-    assert!(
-        both.retain_network_port_lease_internal(Arc::new(()))
-            .is_err()
-    );
+    // Not started and holding no lease: the refusal is the configuration's.
+    assert!(matches!(
+        both.retain_network_port_lease_internal(Arc::new(())),
+        Err(Error::InvalidConfig(_))
+    ));
 }
 
 fn foreign_config() -> ForeignDeviceConfig {
@@ -192,7 +193,7 @@ fn foreign_config() -> ForeignDeviceConfig {
 }
 
 fn assert_refused_as_both(error: Error) {
-    assert!(matches!(error, Error::Encoding(_)), "{error:?}");
+    assert!(matches!(error, Error::InvalidConfig(_)), "{error:?}");
     assert!(
         error
             .to_string()

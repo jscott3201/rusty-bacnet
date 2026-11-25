@@ -1,4 +1,4 @@
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 
 /// Configuration for SC transport reconnection with jittered exponential backoff.
 ///
@@ -78,39 +78,43 @@ impl ScReconnectConfig {
     /// raw SC transport.
     pub fn validate(&self) -> Result<(), Error> {
         if self.initial_delay_ms == 0 {
-            return Err(Error::OutOfRange(
-                "BACnet/SC reconnect initial_delay_ms must be greater than zero".into(),
+            return Err(Error::invalid_config(
+                "BACnet/SC reconnect initial_delay_ms must be greater than zero",
             ));
         }
         if self.max_delay_ms == 0 {
-            return Err(Error::OutOfRange(
-                "BACnet/SC reconnect max_delay_ms must be greater than zero".into(),
+            return Err(Error::invalid_config(
+                "BACnet/SC reconnect max_delay_ms must be greater than zero",
             ));
         }
         if self.initial_delay_ms > self.max_delay_ms {
-            return Err(Error::OutOfRange(format!(
-                "BACnet/SC reconnect initial_delay_ms must not exceed max_delay_ms, \
-                 got initial_delay_ms={} max_delay_ms={}",
-                self.initial_delay_ms, self.max_delay_ms
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new(
+                    "BACnet/SC reconnect initial_delay_ms must not exceed max_delay_ms, \
+                     got initial_delay_ms={} max_delay_ms={}",
+                )
+                .with_values(self.initial_delay_ms, self.max_delay_ms),
+            ));
         }
         if self.max_delay_ms > Self::MAX_DELAY_MS {
-            return Err(Error::OutOfRange(format!(
-                "BACnet/SC reconnect max_delay_ms must not exceed {} (10 minutes), \
-                 got max_delay_ms={}",
-                Self::MAX_DELAY_MS,
-                self.max_delay_ms
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new(
+                    "BACnet/SC reconnect max_delay_ms must not exceed {} (10 minutes), \
+                     got max_delay_ms={}",
+                )
+                .with_values(Self::MAX_DELAY_MS, self.max_delay_ms),
+            ));
         }
         if self.max_retries.is_none()
             && self.initial_delay_ms < Self::UNLIMITED_MIN_INITIAL_DELAY_MS
         {
-            return Err(Error::OutOfRange(format!(
-                "BACnet/SC reconnect initial_delay_ms must be at least {} with unlimited \
-                 retries, got initial_delay_ms={}",
-                Self::UNLIMITED_MIN_INITIAL_DELAY_MS,
-                self.initial_delay_ms
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new(
+                    "BACnet/SC reconnect initial_delay_ms must be at least {} with unlimited \
+                     retries, got initial_delay_ms={}",
+                )
+                .with_values(Self::UNLIMITED_MIN_INITIAL_DELAY_MS, self.initial_delay_ms),
+            ));
         }
         Ok(())
     }
@@ -142,8 +146,8 @@ mod tests {
                     max_retries: Some(max_retries),
                 };
                 assert!(
-                    matches!(config.validate(), Err(Error::OutOfRange(message))
-                        if message.contains("reconnect") && message.contains(field)),
+                    matches!(config.validate(), Err(Error::InvalidConfig(message))
+                        if message.to_string().contains("reconnect") && message.to_string().contains(field)),
                     "{config:?}"
                 );
             }
@@ -161,8 +165,8 @@ mod tests {
                         max_retries: Some(max_retries),
                     };
                     match config.validate() {
-                        Err(Error::OutOfRange(message)) => assert_eq!(
-                            message,
+                        Err(Error::InvalidConfig(message)) => assert_eq!(
+                            message.to_string(),
                             format!(
                                 "BACnet/SC reconnect max_delay_ms must not exceed 600000 (10 minutes), \
                                  got max_delay_ms={max_delay_ms}"
@@ -217,8 +221,8 @@ mod tests {
         };
         for initial_delay_ms in [1, 999] {
             match config(initial_delay_ms, None).validate() {
-                Err(Error::OutOfRange(message)) => assert_eq!(
-                    message,
+                Err(Error::InvalidConfig(message)) => assert_eq!(
+                    message.to_string(),
                     format!(
                         "BACnet/SC reconnect initial_delay_ms must be at least 1000 with \
                          unlimited retries, got initial_delay_ms={initial_delay_ms}"
@@ -236,7 +240,7 @@ mod tests {
         // The ordinary checks still come first.
         assert!(matches!(
             config(0, None).validate(),
-            Err(Error::OutOfRange(message)) if message.contains("greater than zero")
+            Err(Error::InvalidConfig(message)) if message.to_string().contains("greater than zero")
         ));
     }
 }

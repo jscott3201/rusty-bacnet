@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bacnet_types::sync::MutexExt;
 use tokio::time::Instant;
 
@@ -88,10 +88,10 @@ impl ScHubBroadcastRatePolicy {
             ("global_per_second", self.global_per_second),
         ] {
             if value == 0 || value.checked_mul(TOKEN).is_none() {
-                return Err(Error::Encoding(format!(
+                return Err(Error::InvalidConfig(Refusal::text(format!(
                     "hub broadcast {name} must be in 1..={}",
                     u64::MAX / TOKEN
-                )));
+                ))));
             }
         }
         Ok(())

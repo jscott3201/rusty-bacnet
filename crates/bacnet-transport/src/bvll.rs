@@ -55,7 +55,7 @@
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
-use bacnet_types::error::{DecodeError, DecodingKind, Error};
+use bacnet_types::error::{DecodeError, DecodingKind, EncodeError, Error};
 use bytes::{Bytes, BytesMut};
 
 pub use bacnet_bip_codec::{
@@ -86,8 +86,9 @@ pub(crate) use payload_label;
 /// field at fault: 0 for the datagram as a whole, its type octet or a B/IP
 /// address, 1 for the function, 2 for the Length field, 4 for the payload.
 /// The text is the codec's, octets in upper-case hexadecimal (#1803). Encode
-/// failures become [`Error::Encoding`], and so does an error the codec adds
-/// later, until it is placed here.
+/// failures become a static [`Error::Encode`] with the codec's text (#1833),
+/// and so does an error the codec adds later, under a label that says so,
+/// until it is placed here.
 pub fn bvll_error(error: BvllError) -> Error {
     let (offset, label, values) = match error {
         BvllError::TooShort { length } => (
@@ -139,11 +140,33 @@ pub fn bvll_error(error: BvllError) -> Error {
             );
             return payload_refusal(label, function.to_raw(), length);
         }
-        _ => return Error::Encoding(error.to_string()),
+        BvllError::TooLong { length } => {
+            return encode_refusal(
+                "BVLL message of {} octets exceeds the 16-bit BVLC length field",
+                [length, 0],
+            );
+        }
+        BvllError::UndefinedResultCode { code } => {
+            return encode_refusal("BVLC result code {:#06X} is not defined", [code.into(), 0]);
+        }
+        BvllError::BufferExhausted { needed, available } => {
+            return encode_refusal("buffer exhausted: need {}, have {}", [needed, available]);
+        }
+        _ => return encode_refusal("BVLL codec error not mapped by the transport", [0, 0]),
     };
     let mut refused = DecodeError::new(DecodingKind::InvalidEncoding, offset, label);
     refused.values = values;
     refused.into()
+}
+
+/// An encoder's refusal with the codec's `label` and numbers, as
+/// [`Error::Encode`]; a number past `u32::MAX` reads as `u32::MAX`.
+/// Shared with the B/IPv6 mapper.
+pub(crate) fn encode_refusal(label: &'static str, [first, second]: [usize; 2]) -> Error {
+    let value = |number: usize| u32::try_from(number).unwrap_or(u32::MAX);
+    EncodeError::new(label)
+        .with_values(value(first), value(second))
+        .into()
 }
 
 /// The refusal of a `length`-octet payload its function can't carry, at the

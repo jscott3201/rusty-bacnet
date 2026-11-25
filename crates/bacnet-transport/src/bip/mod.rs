@@ -39,7 +39,7 @@ use bacnet_bip_codec::{BdtEntries, BvlcFunction, BvlcResultCode, Bvll};
 use bacnet_bip_core::node::{Cast, Link, Mode};
 use bacnet_npdu::NpduLimits;
 use bacnet_types::bip_port::{BbmdTables, BipPortMode, ForeignRegistration};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle};
 use bacnet_types::sync::MutexExt;
 
 mod bbmd_receive;
@@ -451,16 +451,18 @@ impl TransportPort for BipTransport {
     }
 
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
-        let held = self.network_port_lease.get_mut_locked().is_some();
-        if self.registration_closed
-            || self.node.is_some()
-            || self.tasks.is_running()
-            || held
-            || self.bip_port().is_none()
-        {
-            return Err(Error::Encoding(
-                "registered B/IP lease requires an unstarted transport in one B/IP mode".into(),
-            ));
+        // One text, the variant by cause: started (or a start tried), the
+        // lease held already, or no single B/IP mode to lend.
+        const REFUSED: &str =
+            "registered B/IP lease requires an unstarted transport in one B/IP mode";
+        if self.registration_closed || self.node.is_some() || self.tasks.is_running() {
+            return Err(Error::state(Lifecycle::AlreadyStarted, REFUSED));
+        }
+        if self.network_port_lease.get_mut_locked().is_some() {
+            return Err(Error::limit_reached(REFUSED));
+        }
+        if self.bip_port().is_none() {
+            return Err(Error::invalid_config(REFUSED));
         }
         *self.network_port_lease.get_mut_locked() = Some(lease);
         Ok(())
@@ -535,10 +537,9 @@ impl TransportPort for BipTransport {
         // own address, so they run after the bind. A node is in one B/IP mode: a BBMD distributes its own broadcasts,
         // and a foreign device hands them to its BBMD (#938).
         if self.foreign_device.is_some() && (self.bbmd_config.is_some() || self.bbmd.is_some()) {
-            return Err(Error::Encoding(
+            return Err(Error::invalid_config(
                 "a B/IP transport can't start as a BBMD that also registers as a foreign \
-                 device; run the two on separate transports"
-                    .into(),
+                 device; run the two on separate transports",
             ));
         }
         let foreign_config = self.foreign_device_config();

@@ -60,7 +60,7 @@
 use std::time::Duration;
 
 use bacnet_mstp_codec::{MAX_COBS_FRAME_LENGTH, StreamDecoder};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bytes::Bytes;
 use tokio::io::AsyncReadExt;
 
@@ -134,24 +134,24 @@ impl MonitorConfig {
     ///
     /// # Errors
     ///
-    /// [`Error::Encoding`] for a zero baud rate, a zero frame-abort time,
-    /// or a record capacity of zero or above `usize::MAX / 2`.
+    /// [`Error::InvalidConfig`] for a zero baud rate, a zero frame-abort
+    /// time, or a record capacity of zero or above `usize::MAX / 2`.
     pub fn validate(&self) -> Result<(), Error> {
         if self.baud_rate == 0 {
-            return Err(Error::Encoding(
-                "MS/TP monitor baud_rate must not be zero".into(),
+            return Err(Error::invalid_config(
+                "MS/TP monitor baud_rate must not be zero",
             ));
         }
         if self.frame_abort.is_zero() {
-            return Err(Error::Encoding(
-                "MS/TP monitor frame_abort must not be zero".into(),
+            return Err(Error::invalid_config(
+                "MS/TP monitor frame_abort must not be zero",
             ));
         }
         if self.record_capacity == 0 || self.record_capacity > usize::MAX / 2 {
-            return Err(Error::Encoding(format!(
-                "MS/TP monitor record_capacity {} is out of range",
-                self.record_capacity
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new("MS/TP monitor record_capacity {} is out of range")
+                    .with_value(self.record_capacity as u64),
+            ));
         }
         Ok(())
     }

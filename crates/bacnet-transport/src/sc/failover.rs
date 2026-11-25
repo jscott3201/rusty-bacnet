@@ -143,8 +143,9 @@ pub(super) async fn prepare_primary_restore<W: WebSocketPort>(
             .await
             .map(Arc::new)
     } else {
-        primary_ws
-            .ok_or_else(|| Error::Encoding("SC retired primary requires a fresh connector".into()))
+        primary_ws.ok_or(Error::invalid_config(
+            "SC retired primary requires a fresh connector",
+        ))
     };
     let probe = Arc::new(Mutex::new(probe));
     let socket = match socket {

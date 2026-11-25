@@ -36,7 +36,7 @@ use std::path::Path;
 use tracing::{debug, warn};
 
 use crate::bbmd::{self, BbmdState, BdtEntry, ForeignDevicePolicy, NatTraversal, PersistedNat};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 
 /// Pre-start configuration for BBMD mode.
 pub(super) struct BbmdConfig {
@@ -341,7 +341,7 @@ pub(super) fn initial_bbmd_state(
     let mut state = match loaded {
         Some(state) => state,
         None => {
-            let config_error = |e: Error| Error::Encoding(format!("BDT configuration error: {e}"));
+            let config_error = |e: Error| e.with_context("BDT configuration error");
             let rows = bbmd::canonical_bdt(config.initial_bdt.clone()).map_err(config_error)?;
             let ip = ctx.own_ip(&rows, BdtSource::Configured, config.nat.is_some())?;
             let mut state = new_state(config, group, ip, ctx.port)?;
@@ -404,13 +404,13 @@ pub(super) fn refresh_own_address(
     let old = state.local_address();
     let (old_ip, old_port) = (old.ip().octets(), old.port());
     state.set_local_address(ip.octets(), ctx.port).map_err(|e| {
-        Error::Encoding(format!(
+        Error::LimitReached(Refusal::text(format!(
             "BBMD restart moved its own B/IP address from {}:{old_port} to {ip}:{}, and a \
              self row for the new address would exceed the BDT limit of {} entries: {e}",
             Ipv4Addr::from(old_ip),
             ctx.port,
             BbmdState::MAX_BDT_ENTRIES
-        ))
+        )))
     })
 }
 

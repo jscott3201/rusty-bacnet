@@ -277,6 +277,7 @@ pub fn decode_ethernet_frame(data: &[u8]) -> Result<EthernetFrame, Error> {
 mod transport {
     use super::*;
     use bacnet_types::data_link::DataLink;
+    use bacnet_types::error::Refusal;
     use bacnet_types::sync::RwLockExt;
     use nix::ifaddrs::getifaddrs;
     use nix::net::if_::if_nametoindex;
@@ -712,10 +713,10 @@ mod transport {
             })?;
 
             if mac.len() != 6 {
-                return Err(Error::Encoding(format!(
-                    "Ethernet MAC must be 6 bytes, got {}",
-                    mac.len()
-                )));
+                return Err(Error::InvalidArgument(
+                    Refusal::new("Ethernet MAC must be 6 bytes, got {}")
+                        .with_value(mac.len() as u64),
+                ));
             }
 
             if npdu.len() > MAX_ETHERNET_NPDU {

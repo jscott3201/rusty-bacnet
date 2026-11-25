@@ -18,7 +18,7 @@ use bacnet_bip_codec::{self as codec, BdtEntries, BvlcResultCode, FdtEntries};
 use bacnet_bip_core::Arrival;
 use bacnet_bip_core::bbmd::{self as core_bbmd, BdtError, Request};
 use bacnet_time::HostClock;
-use bacnet_types::error::{DecodeError, DecodingKind, Error};
+use bacnet_types::error::{DecodeError, DecodingKind, Error, Refusal};
 use bytes::BytesMut;
 
 use crate::bvll::bvll_error;
@@ -142,9 +142,16 @@ fn address(ip: [u8; 4], port: u16) -> SocketAddrV4 {
 }
 
 /// The host's error for a BDT the core refused, worded as before the core
-/// existed.
+/// existed: [`Error::LimitReached`] for a table past its size, and
+/// [`Error::InvalidConfig`] for rows it can't take.
 fn bdt_error(error: BdtError) -> Error {
-    Error::Encoding(match error {
+    if let BdtError::Capacity { needed, available } = error {
+        return Error::LimitReached(
+            Refusal::new("BDT size {} exceeds maximum of {} after self-entry insertion")
+                .with_values(needed as u64, available as u64),
+        );
+    }
+    Error::InvalidConfig(Refusal::text(match error {
         BdtError::Invalid { entry, reason } => {
             // A mask under /8 can direct a broadcast to 255.255.255.255,
             // which this error has always named, and the tests check.
@@ -159,11 +166,8 @@ fn bdt_error(error: BdtError) -> Error {
         BdtError::ConflictingMasks { entry } => {
             format!("BDT conflicting masks: {:?}", BdtEntry::from(entry))
         }
-        BdtError::Capacity { needed, available } => {
-            format!("BDT size {needed} exceeds maximum of {available} after self-entry insertion")
-        }
         other => format!("BDT refused: {other}"),
-    })
+    }))
 }
 
 /// Validate and canonicalize a BDT candidate (issue #529) without adding the
@@ -350,8 +354,9 @@ impl BbmdState {
     ///
     /// A self row that [`Self::set_bdt`] appended for the old address moves to
     /// the new one. A row the BDT lists explicitly stays, and becomes an
-    /// ordinary peer row once it no longer matches. Returns `Error::Encoding`,
-    /// changing nothing, when the new self row would overflow the BDT.
+    /// ordinary peer row once it no longer matches. Returns
+    /// [`Error::LimitReached`], changing nothing, when the new self row would
+    /// overflow the BDT.
     /// Behind a NAT router the BDT's own row is the global address, which
     /// stays.
     pub(crate) fn set_local_address(&mut self, ip: [u8; 4], port: u16) -> Result<(), Error> {
@@ -376,9 +381,10 @@ impl BbmdState {
     /// the complete candidate before changing the table. Byte-identical
     /// duplicates collapse in stable first-seen order; the same `(ip, port)`
     /// with different masks rejects the whole candidate. The local BBMD is
-    /// auto-inserted as `/32` when absent. Any invalid, conflicting, or
-    /// over-capacity candidate returns `Error::Encoding` and preserves the
-    /// previously committed table exactly.
+    /// auto-inserted as `/32` when absent. An invalid or conflicting
+    /// candidate returns [`Error::InvalidConfig`], and an over-capacity one
+    /// [`Error::LimitReached`]; either preserves the previously committed
+    /// table exactly.
     pub fn set_bdt(&mut self, entries: Vec<BdtEntry>) -> Result<(), Error> {
         let rows: Vec<codec::BdtEntry> = entries.iter().map(codec::BdtEntry::from).collect();
         self.tables

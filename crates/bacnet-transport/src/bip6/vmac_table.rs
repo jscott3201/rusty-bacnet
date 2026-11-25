@@ -10,7 +10,7 @@ use std::net::SocketAddrV6;
 use std::time::Duration;
 
 use bacnet_types::bip6_vmac::{VmacHex, device_instance_vmac};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use tokio::time::Instant;
 
 use super::Bip6Vmac;
@@ -43,7 +43,9 @@ pub(super) const REVALIDATE_AFTER: Duration = Duration::from_secs(300);
 pub fn vmac_from_device_instance(instance: u32) -> Result<Bip6Vmac, Error> {
     device_instance_vmac(instance)
         .map(Bip6Vmac::new)
-        .ok_or_else(|| Error::Encoding("BACnet Device instance must be in 0..=4194303".to_string()))
+        .ok_or(Error::invalid_argument(
+            "BACnet Device instance must be in 0..=4194303",
+        ))
 }
 
 /// What starts a B/IPv6 VMAC written as text: see [`parse_vmac_text`].
@@ -55,8 +57,8 @@ pub const VMAC_TEXT_PREFIX: &str = "bip6:";
 /// digits for any VMAC, such as a random one. [`format_vmac_text`] writes
 /// the hex form, which this reads back.
 ///
-/// Fails with [`Error::OutOfRange`] for an instance past 4194303 and with
-/// [`Error::Encoding`] for any other text; both messages say what to write.
+/// Fails with [`Error::InvalidArgument`] for an instance past 4194303 and
+/// for any other text it can't read; the message says what to write.
 ///
 /// ```
 /// use bacnet_transport::bip6::{format_vmac_text, parse_vmac_text, Bip6Vmac};
@@ -71,10 +73,10 @@ pub const VMAC_TEXT_PREFIX: &str = "bip6:";
 /// ```
 pub fn parse_vmac_text(text: &str) -> Result<Bip6Vmac, Error> {
     let malformed = || {
-        Error::Encoding(format!(
+        Error::InvalidArgument(Refusal::text(format!(
             "'{text}' is not a B/IPv6 VMAC: write bip6:<device instance 0..=4194303> \
              or bip6:0x<6 hex digits>"
-        ))
+        )))
     };
     let body = text.strip_prefix(VMAC_TEXT_PREFIX).ok_or_else(malformed)?;
     if let Some(hex) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
@@ -92,9 +94,9 @@ pub fn parse_vmac_text(text: &str) -> Result<Bip6Vmac, Error> {
     // 4194303.
     let instance = body.parse::<u32>().unwrap_or(u32::MAX);
     vmac_from_device_instance(instance).map_err(|_| {
-        Error::OutOfRange(format!(
+        Error::InvalidArgument(Refusal::text(format!(
             "B/IPv6 device instance must be in 0..=4194303, not {body}"
-        ))
+        )))
     })
 }
 

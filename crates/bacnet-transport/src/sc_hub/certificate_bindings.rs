@@ -1,7 +1,7 @@
 //! Opt-in installation policy; configuration pins are never connection identity.
 
 use crate::sc_frame::{BROADCAST_VMAC, UNKNOWN_VMAC, Vmac};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use std::{
     collections::{HashMap, HashSet},
     fmt,
@@ -137,7 +137,7 @@ impl fmt::Debug for ScHubCertificateBindings {
     }
 }
 fn invalid(reason: &str) -> Error {
-    Error::Encoding(format!("certificate bindings: {reason}"))
+    Error::InvalidConfig(Refusal::text(format!("certificate bindings: {reason}")))
 }
 
 /// Minted only from rustls's peer chain after a successful verifying handshake.

@@ -52,7 +52,7 @@ impl NodeHandle {
                 .map_err(|refusal| self.refuse_send(refusal))?;
             // An Original-Unicast-NPDU is a four-octet header and `npdu`.
             let datagram = OutgoingDatagram::split(&outgoing.message, npdu).ok_or_else(|| {
-                Error::Encoding("a unicast BVLL message is not a header and its NPDU".into())
+                Error::encode("a unicast BVLL message is not a header and its NPDU")
             })?;
             Ok((datagram, outgoing.to))
         })

@@ -89,7 +89,7 @@ impl Default for ScHubAdmissionLimits {
 
 impl ScHubAdmissionLimits {
     /// Construct checked admission bounds. Zero or overflowing (summing
-    /// past the addressable count) bounds return [`Error::Encoding`]
+    /// past the addressable count) bounds return [`Error::InvalidConfig`]
     /// before any socket is opened.
     pub fn new(max_clients: usize, max_handshakes: usize) -> Result<Self, Error> {
         let limits = Self {
@@ -110,19 +110,18 @@ impl ScHubAdmissionLimits {
 
     pub(super) fn validate(self) -> Result<(), Error> {
         if self.max_clients == 0 {
-            return Err(Error::Encoding(
-                "hub admission max_clients must be nonzero".into(),
+            return Err(Error::invalid_config(
+                "hub admission max_clients must be nonzero",
             ));
         }
         if self.max_handshakes == 0 {
-            return Err(Error::Encoding(
-                "hub admission max_handshakes must be nonzero".into(),
+            return Err(Error::invalid_config(
+                "hub admission max_handshakes must be nonzero",
             ));
         }
         if self.max_clients.checked_add(self.max_handshakes).is_none() {
-            return Err(Error::Encoding(
-                "hub admission limits overflow: max_clients + max_handshakes exceeds the addressable count"
-                    .into(),
+            return Err(Error::invalid_config(
+                "hub admission limits overflow: max_clients + max_handshakes exceeds the addressable count",
             ));
         }
         Ok(())
@@ -389,13 +388,13 @@ mod tests {
         for (clients, handshakes) in [(0, 1), (1, 0), (0, 0)] {
             let error = ScHubAdmissionLimits::new(clients, handshakes).unwrap_err();
             assert!(
-                matches!(error, Error::Encoding(ref message) if message.contains("must be nonzero")),
+                matches!(error, Error::InvalidConfig(ref message) if message.to_string().contains("must be nonzero")),
                 "{error}"
             );
         }
         let error = ScHubAdmissionLimits::new(usize::MAX, 1).unwrap_err();
         assert!(
-            matches!(error, Error::Encoding(ref message) if message.contains("overflow")),
+            matches!(error, Error::InvalidConfig(ref message) if message.to_string().contains("overflow")),
             "{error}"
         );
         assert_eq!(

@@ -57,7 +57,7 @@ async fn foreign_mode_validation_precedes_interface_or_socket_io() {
             renewal_interval: interval,
         });
         let error = transport.start().await.unwrap_err();
-        assert!(matches!(error, Error::Encoding(_)), "{error:?}");
+        assert!(matches!(error, Error::InvalidConfig(_)), "{error:?}");
         assert!(error.to_string().contains("renewal interval"));
         assert!(transport.socket().is_none());
         assert!(!transport.bvlc_client_snapshot().running);
@@ -203,7 +203,7 @@ async fn foreign_mode_refuses_a_bbmd_no_device_could_register_with() {
         renewal_interval: None,
     };
     let refused = |error: Error| {
-        assert!(matches!(error, Error::Encoding(_)), "{error:?}");
+        assert!(matches!(error, Error::InvalidConfig(_)), "{error:?}");
         assert!(error.to_string().contains("BBMD"), "{error}");
     };
     let subnet = Ipv4Addr::new(192, 0, 2, 255);

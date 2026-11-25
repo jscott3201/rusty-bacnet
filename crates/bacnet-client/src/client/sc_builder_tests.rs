@@ -135,7 +135,7 @@ async fn sc_client_builder_rejects_invalid_reconnect_before_tls_lookup() {
                 .err()
                 .expect("invalid reconnect must fail");
             assert!(
-                matches!(&error, Error::OutOfRange(message) if message.contains("reconnect")),
+                matches!(&error, Error::InvalidConfig(message) if message.to_string().contains("reconnect")),
                 "expected reconnect error before TLS lookup, got {error:?}"
             );
         }
@@ -215,7 +215,7 @@ async fn sc_client_test_builder_reconnect_preflight_drops_input_without_io() {
             .err()
             .expect("invalid reconnect must fail");
         assert!(
-            matches!(&error, Error::OutOfRange(message) if message.contains("reconnect")),
+            matches!(&error, Error::InvalidConfig(message) if message.to_string().contains("reconnect")),
             "expected reconnect preflight error, got {error:?}"
         );
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -237,7 +237,7 @@ async fn sc_client_builder_npdu_limit_preflight_covers_all_build_paths() {
             builder().build_any().await.err().unwrap(),
         ] {
             assert!(
-                matches!(error, Error::OutOfRange(message) if message.contains("per-origin limit"))
+                matches!(error, Error::InvalidConfig(message) if message.to_string().contains("per-origin limit"))
             );
         }
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -251,7 +251,7 @@ async fn sc_client_builder_npdu_limit_preflight_covers_all_build_paths() {
             .err()
             .unwrap();
         assert!(
-            matches!(error, Error::OutOfRange(message) if message.contains("per-origin limit"))
+            matches!(error, Error::InvalidConfig(message) if message.to_string().contains("per-origin limit"))
         );
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);

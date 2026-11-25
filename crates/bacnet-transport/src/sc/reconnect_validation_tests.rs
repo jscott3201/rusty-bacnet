@@ -89,7 +89,7 @@ async fn check_invalid_start_and_repair(heartbeat_mode: &str) {
             for _ in 0..2 {
                 let error = transport.start().await.unwrap_err();
                 assert!(
-                    matches!(&error, Error::OutOfRange(message) if message.contains("reconnect")),
+                    matches!(&error, Error::InvalidConfig(message) if message.to_string().contains("reconnect")),
                     "expected reconnect configuration error, got {error:?}"
                 );
                 tokio::task::yield_now().await;

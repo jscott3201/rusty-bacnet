@@ -1,7 +1,7 @@
 use crate::port::DataAttribute;
 use crate::sc_frame::{BROADCAST_VMAC, ScFunction, ScMessage, ScOption, encode_sc_message};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bacnet_types::sync::MutexExt;
 use bytes::{Bytes, BytesMut};
 use tracing::warn;
@@ -154,34 +154,34 @@ pub(super) fn build_bvlc_result_nak(
 
 pub(super) fn to_data_options(data_attributes: &[DataAttribute]) -> Result<Vec<ScOption>, Error> {
     if data_attributes.len() > MAX_SC_DATA_ATTRIBUTES {
-        return Err(Error::Encoding(format!(
-            "BACnet/SC Data Options exceed {MAX_SC_DATA_ATTRIBUTES} attributes"
-        )));
+        return Err(Error::InvalidArgument(
+            Refusal::new("BACnet/SC Data Options exceed {} attributes")
+                .with_value(MAX_SC_DATA_ATTRIBUTES as u64),
+        ));
     }
 
     for attribute in data_attributes {
         if !(1..=31).contains(&attribute.option_type) {
-            return Err(Error::Encoding(format!(
-                "BACnet/SC Data Option type must be 1..31, got {}",
-                attribute.option_type
-            )));
+            return Err(Error::InvalidArgument(
+                Refusal::new("BACnet/SC Data Option type must be 1..31, got {}")
+                    .with_value(attribute.option_type.into()),
+            ));
         }
         if attribute.option_type == SECURE_PATH_OPTION_TYPE && !attribute.must_understand {
-            return Err(Error::Encoding(
-                "BACnet/SC Secure Path Data Option must set Must Understand".into(),
+            return Err(Error::invalid_argument(
+                "BACnet/SC Secure Path Data Option must set Must Understand",
             ));
         }
         if attribute.option_type == SECURE_PATH_OPTION_TYPE && !attribute.data.is_empty() {
-            return Err(Error::Encoding(
-                "BACnet/SC Secure Path Data Option must not contain Header Data".into(),
+            return Err(Error::invalid_argument(
+                "BACnet/SC Secure Path Data Option must not contain Header Data",
             ));
         }
         if attribute.data.len() > u16::MAX as usize {
-            return Err(Error::Encoding(format!(
-                "BACnet/SC Data Option type {} payload length {} exceeds 65535",
-                attribute.option_type,
-                attribute.data.len()
-            )));
+            return Err(Error::InvalidArgument(
+                Refusal::new("BACnet/SC Data Option type {} payload length {} exceeds 65535")
+                    .with_values(attribute.option_type.into(), attribute.data.len() as u64),
+            ));
         }
     }
 

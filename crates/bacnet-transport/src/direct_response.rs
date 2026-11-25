@@ -164,15 +164,17 @@ impl DirectResponse {
             return Err(unavailable());
         }
         if npdu.len() > usize::from(this.peer_max_npdu) {
-            return Err(Error::Encoding(
-                "direct response exceeds peer Max-NPDU-Length".into(),
-            ));
+            return Err(Error::SendTooLong {
+                length: npdu.len(),
+                limit: usize::from(this.peer_max_npdu),
+            });
         }
         let bytes = Self::encode_frame(npdu, this.next_message.fetch_add(1, Ordering::Relaxed));
         if bytes.len() > usize::from(this.peer_max_bvlc) {
-            return Err(Error::Encoding(
-                "direct response exceeds peer Max-BVLC-Length".into(),
-            ));
+            return Err(Error::SendTooLong {
+                length: bytes.len(),
+                limit: usize::from(this.peer_max_bvlc),
+            });
         }
         let deadline = tokio::time::Instant::now()
             .checked_add(this.wait)

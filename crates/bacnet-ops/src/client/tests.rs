@@ -689,3 +689,30 @@ fn a_disabled_node_fails_locally() {
         assert!(!super::timed_out(&error), "{error}");
     }
 }
+
+/// The local refusals #1833 typed out of the encoding error fail locally,
+/// as it did; a stopped transport's not-connected error is a link that is
+/// down instead.
+#[test]
+fn local_refusals_fail_locally_and_a_stopped_link_is_unreachable() {
+    use bacnet_types::error::{Error, Lifecycle};
+    for error in [
+        Error::state(
+            Lifecycle::NotConnected,
+            "BACnet/SC transport not in Connected state",
+        ),
+        Error::invalid_config("SC VMAC is zero or broadcast"),
+        Error::invalid_argument("a unicast can't go to a group address"),
+        Error::unsupported("transport reports no B/IP link or data link"),
+        Error::limit_reached("no room to hold a broadcast until registration"),
+    ] {
+        assert!(super::failed_locally(&error), "{error}");
+        assert!(!super::unreachable(&error), "{error}");
+    }
+    let stopped = Error::Transport(std::io::Error::new(
+        std::io::ErrorKind::NotConnected,
+        "transport stopped",
+    ));
+    assert!(!super::failed_locally(&stopped), "{stopped}");
+    assert!(super::unreachable(&stopped), "{stopped}");
+}

@@ -217,8 +217,8 @@ impl ScHubDialer {
             config.validate()?;
         }
         if self.failover.is_some() && reconnect.is_none() {
-            return Err(Error::Encoding(
-                "BACnet/SC failover hub requires reconnect".into(),
+            return Err(Error::invalid_config(
+                "BACnet/SC failover hub requires reconnect",
             ));
         }
         TlsWebSocket::validate_url(&self.primary)?;

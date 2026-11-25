@@ -361,6 +361,31 @@ decode that way. A decoder that names a fault the table doesn't, such as
 GetEnrollmentSummary's undefined enumerations, returns its `Error::reject(reason)`
 itself. A decoding error met once a service runs keeps its Error PDU.
 
+A call the stack turns down on its own side, before or without any exchange
+with a peer, is a local refusal with a variant per kind (#1833), so a caller
+matches the kind without reading text: `Error::State(Lifecycle, Refusal)` for
+a lifecycle state (`AlreadyStarted`, `NotRunning`, `Stopping`,
+`NotConnected`, `Closed`), `Error::InvalidConfig` for a value the component
+keeps (a builder setting, an option, a table), `Error::InvalidArgument` for a
+value used for one call or text parsed once (an address or MAC of the wrong
+form for the link), `Error::Unsupported` for what this platform, build or
+component doesn't offer, and `Error::LimitReached` for a resource cap,
+including a one-holder resource (a lock, a lease, a seat) another holds. A
+`Refusal` is the text for a person and not API: a static label with as many
+numbers as it has placeholders (`Refusal::new(label)`, then `.with_value(v)` or
+`.with_values(a, b)`, as for `RangeError`), built when displayed, or with `std` owned text where it names a run-time
+value (`Refusal::text`). A number or fact a caller acts on has a typed variant
+or field of its own, as `Error::SendTooLong` has. Each displays as its text
+alone; `Error::with_context` puts context in front and keeps the variant.
+`Error::state`, `Error::invalid_config`, `Error::invalid_argument`,
+`Error::unsupported` and `Error::limit_reached` build one from a static
+label. `bacnet-transport` reports its refusals this way; the other hosted
+crates still report theirs as `Error::Encoding` or `Error::OutOfRange` text
+until #1833 reaches them. A stopped transport's send still fails with
+`Error::Transport` of kind `NotConnected`, which the client and the bindings
+treat as a link that is down; it moves to `State(NotRunning)` in a change of
+its own.
+
 `Error::UnsupportedTransport { required, actual }` reports an operation the
 endpoint's data link cannot carry, such as a BBMD request through an
 `AnyTransport` that is not B/IP. Both fields are a
@@ -1424,7 +1449,7 @@ I-Am could bind a device to a group, and the answer to a request would go to
 every node in it.
 
 `send_unicast` to one of those group destinations fails with
-`Error::Encoding` and sends nothing (#1677). An Original-Unicast-NPDU goes to
+`Error::InvalidArgument` and sends nothing (#1677, #1833). An Original-Unicast-NPDU goes to
 one node's own address, and a receiver that checks where a datagram was sent,
 as this transport does, drops one sent to a group, so the caller finds out
 instead of losing the message; `send_broadcast` reaches the link, and
@@ -1787,7 +1812,7 @@ Production BACnet/SC transports validate heartbeat settings at `start()`: the in
 **Raw transport startup migration:** `new(ws, vmac)` remains two-argument and
 infallible, with a zero UUID placeholder while unstarted. `with_device_uuid` is
 required before `start()`: omitted/all-zero UUIDs and reserved all-zero/all-ff
-local VMACs return clear `Error::Encoding` configuration errors. Error precedence
+local VMACs return clear `Error::InvalidConfig` configuration errors. Error precedence
 is reconnect configuration, heartbeat timing, then identity. No UUID version or
 variant bits, EUI-48 shape, or Random-48 shape are enforced by this guard.
 
@@ -2389,7 +2414,7 @@ retired with no public unchecked escape.
 **Hub identity source/runtime break:** `ScHub::start(bind, tls, vmac, uuid)` now
 requires the fourth UUID argument. All four public starts reject an all-zero
 16-byte UUID or reserved UNKNOWN (all-zero)/BROADCAST (all-ff) local VMAC with
-`Error::Encoding` before `TcpListener::bind`, through one shared enforcement point.
+`Error::InvalidConfig` before `TcpListener::bind`, through one shared enforcement point.
 The other three method names, argument order and return contracts are unchanged.
 No UUID version/variant or general VMAC bit-shape policy is added. Provision the
 hosting device UUID before deployment and durably reuse it for its lifetime
@@ -2532,7 +2557,7 @@ match ScNodeTlsConfig::from_pem_files("site-ca.pem", "node.pem", "node.key") {
 text, in `Debug` or `Display`, and a path's control characters are escaped in the
 text; the key and its PEM text are not zeroized, as with DER.
 `From<ScTlsConfigError>` is implemented for `bacnet_types::error::Error` (as
-`Error::Encoding` with the text) and, with `sc-tls`, for `bacnet_ops::OpsError` (as
+`Error::InvalidConfig` with the text) and, with `sc-tls`, for `bacnet_ops::OpsError` (as
 the typed `OpsError::Tls`), so `?` works in functions returning either.
 `bacnet_ops` re-exports `ScNodeTlsConfig`, `ScTlsConfigError` and the types its
 variants name, so an application on `bacnet_ops` alone loads the files:
@@ -4209,7 +4234,7 @@ a local broadcast too.
 `send_apdu` sends an Unconfirmed-Request for one of the groups the link's own
 broadcast stands for (`TransportPort::local_broadcast_destinations`) through
 the transport's `send_broadcast` (#1677). B/IP refuses every unicast to one of
-its group addresses with `Error::Encoding`, sending nothing, since its
+its group addresses with `Error::InvalidArgument`, sending nothing, since its
 receivers drop an Original-Unicast-NPDU that wasn't sent to their own address.
 On B/IP those groups are the ones at the link's own UDP port: a group address
 at another port belongs to another B/IP network, so a send there is left to
@@ -13904,8 +13929,14 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::UnsupportedTransport { required, actual }` | The client's data link cannot carry the operation (a BBMD helper on a non-B/IP transport) |
 | `Error::Decoding(DecodeError)` | Malformed received data, with its offset and `DecodingKind` |
 | `Error::Encode(EncodeError)`, `Error::Range(RangeError)` | A value an encoder, validator or constructor refused, with a static label |
-| `Error::Encoding(msg)` | A formatted local encoding or configuration error (transport, network, client and server) |
-| `Error::Transport(io_error)` | Transport I/O failure |
+| `Error::State(Lifecycle, Refusal)` | A call the component's lifecycle state refuses: already started, not running, stopping, not connected to its peer, or closed (#1833) |
+| `Error::InvalidConfig(Refusal)` | A value the component would keep (a builder setting, an option, a table) refused before anything ran |
+| `Error::InvalidArgument(Refusal)` | A value for one call, or text parsed once, refused before anything was sent, such as a MAC of the wrong form for the link |
+| `Error::Unsupported(Refusal)` | Not offered on this platform, in this build, or by this kind of component |
+| `Error::LimitReached(Refusal)` | A resource cap reached: a full table, a counter run out, a one-holder resource another holds |
+| `Error::SendTooLong { length, limit }` | A send refused for its length before anything was written |
+| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (network, endpoint, client, server, objects), and, until their own change, the transport's I/O failures as text, the MS/TP and Ethernet NPDU-length refusals, and B/IP's refusals of an NPDU too long, a socket that can't take the datagram now and a socket's own failure |
+| `Error::Transport(io_error)` | Transport I/O failure, and a stopped transport's send (`NotConnected`) |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
 | `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles) |
 

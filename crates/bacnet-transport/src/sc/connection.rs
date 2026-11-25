@@ -1,7 +1,7 @@
 //! BACnet/SC connection state machine.
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle};
 use bytes::Bytes;
 use tracing::{debug, warn};
 
@@ -184,13 +184,15 @@ impl ScConnection {
     /// Returns an error if not connected.
     pub fn build_disconnect_request(&mut self) -> Result<ScMessage, Error> {
         if self.state != ScConnectionState::Connected {
-            return Err(Error::Encoding(
-                "cannot build DisconnectRequest: connection is not connected".into(),
+            return Err(Error::state(
+                Lifecycle::NotConnected,
+                "cannot build DisconnectRequest: connection is not connected",
             ));
         }
         if self.hub_vmac.is_none() {
-            return Err(Error::Encoding(
-                "cannot build DisconnectRequest: no hub VMAC (not connected)".into(),
+            return Err(Error::state(
+                Lifecycle::NotConnected,
+                "cannot build DisconnectRequest: no hub VMAC (not connected)",
             ));
         }
         self.state = ScConnectionState::Disconnecting;

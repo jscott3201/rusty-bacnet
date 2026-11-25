@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use bacnet_types::bip_port::{BipPortMode, ForeignRegistration};
 use bacnet_types::data_link::DataLink;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle};
 use bacnet_types::sync::MutexExt;
 use bytes::BytesMut;
 use tokio::sync::mpsc;
@@ -541,15 +541,15 @@ impl TransportPort for Bip6Transport {
     }
 
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
+        // One text, the variant by cause: started (or a start tried), or
+        // the lease held already.
+        const REFUSED: &str = "registered B/IPv6 lease requires an unstarted transport";
+        if self.registration_closed || self.socket.is_some() || self.tasks.is_running() {
+            return Err(Error::state(Lifecycle::AlreadyStarted, REFUSED));
+        }
         let held = self.network_port_lease.get_mut_locked();
-        if self.registration_closed
-            || self.socket.is_some()
-            || self.tasks.is_running()
-            || held.is_some()
-        {
-            return Err(Error::Encoding(
-                "registered B/IPv6 lease requires an unstarted transport".into(),
-            ));
+        if held.is_some() {
+            return Err(Error::limit_reached(REFUSED));
         }
         *held = Some(lease);
         Ok(())

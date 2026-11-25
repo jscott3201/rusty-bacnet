@@ -2,7 +2,7 @@ use bacnet_mstp_codec::BROADCAST_MAC;
 use bacnet_mstp_core::{Duration as CoreDuration, QueueRefusal};
 use bacnet_time::HostClock;
 use bacnet_types::data_link::DataLink;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle, Refusal};
 use bacnet_types::sync::MutexExt;
 use std::sync::Mutex as StdMutex;
 use tokio::sync::{Mutex, mpsc};
@@ -286,7 +286,8 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
 
         let config = self.config.core_config()?;
         self.execution_mode.validate()?;
-        let not_started = || Error::Encoding("MS/TP transport already started".into());
+        let not_started =
+            || Error::state(Lifecycle::AlreadyStarted, "MS/TP transport already started");
         self.serial
             .as_ref()
             .ok_or_else(not_started)?
@@ -394,10 +395,9 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
 
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
         let [destination] = mac else {
-            return Err(Error::Encoding(format!(
-                "MS/TP MAC must be 1 byte, got {}",
-                mac.len()
-            )));
+            return Err(Error::InvalidArgument(
+                Refusal::new("MS/TP MAC must be 1 byte, got {}").with_value(mac.len() as u64),
+            ));
         };
         self.enqueue(*destination, npdu)
     }
@@ -516,12 +516,12 @@ impl SerialPort for LoopbackSerial {
         {
             own.send(data.to_vec())
                 .await
-                .map_err(|_| Error::Encoding("loopback echo failed".into()))?;
+                .map_err(|_| Error::state(Lifecycle::Closed, "loopback echo failed"))?;
         }
         self.tx
             .send(data.to_vec())
             .await
-            .map_err(|_| Error::Encoding("loopback write failed".into()))
+            .map_err(|_| Error::state(Lifecycle::Closed, "loopback write failed"))
     }
 
     async fn drain(&self) -> Result<(), Error> {
@@ -553,7 +553,7 @@ impl SerialPort for LoopbackSerial {
                     leftover.extend_from_slice(&data[len..]);
                     return Ok(len);
                 }
-                None => return Err(Error::Encoding("loopback channel closed".into())),
+                None => return Err(Error::state(Lifecycle::Closed, "loopback channel closed")),
             }
         }
     }

@@ -33,7 +33,7 @@ use bacnet_bip_core::node::{
     LocalFailure, Mode, Node, NodeCounters, Policy, RegistrationEvent, Response, SendRefusal,
 };
 use bacnet_time::HostClock;
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error, Lifecycle, Refusal};
 use bacnet_types::sync::{MutexExt, RwLockExt};
 use bytes::{Bytes, BytesMut};
 use tokio::sync::{Notify, oneshot};
@@ -798,19 +798,51 @@ fn owned(function: BvlcFunction, frame: &[u8]) -> BvllMessage {
 }
 
 /// Why a matched response doesn't answer: the codec's error, or the
-/// policy's.
+/// policy's. The policy names every refusal it makes, as a table's decoding
+/// error, so the last arm is only a fallback; it reads as the policy's own
+/// refusals do.
 fn refused(decode: Option<BvllError>, policy: Option<Error>) -> Error {
     match (decode, policy) {
         (Some(error), _) => bvll_error(error),
         (None, Some(error)) => error,
-        (None, None) => Error::Encoding("BVLC response refused".into()),
+        (None, None) => {
+            DecodeError::new(DecodingKind::InvalidEncoding, 0, "BVLC response refused").into()
+        }
     }
 }
 
+/// A configuration the node engine refused: [`Error::Unsupported`] for a
+/// change only a foreign device can make, [`Error::InvalidConfig`] for the
+/// rest, in the engine's words.
 pub(super) fn config_error(error: ConfigError) -> Error {
-    Error::Encoding(error.to_string())
+    let text = Refusal::text(error.to_string());
+    match error {
+        ConfigError::NotForeign => Error::Unsupported(text),
+        _ => Error::InvalidConfig(text),
+    }
 }
 
-fn send_refusal(refusal: SendRefusal) -> Error {
-    Error::Encoding(refusal.to_string())
+/// A send the node engine refused, in the engine's words, which a test
+/// holds these labels to: a group address given as a unicast's destination
+/// is [`Error::InvalidArgument`], no room to hold a broadcast is
+/// [`Error::LimitReached`], and a foreign device's BBMD not known yet is
+/// [`Error::State`] with [`Lifecycle::NotConnected`]. An NPDU too long for
+/// B/IP, a socket that can't take the datagram now and a socket's own
+/// failure stay [`Error::Encoding`] until #1833 gives them the forms whose
+/// handling differs ([`Error::SendTooLong`], and [`Error::Transport`] as a
+/// full MS/TP queue already is).
+pub(super) fn send_refusal(refusal: SendRefusal) -> Error {
+    match refusal {
+        SendRefusal::GroupDestination => Error::invalid_argument(
+            "a unicast can't go to a group address; send a broadcast instead",
+        ),
+        SendRefusal::HoldFull => {
+            Error::limit_reached("no room to hold a broadcast until registration")
+        }
+        SendRefusal::NoBbmd => Error::state(
+            Lifecycle::NotConnected,
+            "the foreign device's BBMD isn't known yet",
+        ),
+        _ => Error::Encoding(refusal.to_string()),
+    }
 }
