@@ -2,6 +2,7 @@
 section: Fixed
 ---
 - **Breaking (Rust and Python API):** `routing_table()` reports a link that
-  refuses the query for its state, configuration, platform or a limit (a
-  BACnet/SC link not connected to its hub, say) as `RoutingTableError::Send`,
-  which Python raises as `BacnetError`, not `ValueError` (#1833).
+  refuses the query for its state or kind (a BACnet/SC link off its hub, a
+  router-application client's) as `RoutingTableError::Send`, so Python
+  raises `BacnetError` for both, replacing the `ValueError` noted above
+  (#1833).

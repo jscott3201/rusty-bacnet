@@ -3229,9 +3229,10 @@ number can appear twice.
   `reason` octet and `network`. Rejects with reasons 1, 2 and 4 concern a
   DNET and are ignored for a local query.
 - A client stopped mid-call raises `RuntimeError`.
-- A link that can't send the query for its own state, such as a BACnet/SC
-  link not connected to its hub, raises what that send's error raises
-  (`BacnetError` for that one), not `ValueError` (#1833).
+- A link that can't send the query for its own state or kind, such as a
+  BACnet/SC link not connected to its hub, or a router-application client's
+  link, which carries APDUs only, raises what that send's error raises
+  (`BacnetError` for both), not `ValueError` (#1833).
 
 Each bound is 0 to 3600 seconds, and `wait` may not exceed `total`
 (`ValueError` otherwise). An acknowledgement from the router's own address
