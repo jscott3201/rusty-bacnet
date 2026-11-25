@@ -756,13 +756,13 @@ What `Device.inventory` read (#2561): the device's summary and a
 `Point` for each object of the types asked for, in Object\_List
 order; when the device went silent part way, why (`stopped`) and
 which objects weren't read (`unread`). Iterating it gives the
-points; `len` and an index work on it. Refuses `copy` and
-`pickle`.
+points; `len` and an index work on it. Frozen; compares by identity
+and refuses `copy` and `pickle`, as a `Point` does.
 
 Properties:
 
 - `address: str`: Where the device answers, as text `BACnetClient.device` reads back.
-- `summary: DeviceSummary`: The device's summary, as `Device.summary()` reads it.
+- `summary: DeviceSummary`: The device's summary, as `Device.summary()` reads it. Its `name` is cleaned for display, where the Device object's `Point.name` is the device's text exactly as sent.
 - `cov_support: Literal["unknown", "not-offered", "offered", "accepted", "refused"]`: What is known of the device's COV support, as `Device.cov_support()` says it: from the services the summary lists, or from what this client's subscriptions met.
 - `points: tuple[Point, ...]`: The points read, in Object\_List order.
 - `unread: tuple[ObjectIdentifier, ...]`: The objects of the types asked for that weren't read because the device stopped answering, in Object\_List order; empty when it didn't.
@@ -803,8 +803,10 @@ are out. A device that stops answering raises from `__anext__` once
 the points read before it are out, and iterating again tries the first
 object not read again. A cancel that lands while a point is on its way
 puts it back: the next `__anext__` returns it first. Concurrent
-`__anext__` calls complete one at a time. Refuses `copy` and
-`pickle`.
+`__anext__` calls complete one at a time, each with the next point.
+After the client's `stop()`, the points already read come out first,
+then `__anext__` raises `RuntimeError`. Frozen; compares by
+identity and refuses `copy` and `pickle`, as a `Point` does.
 
 Properties:
 
@@ -1173,6 +1175,11 @@ in control, `settings` its COV\_Increment, range,
 Relinquish\_Default and Polarity, `details` its Device\_Type and
 Profile\_Name.
 
+The whole read is one call: it holds the client throughout, so a
+`stop()` waits for it, and nothing comes back until every object
+is read. For a large device, `points` hands the same records out
+a batch at a time.
+
 A property the device can't give is a problem on its record, never
 raised. A device that goes silent while its objects are read ends
 the read with the records read so far: `Inventory.stopped` says
@@ -1181,7 +1188,8 @@ ValueError for a bad argument when the call is made (`types` as
 one str, an empty `types`, a flag that isn't a bool); on await
 `BacnetLookupError` for a device that can't be placed, and what a
 single read raises for a device that doesn't answer the summary or
-the Object\_List, or refuses the list.
+the Object\_List, or refuses the list (a list read element by
+element that fails at one element names it).
 
 ### Device.points
 
@@ -1199,23 +1207,24 @@ def points(
 
 The device's points as an async iterator, read as they are
 iterated: a `PointIterator` of the `Point` records `inventory`
-reads. The await reads the Object\_List (whole, or element by
-element) and keeps the objects of `types`, each once; with
-`objects` it takes those of `types`, each once, in order, and
-reads nothing. Iterating reads the next batch of objects whenever
-the last batch's points are out, one ReadPropertyMultiple while the
-device takes them: a large device's first points come at once, and
-an `async for` broken off reads no more.
+reads, for a large device or a screen that fills as it goes. The
+await reads the Object\_List (whole, or element by element) and
+keeps the objects of `types`, each once; with `objects` it takes
+those of `types`, each once, in order, and reads nothing.
+Iterating reads the next batch of objects whenever the last batch's
+points are out, one ReadPropertyMultiple while the device takes
+them: a large device's first points come at once, and an `async for` broken off reads no more. Each batch holds the client for its
+read alone; `inventory` reads the whole device in one call.
 
 A device that stops answering raises from `__anext__` (a
 `BacnetTimeoutError`, say) once the points read before it are
 out; iterating again tries the first object not read again. A
 cancelled `__anext__` stops its request, and the next reads that
-batch again: no point is lost or repeated. Raised: TypeError or
+batch again: no point is lost or repeated. After the client's
+`stop()`, the points already read come out first, then
+`__anext__` raises `RuntimeError`. Raised: TypeError or
 ValueError for a bad argument when the call is made; on await what
-`inventory` raises for the Object\_List, and `BacnetError` for a
-list read element by element that stopped part way, naming the
-element.
+`inventory` raises for the Object\_List.
 
 ### Device.resolve_instance
 

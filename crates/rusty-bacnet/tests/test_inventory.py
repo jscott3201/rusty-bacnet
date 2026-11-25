@@ -27,7 +27,6 @@ import rusty_bacnet
 from rusty_bacnet import (
     BACnetClient,
     BACnetServer,
-    BacnetError,
     BacnetRejectError,
     BacnetTimeoutError,
     Device,
@@ -489,7 +488,9 @@ class CancelTests(BigDevice):
             sent = len(self.relay.services)
             await asyncio.sleep(1.0)
             self.assertEqual(len(self.relay.services), sent)
-        self.assertEqual(sent, 4)
+        # Four, or five if a batch's answer beat the cancel; a read the
+        # cancel didn't stop sends all nine.
+        self.assertLessEqual(sent, 5)
 
     async def test_a_cancelled_point_loses_nothing(self) -> None:
         async with client() as c:
@@ -514,6 +515,52 @@ class CancelTests(BigDevice):
         # The cancelled batch is read again, and every point comes once.
         self.assertEqual(names, [f"AI {n}" for n in range(60)])
         self.assertEqual(self.relay.services[2:], [READ_PROPERTY_MULTIPLE] * 7)
+
+    async def test_concurrent_steps_get_consecutive_points(self) -> None:
+        async with client() as c:
+            dev = await c.device(self.address)
+            walk = await dev.points(types=["ai"])
+            # The first batch is read once, by whichever step comes first.
+            pair = await asyncio.gather(anext(walk), anext(walk))
+            self.assertEqual(sorted(p.name for p in pair), ["AI 0", "AI 1"])
+            pair = await asyncio.gather(anext(walk), anext(walk), anext(walk))
+            self.assertEqual(sorted(p.name for p in pair), ["AI 2", "AI 3", "AI 4"])
+        self.assertEqual(self.relay.services.count(READ_PROPERTY_MULTIPLE), 1)
+
+
+class StopTests(BigDevice):
+    async def test_stop_waits_for_an_inventory_in_flight(self) -> None:
+        self.relay.delay = 0.05
+        async with client() as c:
+            dev = await c.device(self.address)
+            task = asyncio.ensure_future(dev.inventory(types=["ai"]))
+            await eventually(lambda: len(self.relay.services) >= 2)
+            await c.stop()
+            # The stop returned after the read: the instance, the summary,
+            # the Object_List and all six batches.
+            self.assertEqual(len(self.relay.services), 9)
+            inventory = await task
+            self.assertIsNone(inventory.stopped)
+            self.assertEqual(len(inventory), 60)
+            with self.assertRaises(RuntimeError):
+                await dev.inventory()
+            with self.assertRaises(RuntimeError):
+                await dev.points()
+        self.assertEqual(len(self.relay.services), 9)
+
+    async def test_points_read_before_a_stop_come_out_first(self) -> None:
+        async with client() as c:
+            dev = await c.device(self.address)
+            await dev.resolve_instance()
+            walk = await dev.points(types=["ai"])
+            first = await anext(walk)
+            await c.stop()
+            # The rest of the first batch, already read.
+            rest = [await anext(walk) for _ in range(9)]
+            with self.assertRaises(RuntimeError):
+                await anext(walk)
+        self.assertEqual([p.name for p in [first, *rest]], [f"AI {n}" for n in range(10)])
+        self.assertEqual(self.relay.services[2:], [READ_PROPERTY_MULTIPLE])
 
 
 class ArgumentTests(Lab):
@@ -559,13 +606,24 @@ class ListTests(BigDevice):
 
     async def test_part_of_a_list_raises_naming_the_element(self) -> None:
         self.relay.refuse_list = "whole"
-        # The whole list, its size and five elements pass.
+        # The whole list, its size and five elements pass; the device goes
+        # silent at the sixth, which raises as a timeout, naming it.
         self.relay.passing = 7
         async with client(apdu_timeout_ms=300) as c:
             dev = await c.device(self.address)
-            with self.assertRaisesRegex(BacnetError, "element 6 of 61"):
+            with self.assertRaisesRegex(BacnetTimeoutError, "element 6 of 61"):
                 await dev.points()
         self.assertEqual(len(self.relay.services), 8)
+
+    async def test_part_of_a_list_fails_an_inventory_the_same_way(self) -> None:
+        self.relay.refuse_list = "whole"
+        # The instance and the summary, then as above.
+        self.relay.passing = 9
+        async with client(apdu_timeout_ms=300) as c:
+            dev = await c.device(self.address)
+            with self.assertRaisesRegex(BacnetTimeoutError, "element 6 of 61"):
+                await dev.inventory()
+        self.assertEqual(len(self.relay.services), 10)
 
     async def test_a_refused_list_raises_the_refusal(self) -> None:
         self.relay.refuse_list = "all"

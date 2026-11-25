@@ -368,7 +368,10 @@ as it goes.
 #### `inventory(*, types=None, values=False, settings=False, details=False) -> Inventory`
 
 Reads the device's summary, its Object_List, then the objects in batches of
-ReadPropertyMultiple, up to 16 objects or 32 properties a request:
+ReadPropertyMultiple, up to 16 objects or 32 properties a request. The read
+is one call: it holds the client throughout, so `stop()` waits for it, and
+nothing comes back until every object is read; for a large device,
+`points()` (below) hands the records out as they come.
 
 ```python
 inventory = await ahu.inventory()
@@ -412,7 +415,7 @@ Failures are data, as in `read_many`:
 |-------------|------|-------------|
 | `.points` | `tuple[Point, ...]` | In Object_List order; iterating, `len` and an index work on the `Inventory` itself |
 | `.point(object)` | `Point \| None` | The record of that object |
-| `.summary` | `DeviceSummary` | As `summary()` reads it |
+| `.summary` | `DeviceSummary` | As `summary()` reads it; its `name` is cleaned for display, where the Device object's `Point.name` is exact |
 | `.address` | `str` | Where the device answers |
 | `.cov_support` | `str` | What is known of the device's COV support, as `Device.cov_support()` says it |
 | `.unread` | `tuple[ObjectIdentifier, ...]` | The objects not read because the device stopped answering |
@@ -420,7 +423,9 @@ Failures are data, as in `read_many`:
 
 #### `points(objects=None, *, types=None, values=False, settings=False, details=False) -> PointIterator`
 
-The same records, handed out as they are read. The await reads the
+The same records as `inventory()` reads, handed out as they are read, for a
+large device or a screen that fills as it goes; `inventory()` reads the
+whole device, with its summary, in one call. The await reads the
 Object_List and keeps the objects of `types`, each once; with `objects`
 (`ObjectIdentifier`s or text) it takes those of `types` instead, each once,
 in order, and reads nothing. Each step of the iteration reads the next batch of
@@ -444,11 +449,17 @@ async for point in walk:
   stops its request. The next step reads that batch again, and a point
   that was on its way when the cancel landed comes first, so no point is
   lost or repeated.
+- Concurrent steps (`asyncio.gather(anext(walk), anext(walk))`) complete
+  one at a time, each with the next point.
+- Each batch holds the client for its read alone. After the client's
+  `stop()`, the points already read come out first, then a step raises
+  `RuntimeError`.
 - `.objects` is the tuple of objects it reads, and `len()` their count.
-- An Object_List read element by element that stops part way raises
-  `BacnetError` from the await, naming the element: part of a list is not
-  the device's objects. `objects()` reads such a list and keeps what it
-  got.
+- The await raises what `inventory()` raises for the Object_List. Part of
+  a list is not the device's objects: a list read element by element that
+  fails at one element raises that element's error (a
+  `BacnetTimeoutError` for a silent device), naming the element, where
+  `objects()` keeps what it got.
 
 #### `Point`
 

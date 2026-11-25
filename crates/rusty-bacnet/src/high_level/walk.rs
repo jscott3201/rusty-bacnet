@@ -37,6 +37,10 @@ use crate::event_stream::{EventSource, LossyReceiver, Next};
 use crate::py_async::future_into_py_or_put_back;
 use crate::types::PyObjectIdentifier;
 
+#[cfg(test)]
+#[path = "walk_tests.rs"]
+mod tests;
+
 /// What one `__anext__` takes from the walk.
 pub(super) enum Step {
     /// The next record, its device's address shown in the style.
@@ -119,6 +123,31 @@ impl EventSource<Step> for Walk {
     }
 }
 
+/// One `__anext__` over `stream`, as an asyncio future: the next point,
+/// the error that stopped the walk, or StopAsyncIteration at the end. A
+/// point whose future was cancelled on its way goes back into the
+/// receiver's slot, and the next step hands it out first.
+fn step<'py, S: EventSource<Step> + 'static>(
+    py: Python<'py>,
+    stream: &LossyReceiver<Step, S>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let (next, put_back) = stream.next();
+    future_into_py_or_put_back(
+        py,
+        async move {
+            match next.await {
+                Some(Next::Fresh(Step::Point(record, style))) => {
+                    Ok(Next::Fresh(Fresh(record, style)))
+                }
+                Some(Next::Again(point)) => Ok(Next::Again(point)),
+                Some(Next::Fresh(Step::Failed(error))) => Err(error),
+                None => Err(PyStopAsyncIteration::new_err("every point was read")),
+            }
+        },
+        put_back,
+    )
+}
+
 /// A fresh record, made a `Point` when it reaches Python.
 struct Fresh(Box<PointRecord>, AddressStyle);
 
@@ -137,8 +166,9 @@ impl<'py> IntoPyObject<'py> for Fresh {
 /// `Point`, reading the next batch of objects (one request while the device
 /// takes ReadPropertyMultiple) when the last is out. A device that stops
 /// answering raises from `__anext__` once the points read before it are
-/// out; iterating again tries the first object not read again. Refuses
-/// `copy` and `pickle`.
+/// out; iterating again tries the first object not read again. Frozen;
+/// compares by identity and refuses `copy` and `pickle`, as a `Point`
+/// does.
 #[pyclass(name = "PointIterator", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyPointIterator {
     objects: Arc<[ObjectIdentifier]>,
@@ -193,21 +223,7 @@ impl PyPointIterator {
     }
 
     fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let (next, put_back) = self.stream.next();
-        future_into_py_or_put_back(
-            py,
-            async move {
-                match next.await {
-                    Some(Next::Fresh(Step::Point(record, style))) => {
-                        Ok(Next::Fresh(Fresh(record, style)))
-                    }
-                    Some(Next::Again(point)) => Ok(Next::Again(point)),
-                    Some(Next::Fresh(Step::Failed(error))) => Err(error),
-                    None => Err(PyStopAsyncIteration::new_err("every point was read")),
-                }
-            },
-            put_back,
-        )
+        step(py, &self.stream)
     }
 
     fn __repr__(&self) -> String {

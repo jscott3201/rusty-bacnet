@@ -15,11 +15,10 @@ use bacnet_ops::PropertyRef;
 use bacnet_ops::client::Wanted;
 use bacnet_ops::target::AddressStyle;
 use bacnet_types::enums::PropertyIdentifier;
-use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::prelude::*;
 
 use super::errors::ops_err;
-use super::points::{PyInventory, cov_label, objects_arg, once_each, options};
+use super::points::{ReadInventory, cov_label, objects_arg, once_each, options};
 use super::preview::PyWritePreview;
 use super::priorities::{PyWritten, priority_arg};
 use super::readings::{PyDeviceSummary, PyObjectList, PyReadings};
@@ -77,9 +76,12 @@ impl Core {
     {
         // Boxed, as the deepest async chain in this crate runs through
         // here: a station lookup down to a link's send. Unboxed, the
-        // crate needs rustc's full default recursion limit, 128 (127
-        // fails); boxed, 109 (108 fails). One allocation per Python
-        // Device call, off the Rust request path.
+        // crate needed rustc's whole default recursion limit, 128, when
+        // this was boxed (#2617), and boxed 109; the chain below has grown
+        // since, and boxed the crate now needs 115 (114 fails), as it did
+        // before this hold moved into `run`. Boxing it as a trait object
+        // needs the same. One allocation per Python Device call, off the
+        // Rust request path.
         let (held, style) = Box::pin(self.hold()).await?;
         // The call's own clone goes before the lease does: `held`
         // outlives the call's future.
@@ -467,6 +469,11 @@ impl PyDevice {
     /// `settings` its COV_Increment, range, Relinquish_Default and
     /// Polarity, `details` its Device_Type and Profile_Name.
     ///
+    /// The whole read is one call: it holds the client throughout, so a
+    /// `stop()` waits for it, and nothing comes back until every object is
+    /// read. For a large device, `points` hands the same records out a
+    /// batch at a time.
+    ///
     /// A property the device can't give is a problem on its record, never
     /// raised. A device that goes silent while its objects are read ends
     /// the read with the records read so far: `Inventory.stopped` says why
@@ -489,29 +496,31 @@ impl PyDevice {
         self.call(py, move |device, style| async move {
             let read = device.inventory(&options).await;
             let read = read.map_err(|error| ops_err(error, style))?;
-            attach(|py| PyInventory::new(py, read, style))
+            // Made an `Inventory` when it reaches Python, on the bridge's
+            // blocking thread, once the lease has gone.
+            Ok(ReadInventory(Box::new(read), style))
         })
     }
 
     /// The device's points as an async iterator, read as they are
     /// iterated: a `PointIterator` of `Point` records, as `inventory`
-    /// reads them. The await reads the Object_List (whole, or element by
-    /// element), keeping the objects of `types`, each once; or, with
-    /// `objects` (`ObjectIdentifier`s or text), takes those of `types`,
-    /// each once, in order, and reads nothing. Iterating reads the next
-    /// batch of objects whenever the last batch's points are out: one
-    /// ReadPropertyMultiple while the device takes them, so a large
-    /// device's first points come at once and an `async for` broken off
-    /// reads no more.
+    /// reads them, for a large device or a screen that fills as it goes.
+    /// The await reads the Object_List (whole, or element by element),
+    /// keeping the objects of `types`, each once; or, with `objects`
+    /// (`ObjectIdentifier`s or text), takes those of `types`, each once, in
+    /// order, and reads nothing. Iterating reads the next batch of objects
+    /// whenever the last batch's points are out: one ReadPropertyMultiple
+    /// while the device takes them, so a large device's first points come
+    /// at once and an `async for` broken off reads no more. Each batch
+    /// holds the client for its read alone; `inventory` reads the whole
+    /// device in one call.
     ///
     /// A device that stops answering raises from `__anext__`, once the
     /// points read before it are out; iterating again tries the first
     /// object not read again. A cancelled `__anext__` stops its request,
     /// and the next reads that batch again, so no point is lost. Raised: a
     /// bad argument TypeError or ValueError, before the Future is made; on
-    /// await what `inventory` raises for the Object_List, and BacnetError
-    /// for a list read element by element that stopped part way, naming
-    /// the element.
+    /// await what `inventory` raises for the Object_List.
     #[pyo3(signature = (objects=None, *, types=None, values=false, settings=false, details=false))]
     fn points<'py>(
         &self,
@@ -533,7 +542,13 @@ impl PyDevice {
                 // The lease, as every call takes it: a stopped client
                 // raises here, with nothing sent.
                 Some(named) => core.run(|_, _| async move { Ok(named) }).await?,
-                None => core.run(list).await?,
+                None => {
+                    let list = |device: OpsDevice, style| async move {
+                        let list = device.list_objects_whole().await;
+                        list.map_err(|error| ops_err(error, style))
+                    };
+                    core.run(list).await?
+                }
             };
             let objects = once_each(listed, |object| options.reads(object.object_type()));
             Ok(PyPointIterator::new(core, objects, options))
@@ -572,21 +587,6 @@ impl PyDevice {
     /// [`crate::types::not_picklable`].
     fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {
         Err(crate::types::not_picklable(slf.as_any()))
-    }
-}
-
-/// The device's Object_List, whole: a list read element by element that
-/// stopped part way raises BacnetError naming the element, since part of a
-/// list is not the device's objects.
-async fn list(device: OpsDevice, style: AddressStyle) -> PyResult<Vec<ObjectIdentifier>> {
-    let read = device.list_objects().await;
-    let read = read.map_err(|error| ops_err(error, style))?;
-    match read.stopped {
-        None => Ok(read.objects),
-        Some(why) => Err(crate::errors::BacnetError::new_err(format!(
-            "the Object_List, read element by element, stopped at {why}; the device's \
-             objects aren't known: try again, or name the objects"
-        ))),
     }
 }
 

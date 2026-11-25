@@ -315,6 +315,13 @@ impl<T: Send + 'static, R: EventSource<T> + 'static> LossyReceiver<T, R> {
         self.slot.close();
     }
 
+    /// The delivery paths taken so far, for another module's tests of an
+    /// iterator built on this receiver.
+    #[cfg(test)]
+    pub(crate) fn trace(&self) -> &Trace {
+        &self.slot.trace
+    }
+
     /// Items lost so far: to lag, or dropped on the way to a read.
     pub(crate) fn missed(&self) -> u64 {
         self.lost().get()

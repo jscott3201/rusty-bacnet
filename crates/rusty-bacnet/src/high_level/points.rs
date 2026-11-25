@@ -10,7 +10,7 @@
 //! never raised. Text the device supplied (names, descriptions, state
 //! texts, Device_Type, Profile_Name) is kept exactly as it sent it.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use bacnet_ops::inventory::{Inventory, InventoryOptions, PointRecord};
 use bacnet_ops::label::{kebab, object_label};
@@ -429,7 +429,8 @@ impl PyPoint {
 /// What `Device.inventory` read: the device's summary and a `Point` for
 /// each object of the types asked for, in Object_List order, and, when
 /// the device went silent part way, why and which objects weren't read.
-/// Iterating it gives the points. Refuses `copy` and `pickle`.
+/// Iterating it gives the points. Frozen; compares by identity and
+/// refuses `copy` and `pickle`, as a `Point` does.
 #[pyclass(name = "Inventory", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyInventory {
     address: String,
@@ -437,6 +438,8 @@ pub(crate) struct PyInventory {
     summary: Py<PyDeviceSummary>,
     cov: CovSupport,
     points: Py<PyTuple>,
+    /// Each point's place in `points`, by its object.
+    places: HashMap<ObjectIdentifier, usize>,
     unread: Vec<ObjectIdentifier>,
     /// The exception a single read would have raised, unraised.
     stopped: Option<Py<PyAny>>,
@@ -444,23 +447,44 @@ pub(crate) struct PyInventory {
 
 impl PyInventory {
     /// `inventory` as Python reads it, addresses in `style`.
-    pub(super) fn new(py: Python<'_>, inventory: Inventory, style: AddressStyle) -> PyResult<Self> {
+    fn new(py: Python<'_>, inventory: Inventory, style: AddressStyle) -> PyResult<Self> {
         let points = inventory
             .points
             .iter()
             .map(|record| Py::new(py, PyPoint::new(py, record, style)?))
             .collect::<PyResult<Vec<_>>>()?;
+        let mut places = HashMap::with_capacity(inventory.points.len());
+        for (at, record) in inventory.points.iter().enumerate() {
+            places.entry(record.object).or_insert(at);
+        }
         Ok(Self {
             address: inventory.address.styled(style),
             instance: inventory.device.device,
             summary: Py::new(py, PyDeviceSummary::new(py, &inventory.device)?)?,
             cov: inventory.cov,
             points: PyTuple::new(py, points)?.unbind(),
+            places,
             unread: inventory.unread,
             stopped: inventory
                 .stopped
                 .map(|error| ops_err(error, style).into_value(py).into_any()),
         })
+    }
+}
+
+/// An inventory as read, its addresses shown in the style: made an
+/// `Inventory` when it reaches Python, so the points are built on the
+/// bridge's blocking thread after the call has let the client go, not on
+/// a runtime worker with the lease held.
+pub(super) struct ReadInventory(pub(super) Box<Inventory>, pub(super) AddressStyle);
+
+impl<'py> IntoPyObject<'py> for ReadInventory {
+    type Target = PyInventory;
+    type Output = Bound<'py, PyInventory>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyInventory>> {
+        Bound::new(py, PyInventory::new(py, *self.0, self.1)?)
     }
 }
 
@@ -472,7 +496,9 @@ impl PyInventory {
         &self.address
     }
 
-    /// The device's summary, as `Device.summary()` reads it.
+    /// The device's summary, as `Device.summary()` reads it. Its `name` is
+    /// cleaned for display, where the Device object's `Point.name` is the
+    /// device's text exactly as sent.
     #[getter]
     fn summary(&self, py: Python<'_>) -> Py<PyDeviceSummary> {
         self.summary.clone_ref(py)
@@ -518,13 +544,11 @@ impl PyInventory {
     /// when it wasn't read.
     fn point(&self, py: Python<'_>, object: &Bound<'_, PyAny>) -> PyResult<Option<Py<PyPoint>>> {
         let wanted = object_arg(object)?;
-        for point in self.points.bind(py).iter() {
-            let point = point.cast_into::<PyPoint>()?;
-            if point.get().object == wanted {
-                return Ok(Some(point.unbind()));
-            }
-        }
-        Ok(None)
+        let Some(&at) = self.places.get(&wanted) else {
+            return Ok(None);
+        };
+        let point = self.points.bind(py).get_item(at)?;
+        Ok(Some(point.cast_into::<PyPoint>()?.unbind()))
     }
 
     fn __len__(&self, py: Python<'_>) -> usize {
