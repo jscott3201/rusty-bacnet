@@ -4,9 +4,10 @@
 //! AV-1 alarms above 80 and SCH-1 commands one of its properties at priority
 //! 16. One context timestamps AV-1's Present_Value and Status_Flags and is
 //! reported at once (Max_Notification_Delay 0); the Device clock reads
-//! 15:00:20 throughout, so every row carries that time. The pass's change is
-//! one more write of the request: it keeps a row of its own when it moves a
-//! value, and the object's transition never adds a row after the request's.
+//! 15:00:20, so the rows carry that time unless a test moves it. The pass's
+//! change is one more write of the request: it keeps a row of its own when it
+//! moves a value, and the object's transition never adds a row after the
+//! request's, nor replaces one the request did not queue.
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_encoding::apdu::ErrorPdu;
@@ -39,11 +40,19 @@ type Write = (
 type Row = (PropertyIdentifier, Vec<u8>, Option<Time>);
 
 fn pv(value: f32) -> Row {
-    (PV, real(value), Some(time(20)))
+    pv_at(value, 20)
 }
 
 fn sf(bits: u8) -> Row {
-    (SF, vec![0x82, 0x04, bits], Some(time(20)))
+    sf_at(bits, 20)
+}
+
+fn pv_at(value: f32, second: u8) -> Row {
+    (PV, real(value), Some(time(second)))
+}
+
+fn sf_at(bits: u8, second: u8) -> Row {
+    (SF, vec![0x82, 0x04, bits], Some(time(second)))
 }
 
 fn schedule(value: f32) -> Write {
@@ -55,9 +64,9 @@ fn target(value: f32, priority: Option<u8>) -> Write {
 }
 
 /// A server whose SCH-1 commands AV-1's `property`, by default `default`,
-/// with the context subscribed, its initial report taken and the clock at
-/// :20. `timestamped` false subscribes the same references untimestamped.
-async fn start(property: PropertyIdentifier, default: PropertyValue, timestamped: bool) -> Harness {
+/// with the context subscribed with Max_Notification_Delay `delay`, its
+/// initial report taken and the clock at :20.
+async fn start(property: PropertyIdentifier, default: PropertyValue, delay: u32) -> Harness {
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         high_limit_alarm(db);
         let mut schedule = ScheduleObject::new(1, "SCH-1", default).unwrap();
@@ -66,8 +75,8 @@ async fn start(property: PropertyIdentifier, default: PropertyValue, timestamped
         db.add(Box::new(schedule)).unwrap();
     })
     .await;
-    let specs = vec![(av1(), vec![(PV, timestamped), (SF, timestamped)])];
-    h.subscribe_with_delay(false, specs, 0).await;
+    let specs = vec![(av1(), vec![(PV, true), (SF, true)])];
+    h.subscribe_with_delay(false, specs, delay).await;
     h.notification().await;
     h.set_clock(20);
     h
@@ -75,7 +84,7 @@ async fn start(property: PropertyIdentifier, default: PropertyValue, timestamped
 
 /// [`start`] with SCH-1 on AV-1's Present_Value, by default 0.
 async fn on_present_value() -> Harness {
-    start(PV, PropertyValue::Real(0.0), true).await
+    start(PV, PropertyValue::Real(0.0), 0).await
 }
 
 fn wpm_body(writes: &[Write]) -> BytesMut {
@@ -168,7 +177,10 @@ async fn a_schedule_and_its_target_written_together_send_one_settled_row() {
 /// AV-1 written to 90 at priority 16, then SCH-1 to 95: the pass writes the
 /// same slot after the attempts, so 95 wins. The request's write and the
 /// pass's are two writes with a row each, the transition folded into the
-/// second, as for two attempts on AV-1 (#856, #2535). The same as dev.
+/// second, as for two attempts on AV-1 (#856, #2535). So the first row
+/// carries the Status_Flags from before the transition, by the one row per
+/// write rule, as two attempts writing 90 then 95 do
+/// (`cov_timed_multiple_tests`). The same as dev.
 #[tokio::test(start_paused = true)]
 async fn a_value_the_pass_moves_keeps_the_requests_row() {
     let mut h = on_present_value().await;
@@ -177,6 +189,64 @@ async fn a_value_the_pass_moves_keeps_the_requests_row() {
     assert_eq!(rows, [pv(90.0), sf(0), pv(95.0), sf(IN_ALARM)]);
     assert_eq!(read(&h, av1(), PV).await, PropertyValue::Real(95.0));
     h.server.stop().await.unwrap();
+}
+
+/// Two attempts on AV-1 before the pass, 50 then 90 at priority 8, with
+/// SCH-1's 95 beneath them: the transition 90 causes takes the place of the
+/// newest row, 90's, and 50's row stays the first write's.
+#[tokio::test(start_paused = true)]
+async fn the_newest_of_the_requests_rows_is_the_one_replaced() {
+    let mut h = on_present_value().await;
+    let writes = [target(50.0, Some(8)), target(90.0, Some(8)), schedule(95.0)];
+    let (answer, rows) = wpm(&mut h, &writes).await;
+    assert_eq!(answer, Ok(()));
+    assert_eq!(rows, [pv(50.0), sf(0), pv(90.0), sf(IN_ALARM)]);
+    h.server.stop().await.unwrap();
+}
+
+/// AV-1 written to 50 at priority 8 at :15 while reports fail, so its row
+/// waits (Max_Notification_Delay 10 s); then, sending again, a
+/// WritePropertyMultiple of `second` at :20. The rows of the one report
+/// that follows.
+async fn after_a_pending_row(second: &[Write]) -> Vec<Row> {
+    let mut h = start(PV, PropertyValue::Real(0.0), 10).await;
+    h.fail_notifications.store(true, Ordering::Release);
+    h.set_clock(15);
+    h.write_pv(50.0, 15).await;
+    assert_eq!(response(&h).await, Ok(()));
+    h.settle().await;
+    *h.after_ack.lock().unwrap() = None;
+    h.fail_notifications.store(false, Ordering::Release);
+    h.set_clock(20);
+    let (answer, rows) = wpm(&mut h, second).await;
+    assert_eq!(answer, Ok(()));
+    h.server.stop().await.unwrap();
+    rows
+}
+
+/// A row an earlier request left pending is never what a later request's
+/// capture after the transition replaces. Writing AV-1's value, the second
+/// request's own row is the newest and is replaced; writing only its
+/// High_Limit, it queues none, so AV-1's transition adds a row after the
+/// first request's.
+#[tokio::test(start_paused = true)]
+async fn a_row_an_earlier_request_left_pending_is_never_replaced() {
+    let rows = after_a_pending_row(&[schedule(95.0), target(90.0, Some(8))]).await;
+    assert_eq!(
+        rows,
+        [pv_at(50.0, 15), sf_at(0, 15), pv(90.0), sf(IN_ALARM)]
+    );
+    let limit = (
+        av1(),
+        PropertyIdentifier::HIGH_LIMIT,
+        PropertyValue::Real(40.0),
+        None,
+    );
+    let rows = after_a_pending_row(&[schedule(95.0), limit]).await;
+    assert_eq!(
+        rows,
+        [pv_at(50.0, 15), sf_at(0, 15), pv(50.0), sf(IN_ALARM)]
+    );
 }
 
 /// A pass that commits no transition: the pass's 50 replaces the request's
@@ -201,7 +271,7 @@ async fn a_pass_without_a_transition_leaves_the_rows_as_they_were() {
 /// As dev, and as one request writing AV-1's value then Out_Of_Service.
 #[tokio::test(start_paused = true)]
 async fn a_pass_that_moves_status_flags_keeps_one_row_per_write() {
-    let mut h = start(OOS, PropertyValue::Boolean(false), true).await;
+    let mut h = start(OOS, PropertyValue::Boolean(false), 0).await;
     let writes = [
         (sch1(), DEFAULT, PropertyValue::Boolean(true), None),
         target(90.0, Some(8)),
@@ -292,19 +362,26 @@ async fn a_write_of_one_of_them_sends_one_row() {
     h.server.stop().await.unwrap();
 }
 
-/// The same references untimestamped: the report is built from the object
-/// after the request, as before.
+/// A second context, process 857, takes the same references untimestamped:
+/// it is reported from the object after the request, as before, while the
+/// timestamped one gets its one settled row.
 #[tokio::test(start_paused = true)]
-async fn untimestamped_references_report_the_settled_object_as_before() {
-    let mut h = start(PV, PropertyValue::Real(0.0), false).await;
+async fn timestamped_and_untimestamped_contexts_both_report_the_settled_target() {
+    let mut h = on_present_value().await;
+    let specs = vec![(av1(), vec![(PV, false), (SF, false)])];
+    h.subscribe_process(857, false, specs, Some(0)).await;
+    h.notification().await;
     h.request(
         ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
         wpm_body(&[schedule(95.0), target(90.0, Some(8))]),
     )
     .await;
     assert_eq!(error_response(&h).await, Ok(()));
-    let report = h.notification().await;
+    let mut reports = [h.notification().await, h.notification().await];
+    reports.sort_by_key(|report| report.subscriber_process_identifier);
+    assert_eq!(rows(&reports[0]), [pv(90.0), sf(IN_ALARM)]);
     let untimed = |(property, value, _): Row| (property, value, None);
-    assert_eq!(rows(&report), [untimed(pv(90.0)), untimed(sf(IN_ALARM))]);
+    let settled = [untimed(pv(90.0)), untimed(sf(IN_ALARM))];
+    assert_eq!(rows(&reports[1]), settled);
     h.server.stop().await.unwrap();
 }
