@@ -1143,10 +1143,11 @@ stand. A device that stops answering part way ends the read with
 what was read, and `Readings.stopped` says so; so does a later
 request the client's own link fails (a route lost, a send
 refused). A read raises only when nothing could be read:
-`properties` as one str or bytes, or a bad item, TypeError or
-ValueError when the call is made; on await a device that can't be
-placed `BacnetLookupError`, and a link that fails the first
-request what a single read raises for it (a `BacnetError`).
+`properties` as one str, bytes or bytearray, or a bad item,
+TypeError or ValueError when the call is made; on await a device
+that can't be placed `BacnetLookupError`, and a link that fails
+the first request what a single read raises for it (a
+`BacnetError`).
 
 ### Device.read_object
 
@@ -1161,8 +1162,8 @@ def read_object(
 Read one object's properties in one ReadPropertyMultiple (or by
 ReadProperty each once the device has refused that): every property
 when `properties` is left out, else those listed, whole
-properties only (one str or bytes raises TypeError when the call is
-made). A property the device refused has its
+properties only (one str, bytes or bytearray raises TypeError when
+the call is made). A property the device refused has its
 `Reading.error` set. A device that stops answering raises
 `BacnetTimeoutError` and keeps nothing, since an object's rows go
 together: `stopped` is always None.

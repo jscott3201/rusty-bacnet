@@ -258,12 +258,12 @@ impl PyDevice {
     /// device that stops answering part way ends the read with what was
     /// read, and `Readings.stopped` says so; so does a later request the
     /// client's own link fails (a route lost, a send refused). A read
-    /// raises only when nothing could be read: `properties` as one str or
-    /// bytes, or a bad item, TypeError or ValueError (ALL, REQUIRED and
-    /// OPTIONAL among them: `read_object` reads those) before the Future
-    /// is made; on await a device that can't be placed BacnetLookupError,
-    /// and a link that fails the first request what a single read raises
-    /// for it.
+    /// raises only when nothing could be read: `properties` as one str,
+    /// bytes or bytearray, or a bad item, TypeError or ValueError (ALL,
+    /// REQUIRED and OPTIONAL among them: `read_object` reads those) before
+    /// the Future is made; on await a device that can't be placed
+    /// BacnetLookupError, and a link that fails the first request what a
+    /// single read raises for it.
     fn read_many<'py>(
         &self,
         py: Python<'py>,
@@ -291,11 +291,11 @@ impl PyDevice {
     /// Read one object's properties in one ReadPropertyMultiple (or by
     /// ReadProperty each once the device has refused that), as `Readings`:
     /// every property when `properties` is left out, else those listed
-    /// (`PropertyIdentifier`s or text, whole properties only; one str or
-    /// bytes raises TypeError before the Future is made). A property the
-    /// device refused has its `Reading.error` set. A device that stops
-    /// answering raises BacnetTimeoutError and keeps nothing, since an
-    /// object's rows go together: `stopped` is always None here.
+    /// (`PropertyIdentifier`s or text, whole properties only; one str,
+    /// bytes or bytearray raises TypeError before the Future is made). A
+    /// property the device refused has its `Reading.error` set. A device
+    /// that stops answering raises BacnetTimeoutError and keeps nothing,
+    /// since an object's rows go together: `stopped` is always None here.
     #[pyo3(signature = (object, properties=None))]
     fn read_object<'py>(
         &self,
