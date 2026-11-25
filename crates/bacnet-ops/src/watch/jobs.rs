@@ -389,7 +389,8 @@ pub(super) async fn poll<T: TransportPort + 'static>(
         .and_then(|rows| rows.as_deref().ok())
         .and_then(named);
     // Answered with no instance (an error, or left out), or its batch
-    // taken only without it: it isn't asked so again.
+    // failed with it and was asked again without it: it isn't asked so
+    // again.
     if ask && answered.is_none() && (identity.is_some() || riders_refused) {
         client.refuse_wildcard(&address);
     }
@@ -509,14 +510,17 @@ pub(super) enum Restart {
     Silent,
 }
 
-/// Read device `instance`'s Time_Of_Device_Restart at `address`, once.
+/// Read device `instance`'s Time_Of_Device_Restart at `address`, once;
+/// with whether the device there answered as that Device object (any
+/// answer but one saying it has no such object): its own word that it is
+/// `instance`.
 pub(super) async fn restart_time<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     address: DeviceAddress,
     instance: u32,
-) -> Restart {
+) -> (Restart, bool) {
     let Ok(device) = ObjectIdentifier::new(ObjectType::DEVICE, instance) else {
-        return Restart::Absent;
+        return (Restart::Absent, false);
     };
     let property = PropertyIdentifier::TIME_OF_DEVICE_RESTART;
     let reader = inner.client.reader(&address, Some(instance));
@@ -525,9 +529,16 @@ pub(super) async fn restart_time<T: TransportPort + 'static>(
         .await
         .map_err(device_error)
     {
-        Ok(raw) => Restart::At(raw),
-        Err(error) if unreachable(&error) || failed_locally(&error) => Restart::Silent,
-        Err(_) => Restart::Absent,
+        Ok(raw) => (Restart::At(raw), true),
+        Err(error) if unreachable(&error) || failed_locally(&error) => (Restart::Silent, false),
+        Err(error) => {
+            let there = match error.remote() {
+                Some(RemoteError::Error { code, .. }) => code != ErrorCode::UNKNOWN_OBJECT,
+                Some(_) => true,
+                None => false,
+            };
+            (Restart::Absent, there)
+        }
     }
 }
 

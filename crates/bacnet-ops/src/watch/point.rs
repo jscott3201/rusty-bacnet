@@ -86,8 +86,10 @@ impl fmt::Display for Point {
 pub enum Why {
     /// The device refused the subscription, with its error; or it refused
     /// the service itself for another point before, so it wasn't asked
-    /// again ([`CovSupport::Refused`](super::CovSupport::Refused)). Not
-    /// asked again.
+    /// again ([`CovSupport::Refused`](super::CovSupport::Refused)); or its
+    /// notifications name another device that answers at its address too,
+    /// so they can't be told from that device's (#2603), and the note names
+    /// it. Not asked again.
     Refused(String),
     /// The first read or the subscription had no answer, with the error:
     /// subscribed again after a backoff.
@@ -113,8 +115,8 @@ pub enum Why {
     /// Another device answers at the point's address now: asked (after an
     /// announcement there, the discovery table, or a notification naming
     /// another sender said so), or in a poll's own answer, the device there
-    /// names itself `found`, not `watched`, the instance the address named
-    /// when the point's watch started. Nothing from the address is taken as
+    /// names itself `found`, not `watched`, the instance an earlier answer
+    /// named for the point. Nothing from the address is taken as
     /// the point's from then on, its values are dropped, and nothing more
     /// is sent for it: its old subscription, which the new device never
     /// held, lapses with its lifetime. The point is given up

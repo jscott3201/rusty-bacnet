@@ -54,7 +54,7 @@ pub(crate) struct BatchRow<K> {
     /// which device answers, #2603): put first, it joins the first batch
     /// without counting toward its limits and is never asked alone, so it
     /// costs no request of its own; a batch the device fails with it is
-    /// asked once without it ([`Batched::riders_refused`]).
+    /// asked again without it ([`Batched::riders_refused`]).
     pub(crate) one_by_one: usize,
 }
 
@@ -85,8 +85,9 @@ pub(crate) struct Batched<K> {
     /// property: the rows after `rows` weren't read, and the last of `rows`
     /// may be `partial`.
     pub(crate) cancelled: bool,
-    /// A batch the device failed with its rows that only ride was read
-    /// without them: the device doesn't take them (#2603).
+    /// A batch the device failed with its rows that only ride was asked
+    /// again without them, whatever came of that: they aren't put to the
+    /// device again (#2603).
     pub(crate) riders_refused: bool,
     /// Some rows were read by ReadPropertyMultiple.
     by_rpm: bool,
@@ -157,15 +158,11 @@ pub(crate) async fn read_until<K: Copy, T: TransportPort + 'static>(
         by_rp: false,
     };
     let mut batches: VecDeque<&[BatchRow<K>]> = batches(rows).collect();
-    // A batch asked again without its riders, after failing with them.
-    let mut retrying = false;
     'batches: while let Some(batch) = batches.pop_front() {
         if rpm {
-            let again = std::mem::take(&mut retrying);
             match rpm_batch(client, limits, (device, path), batch).await {
                 Ok(rows) => {
                     read.by_rpm = true;
-                    read.riders_refused |= again;
                     read.rows.extend(rows);
                     continue;
                 }
@@ -183,13 +180,13 @@ pub(crate) async fn read_until<K: Copy, T: TransportPort + 'static>(
                     read.stopped = Some(error);
                     break;
                 }
-                // The riders may be why: asked once without them, so they
-                // never cost the device's RPM.
+                // The riders may be why: asked again without them, so they
+                // never cost the device's RPM, and not asked again.
                 Err(error)
                     if riding(batch) > 0
                         && !matches!(rpm_failure(&error), RpmFailure::TooLarge) =>
                 {
-                    retrying = true;
+                    read.riders_refused = true;
                     batches.push_front(&batch[riding(batch)..]);
                     continue;
                 }

@@ -69,7 +69,7 @@ pub(super) async fn run(
             _ = stop.wait_for(|stopped| *stopped) => break,
             received = notifications.recv() => match received {
                 Ok(event @ COVEvent::Object(_)) => match restart(&event, own()) {
-                    Some((at, instance, time)) => registry.restarted(&at, instance, time),
+                    Some((at, instance)) => registry.restarted(&at, instance),
                     None => held.extend(registry.deliver(&event, own())),
                 },
                 Ok(COVEvent::Multiple(_)) => {
@@ -127,12 +127,12 @@ fn note_change(registry: &Registry, change: &DeviceEvent, own: Option<u16>) {
     }
 }
 
-/// Where `event` came from, the device that sent it and the
-/// Time_Of_Device_Restart it carries, when
-/// it is a device's restart notification: unsubscribed, so its subscriber
-/// process identifier is 0, about the device's own Device object (Clause
-/// 19.3; Table 13-1b lists what it reports).
-fn restart(event: &COVEvent, own: Option<u16>) -> Option<(DeviceAddress, u32, Option<Vec<u8>>)> {
+/// Where `event` came from and the device that sent it, when it is a
+/// device's restart notification: unsubscribed, so its subscriber process
+/// identifier is 0, about the device's own Device object (Clause 19.3).
+/// Unasked for, it is only a cue to read the device's restart time; the
+/// time it may carry isn't taken.
+fn restart(event: &COVEvent, own: Option<u16>) -> Option<(DeviceAddress, u32)> {
     let received = event.object()?;
     let notification = &received.notification;
     let device = notification.monitored_object_identifier;
@@ -146,12 +146,7 @@ fn restart(event: &COVEvent, own: Option<u16>) -> Option<(DeviceAddress, u32, Op
         (Some(network), Some(station)) => DeviceAddress::new(network, station.as_slice()).ok()?,
         _ => DeviceAddress::new(0, received.source_mac.as_slice()).ok()?,
     };
-    let time = notification
-        .list_of_values
-        .iter()
-        .find(|value| value.property_identifier == PropertyIdentifier::TIME_OF_DEVICE_RESTART)
-        .map(|value| value.value.clone());
-    Some((at.localized(own), device.instance_number(), time))
+    Some((at.localized(own), device.instance_number()))
 }
 
 /// True when `event` is for `point`: a single-object notification from its

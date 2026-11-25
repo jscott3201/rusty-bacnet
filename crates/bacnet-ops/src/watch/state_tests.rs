@@ -319,14 +319,17 @@ fn moved_away(lab: &Lab, instance: u32) {
 /// the table came to name another instance at the address, brings the
 /// given-up point back no more than any other start would: the table must
 /// name the point's instance there when the start is answered. Its own
-/// point began with the old instance, from the table: the device there is
-/// asked, names the other (#2603), and the point takes that one as its own.
+/// point began with the old instance, which an answer had named for the
+/// address (the first point's restart-time read): the device there is
+/// asked, names the other (#2603), and the point is given up for it.
 #[tokio::test(start_paused = true)]
 async fn a_start_from_before_the_move_does_not_revive() {
     let lab = Lab::start(WatchOptions::default()).await;
     let device = lab_device(&lab).await;
     let mut first = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
     until(&mut first, |u| u.state == State::Subscribed).await;
+    // Its restart-time read, which names the device.
+    tokio::time::sleep(Duration::from_secs(1)).await;
     latest(&mut first).await;
     lab.quirks.slow_rpm_ack.store(true, Ordering::Relaxed);
     let from = Instant::now();
@@ -344,7 +347,13 @@ async fn a_start_from_before_the_move_does_not_revive() {
     moved_away(&lab, LAB);
     until(&mut first, |u| matches!(u.state, State::Gone { .. })).await;
     lab.quirks.slow_rpm_ack.store(false, Ordering::Relaxed);
-    until(&mut late, |u| u.state == State::Subscribed).await;
+    let replaced = Why::Replaced {
+        watched: LAB,
+        found: LAB + 1,
+    };
+    let update = until(&mut late, |u| matches!(u.state, State::Gone { .. })).await;
+    assert_eq!(update.state, State::Gone { why: replaced });
+    assert_eq!(number(&update), None, "its first read isn't taken");
     tokio::time::sleep(Duration::from_secs(5)).await;
     let after = latest(&mut first).await;
     assert!(after.is_none(), "revived by a stale start: {after:?}");
@@ -384,18 +393,17 @@ async fn each_moved_point_comes_back_for_its_own_instance() {
     let device = lab_device(&lab).await;
     let mut first = lab.client.watch([device.point("ai:1").unwrap()]).unwrap();
     until(&mut first, |u| u.state == State::Subscribed).await;
+    // Its restart-time read, which names the device, before the move.
+    tokio::time::sleep(Duration::from_secs(1)).await;
     moved_away(&lab, LAB);
     until(&mut first, |u| matches!(u.state, State::Gone { .. })).await;
     // Another device's instance named at the address (and the device there
     // says so when asked, #2603): a point started there now is that
     // device's, and it moves away too.
     let other = LAB + 1;
-    lab.client
-        .low_level()
-        .add_device(other, &[2])
-        .await
-        .unwrap();
     *lab.quirks.named.lock().unwrap() = Some(other);
+    lab.announce(other);
+    settle().await;
     let mut second = lab.client.watch([device.point("ai:2").unwrap()]).unwrap();
     until(&mut second, |u| u.state == State::Subscribed).await;
     assert!(

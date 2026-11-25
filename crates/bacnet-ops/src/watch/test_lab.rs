@@ -100,6 +100,9 @@ pub(super) struct Quirks {
     /// its COV notifications: another device there, as far as which device
     /// answers goes.
     pub(super) named: Mutex<Option<u32>>,
+    /// The instance the device's COV notifications name as their sender,
+    /// in place of [`LAB`] (and of `named`): a gateway naming itself.
+    pub(super) sender: Mutex<Option<u32>>,
     /// A ReadProperty of the Device object by the wildcard instance draws
     /// an unknown-object error, as from a device without the wildcard.
     pub(super) refuse_wildcard: AtomicBool,
@@ -107,6 +110,9 @@ pub(super) struct Quirks {
     /// rejected as an unknown service, as some devices answer a request
     /// they can't take whole.
     pub(super) reject_wildcard_rpm: AtomicBool,
+    /// A ReadProperty of any Device object's Object_Identifier is answered,
+    /// as by a gateway that answers for every instance.
+    pub(super) any_device: AtomicBool,
 }
 
 /// Device,4194303 as a context-tagged object identifier in a request.
@@ -194,7 +200,8 @@ pub(super) fn link(
         .on_inbound(move |npdu| {
             let quirks = Arc::clone(&inbound_quirks);
             let late = late.clone();
-            let named = *quirks.named.lock().unwrap();
+            let sender = *quirks.sender.lock().unwrap();
+            let named = sender.or(*quirks.named.lock().unwrap());
             let npdu = match named {
                 Some(named) => renamed(npdu, named),
                 None => npdu,
@@ -267,6 +274,16 @@ fn faked(quirks: &Quirks, request: &ReadPropertyRequest) -> Option<Vec<u8>> {
         PropertyIdentifier::TIME_OF_DEVICE_RESTART => {
             let time = (*quirks.restart_time.lock().unwrap())?;
             Some(vec![0x21, time])
+        }
+        PropertyIdentifier::OBJECT_IDENTIFIER
+            if device.object_type() == ObjectType::DEVICE
+                && device.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE
+                && device.instance_number() != LAB
+                && quirks.any_device.load(Ordering::Relaxed) =>
+        {
+            let mut value = BytesMut::new();
+            bacnet_encoding::primitives::encode_app_object_id(&mut value, &device);
+            Some(value.to_vec())
         }
         PropertyIdentifier::OBJECT_IDENTIFIER
             if device.object_type() == ObjectType::DEVICE

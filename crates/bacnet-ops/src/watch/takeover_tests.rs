@@ -137,6 +137,14 @@ async fn a_device_naming_another_sender_keeps_its_watch_after_one_read() {
     assert_eq!(present(&lease), Some(56.0));
     assert_eq!(lease.snapshot().state, Phase::Live);
     assert_eq!(lab.sent(READ_PROPERTY, from), 2);
+    // Its own announcement then changes nothing: still its, the name kept.
+    lab.announce(LAB);
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    lab.notify(process, GATEWAY, ai(1), 57.0);
+    settle().await;
+    assert_eq!(present(&lease), Some(57.0));
+    assert_eq!(lease.snapshot().state, Phase::Live);
+    assert_eq!(lease.snapshot().why, None);
     drop(lease);
     lab.stop().await;
 }
@@ -206,6 +214,9 @@ async fn a_cov_refusal_is_forgotten_when_the_device_at_the_address_changes() {
 async fn missed_announcements_are_caught_up_from_the_table() {
     let lab = Lab::start(WatchOptions::default()).await;
     let lease = subscribed(&lab).await;
+    // Its restart-time read, an answer naming the device, before the table
+    // changes: one after would be the device's newer word.
+    tokio::time::sleep(Duration::from_secs(1)).await;
     let low = lab.client.low_level();
     low.add_device(LAB + 1, &[2]).await.unwrap();
     let from = Instant::now();
@@ -257,18 +268,49 @@ async fn the_restart_time_decides_whether_an_announcement_resubscribes() {
 }
 
 /// The device's restart notification (unsubscribed, process identifier 0,
-/// about its Device object) subscribes its point again without a read.
+/// about its Device object) is a cue to read its restart time: moved, the
+/// point is subscribed again. The time the notification carries isn't
+/// taken.
 #[tokio::test(start_paused = true)]
 async fn a_restart_notification_subscribes_again() {
     let lab = Lab::start(WatchOptions::default()).await;
+    *lab.quirks.restart_time.lock().unwrap() = Some(1);
     let lease = subscribed(&lab).await;
     tokio::time::sleep(Duration::from_secs(40)).await;
     let from = Instant::now();
-    let restart = vec![(PropertyIdentifier::TIME_OF_DEVICE_RESTART, vec![0x21, 9])];
-    lab.notify_values(0, LAB, oid(ObjectType::DEVICE, LAB), restart);
+    *lab.quirks.restart_time.lock().unwrap() = Some(2);
+    lab.notify_values(0, LAB, oid(ObjectType::DEVICE, LAB), restart_values(9));
     tokio::time::sleep(Duration::from_secs(20)).await;
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1, "its restart time");
     assert_eq!(lab.sent(SUBSCRIBE_COV, from), 1);
-    assert_eq!(lab.sent(READ_PROPERTY, from), 0);
+    drop(lease);
+    lab.stop().await;
+}
+
+/// Time_Of_Device_Restart as a restart notification lists it.
+fn restart_values(time: u8) -> Vec<(PropertyIdentifier, Vec<u8>)> {
+    vec![(PropertyIdentifier::TIME_OF_DEVICE_RESTART, vec![0x21, time])]
+}
+
+/// A forged restart notification (the device didn't restart) costs one
+/// read of the restart time and subscribes nothing again, whatever time it
+/// carries; another within the lifetime costs nothing.
+#[tokio::test(start_paused = true)]
+async fn a_forged_restart_notification_costs_one_read() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    *lab.quirks.restart_time.lock().unwrap() = Some(1);
+    let lease = subscribed(&lab).await;
+    tokio::time::sleep(Duration::from_secs(40)).await;
+    let from = Instant::now();
+    lab.notify_values(0, LAB, oid(ObjectType::DEVICE, LAB), restart_values(9));
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1);
+    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 0, "not restarted");
+    lab.notify_values(0, LAB, oid(ObjectType::DEVICE, LAB), restart_values(10));
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1, "once a lifetime");
+    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 0);
+    assert_eq!(lease.snapshot().state, Phase::Live);
     drop(lease);
     lab.stop().await;
 }
@@ -410,26 +452,181 @@ async fn a_device_rejecting_the_identity_row_keeps_its_rpm() {
 }
 
 /// Restart notifications: one from another device than the points' is
-/// ignored; one with no time, past a lifetime, subscribes the point again
-/// once, and another soon after doesn't.
+/// ignored; the device's own is a cue to read its restart time, at most
+/// once a lifetime, and a time-less one is no different.
 #[tokio::test(start_paused = true)]
 async fn restart_notifications_are_checked_and_bounded() {
     let lab = Lab::start(WatchOptions::default()).await;
+    *lab.quirks.restart_time.lock().unwrap() = Some(1);
     let lease = subscribed(&lab).await;
-    tokio::time::sleep(Duration::from_secs(301)).await;
+    tokio::time::sleep(Duration::from_secs(40)).await;
     let from = Instant::now();
     let other = LAB + 5;
     // Its System_Status alone: no Time_Of_Device_Restart.
     let status = || vec![(PropertyIdentifier::SYSTEM_STATUS, vec![0x91, 0])];
     lab.notify_values(0, other, oid(ObjectType::DEVICE, other), status());
     tokio::time::sleep(Duration::from_secs(15)).await;
-    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 0, "another device's");
+    assert_eq!(lab.sent(READ_PROPERTY, from), 0, "another device's");
+    *lab.quirks.restart_time.lock().unwrap() = Some(2);
     lab.notify_values(0, LAB, oid(ObjectType::DEVICE, LAB), status());
     tokio::time::sleep(Duration::from_secs(15)).await;
-    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 1, "its own");
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1, "its own");
+    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 1, "restarted");
+    *lab.quirks.restart_time.lock().unwrap() = Some(3);
     lab.notify_values(0, LAB, oid(ObjectType::DEVICE, LAB), status());
     tokio::time::sleep(Duration::from_secs(15)).await;
-    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 1, "once a lifetime");
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1, "once a lifetime");
+    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 1);
+    drop(lease);
+    lab.stop().await;
+}
+
+/// A point polled by ReadProperty alone, started from the table, before
+/// any answer named its device: a forged notification naming another
+/// device under its process identifier is dropped and the device there
+/// asked once; the point keeps its device, and an announcement of that
+/// device changes nothing.
+#[tokio::test(start_paused = true)]
+async fn a_forged_first_notification_leaves_a_polled_points_device() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    lab.quirks.refuse_rpm.store(true, Ordering::Relaxed);
+    lab.quirks.refuse_cov.store(true, Ordering::Relaxed);
+    let lease = lab.hub.watch(object(ai(1))).unwrap();
+    wait_for(&lease, |s| s.state != Phase::Starting).await;
+    let process = lease.shared.process;
+    lab.notify(process, LAB + 1, ai(1), 150.0);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_ne!(present(&lease), Some(150.0));
+    assert_eq!(refuted(&lab), 1);
+    assert_eq!(lease.shared.identity(), Some(LAB));
+    lab.announce(LAB);
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    set(&lab, 44.0).await;
+    wait_for(&lease, |_| present(&lease) == Some(44.0)).await;
+    let snapshot = lease.snapshot();
+    assert_eq!(snapshot.state, Phase::Live);
+    assert!(matches!(snapshot.why, Some(Why::Refused(_))), "COV only");
+    assert_eq!(lease.shared.identity(), Some(LAB));
+    drop(lease);
+    lab.stop().await;
+}
+
+/// A device that refuses the wildcard read, its point started from a stale
+/// table row naming another instance: the device announces itself, the
+/// watched instance's Device object isn't there, and no answer had named
+/// it, so the announced one is read next: it answers, and the point takes
+/// it as its device rather than being given up.
+#[tokio::test(start_paused = true)]
+async fn an_unconfirmed_point_whose_device_is_missing_takes_the_one_there() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    lab.quirks.refuse_rpm.store(true, Ordering::Relaxed);
+    lab.quirks.refuse_cov.store(true, Ordering::Relaxed);
+    lab.quirks.refuse_wildcard.store(true, Ordering::Relaxed);
+    let low = lab.client.low_level();
+    low.add_device(LAB + 1, &[2]).await.unwrap();
+    let lease = lab.hub.watch(object(ai(1))).unwrap();
+    wait_for(&lease, |s| s.polls >= 1).await;
+    settle().await;
+    assert_eq!(lease.shared.identity(), Some(LAB + 1));
+    lab.announce(LAB);
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert_eq!(lease.shared.identity(), Some(LAB));
+    let snapshot = lease.snapshot();
+    assert_eq!(snapshot.state, Phase::Live);
+    assert!(matches!(snapshot.why, Some(Why::Refused(_))), "COV only");
+    drop(lease);
+    lab.stop().await;
+}
+
+/// A polled device whose polls can't ask which device answers (it rejects
+/// that row) keeps its values under a forged announcement of another
+/// device every minute for ten minutes: the device refuted that claim, so
+/// its polls aren't held, and it is asked four times (at 0, 60, 180 and
+/// 420 s), one read each.
+#[tokio::test(start_paused = true)]
+async fn a_refuted_claim_repeated_holds_no_values() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    lab.quirks.refuse_cov.store(true, Ordering::Relaxed);
+    lab.quirks
+        .reject_wildcard_rpm
+        .store(true, Ordering::Relaxed);
+    let lease = lab.hub.watch(object(ai(1))).unwrap();
+    wait_for(&lease, |s| s.polls >= 1).await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let from = Instant::now();
+    let mut value = 10.0;
+    for _ in 0..10 {
+        lab.announce(LAB + 1);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        set(&lab, value).await;
+        tokio::time::sleep(Duration::from_secs(25)).await;
+        assert_eq!(present(&lease), Some(value), "polled, not held");
+        value += 1.0;
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    }
+    assert_eq!(
+        lab.sent(READ_PROPERTY, from),
+        4,
+        "asked at 0, 60, 180, 420 s"
+    );
+    assert_eq!(lease.snapshot().state, Phase::Live);
+    drop(lease);
+    lab.stop().await;
+}
+
+/// A device whose notifications name another device that answers at its
+/// address too (a gateway answering a read of any Device instance): the
+/// name can't be taken, so its point is polled instead, the note naming
+/// the sender, and its subscription is cancelled.
+#[tokio::test(start_paused = true)]
+async fn a_sender_that_answers_there_too_has_the_points_polled() {
+    const GATEWAY: u32 = LAB + 7;
+    let lab = Lab::start(WatchOptions::default()).await;
+    lab.quirks.any_device.store(true, Ordering::Relaxed);
+    let lease = subscribed(&lab).await;
+    let process = lease.shared.process;
+    let from = Instant::now();
+    lab.notify(process, GATEWAY, ai(1), 55.0);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let snapshot = lease.snapshot();
+    assert_eq!(snapshot.source, Some(Source::Poll), "{snapshot:?}");
+    assert_eq!(snapshot.state, Phase::Live);
+    let note = snapshot.note.unwrap_or_default();
+    assert!(note.contains(&GATEWAY.to_string()), "{note}");
+    assert!(
+        matches!(snapshot.why, Some(Why::Refused(_))),
+        "{:?}",
+        snapshot.why
+    );
+    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 1, "the cancel");
+    set(&lab, 61.0).await;
+    wait_for(&lease, |_| present(&lease) == Some(61.0)).await;
+    drop(lease);
+    lab.stop().await;
+}
+
+/// A gateway naming itself in every notification, its point started from
+/// the table before any answer named its device: its notifications are
+/// dropped until the device there says which it is and the name is found
+/// to be no other device there; then they are the point's, and its own
+/// announcement changes nothing.
+#[tokio::test(start_paused = true)]
+async fn a_gateway_naming_itself_from_the_start_keeps_its_watch() {
+    const GATEWAY: u32 = LAB + 7;
+    let lab = Lab::start(WatchOptions::default()).await;
+    *lab.quirks.sender.lock().unwrap() = Some(GATEWAY);
+    let lease = subscribed(&lab).await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    lab.announce(LAB);
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    set(&lab, 71.0).await;
+    wait_for(&lease, |_| present(&lease) == Some(71.0)).await;
+    let snapshot = lease.snapshot();
+    assert_eq!(
+        (snapshot.state, snapshot.source, snapshot.why),
+        (Phase::Live, Some(Source::Cov), None)
+    );
+    assert_eq!(lease.shared.identity(), Some(LAB));
     drop(lease);
     lab.stop().await;
 }

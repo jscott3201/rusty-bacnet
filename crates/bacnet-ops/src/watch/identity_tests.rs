@@ -367,22 +367,23 @@ async fn a_polled_device_taken_silently_is_found_by_the_next_poll() {
 }
 
 /// Two devices fight over an address: announcements naming each in turn,
-/// every five seconds for ten minutes, while the watched one answers. The
-/// device is asked at once, then after 60, 120 and 240 s (the wait doubles
-/// up to the lifetime), and the watch goes on.
+/// every five seconds for twenty minutes, while the watched one answers.
+/// The device is asked at once, then after 60, 120 and 240 s, then once a
+/// lifetime (the wait doubles up to the lifetime and stays there), and the
+/// watch goes on.
 #[tokio::test(start_paused = true)]
 async fn announcements_fighting_over_an_address_are_asked_ever_less_often() {
     let mut first = None;
     let mut lab = Pinned::new(&mut first).await;
     let first = first.unwrap();
     let read = reads(&lab.sent, 2);
-    for step in 0..120u32 {
+    for step in 0..240u32 {
         lab.bus.i_am(2, N + step % 2);
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
     let asked = reads(&lab.sent, 2) - read;
-    // At 5, 65, 185 and 425 s.
-    assert_eq!(asked, 4, "reads in ten minutes");
+    // At 5, 65, 185, 425, 725 and 1025 s.
+    assert_eq!(asked, 6, "reads in twenty minutes");
     assert!(lab.take().iter().all(|u| gone_for(u).is_none()));
     set(&first, 44.0).await;
     until(&mut lab.watch, |u| number(u) == Some(44.0)).await;

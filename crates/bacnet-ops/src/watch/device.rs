@@ -224,8 +224,10 @@ pub(super) async fn run<T: TransportPort + 'static>(
             }
             continue;
         }
+        // Unbiased: a flood of wake-ups can't keep the job or the tick
+        // unpolled. Any order is safe, as each turn takes in everything
+        // noted before it waits, and a wake-up not taken stays stored.
         tokio::select! {
-            biased;
             () = slot.wake.notified() => {}
             done = async { job.as_mut().expect("guarded by the arm's condition").await },
                 if job.is_some() =>
@@ -366,7 +368,13 @@ impl<T: TransportPort + 'static> Device<T> {
         }
         match self.ops.pop_front() {
             Some(Op::Start(process)) => {
+                // The device an answer named for the address's other points
+                // is this one's too, unless an answer named one for it.
+                let known = self.known();
                 let row = self.rows.get_mut(&process)?;
+                if known.is_some() {
+                    row.shared.learn(known, true);
+                }
                 row.mode = Mode::Starting;
                 let shared = Arc::clone(&row.shared);
                 Some(Box::pin(async move {

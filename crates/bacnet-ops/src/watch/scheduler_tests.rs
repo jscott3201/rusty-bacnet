@@ -99,7 +99,9 @@ async fn a_device_refusing_rpm_is_polled_by_readproperty() {
     let from = Instant::now();
     tokio::time::sleep(Duration::from_secs(10)).await;
     assert_eq!(lab.sent(RPM, from), 0, "{:?}", lab.services());
-    assert_eq!(lab.sent(RP, from), 2, "one property a point");
+    // One property a point, and once the restart time, which names the
+    // device for polls that can't ask which device answers.
+    assert_eq!(lab.sent(RP, from), 3, "one property a point");
     lab.stop().await;
 }
 
@@ -118,14 +120,17 @@ async fn a_failed_batch_is_read_one_property_at_a_time() {
     // Asked again without the question of which device answers, in case
     // that was what failed it, then one property at a time.
     assert_eq!(lab.sent(RPM, from), 2);
-    assert_eq!(lab.sent(RP, from), 3 * POINT_PROPERTIES.len());
+    // And the restart time once, which names the device.
+    assert_eq!(lab.sent(RP, from), 3 * POINT_PROPERTIES.len() + 1);
     assert!(!lab.client.refused_rpm(&lab_at()));
     for lease in &leases {
         let snapshot = lease.snapshot();
         assert_eq!((snapshot.polls, snapshot.state), (1, Phase::Live));
     }
     tokio::time::sleep(Duration::from_secs(10)).await;
-    assert_eq!(lab.sent(RPM, from), 4, "RPM again at the next poll");
+    // The question of which device answers isn't put to it again.
+    assert!(lab.client.wildcard_refused(&lab_at()));
+    assert_eq!(lab.sent(RPM, from), 3, "RPM again at the next poll");
     lab.stop().await;
 }
 

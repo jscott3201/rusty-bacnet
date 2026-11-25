@@ -230,11 +230,17 @@ impl Shared {
         release(entry);
     }
 
-    /// The instance of the point's device, `found` when none was known,
-    /// `confirmed` when the device itself named it.
+    /// The instance of the point's device: `found` when none was known, or
+    /// when the device itself named `found` (`confirmed`, an answer to a
+    /// request) and nothing it answered named the point's device before.
     pub(super) fn learn(&self, found: Option<u32>, confirmed: bool) -> Option<u32> {
         let mut entry = self.lock();
-        if entry.identity.is_none() && found.is_some() {
+        let take = match (entry.identity, found) {
+            (_, None) => false,
+            (None, Some(_)) => true,
+            (Some(_), Some(_)) => confirmed && !entry.confirmed,
+        };
+        if take {
             entry.identity = found;
             entry.confirmed = confirmed;
         }
@@ -244,6 +250,12 @@ impl Shared {
     /// The instance of the point's device, if known.
     pub(super) fn identity(&self) -> Option<u32> {
         self.lock().identity
+    }
+
+    /// The point's device, when the device itself named it in an answer.
+    pub(super) fn confirmed(&self) -> Option<u32> {
+        let entry = self.lock();
+        entry.identity.filter(|_| entry.confirmed)
     }
 
     /// The device at the address named itself `found`: the point's device
@@ -474,8 +486,8 @@ pub(super) struct Notes {
     /// although the device had named another for their point.
     pub(super) senders: Vec<u32>,
     /// A device at the address said it restarted (a restart notification):
-    /// its instance, and its Time_Of_Device_Restart when it gave one.
-    pub(super) restart: Option<(u32, Option<Vec<u8>>)>,
+    /// its instance. Only a cue to read its restart time.
+    pub(super) restart: Option<u32>,
     /// Instances given up here for another device at the address, heard
     /// announcing themselves at another address since.
     pub(super) elsewhere: Vec<u32>,
@@ -592,9 +604,10 @@ impl DeviceSlot {
         keep(&mut self.heard().notes.senders, sender).0
     }
 
-    /// A device at the address, `instance`, said it restarted.
-    fn restarted(&self, instance: u32, time: Option<Vec<u8>>) {
-        self.heard().notes.restart = Some((instance, time));
+    /// A device at the address, `instance`, said it restarted: whether
+    /// that is news for the scheduler.
+    fn restarted(&self, instance: u32) -> bool {
+        self.heard().notes.restart.replace(instance) != Some(instance)
     }
 
     /// `instance`, given up here, announced itself elsewhere.
@@ -788,10 +801,9 @@ impl Registry {
     }
 
     /// The device at `at`, `instance`, said it restarted.
-    pub(super) fn restarted(&self, at: &DeviceAddress, instance: u32, time: Option<Vec<u8>>) {
+    pub(super) fn restarted(&self, at: &DeviceAddress, instance: u32) {
         let device = self.table().devices.get(at).cloned();
-        if let Some(device) = device {
-            device.restarted(instance, time);
+        if let Some(device) = device.filter(|device| device.restarted(instance)) {
             device.wake.notify_one();
         }
     }
@@ -844,20 +856,20 @@ impl Registry {
             let device = table.devices.get(&shared.point.device).cloned();
             (shared, device)
         };
-        let (identity, confirmed) = {
+        let identity = {
             let state = shared.lock();
             if !dispatch::belongs(&shared.point, state.target.as_ref(), event, own) {
                 return None;
             }
-            (state.identity, state.confirmed)
+            state.identity
         };
-        // Every notification names the device that sent it (#2603). One
-        // naming the point's device, or the name a read showed that device
-        // uses ([`Alias`]), is the point's. Before the device itself named
-        // the point's instance, its first word names it: what the table
-        // said is replaced. After, one naming another device isn't the
-        // point's, under its process identifier or not: its scheduler asks
-        // who answers there.
+        // Every notification names the device that sent it (#2603), and
+        // none was asked for: one naming the point's device, or the name a
+        // read showed that device uses ([`Alias`]), is the point's; with no
+        // device known at all, its sender is taken, unconfirmed. Any other
+        // isn't the point's, under its process identifier or not: dropped,
+        // and its scheduler asks the device there which it is, in time.
+        // Only that answer may change or confirm the point's device.
         let sender = received.notification.initiating_device_identifier;
         let named = sender.instance_number();
         let alias = match (&device, identity) {
@@ -865,7 +877,7 @@ impl Registry {
             _ => false,
         };
         let ours = identity == Some(named) || alias;
-        let adopt = !ours && !confirmed;
+        let adopt = identity.is_none();
         if sender.object_type() != ObjectType::DEVICE || !(ours || adopt) {
             self.foreign.fetch_add(1, Ordering::Relaxed);
             if let Some(device) = device.filter(|device| device.sender(named)) {
@@ -882,7 +894,6 @@ impl Registry {
         if adopt {
             state.identity = Some(named);
         }
-        state.confirmed |= !alias;
         let merged = dispatch::merge(
             &mut state.snapshot.rows,
             &shared.point,
