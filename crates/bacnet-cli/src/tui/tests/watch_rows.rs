@@ -256,6 +256,9 @@ async fn watch_ai1(site: &mut Site) {
     .await;
 }
 
+/// The reads sent to the lab device: a COV row's start ends with two
+/// ReadProperty (12), once a device: its name by the wildcard instance and
+/// its Time_Of_Device_Restart (#2603).
 fn reads(site: &Site) -> Vec<u8> {
     site.hub
         .services_to(&[10, 0, 0, 100, 0xBA, 0xC0])
@@ -272,7 +275,7 @@ async fn the_name_comes_with_the_first_read() {
     let row = &site.app.watch.rows()[0];
     assert_eq!(row.name.as_deref(), Some("Zone Temp"));
     assert_eq!(row.units.as_deref(), Some("degrees-fahrenheit"));
-    assert_eq!(reads(&site), [14]);
+    assert_eq!(reads(&site), [14, 12, 12]);
     site.stop().await;
 }
 
@@ -292,7 +295,7 @@ async fn a_device_that_fails_the_read_for_the_name_still_gets_its_row() {
     assert_eq!(row.name, None);
     assert!(row.value.clone().unwrap().is_ok(), "{:?}", row.value);
     assert_eq!(row.units.as_deref(), Some("degrees-fahrenheit"));
-    assert_eq!(reads(&site), [14, 14]);
+    assert_eq!(reads(&site), [14, 14, 12, 12]);
     site.stop().await;
 }
 
@@ -312,8 +315,9 @@ async fn a_refused_name_read_alone_leaves_the_rest_of_the_row() {
     assert_eq!(row.name, None);
     assert!(row.value.clone().unwrap().is_ok(), "{:?}", row.value);
     assert_eq!(row.units.as_deref(), Some("degrees-fahrenheit"));
-    // The refused RPM, then four ReadProperty: value, flags, units, name.
-    assert_eq!(reads(&site), [14, 12, 12, 12, 12]);
+    // The refused RPM, then four ReadProperty: value, flags, units, name;
+    // then the device's name and restart time.
+    assert_eq!(reads(&site), [14, 12, 12, 12, 12, 12, 12]);
     site.stop().await;
 }
 
@@ -343,7 +347,7 @@ async fn watching_the_name_itself_asks_for_it_once() {
     assert_eq!(row.name.as_deref(), Some("Zone Temp"));
     let value = row.value.clone().unwrap().unwrap();
     assert!(value.contains("Zone Temp"), "{value}");
-    assert_eq!(reads(&site), [14]);
+    assert_eq!(reads(&site), [14, 12, 12]);
     site.stop().await;
 }
 
@@ -358,7 +362,7 @@ async fn a_refused_name_that_is_the_point_is_not_asked_again() {
     .await;
     watch_line(&mut site, "watch 100 ai:1 object-name").await;
     assert_eq!(site.app.watch.rows()[0].name, None);
-    assert_eq!(reads(&site), [14]);
+    assert_eq!(reads(&site), [14, 12, 12]);
     site.stop().await;
 }
 
@@ -372,7 +376,7 @@ async fn an_object_error_is_not_retried_without_the_name() {
     })
     .await;
     watch_line(&mut site, "watch 100 ai:1").await;
-    assert_eq!(reads(&site), [14]);
+    assert_eq!(reads(&site), [14, 12, 12]);
     site.stop().await;
 }
 

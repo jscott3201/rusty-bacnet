@@ -119,6 +119,27 @@ fn a_snapshot_reads_as_the_row_source() {
                 "the device answers at mstp:9 now; watch it there".into(),
             )),
         ),
+        // Another device at the address now: the row fails, naming both.
+        (
+            snapshot(
+                poll,
+                Some(Why::Replaced {
+                    watched: 1001,
+                    found: 1002,
+                }),
+                Some("device 1002 answers at mstp:9 now, not device 1001"),
+            ),
+            Some(Source::Failed(
+                "device 1002 answers at mstp:9 now, not device 1001".into(),
+            )),
+        ),
+        // Notifications naming a sender that can't be told apart: polled.
+        (
+            snapshot(poll, Some(Why::ForeignSender { sender: 1002 }), None),
+            Some(Source::Polled(
+                "notifications name device 1002, which can't be told apart".into(),
+            )),
+        ),
         // Between the steps of a change: no source yet.
         (snapshot(poll, None, Some("timeout")), None),
         (

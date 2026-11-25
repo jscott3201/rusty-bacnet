@@ -137,9 +137,14 @@ pub(crate) fn hub_point(point: &Point, at: DeviceAddress) -> WatchPoint {
 fn source_of(snapshot: &Snapshot, lifetime: u32) -> Option<Source> {
     match (&snapshot.why, snapshot.source) {
         (None, Some(hub::Source::Cov)) => Some(Source::Cov { lifetime }),
-        (Some(Why::Missing | Why::Moved { .. }), _) => snapshot.note.clone().map(Source::Failed),
+        (Some(Why::Missing | Why::Moved { .. } | Why::Replaced { .. }), _) => {
+            snapshot.note.clone().map(Source::Failed)
+        }
         (Some(why), Some(hub::Source::Poll)) => Some(Source::Polled(match why {
             Why::Refused(error) => format!("COV refused: {error}"),
+            Why::ForeignSender { sender } => {
+                format!("notifications name device {sender}, which can't be told apart")
+            }
             Why::NoAnswer(error) => format!("no answer: {error}"),
             Why::Full(error) => format!("COV table full: {error}"),
             Why::Lapsed(Some(error)) => format!("renewal failed: {error}"),

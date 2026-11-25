@@ -7,9 +7,11 @@ use std::sync::Weak;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 
+use bacnet_types::error::Error;
+
 use super::follow::Elsewhere;
 use super::{Device, DeviceAddress};
-use crate::client::{Client, lock};
+use crate::client::{Client, device_error, failed_locally, lock, unreachable};
 use crate::error::OpsError;
 use crate::reading::{IntoProperty, one_property};
 use crate::watch::{CovSupport, Point, Watched};
@@ -23,10 +25,13 @@ impl<T: TransportPort + 'static> Device<T> {
     /// by SubscribeCOVProperty.
     ///
     /// The point is at the device's address now
-    /// ([`address`](Self::address)). A following handle that moves later
-    /// makes its points at the new address, and a watch of the old one
-    /// reports the move ([`Why::Moved`](crate::watch::Why::Moved)). Sends
-    /// nothing.
+    /// ([`address`](Self::address)), and a watch of it follows the device
+    /// that address names when the watch starts. A following handle that
+    /// moves later makes its points at the new address, and a watch of the
+    /// old one reports the move ([`Why::Moved`](crate::watch::Why::Moved));
+    /// another device taking the address is reported too
+    /// ([`Why::Replaced`](crate::watch::Why::Replaced)), and never watched
+    /// as this one. Sends nothing.
     ///
     /// # Errors
     ///
@@ -64,6 +69,48 @@ impl<T: TransportPort + 'static> Client<T> {
         match address.row(self.low_level()).await {
             Some(row) => Some(row.object_identifier.instance_number()),
             None => self.remembered(address),
+        }
+    }
+
+    /// The instance the device at `address` claims, by one ReadProperty of
+    /// the Device object's Object_Identifier by the wildcard instance,
+    /// remembered for the address as a handle's
+    /// ([`Device::resolve_instance`]) is. A device that answers it with an
+    /// error is remembered too, and not asked so again
+    /// ([`wildcard_refused`](Client::wildcard_refused)).
+    ///
+    /// # Errors
+    ///
+    /// The device's error, or none from a device gone quiet.
+    pub(crate) async fn ask_instance(&self, address: &DeviceAddress) -> Result<u32, Error> {
+        let mut reader = self.reader(address, None);
+        match reader.instance().await.map_err(device_error) {
+            Ok(instance) => {
+                self.remember(address.clone(), instance);
+                Ok(instance)
+            }
+            Err(error) => {
+                if !unreachable(&error) && !failed_locally(&error) {
+                    self.refuse_wildcard(address);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// The instance the device at `address` last named itself in an answer
+    /// to this client (a read by the wildcard instance, or the watch hub's
+    /// question of which device answers): what it said, not what the
+    /// discovery table holds. It goes when the table loses its row there or
+    /// a device there announces another instance (#2603). Sends nothing.
+    pub(crate) fn said(&self, address: &DeviceAddress) -> Option<u32> {
+        self.remembered(address)
+    }
+
+    /// Note that the device at `address` named itself `instance`.
+    pub(crate) fn note_said(&self, address: &DeviceAddress, instance: u32) {
+        if self.remembered(address) != Some(instance) {
+            self.remember(address.clone(), instance);
         }
     }
 
