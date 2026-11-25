@@ -322,7 +322,7 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     /// timeouts within Clause 9.5.3's ranges and a pad of at most 15 ms,
     /// plus a nonzero echo grace on a port that declares an echo
     /// ([`Echo::validate`](bacnet_transport::mstp::Echo::validate)); returns
-    /// a typed [`Error::Encoding`] otherwise.
+    /// [`Error::InvalidConfig`] otherwise.
     pub fn validate_only(&self) -> Result<(), Error> {
         self.config().validate()?;
         match &self.serial {
@@ -355,20 +355,22 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
     pub fn build_transport(mut self) -> Result<MstpTransport<S>, Error> {
         self.validate_only()?;
         if !self.source_audit_bindings.is_empty() || !self.source_audit_routed.is_empty() {
-            return Err(Error::Encoding(
-                "source Audit route data requires build_session()".into(),
+            return Err(Error::invalid_config(
+                "source Audit route data requires build_session()",
             ));
         }
         if self.device_storage_path.is_some() {
-            return Err(Error::Encoding(
-                "a Device storage path requires build_session()".into(),
+            return Err(Error::invalid_config(
+                "a Device storage path requires build_session()",
             ));
         }
         let config = self.config();
-        let serial = self
-            .serial
-            .take()
-            .ok_or_else(|| Error::Encoding("MS/TP endpoint serial owner is missing".into()))?;
+        // Only a build takes the port, and a build takes the builder: never
+        // met.
+        let serial = self.serial.take().ok_or(Error::state(
+            bacnet_types::error::Lifecycle::AlreadyStarted,
+            "MS/TP endpoint serial owner is missing",
+        ))?;
         Ok(MstpTransport::new(serial, config).with_execution_mode(self.execution_mode))
     }
 

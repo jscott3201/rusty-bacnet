@@ -97,3 +97,26 @@ fn apdu_budget_header_is_the_header_the_reply_carries() {
         );
     }
 }
+
+/// The NPDU encoder's refusals of a reply plan's NPDU are a static encode
+/// error in the encoder's own words (#1833).
+#[test]
+fn npdu_encoder_refusals_keep_their_text() {
+    use bacnet_npdu::EncodeError as Refused;
+    use bacnet_types::error::Error;
+    let refusals = [
+        Refused::NoRoom {
+            needed: 30,
+            available: 8,
+        },
+        Refused::ReservedNetwork,
+        Refused::EmptySource,
+        Refused::AddressTooLong,
+    ];
+    for refused in refusals {
+        match super::npdu_encode_error(refused) {
+            Error::Encode(error) => assert_eq!(error.message().to_string(), refused.to_string()),
+            other => panic!("{refused:?}: {other:?}"),
+        }
+    }
+}

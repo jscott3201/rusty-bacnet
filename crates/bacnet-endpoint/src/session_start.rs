@@ -32,8 +32,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             let (link, broadcast) = match receivers.bip_broadcast_endpoint {
                 Some(broadcast) => (SourceLink::Bip(broadcast), *broadcast.ip()),
                 None if routes.is_bip() => {
-                    return Err(Error::Encoding(
-                        "source Audit lost its B/IP capability at startup".into(),
+                    return Err(Error::unsupported(
+                        "source Audit lost its B/IP capability at startup",
                     ));
                 }
                 None => {

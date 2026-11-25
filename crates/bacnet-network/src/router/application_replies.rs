@@ -190,7 +190,7 @@ impl Replies {
         let npdu = response.plan().npdu(apdu, expecting_reply, priority);
         let mut encoded = BytesMut::zeroed(npdu.encoded_len());
         npdu.encode_into(&mut encoded)
-            .map_err(|error| Error::Encoding(error.to_string()))?;
+            .map_err(crate::response_route::npdu_encode_error)?;
         response
             .send(encoded.freeze(), priority, self.scope.guard(), || {})
             .await

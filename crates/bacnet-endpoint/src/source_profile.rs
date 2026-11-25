@@ -51,14 +51,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         &self,
         recipient: Option<bacnet_types::constructed::BACnetRecipient>,
     ) -> Result<(), Error> {
-        fn unavailable() -> Error {
-            Error::Encoding("endpoint source Audit owner is not running".into())
-        }
+        // One text, the variant by cause (#1833): the session's state, a
+        // session with no source owner, or an owner shut for good.
+        const UNAVAILABLE: &str = "endpoint source Audit owner is not running";
+        let closed = || Error::state(bacnet_types::error::Lifecycle::Closed, UNAVAILABLE);
         if !self.is_running() {
-            return Err(unavailable());
+            return Err(Error::state(self.not_running_state(), UNAVAILABLE));
         }
         let (Some(source), Some(runtime)) = (&self.source_audit, &self.source_recipient) else {
-            return Err(unavailable());
+            return Err(Error::unsupported(UNAVAILABLE));
         };
         // The session can't stop while this call borrows it, so under the
         // guard the owner is what may have gone.
@@ -66,12 +67,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         source
             .under_write_guard(move |_, db| {
                 if !runtime.owner.is_active() {
-                    return Err(unavailable());
+                    return Err(closed());
                 }
                 runtime.write_local(db, recipient)
             })
             .await
-            .unwrap_or_else(|| Err(unavailable()))
+            .unwrap_or_else(|| Err(closed()))
     }
 
     /// Reports a reset the application carries out for its own reasons, not
@@ -92,10 +93,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// (#2759).
     ///
     /// # Errors
-    /// [`Error::Encoding`] when the session is not running.
+    /// [`Error::State`] when the session is not running.
     pub async fn report_device_reset_local(&self) -> Result<(), Error> {
         if !self.is_running() {
-            return Err(Error::Encoding("endpoint session is not running".into()));
+            return Err(self.not_running());
         }
         let Some(source) = &self.source_audit else {
             return Ok(());
@@ -251,17 +252,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// any other link's own MAC and group rule (#2357).
     fn prepare_source_routes(&self) -> Result<crate::source_audit::recipient::SourceRoutes, Error> {
         use crate::source_audit::recipient::{SourceLink, SourceRoutes};
-        let ingress = self
-            .ingress
-            .as_ref()
-            .ok_or_else(|| Error::Encoding("source Audit requires the session's link".into()))?;
+        // A link that gives no unicast facts offers source Audit nothing.
+        let no_link = || Error::unsupported("source Audit requires the session's link");
+        let ingress = self.ingress.as_ref().ok_or_else(no_link)?;
         match ingress.bip_broadcast_endpoint() {
             Some(broadcast) => {
                 if !self.source_audit_link_bindings.is_empty() {
-                    return Err(Error::Encoding(
+                    return Err(Error::invalid_config(
                         "source Audit link bindings need a link other than IPv4 B/IP; \
-                         B/IP takes source_audit_device_binding"
-                            .into(),
+                         B/IP takes source_audit_device_binding",
                     ));
                 }
                 SourceRoutes::new(&self.source_audit_bindings, broadcast)?
@@ -269,13 +268,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             }
             None => {
                 if !self.source_audit_bindings.is_empty() {
-                    return Err(Error::Encoding(
-                        "B/IP source Audit bindings need an IPv4 B/IP link".into(),
+                    return Err(Error::invalid_config(
+                        "B/IP source Audit bindings need an IPv4 B/IP link",
                     ));
                 }
-                let (local, groups) = ingress.link_unicast_facts().ok_or_else(|| {
-                    Error::Encoding("source Audit requires the session's link".into())
-                })?;
+                let (local, groups) = ingress.link_unicast_facts().ok_or_else(no_link)?;
                 SourceRoutes::for_link(
                     &self.source_audit_link_bindings,
                     SourceLink::Other { local, groups },
@@ -291,9 +288,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let Some(selected) = self.source_audit_reporter else {
             return Ok(None);
         };
+        // Each refusal below is of the session's configuration, but for a
+        // Reporter asking for what source Audit doesn't do (#1833).
         if self.role == SessionRole::ServerOnly {
-            return Err(Error::Encoding(
-                "source Audit Reporter requires a client role".into(),
+            return Err(Error::invalid_config(
+                "source Audit Reporter requires a client role",
             ));
         }
         // No peer may rewrite the audited Device's recipient by default: the
@@ -302,17 +301,16 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         if let Some(builder) = &self.server_builder
             && !builder.node_facts().decides_mutations
         {
-            return Err(Error::Encoding(
+            return Err(Error::invalid_config(
                 "source Audit beside a full server requires a server policy that decides \
                  mutations (a ServerPolicy whose decides_mutations is true, or \
-                 MutationPolicy::DenyAll)"
-                    .into(),
+                 MutationPolicy::DenyAll)",
             ));
         }
         let routes = self.prepare_source_routes()?;
-        let db = self.database.as_mut().ok_or_else(|| {
-            Error::Encoding("source Audit Reporter requires an attached local database".into())
-        })?;
+        let db = self.database.as_mut().ok_or(Error::invalid_config(
+            "source Audit Reporter requires an attached local database",
+        ))?;
         // Ready sessions have not shared the Arc with a server. Synchronous,
         // exclusive validation has no await/cancellation or concurrent mutation.
         let db = Arc::get_mut(db)
@@ -320,16 +318,16 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .get_mut();
         // The local Device is the audit identity. Source ownership refuses any
         // new Device and keeps this one, so it stays the lowest while owned.
-        let device = db.local_device().identifier().ok_or_else(|| {
-            Error::Encoding("source Audit Reporter requires a concrete local Device".into())
-        })?;
+        let device = db.local_device().identifier().ok_or(Error::invalid_config(
+            "source Audit Reporter requires a concrete local Device",
+        ))?;
         if self
             .identity
             .as_ref()
             .is_some_and(|identity| device.instance_number() != identity.instance())
         {
-            return Err(Error::Encoding(
-                "source Audit Reporter local Device does not match session identity".into(),
+            return Err(Error::invalid_config(
+                "source Audit Reporter local Device does not match session identity",
             ));
         }
         let recipient = db
@@ -337,26 +335,24 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .and_then(|object| object.device_authority_internal())
             .filter(|authority| authority.object_identifier() == device)
             .and_then(|authority| authority.provisioned_audit_recipient().cloned())
-            .ok_or_else(|| {
-                Error::Encoding(
-                    "source Audit requires a provisioned built-in Device recipient".into(),
-                )
-            })?;
+            .ok_or(Error::invalid_config(
+                "source Audit requires a provisioned built-in Device recipient",
+            ))?;
         routes.validate_initial(&recipient)?;
         if selected.object_type() != ObjectType::AUDIT_REPORTER {
-            return Err(Error::Encoding(
-                "source selection must be an Audit Reporter".into(),
+            return Err(Error::invalid_config(
+                "source selection must be an Audit Reporter",
             ));
         }
-        let object = db.get(&selected).ok_or_else(|| {
-            Error::Encoding("selected source Audit Reporter is absent from the database".into())
-        })?;
+        let object = db.get(&selected).ok_or(Error::invalid_config(
+            "selected source Audit Reporter is absent from the database",
+        ))?;
         if !object
             .audit_reporter()
             .is_some_and(|reporter| reporter.object_identifier() == selected)
         {
-            return Err(Error::Encoding(
-                "selected object lacks the Audit Reporter capability".into(),
+            return Err(Error::invalid_config(
+                "selected object lacks the Audit Reporter capability",
             ));
         }
         if object.audit_reporter().is_some_and(|reporter| {
@@ -368,8 +364,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 .maximum_send_delay
                 .is_some()
         }) {
-            return Err(Error::Encoding(
-                "source Audit does not support Monitored_Objects or delayed notifications".into(),
+            return Err(Error::unsupported(
+                "source Audit does not support Monitored_Objects or delayed notifications",
             ));
         }
         for (oid, object) in db.iter_objects() {
@@ -377,13 +373,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 match object.read_property(PropertyIdentifier::AUDIT_SOURCE_REPORTER, None) {
                     Ok(PropertyValue::Boolean(false)) => {}
                     Ok(PropertyValue::Boolean(true)) => {
-                        return Err(Error::Encoding(
-                            "database already contains a conflicting source Audit Reporter".into(),
+                        return Err(Error::invalid_config(
+                            "database already contains a conflicting source Audit Reporter",
                         ));
                     }
                     _ => {
-                        return Err(Error::Encoding(
-                            "cannot determine another Audit Reporter's source ownership".into(),
+                        return Err(Error::invalid_config(
+                            "cannot determine another Audit Reporter's source ownership",
                         ));
                     }
                 }

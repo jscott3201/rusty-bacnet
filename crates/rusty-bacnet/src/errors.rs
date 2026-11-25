@@ -25,6 +25,8 @@ create_exception!(rusty_bacnet, BacnetBvlcUnexpectedResponseError, BacnetError);
 create_exception!(rusty_bacnet, BacnetNetworkRejectError, BacnetError);
 
 mod lookup;
+#[cfg(test)]
+mod refusal_tests;
 pub(crate) use lookup::{Lookup, lookup_error};
 #[cfg(test)]
 pub(crate) use lookup::{ambiguous_error_type, lookup_error_type};

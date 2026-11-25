@@ -241,16 +241,26 @@ fn loopback_ports(macs: &[Vec<u8>]) -> Vec<RouterPort<LoopbackTransport>> {
 /// before the engine started without ports or with more than 255.
 #[tokio::test]
 async fn start_refuses_what_the_engine_cannot_run() {
+    // One text, the variant by cause (#1833).
     let none = refused(Vec::new()).await.expect("no port");
-    assert!(none.to_string().contains("1 to 255 ports"), "{none}");
+    assert!(
+        matches!(&none, Error::InvalidConfig(text) if text.to_string() == "A router needs 1 to 255 ports, not 0"),
+        "{none:?}"
+    );
     let many = refused(loopback_ports(&vec![vec![1]; 256]))
         .await
         .expect("256 ports");
-    assert!(many.to_string().contains("not 256"), "{many}");
+    assert!(
+        matches!(&many, Error::LimitReached(text) if text.to_string() == "A router needs 1 to 255 ports, not 256"),
+        "{many:?}"
+    );
     let long = refused(loopback_ports(&[vec![1], vec![2; 19]]))
         .await
         .expect("a 19-octet MAC");
-    assert!(long.to_string().contains("network 101"), "{long}");
+    assert!(
+        matches!(&long, Error::Unsupported(text) if text.to_string().contains("network 101")),
+        "{long:?}"
+    );
     let StartedRouter { mut router, .. } = BACnetRouter::start(
         loopback_ports(&[vec![1], vec![2; 18]]),
         RouterOptions::new(),
@@ -277,7 +287,10 @@ async fn start_refuses_a_reserved_network_before_any_transport_starts() {
             .err()
             .expect("a reserved network");
         let named = format!("network {reserved}");
-        assert!(error.to_string().contains(&named), "{error}");
+        assert!(
+            matches!(&error, Error::InvalidConfig(refusal) if refusal.to_string().contains(&named)),
+            "{error:?}"
+        );
         assert!(!first_handle.started.load(Ordering::SeqCst));
         assert!(!second_handle.started.load(Ordering::SeqCst));
     }

@@ -52,6 +52,12 @@ async fn ingress_canceled_stop_retains_join_and_actual_post_start_bip_fact() {
         4,
     );
     assert_eq!(endpoint.bip_broadcast_endpoint().unwrap().port(), 0);
+    // Before its start it is not running, and can start (#1833).
+    assert!(matches!(
+        endpoint.stop().await,
+        Err(Error::State(error::Lifecycle::NotRunning, ref text))
+            if text.to_string() == "endpoint ingress is not running"
+    ));
     let receivers = endpoint.start().await.unwrap();
     assert_eq!(receivers.bip_broadcast_endpoint.unwrap().port(), 30001);
     {
@@ -67,7 +73,15 @@ async fn ingress_canceled_stop_retains_join_and_actual_post_start_bip_fact() {
     ));
     assert_eq!(complete.load(Ordering::SeqCst), 1);
     assert_eq!(handle.stops(), 1);
-    assert!(endpoint.stop().await.is_err());
+    // Stopped, it is closed for good: an ingress starts once.
+    assert!(matches!(
+        endpoint.stop().await,
+        Err(Error::State(error::Lifecycle::Closed, _))
+    ));
+    assert!(matches!(
+        endpoint.start().await,
+        Err(Error::State(error::Lifecycle::AlreadyStarted, _))
+    ));
     drop(receivers);
     drop(handle);
 }

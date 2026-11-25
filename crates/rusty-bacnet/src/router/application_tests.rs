@@ -91,7 +91,7 @@ async fn the_wrapped_port_is_the_router_port_and_has_no_link() {
     transport.send_broadcast(&local).await.unwrap();
     assert!(matches!(
         transport.send_unicast(&local, &[0x21]).await,
-        Err(Error::Encoding(message)) if message.contains("names no one station")
+        Err(Error::InvalidArgument(message)) if message.to_string().contains("names no one station")
     ));
     router.stop().await.unwrap();
     // Every send after the router stops fails as not connected.

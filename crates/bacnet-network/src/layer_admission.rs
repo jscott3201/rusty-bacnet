@@ -1,5 +1,6 @@
 use super::ingress::{ApduReceiver, Ingress};
 use super::*;
+use bacnet_types::error::Lifecycle;
 use bacnet_types::sync::MutexExt;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -8,6 +9,11 @@ use tokio::sync::mpsc;
 
 const QUEUE_CAPACITY: usize = 256;
 const APDU_SOURCE_CAPACITY: usize = 16;
+
+/// A second start of the layer, which either start refuses (#1833).
+fn already_started() -> Error {
+    Error::state(Lifecycle::AlreadyStarted, "NetworkLayer is already started")
+}
 
 // NetworkLayer has one unnamed transport; router MACs are scoped to the
 // ingress port's network number, never the routed NPDU SNET/SADR.
@@ -444,13 +450,15 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         Error,
     > {
         if self.started {
-            return Err(Error::Encoding(
-                "network-control receiver must be enabled before NetworkLayer::start".into(),
+            return Err(Error::state(
+                Lifecycle::AlreadyStarted,
+                "network-control receiver must be enabled before NetworkLayer::start",
             ));
         }
+        // The layer has one control stream, which a receiver already holds.
         if self.network_control_tx.is_some() {
-            return Err(Error::Encoding(
-                "network-control receiver is already enabled".into(),
+            return Err(Error::limit_reached(
+                "network-control receiver is already enabled",
             ));
         }
         let (tx, rx) = AdmissionSender::channel(track_depth);
@@ -475,7 +483,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
     /// [receive-queue contract](crate::layer#receive-queue-admission).
     pub async fn start(&mut self) -> Result<ApduReceiver, Error> {
         if self.started {
-            return Err(Error::Encoding("NetworkLayer is already started".into()));
+            return Err(already_started());
         }
         let npdu_rx = self.transport.start().await?;
         self.started = true;
@@ -542,7 +550,7 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         &mut self,
     ) -> Result<(mpsc::Receiver<ReceivedApdu>, QueueAdmissionCounters), Error> {
         if self.started {
-            return Err(Error::Encoding("NetworkLayer is already started".into()));
+            return Err(already_started());
         }
         let mut npdu_rx = self.transport.start().await?;
         self.started = true;
