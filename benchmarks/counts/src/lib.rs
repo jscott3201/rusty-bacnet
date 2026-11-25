@@ -8,12 +8,14 @@
 //! counts come from running the binary under callgrind at two loop lengths
 //! (`scripts/perf/perf_counts.py`); their difference divided by the
 //! difference in length is the cost of one iteration, free of setup,
-//! oracles and shutdown.
+//! oracles and shutdown. Each binary first fixes the process's hash-map
+//! keys when asked to ([`hash_keys`]), so two runs probe their maps alike.
 #![deny(missing_docs)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
+pub mod hash_keys;
 pub mod setup;
 
 static CALLS: AtomicU64 = AtomicU64::new(0);
@@ -94,15 +96,17 @@ impl AllocSnapshot {
 pub const WARMUP: u64 = 200;
 
 /// Prints the line `scripts/perf/perf_counts.py` reads: the workload, the
-/// loop length and the counted loop's allocator totals.
+/// loop length, the counted loop's allocator totals and whether the
+/// hash-map keys were fixed ([`hash_keys::report_fields`]).
 pub fn report(workload: &str, runtime: &str, n: u64, counted: AllocSnapshot) {
     eprintln!(
         "RESULT workload={workload} runtime={runtime} n={n} warmup={WARMUP} allocs={} bytes={} \
-         allocs_per_iter={:.6} bytes_per_iter={:.6}",
+         allocs_per_iter={:.6} bytes_per_iter={:.6} {}",
         counted.calls,
         counted.bytes,
         counted.calls as f64 / n as f64,
         counted.bytes as f64 / n as f64,
+        hash_keys::report_fields(),
     );
 }
 

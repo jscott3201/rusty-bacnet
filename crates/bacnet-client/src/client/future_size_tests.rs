@@ -17,6 +17,13 @@
 //! too, either way: one that trips a bound means measuring the sizes on dev
 //! again with the new compiler and setting the bounds from those, not a
 //! regression to chase here.
+//!
+//! The dispatch and segmented-receive bounds come from #2558, not
+//! 54fec70ed: the sizes after its split, measured on macOS aarch64 only.
+//! Nothing those futures hold is laid out by platform: no field under a
+//! `target_os`, `unix` or `windows` cfg, and the one feature-gated field, a
+//! direct BACnet/SC peer's certificate, sits behind an `Arc`. So they take
+//! the same 32-byte margin.
 
 use super::segmentation_context::SegmentedRequestLimits;
 use super::station::ConfirmedTarget;
@@ -84,5 +91,60 @@ async fn the_request_futures_stay_within_their_bounds() {
     assert!(
         segmented_size <= SEGMENTED_BOUND,
         "segmented_confirmed_request's future is {segmented_size} bytes, over {SEGMENTED_BOUND}"
+    );
+}
+
+/// `dispatch_apdu`'s future, which the client's dispatch task holds while
+/// it handles each frame, was 2,784 bytes before #2558 moved most of its
+/// arms into functions of their own, and 2,152 after (debug, 64-bit, Rust
+/// 1.99.0). A local saved across two awaits sits in the future's prefix, so
+/// the arms' locals used to add up rather than overlap.
+const DISPATCH_BOUND: usize = 2_152 + 32;
+
+/// `handle_segmented_complex_ack`'s future, which the dispatch future holds
+/// while a segment is received, was 1,512 bytes before #2558 split it, and
+/// 1,464 after.
+const SEGMENTED_RECEIVE_BOUND: usize = 1_464 + 32;
+
+type SegState = &'static mut HashMap<SegKey, SegmentedReceiveState>;
+
+/// The size of `dispatch_apdu`'s future, without making one.
+fn dispatch_size<F>(
+    _make: impl FnOnce(
+        &'static super::dispatch_context::DispatchContext<'static, TestTransport>,
+        SegState,
+        super::dispatch_context::InboundApdu<'static>,
+        Apdu,
+        ResponseLimits,
+    ) -> F,
+) -> usize {
+    std::mem::size_of::<F>()
+}
+
+/// The size of `handle_segmented_complex_ack`'s future, without making one.
+fn receive_size<F>(
+    _make: impl FnOnce(
+        &'static Arc<SyncMutex<Tsm>>,
+        &'static Arc<NetworkLayer<TestTransport>>,
+        SegState,
+        super::segmentation_context::InboundSegmentSource<'static>,
+        bacnet_encoding::apdu::ComplexAck,
+        ResponseLimits,
+    ) -> F,
+) -> usize {
+    std::mem::size_of::<F>()
+}
+
+#[test]
+fn the_dispatch_futures_stay_within_their_bounds() {
+    let dispatch = dispatch_size(BACnetClient::<TestTransport>::dispatch_apdu);
+    let receive = receive_size(BACnetClient::<TestTransport>::handle_segmented_complex_ack);
+    assert!(
+        dispatch <= DISPATCH_BOUND,
+        "dispatch_apdu's future is {dispatch} bytes, over {DISPATCH_BOUND}"
+    );
+    assert!(
+        receive <= SEGMENTED_RECEIVE_BOUND,
+        "handle_segmented_complex_ack's future is {receive} bytes, over {SEGMENTED_RECEIVE_BOUND}"
     );
 }
