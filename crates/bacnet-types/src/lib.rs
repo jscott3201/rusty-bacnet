@@ -32,6 +32,9 @@ pub mod points;
 pub mod primitives;
 #[cfg(feature = "qudt")]
 pub mod qudt;
+// std's locks, taken whether poisoned or not (#2559).
+#[cfg(feature = "std")]
+pub mod sync;
 pub mod text;
 
 /// BACnet MAC address — stack-allocated for typical sizes (≤6 bytes).
