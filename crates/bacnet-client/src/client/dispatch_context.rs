@@ -47,3 +47,19 @@ pub(super) struct InboundApdu<'a> {
     /// Channel for handing a reply to the transport, when it supplied one.
     pub(super) reply_tx: Option<oneshot::Sender<Bytes>>,
 }
+
+/// Where an answer came from and the transaction it answers: what each of
+/// the dispatcher's answer functions takes (#2558). Built in the arm that
+/// calls one, from the values `dispatch_apdu` already holds.
+pub(super) struct AnswerSource<'a> {
+    /// Immediate MAC the APDU arrived from.
+    pub(super) source_mac: &'a [u8],
+    /// The peer's SNET/SADR when the APDU arrived through a router.
+    pub(super) source_network: &'a Option<NpduAddress>,
+    /// Transport provenance snapshot for this APDU.
+    pub(super) provenance: TransportProvenance,
+    /// TSM key MAC of the transaction the answer belongs to.
+    pub(super) tsm_mac: MacAddr,
+    /// Canonical identity of the answering peer.
+    pub(super) canonical_peer: CanonicalPeer,
+}
