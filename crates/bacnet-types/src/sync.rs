@@ -4,16 +4,19 @@
 //! it, and from then on its lock calls return an error. Unwrapping that
 //! error turns the one panic into a panic in every later user of the lock,
 //! so a panic in one request's task could take a whole server, link or
-//! router down with it. The stack's rule is to take the lock either way,
-//! through these extension traits, and leave the panic to the task it
-//! happened in. The data is as the panicking holder left it. Where a
-//! half-done update would leave data that must not be used, the code
-//! returns an error on poison instead, and says so where it locks.
+//! router down with it. The stack never panics on a poisoned lock: by
+//! default it takes the lock through these extension traits and leaves the
+//! panic to the task it happened in, with the data as the panicking holder
+//! left it. Where a half-done update would leave data that must not be
+//! used, the code returns an error on poison instead (fails closed), and
+//! says why where it locks.
 //!
 //! Each method is the std method it is named after, with the poison error
-//! unwrapped to its guard or reference: no other cost.
-//! `scripts/ci/check-lock-poison.py` fails CI on `.lock().unwrap()` and
-//! the other spellings that go around them.
+//! unwrapped to its guard or reference: no other cost. The traits are
+//! sealed: only std's types implement them, so methods can be added later.
+//! In the rusty-bacnet repository, a CI script
+//! (`scripts/ci/check-lock-poison.py`) holds the stack's own code to this
+//! rule.
 //!
 //! ```
 //! use bacnet_types::sync::MutexExt;
@@ -30,8 +33,17 @@ use std::sync::{
 };
 use std::time::Duration;
 
+/// Only std's lock types implement the traits here, so adding a method to
+/// one is not a breaking change.
+mod sealed {
+    pub trait Sealed {}
+    impl<T: ?Sized> Sealed for std::sync::Mutex<T> {}
+    impl<T: ?Sized> Sealed for std::sync::RwLock<T> {}
+    impl Sealed for std::sync::Condvar {}
+}
+
 /// [`Mutex`] access that doesn't fail when the mutex is poisoned.
-pub trait MutexExt<T: ?Sized> {
+pub trait MutexExt<T: ?Sized>: sealed::Sealed {
     /// [`Mutex::lock`], poisoned or not.
     fn locked(&self) -> MutexGuard<'_, T>;
     /// [`Mutex::get_mut`], poisoned or not.
@@ -51,7 +63,7 @@ impl<T: ?Sized> MutexExt<T> for Mutex<T> {
 }
 
 /// [`RwLock`] access that doesn't fail when the lock is poisoned.
-pub trait RwLockExt<T: ?Sized> {
+pub trait RwLockExt<T: ?Sized>: sealed::Sealed {
     /// [`RwLock::read`], poisoned or not.
     fn read_locked(&self) -> RwLockReadGuard<'_, T>;
     /// [`RwLock::write`], poisoned or not.
@@ -78,7 +90,7 @@ impl<T: ?Sized> RwLockExt<T> for RwLock<T> {
 }
 
 /// [`Condvar`] waits that take the mutex back whether it was poisoned or not.
-pub trait CondvarExt {
+pub trait CondvarExt: sealed::Sealed {
     /// [`Condvar::wait`], poisoned or not.
     fn wait_locked<'a, T>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T>;
     /// [`Condvar::wait_timeout_while`], poisoned or not.
@@ -182,13 +194,15 @@ mod tests {
         }
         drop(ready);
         waker.join().unwrap();
-        // No wait: the condition already holds, so only the poison is left
-        // to get past.
-        let (ready, timeout) =
-            shared
-                .1
-                .wait_timeout_while_locked(shared.0.locked(), Duration::ZERO, |ready| !*ready);
+        // A condition that stays true, so the wait runs (std returns before
+        // it looks at the poison when the condition is already false), and
+        // nothing notifies: it times out and takes the poisoned mutex back.
+        let (ready, timeout) = shared.1.wait_timeout_while_locked(
+            shared.0.locked(),
+            Duration::from_millis(1),
+            |ready| *ready,
+        );
         assert!(*ready);
-        assert!(!timeout.timed_out());
+        assert!(timeout.timed_out());
     }
 }
