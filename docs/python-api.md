@@ -3207,6 +3207,8 @@ await client.who_is(scope="192.168.1.100:47808")
 Manually add a device to the discovery table. The table holds one device
 per address: adding an instance at an address that holds another replaces
 it, so `get_device()` no longer finds the instance that was there (#2560).
+An address longer than 18 octets, which the hex form can spell, raises
+`BacnetError` and adds nothing: no link's MAC is longer (#2606).
 
 ```python
 await client.add_device(1234, "192.168.1.100:47808")

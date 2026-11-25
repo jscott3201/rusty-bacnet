@@ -2,6 +2,7 @@
 //! device instance, an object type and instance, a property. A device-list
 //! page is named by the row it follows: an instance at an address.
 
+use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::label::kebab;
 use bacnet_ops::octets::hex;
@@ -22,7 +23,9 @@ pub(crate) const LEDGER: &str = "bacnet://ledger";
 /// named by its instance and its address (network, then the station's MAC
 /// there). Rows are listed in this order, and no two share it, so a page
 /// boundary falls between rows even when several addresses claim one
-/// instance.
+/// instance. `bacnet://devices` names it in a URI and `bacnet_discover`
+/// in a signed cursor (#2606), so a page starts after a row, wherever
+/// rows found or lost in between have moved it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct DeviceCursor {
     pub(crate) instance: u32,
@@ -38,6 +41,43 @@ impl DeviceCursor {
             network: address.network_number,
             mac: address.mac_address,
         }
+    }
+
+    /// The row `found` is listed by: its instance, then its address as
+    /// the discovery table keys it. No two rows share it. A row with no
+    /// one station to name (the table keeps none) falls back to its MAC.
+    /// The table never stores such a row, so the fallback cannot run; it
+    /// only spares a panic.
+    pub(crate) fn of(found: &DiscoveredDevice) -> Self {
+        let address = found.address().unwrap_or_else(|| BACnetAddress {
+            network_number: 0,
+            mac_address: found.mac_address.clone(),
+        });
+        Self::new(found.object_identifier.instance_number(), address)
+    }
+
+    /// The row as a cursor carries it: the instance and the network, big
+    /// endian, then the MAC, at most 24 octets for an 18-octet MAC.
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(6 + self.mac.len());
+        bytes.extend_from_slice(&self.instance.to_be_bytes());
+        bytes.extend_from_slice(&self.network.to_be_bytes());
+        bytes.extend_from_slice(&self.mac);
+        bytes
+    }
+
+    /// The row [`to_bytes`](Self::to_bytes) wrote, or `None` for bytes
+    /// too short to hold one. A signed cursor carries them, so they are
+    /// this server's own; their MAC is taken at any length, so no row the
+    /// table holds can end a walk.
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let (instance, rest) = bytes.split_first_chunk::<4>()?;
+        let (network, mac) = rest.split_first_chunk::<2>()?;
+        Some(Self {
+            instance: u32::from_be_bytes(*instance),
+            network: u16::from_be_bytes(*network),
+            mac: MacAddr::from_slice(mac),
+        })
     }
 
     /// `{instance}/{network}/{mac as lowercase hex}`.
@@ -345,5 +385,30 @@ mod tests {
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }
+    }
+
+    /// A row's bytes, as `bacnet_discover`'s cursor carries them, read back
+    /// as the row, the longest 24 octets (#2606).
+    #[test]
+    fn a_row_reads_back_from_its_bytes() {
+        let row = |instance, network_number, mac: &[u8]| {
+            DeviceCursor::new(
+                instance,
+                BACnetAddress {
+                    network_number,
+                    mac_address: MacAddr::from_slice(mac),
+                },
+            )
+        };
+        let longest = row(4_194_303, 65535, &[0xAB; 18]);
+        assert_eq!(longest.to_bytes().len(), 24);
+        for row in [
+            row(1201, 0, &[10, 0, 0, 2, 0xBA, 0xC0]),
+            row(0, 0, &[]),
+            longest,
+        ] {
+            assert_eq!(DeviceCursor::from_bytes(&row.to_bytes()), Some(row));
+        }
+        assert_eq!(DeviceCursor::from_bytes(&[0; 5]), None);
     }
 }

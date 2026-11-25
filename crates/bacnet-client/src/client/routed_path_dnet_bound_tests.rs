@@ -201,3 +201,40 @@ async fn add_routed_device_refuses_a_destination_no_request_could_reach() {
     assert!(client.get_device(ROUTED_DEVICE).await.unwrap().is_some());
     client.stop().await.unwrap();
 }
+
+/// `add_device` holds a local station's MAC to the bound
+/// `add_routed_device` holds a routed one's to (#2606): an empty or a
+/// 19-octet MAC is refused with the same kind of error, the table left
+/// unchanged, and an 18-octet one is taken.
+#[tokio::test]
+async fn add_device_holds_its_mac_to_the_routed_bound() {
+    let (mut client, _inbound, _outbound) = client().await;
+    let too_long = vec![3; bacnet_npdu::MAX_MAC_LEN + 1];
+    let routed = client
+        .add_routed_device(RoutedDeviceConfig {
+            instance: ROUTED_DEVICE,
+            router_mac: ROUTER.to_vec(),
+            remote_network: DNET,
+            remote_mac: too_long.clone(),
+            max_apdu_length: 1476,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
+            max_segments_accepted: None,
+        })
+        .await;
+    assert!(matches!(routed, Err(Error::Encoding(_))), "{routed:?}");
+    for mac in [Vec::new(), too_long] {
+        let result = client.add_device(ROUTED_DEVICE, &mac).await;
+        assert!(
+            matches!(&result, Err(Error::Encoding(m))
+                if m == "device MAC address must contain 1..=18 octets"),
+            "{} octets: {result:?}",
+            mac.len()
+        );
+        assert!(client.discovered_devices().await.is_empty());
+    }
+    let longest = vec![3; bacnet_npdu::MAX_MAC_LEN];
+    client.add_device(ROUTED_DEVICE, &longest).await.unwrap();
+    let row = client.get_device(ROUTED_DEVICE).await.unwrap().unwrap();
+    assert_eq!(row.mac_address.as_slice(), longest.as_slice());
+    client.stop().await.unwrap();
+}

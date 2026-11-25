@@ -584,6 +584,24 @@ class TargetTests(unittest.IsolatedAsyncioTestCase):
                 await pinned.read("ai:0")
 
 
+class AddDeviceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_mac_past_18_octets_is_refused(self) -> None:
+        # The hex form takes any number of pairs; the table holds a station's
+        # MAC to 1 to 18 octets, as a routed one's (#2606).
+        longest = ":".join(["0a"] * 18)
+        async with client() as c:
+            with self.assertRaises(BacnetError) as caught:
+                await c.add_device(7, longest + ":0b")
+            self.assertIs(type(caught.exception), BacnetError)
+            self.assertIn("device MAC address must contain 1..=18 octets",
+                          str(caught.exception))
+            self.assertEqual(await c.discovered_devices(), [])
+            await c.add_device(7, longest)
+            [row] = await c.discovered_devices()
+            self.assertEqual((row.object_identifier.instance, row.mac_address),
+                             (7, bytes([0x0A] * 18)))
+
+
 class LifecycleTests(Lab):
     async def test_a_handle_after_stop_and_after_a_restart(self) -> None:
         c = client()

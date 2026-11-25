@@ -191,7 +191,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// The table holds one device per address: registering `instance` at
     /// a MAC that holds another instance replaces that row, so
     /// [`Self::get_device`] no longer finds the instance it held there.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Encoding`], leaving the table unchanged, when `mac` is
+    /// empty or longer than [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN), the
+    /// bound [`Self::add_routed_device`] holds a station's MAC to: no
+    /// link's MAC is longer, and an empty one names no station (#2606).
+    /// An `instance` past 4194303 is refused as
+    /// [`ObjectIdentifier::new`](bacnet_types::primitives::ObjectIdentifier::new)
+    /// refuses it.
     pub async fn add_device(&self, instance: u32, mac: &[u8]) -> Result<(), Error> {
+        if !(1..=bacnet_npdu::MAX_MAC_LEN).contains(&mac.len()) {
+            return Err(Error::Encoding(format!(
+                "device MAC address must contain 1..={} octets",
+                bacnet_npdu::MAX_MAC_LEN
+            )));
+        }
         let oid = bacnet_types::primitives::ObjectIdentifier::new(
             bacnet_types::enums::ObjectType::DEVICE,
             instance,
