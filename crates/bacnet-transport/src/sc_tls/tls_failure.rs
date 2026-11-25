@@ -169,7 +169,7 @@ mod tests {
     fn a_session_with_no_peer_certificate_is_a_tls_failure() {
         let error = no_peer_certificate("hub.example:443");
         let Error::Transport(io) = &error else {
-            panic!("{error:?}");
+            panic!("a session with no peer certificate must be a transport error");
         };
         assert_eq!(io.kind(), io::ErrorKind::InvalidData);
         assert!(matches!(
@@ -187,8 +187,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("WebSocket TLS handshake with hub.example:443 failed"),
-            "{error}"
+                .contains("WebSocket TLS handshake with hub.example:443 failed")
         );
     }
 
