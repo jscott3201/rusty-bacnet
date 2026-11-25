@@ -1,40 +1,49 @@
-//! A watched device changing under its watch (#2603), on the device tests'
-//! bus: another device taking a watched address is never taken for the
-//! watched one (a pinned watch gives its point up until its device comes
-//! back; one made through a following handle reports where it went), and a
-//! device that restarts is subscribed again when it announces itself, at
-//! most once a lifetime, within the client's request limits.
+//! Another device at a watched address (#2603), on the device tests' bus:
+//! it is never taken for the watched one, whether it announces itself, or
+//! only answers (its notifications name it, a poll asks it), or sends before
+//! announcing; a pinned watch gives its point up until its device comes
+//! back, and reports it moved once it turns up elsewhere; one made through
+//! a following handle reports the move; announcements fighting over an
+//! address cost one read a lifetime.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
-use bacnet_encoding::apdu::Apdu;
+use bacnet_encoding::apdu::{Apdu, UnconfirmedRequest, encode_apdu};
 use bacnet_server::server::BACnetServer;
+use bacnet_services::cov::COVNotificationRequest;
 use bacnet_transport::test_transport::{SendLog, TestTransport};
-use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType};
+use bacnet_types::constructed::BACnetPropertyValue;
+use bacnet_types::enums::{
+    ConfirmedServiceChoice, ObjectType, PropertyIdentifier, UnconfirmedServiceChoice,
+};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bytes::BytesMut;
 use tokio::time::Instant;
 
 use super::State;
+use super::hub::PROCESS_BASE;
 use super::stream_tests::{number, ready, until};
 use super::*;
-use crate::device::test_bus::{Bus, N, at, client, config, requests, server, settle, stop};
-use crate::limits::RequestLimits;
+use crate::device::test_bus::{Bus, N, at, client, requests, server, settle, stop};
 
-fn ai1() -> ObjectIdentifier {
+pub(super) fn ai1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()
 }
 
-async fn set(server: &BACnetServer<TestTransport>, value: f32) {
+pub(super) async fn set(server: &BACnetServer<TestTransport>, value: f32) {
     server
         .set_present_value_local(&ai1(), PropertyValue::Real(value))
         .await
         .unwrap();
 }
 
-fn subscribes(sent: &SendLog, station: u8) -> usize {
+pub(super) fn subscribes(sent: &SendLog, station: u8) -> usize {
     requests(sent, ConfirmedServiceChoice::SUBSCRIBE_COV, station)
+}
+
+pub(super) fn reads(sent: &SendLog, station: u8) -> usize {
+    requests(sent, ConfirmedServiceChoice::READ_PROPERTY, station)
 }
 
 fn gone_for(update: &Update) -> Option<&Why> {
@@ -44,17 +53,24 @@ fn gone_for(update: &Update) -> Option<&Why> {
     }
 }
 
-/// A pinned watch of device `N` at station 2, subscribed, on a new bus.
-struct Pinned {
-    bus: Arc<Bus>,
-    client: crate::Client<TestTransport>,
-    sent: SendLog,
-    device: crate::Device<TestTransport>,
-    watch: Watch,
+const REPLACED: Why = Why::Replaced {
+    watched: N,
+    found: N + 1,
+};
+
+/// A pinned watch of device `N`'s AI 1 at station 2, subscribed, on a new
+/// bus, with every update it has had.
+pub(super) struct Pinned {
+    pub(super) bus: Arc<Bus>,
+    pub(super) client: crate::Client<TestTransport>,
+    pub(super) sent: SendLog,
+    pub(super) device: crate::Device<TestTransport>,
+    pub(super) watch: Watch,
+    pub(super) seen: Vec<Update>,
 }
 
 impl Pinned {
-    async fn new(first: &mut Option<BACnetServer<TestTransport>>) -> Self {
+    pub(super) async fn new(first: &mut Option<BACnetServer<TestTransport>>) -> Self {
         let bus = Bus::new();
         *first = Some(server(bus.port(2), N, "first").await);
         let (client, sent) = client(&bus).await;
@@ -63,22 +79,95 @@ impl Pinned {
         let device = client.device(at(2)).await.unwrap();
         assert!(!device.follows());
         let mut watch = client.watch([device.point("ai:1").unwrap()]).unwrap();
-        until(&mut watch, |u| u.state == State::Subscribed).await;
+        let mut seen = Vec::new();
+        loop {
+            let update = until(&mut watch, |_| true).await;
+            let done = update.state == State::Subscribed;
+            seen.push(update);
+            if done {
+                break;
+            }
+        }
+        // Its Time_Of_Device_Restart, read once after the subscription.
+        settle().await;
         Self {
             bus,
             client,
             sent,
             device,
             watch,
+            seen,
+        }
+    }
+
+    /// Every update waiting now, kept.
+    pub(super) fn take(&mut self) -> Vec<Update> {
+        let mut new = Vec::new();
+        while let Some(update) = ready(&mut self.watch) {
+            new.push(update);
+        }
+        self.seen.extend(new.iter().cloned());
+        new
+    }
+
+    /// Run `seconds` of paused time, a few at a time, setting `server`'s
+    /// value from `from` up each step, and keep every update.
+    async fn run(&mut self, seconds: u64, server: &BACnetServer<TestTransport>, from: f32) {
+        let end = Instant::now() + Duration::from_secs(seconds);
+        let mut value = from;
+        while Instant::now() < end {
+            set(server, value).await;
+            value += 1.0;
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            self.take();
+        }
+    }
+
+    /// No update has carried a value of 99 or more: the new device's.
+    fn none_foreign(&self) {
+        for update in &self.seen {
+            assert!(
+                number(update).is_none_or(|v| v < 99.0),
+                "the new device's value as the point's: {update:?}"
+            );
         }
     }
 }
 
+/// An UnconfirmedCOVNotification from station `n` to the client, under
+/// subscriber process `process`, sent by device `sender`: AI 1 is `value`.
+fn notify_from(bus: &Bus, n: u8, process: u32, sender: u32, value: f32) {
+    let mut service = BytesMut::new();
+    COVNotificationRequest {
+        subscriber_process_identifier: process,
+        initiating_device_identifier: ObjectIdentifier::new(ObjectType::DEVICE, sender).unwrap(),
+        monitored_object_identifier: ai1(),
+        time_remaining: 300,
+        list_of_values: vec![BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+            value: [&[0x44][..], &value.to_be_bytes()].concat(),
+            priority: None,
+        }],
+    }
+    .encode(&mut service)
+    .unwrap();
+    let apdu = Apdu::UnconfirmedRequest(UnconfirmedRequest {
+        service_choice: UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION,
+        service_request: service.freeze(),
+    });
+    let mut npdu = BytesMut::from(&[1u8, 0][..]);
+    encode_apdu(&mut npdu, &apdu).unwrap();
+    bus.send_from(n, &npdu, 1);
+}
+
 /// Acceptance (#2603 A): the watched device leaves its address and another,
-/// with the same objects, takes it and announces itself. The point is
-/// given up for it at once, and over the old subscription's renewal and
-/// lifetime no value of the new device's is ever reported as the point's,
-/// and nothing is sent to it.
+/// with the same objects, takes it and announces itself. The device there
+/// is asked once and says it is the other: the point is given up for it,
+/// its values dropped, and over the old subscription's renewal and
+/// lifetime no update ever carries a value of the new device's, and
+/// nothing is sent to it but that one read. Let go and watched again, the
+/// point watches the device there now.
 #[tokio::test(start_paused = true)]
 async fn a_device_taking_a_watched_address_is_never_the_watched_one() {
     let mut first = None;
@@ -88,32 +177,16 @@ async fn a_device_taking_a_watched_address_is_never_the_watched_one() {
     until(&mut lab.watch, |u| number(u) == Some(21.0)).await;
     stop(vec![first]).await;
     let second = server(lab.bus.port(2), N + 1, "second").await;
+    let (subscribed, read) = (subscribes(&lab.sent, 2), reads(&lab.sent, 2));
     lab.bus.i_am(2, N + 1);
-    let update = until(&mut lab.watch, |u| gone_for(u).is_some()).await;
-    let replaced = Why::Replaced {
-        watched: N,
-        found: N + 1,
-    };
-    assert_eq!(gone_for(&update), Some(&replaced));
-    assert_eq!(number(&update), Some(21.0), "the last value of its own");
-    let subscribed = subscribes(&lab.sent, 2);
-    let end = Instant::now() + Duration::from_secs(400);
-    let mut value = 99.0;
-    while Instant::now() < end {
-        set(&second, value).await;
-        value += 1.0;
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        while let Some(update) = ready(&mut lab.watch) {
-            assert!(
-                number(&update).is_none_or(|v| v < 99.0),
-                "the new device's value as the point's: {update:?}"
-            );
-        }
-    }
-    assert_eq!(subscribes(&lab.sent, 2), subscribed, "nothing sent to it");
+    lab.run(400, &second, 99.0).await;
+    lab.none_foreign();
+    let gone = lab.seen.iter().find(|u| gone_for(u).is_some()).unwrap();
+    assert_eq!(gone_for(gone), Some(&REPLACED));
+    assert_eq!(gone.value, None, "its last values dropped");
+    assert_eq!(subscribes(&lab.sent, 2), subscribed, "nothing but one read");
+    assert_eq!(reads(&lab.sent, 2), read + 1);
     assert_eq!(second.cov_counters().subscriptions_active, 0);
-    // Let go, it is cancelled with nothing sent; watched there again, it
-    // starts as any point does, with the device there now.
     drop(lab.watch);
     settle().await;
     assert_eq!(subscribes(&lab.sent, 2), subscribed, "no cancel either");
@@ -128,9 +201,51 @@ async fn a_device_taking_a_watched_address_is_never_the_watched_one() {
     stop(vec![second]).await;
 }
 
+/// Another device takes the address without announcing itself. The old
+/// subscription's renewal reaches it and it takes it; its notifications
+/// name it as their sender, so none is taken, and the device there is
+/// asked and the point given up for it: no later than the renewal, with no
+/// request but that one read.
+#[tokio::test(start_paused = true)]
+async fn a_silent_takeover_is_found_by_the_new_devices_notifications() {
+    let mut first = None;
+    let mut lab = Pinned::new(&mut first).await;
+    stop(vec![first.unwrap()]).await;
+    let second = server(lab.bus.port(2), N + 1, "second").await;
+    let read = reads(&lab.sent, 2);
+    lab.run(400, &second, 99.0).await;
+    lab.none_foreign();
+    let gone = lab.seen.iter().find(|u| gone_for(u).is_some());
+    assert_eq!(gone.and_then(gone_for), Some(&REPLACED), "{:?}", lab.seen);
+    assert_eq!(reads(&lab.sent, 2), read + 1, "one read");
+    drop((lab.watch, lab.device));
+    settle().await;
+    stop(vec![second]).await;
+}
+
+/// The new device's notification under the point's own process identifier
+/// reaches the client before its announcement: it is dropped all the same.
+#[tokio::test(start_paused = true)]
+async fn a_notification_before_the_announcement_is_dropped() {
+    let mut first = None;
+    let mut lab = Pinned::new(&mut first).await;
+    stop(vec![first.unwrap()]).await;
+    let second = server(lab.bus.port(2), N + 1, "second").await;
+    notify_from(&lab.bus, 2, PROCESS_BASE, N + 1, 150.0);
+    lab.bus.i_am(2, N + 1);
+    lab.run(30, &second, 99.0).await;
+    lab.none_foreign();
+    let gone = lab.seen.iter().find(|u| gone_for(u).is_some());
+    assert_eq!(gone.and_then(gone_for), Some(&REPLACED));
+    drop((lab.watch, lab.device));
+    settle().await;
+    stop(vec![second]).await;
+}
+
 /// The device of a pinned watch given up for another device at its address
-/// comes back there and announces itself: the point starts again, and its
-/// values are taken again.
+/// comes back there and announces itself: once the address's one read a
+/// lifetime allows, it is asked, and the point starts again and takes its
+/// values.
 #[tokio::test(start_paused = true)]
 async fn the_watched_device_coming_back_brings_a_pinned_watch_back() {
     let mut first = None;
@@ -149,6 +264,32 @@ async fn the_watched_device_coming_back_brings_a_pinned_watch_back() {
     drop((lab.watch, lab.device));
     settle().await;
     stop(vec![back]).await;
+}
+
+/// A pinned watch given up for another device at its address: its device
+/// turns up at station 3 and announces itself there, and the point is
+/// reported moved there, sending nothing.
+#[tokio::test(start_paused = true)]
+async fn a_replaced_point_is_moved_once_its_device_turns_up_elsewhere() {
+    let mut first = None;
+    let mut lab = Pinned::new(&mut first).await;
+    stop(vec![first.unwrap()]).await;
+    let second = server(lab.bus.port(2), N + 1, "second").await;
+    lab.bus.i_am(2, N + 1);
+    until(&mut lab.watch, |u| gone_for(u) == Some(&REPLACED)).await;
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    let moved = server(lab.bus.port(3), N, "moved").await;
+    let sent = lab.sent.len();
+    lab.bus.i_am(3, N);
+    let update = until(&mut lab.watch, |u| {
+        gone_for(u).is_some_and(|why| *why != REPLACED)
+    })
+    .await;
+    assert_eq!(gone_for(&update), Some(&Why::Moved { to: at(3) }));
+    assert_eq!(lab.sent.len(), sent, "nothing sent");
+    drop((lab.watch, lab.device));
+    settle().await;
+    stop(vec![second, moved]).await;
 }
 
 /// A watch made through a following handle, whose device moved to station
@@ -186,143 +327,52 @@ async fn a_following_watch_whose_address_was_taken_reports_the_move() {
     stop(vec![moved, taker]).await;
 }
 
-/// Acceptance (#2603 B): a watched device restarts, losing its
-/// subscriptions, and announces itself: its point is subscribed again at
-/// once, so its next change comes as a notification long before the old
-/// subscription's renewal would have made it again.
+/// A polled point (its device has no COV for it): another device takes the
+/// address without announcing itself. The next poll asks the device which
+/// it is in the same request, and the point is given up, its answer not
+/// taken.
 #[tokio::test(start_paused = true)]
-async fn a_restarted_device_is_subscribed_again_when_it_announces_itself() {
+async fn a_polled_device_taken_silently_is_found_by_the_next_poll() {
+    let bus = Bus::new();
+    let first = server(bus.port(2), N, "first").await;
+    let (client, sent) = client(&bus).await;
+    bus.i_am(2, N);
+    settle().await;
+    let device = client.device(at(2)).await.unwrap();
+    let point = device.point("device:1001 object-name").unwrap();
+    let mut watch = client.watch([point]).unwrap();
+    let polled = until(&mut watch, |u| u.state != State::Starting).await;
+    assert!(matches!(polled.state, State::Polled { .. }), "{polled:?}");
+    stop(vec![first]).await;
+    let second = server(bus.port(2), N + 1, "second").await;
+    let read = reads(&sent, 2);
+    let update = until(&mut watch, |u| gone_for(u).is_some()).await;
+    assert_eq!(gone_for(&update), Some(&REPLACED));
+    assert_eq!(reads(&sent, 2), read, "no read of its own");
+    drop((watch, device));
+    settle().await;
+    stop(vec![second]).await;
+}
+
+/// Two devices fight over an address: announcements naming each in turn,
+/// every five seconds for ten minutes, while the watched one answers. The
+/// device is asked once a lifetime at most, and the watch goes on.
+#[tokio::test(start_paused = true)]
+async fn announcements_fighting_over_an_address_cost_a_read_a_lifetime() {
     let mut first = None;
     let mut lab = Pinned::new(&mut first).await;
-    let started = Instant::now();
-    stop(vec![first.unwrap()]).await;
-    let again = server(lab.bus.port(2), N, "again").await;
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    lab.bus.i_am(2, N);
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    assert_eq!(
-        again.cov_counters().subscriptions_active,
-        1,
-        "subscribed again on its announcement"
-    );
-    set(&again, 42.0).await;
-    let update = until(&mut lab.watch, |u| number(u) == Some(42.0)).await;
-    assert_eq!(update.via, Some(Via::Notification), "{update:?}");
-    assert_eq!(update.state, State::Subscribed);
-    assert!(
-        started.elapsed() < Duration::from_secs(60),
-        "before renewal"
-    );
-    drop((lab.watch, lab.device));
-    settle().await;
-    stop(vec![again]).await;
-}
-
-/// A device starting up announces itself several times over a few
-/// seconds: its point is subscribed again once.
-#[tokio::test(start_paused = true)]
-async fn a_burst_of_announcements_subscribes_again_once() {
-    let mut first = None;
-    let lab = Pinned::new(&mut first).await;
-    let before = subscribes(&lab.sent, 2);
-    for _ in 0..5 {
-        lab.bus.i_am(2, N);
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-    tokio::time::sleep(Duration::from_secs(10)).await;
-    assert_eq!(subscribes(&lab.sent, 2) - before, 1, "one subscription");
-    drop((lab.watch, lab.device));
-    settle().await;
-    stop(vec![first.unwrap()]).await;
-}
-
-/// A device that announces itself every five seconds is subscribed again
-/// at most once a lifetime (five minutes): over ten minutes, its point's
-/// subscriptions are the early ones (at most three) and the renewals of
-/// each, not one an announcement.
-#[tokio::test(start_paused = true)]
-async fn a_device_announcing_itself_often_is_subscribed_again_once_a_lifetime() {
-    let mut first = None;
-    let lab = Pinned::new(&mut first).await;
-    let before = subscribes(&lab.sent, 2);
-    let end = Instant::now() + Duration::from_secs(600);
-    while Instant::now() < end {
-        lab.bus.i_am(2, N);
+    let first = first.unwrap();
+    let read = reads(&lab.sent, 2);
+    for step in 0..120u32 {
+        lab.bus.i_am(2, N + step % 2);
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
-    let sent = subscribes(&lab.sent, 2) - before;
-    // Early at 0 s and 300 s (and 600 s at most), each renewed 240 s after;
-    // with renewals alone, two.
-    assert!(
-        (3..=6).contains(&sent),
-        "{sent} subscriptions in ten minutes"
-    );
+    let asked = reads(&lab.sent, 2) - read;
+    assert!((1..=3).contains(&asked), "{asked} reads in ten minutes");
+    assert!(lab.take().iter().all(|u| gone_for(u).is_none()));
+    set(&first, 44.0).await;
+    until(&mut lab.watch, |u| number(u) == Some(44.0)).await;
     drop((lab.watch, lab.device));
     settle().await;
-    stop(vec![first.unwrap()]).await;
-}
-
-/// The confirmed requests in `sent` from index `seen` on.
-fn confirmed(sent: &SendLog, seen: usize) -> usize {
-    sent.frames()[seen..]
-        .iter()
-        .filter(|frame| !frame.mac.is_empty())
-        .filter(|frame| matches!(frame.apdu(), Apdu::ConfirmedRequest(_)))
-        .count()
-}
-
-/// Six watched devices announce themselves at once, as after a power cut:
-/// their points are read and subscribed again no faster than the client's
-/// rate (four requests a second), one at a time, not in a burst.
-#[tokio::test(start_paused = true)]
-async fn devices_announcing_at_once_are_subscribed_again_within_the_rate() {
-    const DEVICES: u8 = 6;
-    let bus = Bus::new();
-    let mut servers = Vec::new();
-    for n in 0..DEVICES {
-        servers.push(server(bus.port(2 + n), N + u32::from(n), "device").await);
-    }
-    let port = bus.port(1);
-    let sent = port.sent();
-    let low = BACnetClient::start(config(), port).await.unwrap();
-    let client = crate::Client::new(Arc::new(low), Arc::new(RequestLimits::new(4)));
-    let mut points = Vec::new();
-    for n in 0..DEVICES {
-        bus.i_am(2 + n, N + u32::from(n));
-        settle().await;
-        let device = client.device(at(2 + n)).await.unwrap();
-        points.push(device.point("ai:1").unwrap());
-    }
-    let mut watch = client.watch(points).unwrap();
-    for _ in 0..DEVICES {
-        until(&mut watch, |u| u.state == State::Subscribed).await;
-    }
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    let mut seen = sent.len();
-    for n in 0..DEVICES {
-        bus.i_am(2 + n, N + u32::from(n));
-    }
-    let mut times = Vec::new();
-    let end = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < end {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        let new = confirmed(&sent, seen);
-        times.extend(std::iter::repeat_n(Instant::now(), new));
-        seen = sent.len();
-    }
-    // A first read and a subscription a point.
-    assert_eq!(times.len(), 2 * usize::from(DEVICES), "{times:?}");
-    for pair in times.windows(2) {
-        let gap = pair[1] - pair[0];
-        assert!(
-            gap >= Duration::from_millis(240),
-            "two requests {gap:?} apart"
-        );
-    }
-    for server in &servers {
-        assert_eq!(server.cov_counters().subscriptions_active, 1);
-    }
-    drop(watch);
-    settle().await;
-    stop(servers).await;
+    stop(vec![first]).await;
 }

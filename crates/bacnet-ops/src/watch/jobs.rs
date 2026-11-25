@@ -22,8 +22,9 @@ use bacnet_client::client::{
     CovPropertySubscription, ManagedCOVSubscription, ManagedCOVSubscriptionOptions, Station,
 };
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::PropertyIdentifier;
-use bacnet_types::error::Error;
+use bacnet_types::enums::{ErrorCode, ObjectType, PropertyIdentifier};
+use bacnet_types::error::{Error, RemoteError};
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::hub::Inner;
 use super::hub::first::first_read;
@@ -32,7 +33,7 @@ use super::shared::Shared;
 use super::support::{CovSupport, fills_table, refuses_service};
 use super::{Point, Watched};
 use crate::client::batch::{self, BatchRow, Missing};
-use crate::client::{device_error, failed_locally, unreachable};
+use crate::client::{ReadVia, device_error, failed_locally, unreachable};
 use crate::device::{DeviceAddress, path_to};
 use crate::format::{PropertyError, RawRow};
 
@@ -136,9 +137,11 @@ pub(super) async fn start<T: TransportPort + 'static>(
     shared.lock().target = Some(target.clone());
     let first = read(&inner, point, address, before).await;
     let read_at = Some((Instant::now(), SystemTime::now()));
-    // The point's device, from what answered at its address.
+    // The point's device, from what answered at its address, unless the
+    // device refused that read before.
+    let unknown = shared.identity().is_none() && !client.wildcard_refused(address);
     let before = match before {
-        None if shared.identity().is_none() && first.is_ok() => client.read_instance(address).await,
+        None if unknown && first.is_ok() => client.ask_instance(address).await.ok(),
         known => known,
     };
     let (outcome, observed, cov) = if first.as_ref().is_err_and(unreachable) {
@@ -282,10 +285,46 @@ pub(super) struct Polled {
     /// The rows not read, one read only in part included; empty when every
     /// row was.
     pub(super) unread: Vec<u32>,
+    /// The instance the device named in the same ReadPropertyMultiple, its
+    /// Device object read by the wildcard instance: the poll's answer is
+    /// that device's. `None` without RPM, or when it gave none.
+    pub(super) answered: Option<u32>,
     /// The instance the discovery table, or a read by the wildcard
-    /// instance, names at the address once the poll is answered: an answer
-    /// from another device than the points' is none of theirs.
-    pub(super) instance: Option<u32>,
+    /// instance, names at the address once the poll is answered.
+    pub(super) table: Option<u32>,
+}
+
+/// The key of a poll's row that reads the Device object by the wildcard
+/// instance: no subscriber process identifier is this one.
+const IDENTITY_ROW: u32 = u32::MAX;
+
+/// The row asking the device which instance it is, by the wildcard
+/// instance, in a ReadPropertyMultiple: it costs no request of its own,
+/// and none is sent for it without RPM.
+fn identity_row() -> BatchRow<u32> {
+    let any = ObjectIdentifier::new(ObjectType::DEVICE, ObjectIdentifier::WILDCARD_INSTANCE)
+        .expect("the wildcard instance is a valid instance");
+    BatchRow {
+        key: IDENTITY_ROW,
+        object: any,
+        wanted: vec![(PropertyIdentifier::OBJECT_IDENTIFIER, None)],
+        one_by_one: 0,
+    }
+}
+
+/// The instance `rows` (an identity row's answer) name, if they name one.
+fn named(rows: &[RawRow]) -> Option<u32> {
+    let (_, raw) = rows
+        .iter()
+        .find(|(p, _)| *p == PropertyIdentifier::OBJECT_IDENTIFIER)?;
+    match crate::format::decode_all(raw.as_ref().ok()?).as_deref() {
+        Some([PropertyValue::ObjectIdentifier(device)])
+            if device.object_type() == ObjectType::DEVICE =>
+        {
+            Some(device.instance_number())
+        }
+        _ => None,
+    }
 }
 
 impl Polled {
@@ -296,7 +335,8 @@ impl Polled {
 }
 
 /// Poll `rows` of the device at `address` together, by RPM unless it
-/// refused it.
+/// refused it, asking in the same request which instance the device is
+/// (#2603), unless it refused the wildcard instance before.
 pub(super) async fn poll<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     address: DeviceAddress,
@@ -304,11 +344,21 @@ pub(super) async fn poll<T: TransportPort + 'static>(
 ) -> Polled {
     let client = &inner.client;
     let rpm = !client.refused_rpm(&address);
-    let read = batch::read(client.low_level(), client.limits(), &address, &rows, rpm).await;
-    if read.as_ref().is_ok_and(|read| read.refused_rpm) {
+    let ask = rpm && !client.wildcard_refused(&address);
+    // Last, so it joins the last batch when it fits there, and is left out
+    // when it doesn't.
+    let asked: Vec<BatchRow<u32>> = rows.iter().cloned().chain(ask.then(identity_row)).collect();
+    let read = batch::read(client.low_level(), client.limits(), &address, &asked, rpm).await;
+    let refused = read.as_ref().is_ok_and(|read| read.refused_rpm);
+    if refused {
         client.refuse_rpm(&address);
     }
-    let (read_rows, stopped) = match read {
+    // A batch the device failed as a whole, read again one property at a
+    // time: the identity row may be why.
+    let fell_back = read.as_ref().is_ok_and(|read| {
+        matches!(read.via(), Some(ReadVia::Rp | ReadVia::Mixed)) && !read.refused_rpm
+    });
+    let (mut read_rows, stopped) = match read {
         Ok(read) => {
             let mut read_rows = read.rows;
             // A row read only in part counts as not read: its point gets
@@ -320,15 +370,33 @@ pub(super) async fn poll<T: TransportPort + 'static>(
         }
         Err(error) => (Vec::new(), Some(error)),
     };
+    let identity = read_rows
+        .iter()
+        .position(|(key, _)| *key == IDENTITY_ROW)
+        .map(|at| read_rows.remove(at).1);
+    let answered = identity
+        .as_ref()
+        .and_then(|rows| rows.as_deref().ok())
+        .and_then(named);
+    // Answered with no instance (an error, or left out), or its batch read
+    // again one property at a time: it isn't asked so again.
+    if ask && answered.is_none() && (identity.is_some() || fell_back) {
+        client.refuse_wildcard(&address);
+    }
     let unread = match stopped {
-        Some(_) => rows[read_rows.len()..].iter().map(|row| row.key).collect(),
+        Some(_) => rows
+            .iter()
+            .map(|row| row.key)
+            .filter(|key| !read_rows.iter().any(|(read, _)| read == key))
+            .collect(),
         None => Vec::new(),
     };
     Polled {
         rows: read_rows,
         stopped,
         unread,
-        instance: client.instance_at(&address).await,
+        answered,
+        table: client.instance_at(&address).await,
     }
 }
 
@@ -340,6 +408,105 @@ pub(super) async fn verify<T: TransportPort + 'static>(
     address: DeviceAddress,
 ) -> Option<u32> {
     inner.client.instance_at(&address).await
+}
+
+/// What the device at an address said of itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Answer {
+    /// It is this instance.
+    Is(u32),
+    /// It has no Device object of the instance asked for.
+    Not,
+    /// It answered with another error, which says neither.
+    Unclear,
+    /// It didn't answer.
+    Silent,
+}
+
+/// Ask the device at `address` which instance it is (#2603): one
+/// ReadProperty of its Device object's Object_Identifier by the wildcard
+/// instance, or, for a device that refused that before, of `watched`'s
+/// Device object, which only that device has. Through the device's gate
+/// and the client's rate, as any request.
+pub(super) async fn confirm<T: TransportPort + 'static>(
+    inner: Arc<Inner<T>>,
+    address: DeviceAddress,
+    watched: u32,
+) -> Answer {
+    let client = &inner.client;
+    if !client.wildcard_refused(&address) {
+        match client.ask_instance(&address).await {
+            Ok(instance) => return Answer::Is(instance),
+            Err(error) => {
+                if let Some(answer) = silence(&error) {
+                    return answer;
+                }
+            }
+        }
+    }
+    let Ok(device) = ObjectIdentifier::new(ObjectType::DEVICE, watched) else {
+        return Answer::Unclear;
+    };
+    let property = PropertyIdentifier::OBJECT_IDENTIFIER;
+    let reader = client.reader(&address, Some(watched));
+    match reader
+        .rp(device, property, None)
+        .await
+        .map_err(device_error)
+    {
+        Ok(raw) => named(&[(property, Ok(raw))]).map_or(Answer::Unclear, Answer::Is),
+        Err(error) => silence(&error).unwrap_or(match error.remote() {
+            Some(RemoteError::Error { code, .. }) if code == ErrorCode::UNKNOWN_OBJECT => {
+                Answer::Not
+            }
+            _ => Answer::Unclear,
+        }),
+    }
+}
+
+/// The answer `error` makes when the device said nothing: none, or the
+/// client's own failure, which says nothing of it.
+fn silence(error: &Error) -> Option<Answer> {
+    if unreachable(error) {
+        Some(Answer::Silent)
+    } else if failed_locally(error) {
+        Some(Answer::Unclear)
+    } else {
+        None
+    }
+}
+
+/// A device's Time_Of_Device_Restart, as read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Restart {
+    /// Its encoded value.
+    At(Vec<u8>),
+    /// The device has no such property, or wouldn't give it.
+    Absent,
+    /// No answer.
+    Silent,
+}
+
+/// Read device `instance`'s Time_Of_Device_Restart at `address`, once.
+pub(super) async fn restart_time<T: TransportPort + 'static>(
+    inner: Arc<Inner<T>>,
+    address: DeviceAddress,
+    instance: u32,
+) -> Restart {
+    let Ok(device) = ObjectIdentifier::new(ObjectType::DEVICE, instance) else {
+        return Restart::Absent;
+    };
+    let property = PropertyIdentifier::TIME_OF_DEVICE_RESTART;
+    let reader = inner.client.reader(&address, Some(instance));
+    match reader
+        .rp(device, property, None)
+        .await
+        .map_err(device_error)
+    {
+        Ok(raw) => Restart::At(raw),
+        Err(error) if unreachable(&error) || failed_locally(&error) => Restart::Silent,
+        Err(_) => Restart::Absent,
+    }
 }
 
 /// Cancel `point`'s subscription, held or possibly made: stop renewing it,

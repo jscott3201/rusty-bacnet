@@ -7,9 +7,11 @@ use std::sync::Weak;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 
+use bacnet_types::error::Error;
+
 use super::follow::Elsewhere;
 use super::{Device, DeviceAddress};
-use crate::client::{Client, lock};
+use crate::client::{Client, device_error, failed_locally, lock, unreachable};
 use crate::error::OpsError;
 use crate::reading::{IntoProperty, one_property};
 use crate::watch::{CovSupport, Point, Watched};
@@ -73,13 +75,27 @@ impl<T: TransportPort + 'static> Client<T> {
     /// The instance the device at `address` claims, by one ReadProperty of
     /// the Device object's Object_Identifier by the wildcard instance,
     /// remembered for the address as a handle's
-    /// ([`Device::resolve_instance`]) is; `None` when the device doesn't
-    /// answer it with one.
-    pub(crate) async fn read_instance(&self, address: &DeviceAddress) -> Option<u32> {
+    /// ([`Device::resolve_instance`]) is. A device that answers it with an
+    /// error is remembered too, and not asked so again
+    /// ([`wildcard_refused`](Client::wildcard_refused)).
+    ///
+    /// # Errors
+    ///
+    /// The device's error, or none from a device gone quiet.
+    pub(crate) async fn ask_instance(&self, address: &DeviceAddress) -> Result<u32, Error> {
         let mut reader = self.reader(address, None);
-        let instance = reader.instance().await.ok()?;
-        self.remember(address.clone(), instance);
-        Some(instance)
+        match reader.instance().await.map_err(device_error) {
+            Ok(instance) => {
+                self.remember(address.clone(), instance);
+                Ok(instance)
+            }
+            Err(error) => {
+                if !unreachable(&error) && !failed_locally(&error) {
+                    self.refuse_wildcard(address);
+                }
+                Err(error)
+            }
+        }
     }
 
     /// Forget what the discovery table's changes made stale, before what

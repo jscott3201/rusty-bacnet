@@ -9,8 +9,8 @@ use bacnet_ops::client::Wanted;
 use bacnet_ops::format::{self, RawRow};
 use bacnet_ops::label::kebab;
 use bacnet_ops::limits::charged;
-use bacnet_ops::watch::Watched;
 use bacnet_ops::watch::hub::{Phase, Snapshot, Source};
+use bacnet_ops::watch::{Watched, Why};
 use bacnet_ops::{DeviceAddress, PropertyError, PropertyRef, Reading};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::BACnetAddress;
@@ -162,6 +162,7 @@ pub(crate) fn point_body<T: TransportPort + 'static>(
             });
             body["state"] = json!(state_name(snapshot.state));
             body["note"] = json!(snapshot.note);
+            body["why"] = why_body(snapshot.why.as_ref());
             body["seq"] = json!(snapshot.seq);
             body["age_ms"] = json!(
                 snapshot
@@ -177,6 +178,27 @@ pub(crate) fn point_body<T: TransportPort + 'static>(
         }
     }
     body
+}
+
+/// Why a watched point isn't live, as data beside the note: its kind, with
+/// the instances a replaced point names or the address a moved one does.
+/// Numbers and names only, no device text, so an agent need not read the
+/// note.
+pub(crate) fn why_body(why: Option<&Why>) -> Value {
+    let kind = |kind: &str| json!({ "kind": kind });
+    match why {
+        None => Value::Null,
+        Some(Why::Replaced { watched, found }) => {
+            json!({ "kind": "replaced", "watched": watched, "found": found })
+        }
+        Some(Why::Moved { to }) => json!({ "kind": "moved", "to": to }),
+        Some(Why::Refused(_)) => kind("refused"),
+        Some(Why::NoAnswer(_)) => kind("no-answer"),
+        Some(Why::Full(_)) => kind("full"),
+        Some(Why::Lapsed(_)) => kind("lapsed"),
+        Some(Why::Missing) => kind("missing"),
+        Some(_) => kind("other"),
+    }
 }
 
 pub(crate) fn state_name(state: Phase) -> &'static str {

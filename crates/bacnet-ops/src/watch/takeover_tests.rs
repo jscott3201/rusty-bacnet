@@ -1,9 +1,11 @@
-//! Another device at a watched address (#2603), against the lab device on
-//! the hub's own layer: what the address sends once it names another
-//! instance is never a point's (a notification under the point's process
-//! identifier, a poll answered across the change), the client forgets what
-//! it learned of COV there, and announcements missed by a receiver that
-//! fell behind are caught up by reading the discovery table.
+//! Which device answers at a watched address (#2603), against the lab
+//! device on the hub's own layer, where the device at the address is always
+//! the lab's: a forged claim of another device costs one read and ends
+//! nothing, a device naming another sender in its notifications keeps its
+//! watch after one read, a ReadProperty poll across a table change waits
+//! for the device's word, the client forgets what it learned of COV there,
+//! missed announcements are caught up, and the device's restarts are told
+//! by its Time_Of_Device_Restart or its restart notification.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -11,6 +13,7 @@ use std::time::Duration;
 
 use bacnet_client::client::{
     COVEvent, COVNotificationDelivery, DeviceEvent, DeviceEventKind, ReceivedCOVNotification,
+    Station,
 };
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_services::cov::COVNotificationRequest;
@@ -21,14 +24,9 @@ use tokio::sync::{broadcast, watch};
 use tokio::time::Instant;
 
 use super::hub::*;
-use super::shared::{DeviceSlot, Registry};
-use super::test_lab::{LAB, Lab, RPM, ai, lab_at, object, oid, settle};
+use super::shared::{DeviceSlot, Registry, Shared};
+use super::test_lab::{LAB, Lab, READ_PROPERTY, SUBSCRIBE_COV, ai, lab_at, object, oid, settle};
 use super::*;
-
-const REPLACED: Why = Why::Replaced {
-    watched: LAB,
-    found: LAB + 1,
-};
 
 /// AI 1's Present_Value as `lease` holds it.
 fn present(lease: &Lease) -> Option<f32> {
@@ -39,22 +37,6 @@ fn present(lease: &Lease) -> Option<f32> {
         .find(|(p, _)| *p == PropertyIdentifier::PRESENT_VALUE)?;
     let raw = raw.as_ref().ok()?;
     Some(f32::from_be_bytes(raw.get(1..5)?.try_into().ok()?))
-}
-
-/// Every Present_Value `samples` carried so far.
-fn sampled(samples: &mut Samples) -> Vec<f32> {
-    let mut values = Vec::new();
-    while let Some(sample) = samples.try_next() {
-        for (property, raw) in sample.values.iter().flatten() {
-            if *property == PropertyIdentifier::PRESENT_VALUE
-                && let Ok(raw) = raw
-                && let Some(bytes) = raw.get(1..5)
-            {
-                values.push(f32::from_be_bytes(bytes.try_into().unwrap()));
-            }
-        }
-    }
-    values
 }
 
 async fn wait_for(lease: &Lease, done: impl Fn(&Snapshot) -> bool) -> Snapshot {
@@ -69,87 +51,107 @@ async fn wait_for(lease: &Lease, done: impl Fn(&Snapshot) -> bool) -> Snapshot {
     }
 }
 
-/// The new device notifies under the point's own subscriber process
-/// identifier right after announcing itself: the notification isn't the
-/// point's, though one from the point's device a moment before was.
-#[tokio::test(start_paused = true)]
-async fn a_notification_from_the_new_device_is_never_the_points() {
-    let lab = Lab::start(WatchOptions::default()).await;
-    let lease = lab.hub.watch(object(ai(1))).unwrap();
-    let mut samples = lease.samples();
-    wait_for(&lease, |s| s.source == Some(Source::Cov)).await;
-    let process = lease.shared.process;
-    lab.notify(process, LAB, ai(1), 55.0);
-    settle().await;
-    assert_eq!(present(&lease), Some(55.0), "its own device's");
-    lab.announce(LAB + 1);
-    lab.notify(process, LAB + 1, ai(1), 77.0);
-    settle().await;
-    let snapshot = lease.snapshot();
-    assert_eq!(
-        (snapshot.state, snapshot.why),
-        (Phase::Gone, Some(REPLACED))
-    );
-    assert_eq!(present(&lease), Some(55.0));
-    assert!(!sampled(&mut samples).contains(&77.0));
-    // Later ones neither, while the address names the other device.
-    lab.notify(process, LAB + 1, ai(1), 78.0);
-    lab.notify(process, LAB, ai(1), 79.0);
-    settle().await;
-    assert_eq!(present(&lease), Some(55.0));
-    drop(lease);
-    lab.stop().await;
-}
-
-/// A polled point's poll is out when the address comes to name another
-/// device, by an announcement (`announced`) or a change of the discovery
-/// table no announcement told of: its answer, read from whichever device
-/// answered, isn't the point's.
-async fn poll_across_a_change(announced: bool) {
-    let lab = Lab::start(WatchOptions::default()).await;
-    lab.quirks.refuse_cov.store(true, Ordering::Relaxed);
-    let lease = lab.hub.watch(object(ai(1))).unwrap();
-    let mut samples = lease.samples();
-    wait_for(&lease, |s| s.source == Some(Source::Poll)).await;
-    let set = PropertyValue::Real(55.0);
+async fn set(lab: &Lab, value: f32) {
+    let value = PropertyValue::Real(value);
     lab.server
-        .set_present_value_local(&ai(1), set)
+        .set_present_value_local(&ai(1), value)
         .await
         .unwrap();
-    lab.quirks.slow_rpm_ack.store(true, Ordering::Relaxed);
+}
+
+/// A subscribed lease on AI 1 of the lab device.
+async fn subscribed(lab: &Lab) -> Lease {
+    let lease = lab.hub.watch(object(ai(1))).unwrap();
+    wait_for(&lease, |s| s.source == Some(Source::Cov)).await;
+    settle().await;
+    lease
+}
+
+fn refuted(lab: &Lab) -> u64 {
+    lab.hub.inner.registry.refuted.load(Ordering::Relaxed)
+}
+
+/// A stray or forged I-Am names another device at the address: the device
+/// there is asked once, says it is still the watched one, and the watch
+/// goes on, subscribed, taking its values; the same claim again within the
+/// lifetime sends nothing.
+#[tokio::test(start_paused = true)]
+async fn a_forged_announcement_costs_one_read_and_ends_nothing() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    let lease = subscribed(&lab).await;
     let from = Instant::now();
-    while lab.sent(RPM, from) == 0 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    if announced {
-        lab.announce(LAB + 1);
-    } else {
-        let low = lab.client.low_level();
-        low.add_device(LAB + 1, &[2]).await.unwrap();
-    }
+    lab.announce(LAB + 1);
     tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1, "one read of the Device");
+    assert_eq!(refuted(&lab), 1);
     let snapshot = lease.snapshot();
     assert_eq!(
-        (snapshot.state, snapshot.why),
-        (Phase::Gone, Some(REPLACED))
+        (snapshot.state, snapshot.source),
+        (Phase::Live, Some(Source::Cov))
     );
-    assert_eq!(present(&lease), Some(10.0), "the read before the change");
-    assert!(!sampled(&mut samples).contains(&55.0));
-    let polls = lab.sent(RPM, Instant::now());
-    tokio::time::sleep(Duration::from_secs(60)).await;
-    assert_eq!(lab.sent(RPM, Instant::now()), polls, "no longer polled");
+    set(&lab, 33.0).await;
+    wait_for(&lease, |_| present(&lease) == Some(33.0)).await;
+    // Its own announcement costs one read of its restart time; the claim
+    // again waits a lifetime.
+    lab.announce(LAB);
+    lab.announce(LAB + 1);
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert_eq!(
+        lab.sent(READ_PROPERTY, from),
+        2,
+        "the next waits a lifetime"
+    );
+    assert_eq!(lease.snapshot().state, Phase::Live);
     drop(lease);
     lab.stop().await;
 }
 
+/// A device whose notifications name another device as their sender (a
+/// gateway naming itself, say): the first is dropped and the device asked
+/// once; it answers as the watched device, so its notifications are taken
+/// from then on, and the client remembers that for the address.
 #[tokio::test(start_paused = true)]
-async fn a_poll_answered_across_an_announcement_is_never_the_points() {
-    poll_across_a_change(true).await;
+async fn a_device_naming_another_sender_keeps_its_watch_after_one_read() {
+    const GATEWAY: u32 = LAB + 7;
+    let lab = Lab::start(WatchOptions::default()).await;
+    let lease = subscribed(&lab).await;
+    let process = lease.shared.process;
+    let from = Instant::now();
+    lab.notify(process, GATEWAY, ai(1), 55.0);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_ne!(present(&lease), Some(55.0), "dropped until the device says");
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1);
+    lab.notify(process, GATEWAY, ai(1), 56.0);
+    settle().await;
+    assert_eq!(present(&lease), Some(56.0));
+    assert_eq!(lab.client.initiator(&lab_at()), Some(GATEWAY));
+    assert_eq!(lease.snapshot().state, Phase::Live);
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1);
+    drop(lease);
+    lab.stop().await;
 }
 
+/// A device read by ReadProperty alone, polled: the table comes to name
+/// another device at the address, with no announcement. The next poll's
+/// values aren't taken; the device is asked once, says it is the watched
+/// one, and the polls' values are taken again.
 #[tokio::test(start_paused = true)]
-async fn a_poll_answered_across_a_table_change_is_never_the_points() {
-    poll_across_a_change(false).await;
+async fn a_readproperty_poll_across_a_table_change_waits_for_the_device() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    lab.quirks.refuse_cov.store(true, Ordering::Relaxed);
+    lab.quirks.refuse_rpm.store(true, Ordering::Relaxed);
+    let lease = lab.hub.watch(object(ai(1))).unwrap();
+    wait_for(&lease, |s| s.source == Some(Source::Poll)).await;
+    let low = lab.client.low_level();
+    low.add_device(LAB + 1, &[2]).await.unwrap();
+    set(&lab, 44.0).await;
+    let polls = lease.snapshot().polls;
+    wait_for(&lease, |_| refuted(&lab) == 1).await;
+    assert_eq!(lease.snapshot().polls, polls, "not taken meanwhile");
+    wait_for(&lease, |_| present(&lease) == Some(44.0)).await;
+    assert_ne!(lease.snapshot().state, Phase::Gone);
+    drop(lease);
+    lab.stop().await;
 }
 
 /// The client forgets a COV refusal learned at an address once another
@@ -188,33 +190,86 @@ async fn a_cov_refusal_is_forgotten_when_the_device_at_the_address_changes() {
 
 /// Announcements missed: the table names another instance at the address
 /// now, though nothing told of it. Once the receiver says it fell behind,
-/// the scheduler reads the table and gives the point up, sending nothing.
+/// the scheduler reads the table, asks the device once, and the watch goes
+/// on as the device says.
 #[tokio::test(start_paused = true)]
 async fn missed_announcements_are_caught_up_from_the_table() {
     let lab = Lab::start(WatchOptions::default()).await;
-    let lease = lab.hub.watch(object(ai(1))).unwrap();
-    wait_for(&lease, |s| s.source == Some(Source::Cov)).await;
+    let lease = subscribed(&lab).await;
     let low = lab.client.low_level();
     low.add_device(LAB + 1, &[2]).await.unwrap();
-    let services = lab.services().len();
+    let from = Instant::now();
     lab.hub.inner.registry.missed();
     settle().await;
-    let snapshot = lease.snapshot();
-    assert_eq!(
-        (snapshot.state, snapshot.why),
-        (Phase::Gone, Some(REPLACED))
-    );
-    assert_eq!(lab.services().len(), services, "nothing sent");
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1, "the device asked");
+    assert_eq!(refuted(&lab), 1);
+    assert_eq!(lease.snapshot().state, Phase::Live);
     drop(lease);
     lab.stop().await;
 }
 
-/// A notification for no point the test's receiver holds.
-fn notification() -> COVEvent {
+/// A device with Time_Of_Device_Restart, read once for an announcement (at
+/// most once a lifetime). The first read only learns it, within the first
+/// subscription's lifetime: nothing is subscribed again. A lifetime on,
+/// changed (it restarted), its point is.
+#[tokio::test(start_paused = true)]
+async fn the_restart_time_decides_whether_an_announcement_resubscribes() {
+    let start = Instant::now();
+    let lab = Lab::start(WatchOptions::default()).await;
+    *lab.quirks.restart_time.lock().unwrap() = Some(1);
+    let lease = subscribed(&lab).await;
+    assert_eq!(lab.sent(READ_PROPERTY, start), 0, "nothing until announced");
+    let from = Instant::now();
+    lab.announce(LAB);
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1, "one read");
+    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 0, "not restarted");
+    // A lifetime on, unchanged: one read, nothing subscribed again.
+    tokio::time::sleep(Duration::from_secs(300)).await;
+    let from = Instant::now();
+    lab.announce(LAB);
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1);
+    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 0, "unchanged");
+    tokio::time::sleep(Duration::from_secs(300)).await;
+    *lab.quirks.restart_time.lock().unwrap() = Some(2);
+    let from = Instant::now();
+    lab.announce(LAB);
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert_eq!(lab.sent(READ_PROPERTY, from), 1);
+    assert_eq!(
+        lab.sent(SUBSCRIBE_COV, from),
+        1,
+        "restarted: subscribed again"
+    );
+    drop(lease);
+    lab.stop().await;
+}
+
+/// The device's restart notification (unsubscribed, process identifier 0,
+/// about its Device object) subscribes its point again without a read.
+#[tokio::test(start_paused = true)]
+async fn a_restart_notification_subscribes_again() {
+    let lab = Lab::start(WatchOptions::default()).await;
+    let lease = subscribed(&lab).await;
+    tokio::time::sleep(Duration::from_secs(40)).await;
+    let from = Instant::now();
+    let restart = vec![(PropertyIdentifier::TIME_OF_DEVICE_RESTART, vec![0x21, 9])];
+    lab.notify_values(0, LAB, oid(ObjectType::DEVICE, LAB), restart);
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    assert_eq!(lab.sent(SUBSCRIBE_COV, from), 1);
+    assert_eq!(lab.sent(READ_PROPERTY, from), 0);
+    drop(lease);
+    lab.stop().await;
+}
+
+/// A notification from the lab's MAC under process `process`, sent by
+/// device `sender`.
+fn notification(process: u32, sender: u32) -> COVEvent {
     COVEvent::Object(ReceivedCOVNotification {
         notification: COVNotificationRequest {
-            subscriber_process_identifier: 1,
-            initiating_device_identifier: oid(ObjectType::DEVICE, LAB),
+            subscriber_process_identifier: process,
+            initiating_device_identifier: oid(ObjectType::DEVICE, sender),
             monitored_object_identifier: ai(1),
             time_remaining: 100,
             list_of_values: Vec::new(),
@@ -245,14 +300,24 @@ fn device_event(instance: u32, mac: u8) -> DeviceEvent {
 }
 
 /// The receiver falls behind on the discovery table's changes, more than
-/// its channel holds: each watched address is told it missed some, whether
-/// the receiver finds out waiting for the next change or taking them in
-/// before a notification.
+/// its channel holds: each watched address is told it missed some, and a
+/// notification another device sends under a point's process identifier
+/// is dropped all the same, its sender noted for the scheduler.
 #[tokio::test(start_paused = true)]
-async fn a_receiver_behind_on_the_table_tells_every_scheduler() {
+async fn a_receiver_behind_on_the_table_still_drops_another_senders_notification() {
     let registry = Arc::new(Registry::new(0x100, Duration::ZERO, Vec::new(), false));
     let slot = Arc::new(DeviceSlot::new());
-    registry.table().devices.insert(lab_at(), Arc::clone(&slot));
+    let shared = Arc::new(Shared::new(object(ai(1)), 0x100, 4));
+    {
+        let mut entry = shared.lock();
+        entry.identity = Some(LAB);
+        entry.target = Some(Station::local(&[2]));
+    }
+    {
+        let mut table = registry.table();
+        table.devices.insert(lab_at(), Arc::clone(&slot));
+        table.by_process.insert(0x100, Arc::clone(&shared));
+    }
     let (cov_tx, notifications) = broadcast::channel(4);
     let (events_tx, events) = broadcast::channel(4);
     let (devices_tx, devices) = broadcast::channel(64);
@@ -260,6 +325,7 @@ async fn a_receiver_behind_on_the_table_tells_every_scheduler() {
     for n in 0..100u32 {
         devices_tx.send(device_event(LAB + 10 + n, 50)).unwrap();
     }
+    cov_tx.send(notification(0x100, LAB + 1)).unwrap();
     let heard = super::dispatch::Heard {
         events,
         devices,
@@ -272,18 +338,15 @@ async fn a_receiver_behind_on_the_table_tells_every_scheduler() {
         stop,
     ));
     settle().await;
-    assert_eq!(slot.take_heard(), (Vec::new(), true), "missed");
-    // Behind again, found taking them in before a notification, which the
-    // receiver looks at first.
-    for n in 0..100u32 {
-        devices_tx.send(device_event(LAB + 10 + n, 50)).unwrap();
-    }
-    devices_tx.send(device_event(LAB, 2)).unwrap();
-    cov_tx.send(notification()).unwrap();
+    let notes = slot.take_notes();
+    assert!(notes.missed, "missed");
+    assert_eq!(notes.senders, [LAB + 1]);
+    assert_eq!(shared.snapshot().notifications, 0, "dropped");
+    assert_eq!(registry.foreign.load(Ordering::Relaxed), 1);
+    cov_tx.send(notification(0x100, LAB)).unwrap();
     settle().await;
-    let (heard, missed) = slot.take_heard();
-    assert_eq!((heard, missed), (vec![LAB], true));
+    assert_eq!(shared.snapshot().notifications, 1, "its own device's taken");
     stop_tx.send_replace(true);
     task.await.unwrap();
-    drop((cov_tx, events_tx));
+    drop(events_tx);
 }

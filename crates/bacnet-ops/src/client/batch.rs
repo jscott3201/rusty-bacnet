@@ -49,7 +49,10 @@ pub(crate) struct BatchRow<K> {
     /// element if one; the first is the watched one.
     pub(crate) wanted: Vec<(PropertyIdentifier, Option<u32>)>,
     /// How many of `wanted`, from the first, are read one by one by
-    /// ReadProperty when RPM isn't used; at least one.
+    /// ReadProperty when RPM isn't used. None for a row that only rides in
+    /// a ReadPropertyMultiple with other rows (the watch hub's question of
+    /// which device answers, #2603): it is never asked alone, so it costs
+    /// no request of its own, and a batch it doesn't fit in goes without it.
     pub(crate) one_by_one: usize,
 }
 
@@ -177,13 +180,19 @@ pub(crate) async fn read_until<K: Copy, T: TransportPort + 'static>(
                         );
                         rpm = false;
                     }
-                    RpmFailure::TooLarge if batch.len() > 1 => {
+                    // Rows that only ride with others don't count: one
+                    // row with them is read as one row alone would be.
+                    RpmFailure::TooLarge
+                        if batch.iter().filter(|row| row.one_by_one > 0).count() > 1 =>
+                    {
                         tracing::debug!(
                             "device {device}: batch answer too large ({error}); reading it a row at a time"
                         );
                         read.too_large = true;
                         for at in (0..batch.len()).rev() {
-                            batches.push_front(&batch[at..=at]);
+                            if batch[at].one_by_one > 0 {
+                                batches.push_front(&batch[at..=at]);
+                            }
                         }
                         continue;
                     }
@@ -241,11 +250,12 @@ fn answers(object: ObjectIdentifier, result: &ReadAccessResult) -> bool {
 
 /// `rows` in batches of at most [`MAX_BATCH`] rows and
 /// [`MAX_BATCH_PROPERTIES`] properties; a row asking for more is a batch of
-/// its own.
+/// its own. Rows that only ride with others ([`BatchRow::one_by_one`] 0)
+/// left over at the end make no batch.
 fn batches<K>(rows: &[BatchRow<K>]) -> impl Iterator<Item = &[BatchRow<K>]> {
     let mut start = 0;
     std::iter::from_fn(move || {
-        if start == rows.len() {
+        if rows[start..].iter().all(|row| row.one_by_one == 0) {
             return None;
         }
         let mut end = start;
@@ -286,7 +296,7 @@ async fn one_by_one<K, T: TransportPort + 'static>(
     stop: &AtomicBool,
 ) -> (Vec<RawRow>, Option<End>) {
     let mut rows = Vec::with_capacity(row.one_by_one);
-    for &(property, index) in row.wanted.iter().take(row.one_by_one.max(1)) {
+    for &(property, index) in row.wanted.iter().take(row.one_by_one) {
         if stop.load(Ordering::Relaxed) {
             return (rows, Some(End::Cancelled));
         }

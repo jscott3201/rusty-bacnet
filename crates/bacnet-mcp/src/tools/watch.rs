@@ -107,6 +107,14 @@ fn output() -> Value {
                     "source": { "enum": ["cov", "poll", "starting"] },
                     "state": { "enum": ["starting", "live", "failed", "unreachable", "stopped"] },
                     "note": { "type": ["string", "null"] },
+                    "why": {
+                        "type": ["object", "null"],
+                        "description": "Why the point isn't live, as data: kind (replaced, \
+                                        moved, refused, no-answer, full, lapsed, missing); \
+                                        a replaced point names the instances watched and \
+                                        found at its address, a moved one where it answers \
+                                        now (to)",
+                    },
                     "seq": { "type": "integer" },
                     "age_ms": { "type": ["integer", "null"] },
                     "updates": { "type": "object" },

@@ -13217,35 +13217,53 @@ A watched device is its address and the instance the address named when
 the point's watch started (#2603): the discovery table's row there, else
 an instance read there earlier by the wildcard instance, else one such
 read once the first read is answered, else the first instance announced
-there. When the address names another instance (an I-Am there, or the
-table once a start or poll there is answered), nothing from it is taken
-as the point's: a notification under the point's own subscriber process
-identifier included, and a poll answered across the change. The point is
-given up (`State::Gone { why: Why::Replaced { watched, found } }`), its
-renewals stop and nothing more is sent for it, cancels included, since
-the new device never held its subscription. It becomes `Why::Moved` once
-one other address claims `watched`, and starts again when its address
-announces `watched` again. A pinned handle's points stay given up until
-then; a following handle moves by its own rule, and its `point` gives
-the point at the new address to watch. A device that never announces
-itself is checked only at each start and poll, against the table and the
-instance read for its address, so another such device taking its address
-goes unnoticed: finding it would take a request per device and lifetime.
+there. Every COV notification names the device that sent it, and one
+naming another device than the point's is dropped, whatever process
+identifier it carries; a poll by ReadPropertyMultiple asks the device
+which it is in the same request, at no extra request. A poll naming
+another instance gives the point up at once
+(`State::Gone { why: Why::Replaced { watched, found } }`). Anything else
+saying another device is there (an I-Am at the address, the table once a
+start or poll there is answered, a notification naming another sender) is
+a claim: the device there is asked once which it is, by one ReadProperty
+of its Device object (by the wildcard instance, or by the watched instance
+for a device that refused the wildcard), through the device's gate and the
+client's rate. Answered as the watched device, the claim is ignored (a
+stray or forged I-Am ends nothing), and a sender its notifications named is
+taken as its own from then on, remembered for the address (a gateway that
+names itself, say). Answered as another, the point is given up. Not
+answered, the device is unreachable, as for any unanswered request. One
+such read a lifetime an address at most, revivals included; a later claim
+waits for it. A given-up point's renewals stop and nothing more is sent
+for it, cancels included, since the new device never held its
+subscription, and its values are dropped. It becomes `Why::Moved` once its
+instance announces itself at one other address (that sends nothing), and
+starts again when its address answers for it again. A pinned handle's
+points stay given up until then; a following handle moves by its own
+rule, and its `point` gives the point at the new address to watch. Not
+caught: a device that never announces itself taking the address of a
+point polled by ReadProperty alone, which would take a request per device
+and lifetime to find.
 
 A watched device announcing itself again at its address, for its own
-instance, may have restarted and lost its subscriptions: its subscribed
-points are read and subscribed again at once, and those polled after a
-failure (`NoAnswer`, `Full`, `Lapsed`, `Missing`) are tried again, rather
-than at their next renewal or retry. At most once a lifetime a device (five
-minutes for a client's own hub): a device announcing itself every few
-seconds, or answering every Who-Is, costs at most one more read and
-subscription a point a lifetime, and a second restart within that
-lifetime waits for the renewal, as every restart did before. The starts go
-through the device's gate and the client's rate like any other request,
-so many devices announcing at once come back no faster than the limits
-allow. A burst of announcements the hub's receiver fell behind on makes
-each device's scheduler read the discovery table at its address, which
-sends nothing.
+instance, may have restarted and lost its subscriptions. Its
+Time_Of_Device_Restart is read then, once a lifetime at most: when it moved
+since the last read, its subscribed points are read and subscribed again,
+and those polled after a failure (`NoAnswer`, `Full`, `Lapsed`, `Missing`)
+tried again, rather than at their next renewal or retry; unchanged,
+nothing more is sent. The first read only learns it, and a device without
+the property is taken as maybe restarted on the announcement alone:
+subscribed again at most once a lifetime counted from its first
+subscription (five minutes for a client's own hub). So a Who-Is answered
+by every device once a lifetime costs a device with the property one read
+a lifetime, and one without it one read and subscription a point a
+lifetime. A restart notification the device sends (process identifier 0,
+about its Device object) is taken at its word. Each check and
+re-subscription waits up to 10 s, a part set by the device's address, so
+devices answering one Who-Is are asked one after another, and goes
+through the device's gate and the client's rate. A burst of
+announcements the hub's receiver fell behind on makes each device's
+scheduler read the discovery table at its address, which sends nothing.
 
 `CovSupport` (`Unknown`, `NotOffered`, `Offered`, `Accepted`, `Refused`;
 `#[non_exhaustive]`) says what is known of COV: `device.cov_support()` for

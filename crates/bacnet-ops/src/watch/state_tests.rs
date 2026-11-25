@@ -320,7 +320,8 @@ fn moved_away(lab: &Lab, instance: u32) {
 /// given-up point back no more than any other start would: the table must
 /// name the point's instance there when the start is answered. Its own
 /// point began with the old instance, so the answer may be the other
-/// device's, and it is given up for it (#2603).
+/// device's: the device there is asked, says it is the other (#2603), and
+/// the point is given up for it.
 #[tokio::test(start_paused = true)]
 async fn a_start_from_before_the_move_does_not_revive() {
     let lab = Lab::start(WatchOptions::default()).await;
@@ -340,6 +341,7 @@ async fn a_start_from_before_the_move_does_not_revive() {
         .add_device(LAB + 1, &[2])
         .await
         .unwrap();
+    *lab.quirks.named.lock().unwrap() = Some(LAB + 1);
     moved_away(&lab, LAB);
     until(&mut first, |u| matches!(u.state, State::Gone { .. })).await;
     lab.quirks.slow_rpm_ack.store(false, Ordering::Relaxed);
@@ -391,14 +393,16 @@ async fn each_moved_point_comes_back_for_its_own_instance() {
     until(&mut first, |u| u.state == State::Subscribed).await;
     moved_away(&lab, LAB);
     until(&mut first, |u| matches!(u.state, State::Gone { .. })).await;
-    // Another device's instance named at the address: a point started
-    // there now is that device's, and it moves away too.
+    // Another device's instance named at the address (and the device there
+    // says so when asked, #2603): a point started there now is that
+    // device's, and it moves away too.
     let other = LAB + 1;
     lab.client
         .low_level()
         .add_device(other, &[2])
         .await
         .unwrap();
+    *lab.quirks.named.lock().unwrap() = Some(other);
     let mut second = lab.client.watch([device.point("ai:2").unwrap()]).unwrap();
     until(&mut second, |u| u.state == State::Subscribed).await;
     assert!(

@@ -110,16 +110,18 @@ pub enum Why {
         /// Where the device answers now.
         to: DeviceAddress,
     },
-    /// Another device answers at the point's address now: an announcement
-    /// there, or the discovery table once a request there was answered,
-    /// names instance `found`, not `watched`, the instance the address
-    /// named when the point's watch started. Nothing from the address is
-    /// taken as the point's from then on and nothing more is sent for it:
-    /// its old subscription, which the new device never held, lapses with
-    /// its lifetime. The point is given up
+    /// Another device answers at the point's address now: asked (after an
+    /// announcement there, the discovery table, or a notification naming
+    /// another sender said so), or in a poll's own answer, the device there
+    /// names itself `found`, not `watched`, the instance the address named
+    /// when the point's watch started. Nothing from the address is taken as
+    /// the point's from then on, its values are dropped, and nothing more
+    /// is sent for it: its old subscription, which the new device never
+    /// held, lapses with its lifetime. The point is given up
     /// ([`State::Gone`](super::State::Gone)), becomes
-    /// [`Moved`](Self::Moved) once one other address claims `watched`, and
-    /// starts again when its address announces `watched` again.
+    /// [`Moved`](Self::Moved) once `watched` announces itself at one other
+    /// address, and starts again when its address answers for `watched`
+    /// again.
     Replaced {
         /// The instance the point's device had when its watch started.
         watched: u32,

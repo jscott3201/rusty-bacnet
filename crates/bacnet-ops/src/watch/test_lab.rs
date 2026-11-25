@@ -17,6 +17,7 @@ use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_server::server::BACnetServer;
 use bacnet_services::cov::COVNotificationRequest;
+use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
 use bacnet_services::who_is::IAmRequest;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::ReceivedNpdu;
@@ -90,6 +91,14 @@ pub(super) struct Quirks {
     /// The device's acknowledgements of SubscribeCOV come half a second
     /// late, after what it sent meanwhile: its notifications overtake them.
     pub(super) late_cov_ack: AtomicBool,
+    /// The Time_Of_Device_Restart the device answers a ReadProperty with
+    /// (an Unsigned, which the hub only compares); `None` for its server's
+    /// answer, which has no such property.
+    pub(super) restart_time: Mutex<Option<u8>>,
+    /// The instance the device names itself when its Device object is read
+    /// by the wildcard instance, in place of [`LAB`]: another device there,
+    /// as far as a check of who answers goes.
+    pub(super) named: Mutex<Option<u32>>,
 }
 
 /// Whether `npdu` acknowledges a SubscribeCOV.
@@ -212,6 +221,32 @@ fn inject(handle: &TestTransportHandle, frame: Vec<u8>) {
     }
 }
 
+/// The value the quirks answer `request` with in place of the device: its
+/// Time_Of_Device_Restart, or the instance it names itself by the
+/// wildcard.
+fn faked(quirks: &Quirks, request: &ReadPropertyRequest) -> Option<Vec<u8>> {
+    let device = request.object_identifier;
+    match request.property_identifier {
+        PropertyIdentifier::TIME_OF_DEVICE_RESTART => {
+            let time = (*quirks.restart_time.lock().unwrap())?;
+            Some(vec![0x21, time])
+        }
+        PropertyIdentifier::OBJECT_IDENTIFIER
+            if device.object_type() == ObjectType::DEVICE
+                && device.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE =>
+        {
+            let named = (*quirks.named.lock().unwrap())?;
+            let mut value = BytesMut::new();
+            bacnet_encoding::primitives::encode_app_object_id(
+                &mut value,
+                &oid(ObjectType::DEVICE, named),
+            );
+            Some(value.to_vec())
+        }
+        _ => None,
+    }
+}
+
 /// Whether a unicast goes on to the device, after the quirks have had their
 /// say: a confirmed request is recorded, and the ones the device would
 /// refuse or abort are answered here instead.
@@ -251,6 +286,30 @@ fn forwards(
                     answer_routed(handle, vec![0x50, invoke, service, 0x91, class, 0x91, code]);
                 }
             }
+            return false;
+        }
+        if service == READ_PROPERTY
+            && let Ok(request) = ReadPropertyRequest::decode(&apdu[4..])
+            && let Some(value) = faked(quirks, &request)
+        {
+            let mut ack = BytesMut::from(&[0x30, invoke, READ_PROPERTY][..]);
+            // A device read by the wildcard instance answers as itself.
+            let named = *quirks.named.lock().unwrap();
+            let object = match (request.property_identifier, named) {
+                (PropertyIdentifier::OBJECT_IDENTIFIER, Some(named)) => {
+                    oid(ObjectType::DEVICE, named)
+                }
+                _ => request.object_identifier,
+            };
+            ReadPropertyACK {
+                object_identifier: object,
+                property_identifier: request.property_identifier,
+                property_array_index: None,
+                property_value: value,
+            }
+            .encode(&mut ack)
+            .unwrap();
+            answer(handle, ack.to_vec());
             return false;
         }
         if service == RPM {
@@ -398,18 +457,36 @@ impl Lab {
     /// subscriber `process`, as from device `instance`: `object`'s
     /// Present_Value is `value`.
     pub(super) fn notify(&self, process: u32, instance: u32, object: ObjectIdentifier, value: f32) {
+        let real = [&[0x44][..], &value.to_be_bytes()].concat();
+        let values = vec![(PropertyIdentifier::PRESENT_VALUE, real)];
+        self.notify_values(process, instance, object, values);
+    }
+
+    /// An UnconfirmedCOVNotification from the lab device's MAC to
+    /// subscriber `process`, as from device `instance`, about `object`,
+    /// carrying `values` (encoded).
+    pub(super) fn notify_values(
+        &self,
+        process: u32,
+        instance: u32,
+        object: ObjectIdentifier,
+        values: Vec<(PropertyIdentifier, Vec<u8>)>,
+    ) {
         let mut service = BytesMut::new();
         COVNotificationRequest {
             subscriber_process_identifier: process,
             initiating_device_identifier: oid(ObjectType::DEVICE, instance),
             monitored_object_identifier: object,
             time_remaining: 300,
-            list_of_values: vec![BACnetPropertyValue {
-                property_identifier: PropertyIdentifier::PRESENT_VALUE,
-                property_array_index: None,
-                value: [&[0x44][..], &value.to_be_bytes()].concat(),
-                priority: None,
-            }],
+            list_of_values: values
+                .into_iter()
+                .map(|(property_identifier, value)| BACnetPropertyValue {
+                    property_identifier,
+                    property_array_index: None,
+                    value,
+                    priority: None,
+                })
+                .collect(),
         }
         .encode(&mut service)
         .unwrap();

@@ -10,24 +10,22 @@
 //! table's, released before the entry's), and a held-back signal is a
 //! deadline the loop sleeps toward. It also hands each device's scheduler
 //! the moves of handles following the device's instance away from its
-//! address ([`ClientEvent::Moved`]), and the instances announced at its
-//! address (#2603). The discovery table's changes go first: before each
-//! notification, those the client made before it are taken in, so a
-//! device announcing itself at a watched address is known there before
-//! anything it sends next is looked at. A receiver that fell behind on
-//! them has every scheduler read the table again.
+//! address ([`ClientEvent::Moved`]), the instances announced at its address
+//! and a restart its device announced (#2603). A notification is checked
+//! against the device it names as its sender, not against the order the
+//! announcements came in, so a receiver that fell behind on the discovery
+//! table's changes only has every scheduler read the table again.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use bacnet_client::client::{COVEvent, ReceivedCOVNotification, Station};
 use bacnet_types::constructed::BACnetPropertyValue;
-use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 
 use super::options::MAX_ROWS;
 use super::shared::{Registry, Shared};
@@ -70,12 +68,10 @@ pub(super) async fn run(
             biased;
             _ = stop.wait_for(|stopped| *stopped) => break,
             received = notifications.recv() => match received {
-                Ok(event @ COVEvent::Object(_)) => {
-                    if announcing {
-                        announcing = take_changes(&registry, &mut devices, &*own);
-                    }
-                    held.extend(registry.deliver(&event, own()));
-                }
+                Ok(event @ COVEvent::Object(_)) => match restart(&event, own()) {
+                    Some((at, time)) => registry.restarted(&at, time),
+                    None => held.extend(registry.deliver(&event, own())),
+                },
                 Ok(COVEvent::Multiple(_)) => {
                     registry.cov_multiple_ignored.fetch_add(1, Ordering::Relaxed);
                 }
@@ -126,25 +122,35 @@ fn note_change(registry: &Registry, change: &DeviceEvent, own: Option<u16>) {
     }
     if let Some(at) = DeviceAddress::of(&change.device) {
         let instance = change.device.object_identifier.instance_number();
-        registry.announced(&at.localized(own), instance);
+        let when = change.device.last_announced;
+        registry.announced(&at.localized(own), instance, when);
     }
 }
 
-/// Take in the discovery table's changes waiting now, without waiting for
-/// more; false once the client's channel has closed.
-fn take_changes(
-    registry: &Registry,
-    devices: &mut broadcast::Receiver<DeviceEvent>,
-    own: &dyn Fn() -> Option<u16>,
-) -> bool {
-    loop {
-        match devices.try_recv() {
-            Ok(change) => note_change(registry, &change, own()),
-            Err(TryRecvError::Lagged(_)) => registry.missed(),
-            Err(TryRecvError::Empty) => return true,
-            Err(TryRecvError::Closed) => return false,
-        }
+/// Where `event` came from and the Time_Of_Device_Restart it carries, when
+/// it is a device's restart notification: unsubscribed, so its subscriber
+/// process identifier is 0, about the device's own Device object (Clause
+/// 19.3; Table 13-1b lists what it reports).
+fn restart(event: &COVEvent, own: Option<u16>) -> Option<(DeviceAddress, Option<Vec<u8>>)> {
+    let received = event.object()?;
+    let notification = &received.notification;
+    let device = notification.monitored_object_identifier;
+    if notification.subscriber_process_identifier != 0
+        || device.object_type() != ObjectType::DEVICE
+        || device != notification.initiating_device_identifier
+    {
+        return None;
     }
+    let at = match (received.source_network, &received.source_address) {
+        (Some(network), Some(station)) => DeviceAddress::new(network, station.as_slice()).ok()?,
+        _ => DeviceAddress::new(0, received.source_mac.as_slice()).ok()?,
+    };
+    let time = notification
+        .list_of_values
+        .iter()
+        .find(|value| value.property_identifier == PropertyIdentifier::TIME_OF_DEVICE_RESTART)
+        .map(|value| value.value.clone());
+    Some((at.localized(own), time))
 }
 
 /// True when `event` is for `point`: a single-object notification from its

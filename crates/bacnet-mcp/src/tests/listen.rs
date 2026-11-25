@@ -96,6 +96,7 @@ async fn two_streams_share_one_subscription_until_the_last_is_cancelled() {
     assert_eq!(content["watched"], json!(true));
     assert_eq!(content["source"], json!("cov"));
     assert_eq!(content["state"], json!("live"));
+    assert_eq!(content["why"], json!(null));
     assert_eq!(present_value(&content), json!(72.5));
     assert_eq!(content["cost"]["requests"], json!(0));
 
@@ -265,6 +266,7 @@ async fn a_silent_device_is_reported_on_its_point() {
     let content = lab.agent.read(AI1).await.unwrap();
     assert_eq!(content["state"], json!("unreachable"), "{content}");
     assert_eq!(content["source"], json!("poll"));
+    assert_eq!(content["why"], json!({ "kind": "lapsed" }), "{content}");
     lab.stop().await;
 }
 

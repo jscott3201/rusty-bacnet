@@ -78,6 +78,10 @@ enum Mode {
     /// No route to its device is known: looked for again at
     /// `resubscribe`.
     Waiting,
+    /// Its start was answered while its address was said to hold another
+    /// device: it waits for the device there to say which it is
+    /// ([`identity`]).
+    Held,
     /// Given up ([`Phase::Gone`]).
     Gone,
 }
@@ -105,9 +109,8 @@ enum Op {
     Start(u32),
     /// Ask where the device of an instance went.
     Locate(u32),
-    /// Read the discovery table at the address: announcements there were
-    /// missed.
-    Verify,
+    /// Which device answers at the address, or when it restarted.
+    Check(identity::Check),
     Cancel {
         shared: Arc<Shared>,
         /// What the cancel keeps counted until it ends.
@@ -126,21 +129,17 @@ enum Holder {
     Alone(Running),
 }
 
-/// What a job ended with. A start, poll or verify carries the count of
-/// announcements at the address as it began ([`DeviceSlot::generation`]).
 enum Done {
     Started {
         process: u32,
         started: Box<Started>,
-        generation: u64,
     },
     /// A cancel ended; whether the device answered it.
     Cancelled(Holder, bool),
-    Polled(Polled, u64),
+    Polled(Polled),
     /// Where the instance looked for answers now, if it moved.
     Located(u32, Option<DeviceAddress>),
-    /// What the table names at the address now.
-    Verified(Option<u32>, u64),
+    Checked(identity::Checked),
 }
 
 type Job = Pin<Box<dyn Future<Output = Done> + Send>>;
@@ -154,11 +153,8 @@ struct Device<T: TransportPort + 'static> {
     slot: Arc<DeviceSlot>,
     /// The instances whose locate is queued or running.
     locating: BTreeSet<u32>,
-    /// A verify is queued or running.
-    verifying: bool,
-    /// When the points were last subscribed again for the device
-    /// announcing itself ([`identity`]).
-    restarted: Option<Instant>,
+    /// Which device answers at the address, and when it restarted.
+    ids: identity::Ids,
     rows: BTreeMap<u32, Row>,
     ops: VecDeque<Op>,
     /// The device stopped answering polls: the current backoff, and when
@@ -180,8 +176,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         address,
         slot: Arc::clone(&slot),
         locating: BTreeSet::new(),
-        verifying: false,
-        restarted: None,
+        ids: identity::Ids::default(),
         rows: BTreeMap::new(),
         ops: VecDeque::new(),
         backoff: Duration::ZERO,
@@ -221,6 +216,10 @@ pub(super) async fn run<T: TransportPort + 'static>(
                 {
                     table.devices.remove(&device.address);
                 }
+                table.replaced.retain(|_, addresses| {
+                    addresses.remove(&device.address);
+                    !addresses.is_empty()
+                });
                 return;
             }
             continue;
@@ -365,7 +364,6 @@ impl<T: TransportPort + 'static> Device<T> {
             );
             self.done(Done::Cancelled(holder, false));
         }
-        let generation = self.slot.generation();
         match self.ops.pop_front() {
             Some(Op::Start(process)) => {
                 let row = self.rows.get_mut(&process)?;
@@ -376,7 +374,6 @@ impl<T: TransportPort + 'static> Device<T> {
                     Done::Started {
                         process,
                         started: Box::new(started),
-                        generation,
                     }
                 }))
             }
@@ -386,12 +383,7 @@ impl<T: TransportPort + 'static> Device<T> {
                     Done::Located(instance, jobs::locate(inner, address, instance).await)
                 }))
             }
-            Some(Op::Verify) => {
-                let address = self.address.clone();
-                Some(Box::pin(async move {
-                    Done::Verified(jobs::verify(inner, address).await, generation)
-                }))
-            }
+            Some(Op::Check(check)) => Some(self.check_job(check)),
             Some(Op::Cancel {
                 shared,
                 holder,
@@ -426,8 +418,7 @@ impl<T: TransportPort + 'static> Device<T> {
                 }
                 let address = self.address.clone();
                 Some(Box::pin(async move {
-                    let polled = charged(account, jobs::poll(inner, address, due)).await;
-                    Done::Polled(polled, generation)
+                    Done::Polled(charged(account, jobs::poll(inner, address, due)).await)
                 }))
             }
         }
@@ -435,11 +426,7 @@ impl<T: TransportPort + 'static> Device<T> {
 
     fn done(&mut self, done: Done) {
         match done {
-            Done::Started {
-                process,
-                started,
-                generation,
-            } => self.started(process, *started, generation),
+            Done::Started { process, started } => self.started(process, *started),
             Done::Cancelled(holder, answered) => {
                 self.inner
                     .registry
@@ -453,14 +440,14 @@ impl<T: TransportPort + 'static> Device<T> {
                     self.back_off();
                 }
             }
-            Done::Polled(polled, generation) => self.polled(polled, generation),
+            Done::Polled(polled) => self.polled(polled),
             Done::Located(instance, to) => {
                 self.locating.remove(&instance);
                 if let Some(to) = to {
                     self.moved(instance, to);
                 }
             }
-            Done::Verified(instance, generation) => self.verified(instance, generation),
+            Done::Checked(checked) => self.checked(checked),
         }
     }
 
@@ -491,10 +478,7 @@ impl<T: TransportPort + 'static> Device<T> {
         self.retry_at = Some(Instant::now() + self.backoff);
     }
 
-    fn started(&mut self, process: u32, started: Started, generation: u64) {
-        if let Some(found) = started.instance {
-            self.slot.confirm(generation, found);
-        }
+    fn started(&mut self, process: u32, started: Started) {
         if self.started_elsewhere(process, &started) {
             return;
         }
@@ -623,8 +607,9 @@ impl<T: TransportPort + 'static> Device<T> {
                     entry.failure = None;
                 }
                 shared.set_state(seq, Some(Source::Cov), Phase::Live, None);
+                self.subscribed();
                 if read_first {
-                    self.answered_for(started.instance);
+                    self.answered_at(started.instance);
                 }
                 return;
             }
@@ -677,17 +662,14 @@ impl<T: TransportPort + 'static> Device<T> {
                 self.locate(instance);
             }
         } else if read_first {
-            self.answered_for(started.instance);
+            self.answered_at(started.instance);
         }
     }
 
-    fn polled(&mut self, polled: Polled, generation: u64) {
-        if let Some(found) = polled.instance {
-            // An answer from another device is none of the points': they
-            // are given up before its rows are looked at.
-            self.slot.confirm(generation, found);
-            self.check(found);
-        }
+    fn polled(&mut self, polled: Polled) {
+        // Rows answered by another device than their points' are none of
+        // theirs: given up, or left for the device there to say.
+        let foreign = self.poll_identity(&polled);
         let now = Instant::now();
         self.last_polled = Some(now);
         let unreachable = polled.unreachable();
@@ -725,7 +707,8 @@ impl<T: TransportPort + 'static> Device<T> {
             shared.sample(Err(error), Via::Poll);
         };
         // A point given up while the poll was out stays so.
-        let live = |row: &&Row| !matches!(row.mode, Mode::Gone);
+        let live =
+            |row: &&Row| !matches!(row.mode, Mode::Gone) && !foreign.contains(&row.shared.process);
         for (process, rows) in rows {
             let Some(row) = self.rows.get(&process).filter(live) else {
                 continue;
@@ -748,6 +731,7 @@ impl<T: TransportPort + 'static> Device<T> {
     /// due again.
     fn tick(&mut self) {
         let now = Instant::now();
+        self.identity_due(now);
         let retry_cov = self.inner.options.retry_cov;
         let seq = &self.inner.registry.seq;
         for (process, row) in &mut self.rows {
