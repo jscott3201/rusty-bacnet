@@ -13,8 +13,8 @@ use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 use bacnet_transport::test_transport::{StartMode, TestTransport, TestTransportHandle};
 use bacnet_types::MacAddr;
-use bacnet_types::enums::ConfirmedServiceChoice;
-use bacnet_types::error::{Error, SegmentationError};
+use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
+use bacnet_types::error::{Error, RemoteError, SegmentationError};
 use bytes::BytesMut;
 use tokio::time::{Duration, timeout};
 
@@ -282,6 +282,45 @@ async fn a_positive_acknowledgement_starts_the_negative_count_again() {
         .unwrap();
     assert!(result.unwrap().is_empty());
     assert_eq!(handle.sent().len(), 13);
+    let mut client = Arc::try_unwrap(client).unwrap_or_else(|_| panic!("client still shared"));
+    client.stop().await.unwrap();
+}
+
+/// A segmented request to a peer that never acknowledges ends with the
+/// timeout Abort once its segment timer has run out one time more than the
+/// retries allowed, at the largest setting too (#2809): the window goes
+/// once and 255 times again, and the 256th expiry ends the request.
+#[tokio::test(start_paused = true)]
+async fn a_segmented_request_to_a_silent_peer_ends_after_its_last_retry_at_255() {
+    let config = ClientConfig {
+        apdu_retries: u8::MAX,
+        ..segmented_config()
+    };
+    let (client, handle) = client(config).await;
+    let result = timeout(
+        Duration::from_secs(24 * 60 * 60),
+        client.confirmed_request(
+            SERVER_MAC,
+            ConfirmedServiceChoice::WRITE_PROPERTY,
+            &[0x0C; 100],
+        ),
+    )
+    .await
+    .expect("the request never ended");
+    assert!(
+        matches!(
+            result,
+            Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::TSM_TIMEOUT
+        ),
+        "{result:?}"
+    );
+    let sent = handle.sent().frames();
+    assert_eq!(sent.len(), 1 + usize::from(u8::MAX));
+    assert!(sent.iter().all(|frame| matches!(
+        frame.apdu(),
+        Apdu::ConfirmedRequest(segment) if segment.segmented && segment.sequence_number == Some(0)
+    )));
+    wait_until_released(&client).await;
     let mut client = Arc::try_unwrap(client).unwrap_or_else(|_| panic!("client still shared"));
     client.stop().await.unwrap();
 }

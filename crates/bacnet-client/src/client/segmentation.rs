@@ -408,7 +408,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ) -> impl Future<Output = Result<WindowAck, Error>> + Send + 'a {
         let (window_start, window_end) = window;
         async move {
-            let mut ack_retries: u8 = 0;
+            // Wider than `apdu_retries`, so the expiry after the last of
+            // 255 retries still ends the request (#2809).
+            let mut ack_retries: u16 = 0;
             loop {
                 let segment_timer = tokio::time::sleep(transfer.timeout_duration);
                 tokio::pin!(segment_timer);
@@ -485,7 +487,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             transfer.send_context.tsm_mac,
                         );
                         ack_retries += 1;
-                        if ack_retries > transfer.max_ack_retries {
+                        if ack_retries > u16::from(transfer.max_ack_retries) {
                             return Err(Error::abort(bacnet_types::enums::AbortReason::TSM_TIMEOUT));
                         }
                         warn!(
