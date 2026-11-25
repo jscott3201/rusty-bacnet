@@ -20,6 +20,8 @@ mod readings;
 mod specs;
 mod value;
 mod walk;
+mod watch;
+mod watch_update;
 
 use std::sync::Arc;
 
@@ -37,6 +39,7 @@ pub(crate) use discovered::PyDiscovered;
 pub(crate) use errors::ops_err;
 pub(crate) use priorities::{PyPriorityView, PyWritePolicy};
 pub(crate) use specs::target_arg;
+pub(crate) use watch::{Ended, WatchShared};
 
 /// The high-level client over the binding's transport.
 pub(crate) type OpsClient = bacnet_ops::Client<AppTransport>;
@@ -177,6 +180,9 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<points::PyPoint>()?;
     m.add_class::<points::PyInventory>()?;
     m.add_class::<walk::PyPointIterator>()?;
+    m.add_class::<watch::PyWatch>()?;
+    m.add_class::<watch_update::PyWatchUpdate>()?;
+    m.add_class::<watch_update::PyWatchReason>()?;
     errors::register(m)
 }
 

@@ -8,7 +8,9 @@
 //! reason ([`Why`]) whenever the point isn't subscribed. That is the one
 //! way an application watches. Under it is [`hub`], for a front end that
 //! runs its own hub (the `bacnet` tool's watch list and MCP server keep a
-//! history, serve several sessions and pick their own settings).
+//! history, serve several sessions and pick their own settings); one that
+//! picks its own settings but reads updates as an application does takes
+//! a [`Watch`] from its hub ([`Hub::stream`](hub::Hub::stream)).
 //!
 //! A point names its device by address: the hub keys its entries, its
 //! per-device schedulers and its subscriptions' targets on it, so two
@@ -85,6 +87,11 @@ mod sample;
 mod shared;
 mod stream;
 mod support;
+
+/// The trait a [`Watch`] hands out its [`Update`]s by, so a caller can
+/// poll one without depending on `futures-core` itself (the Python
+/// bindings do).
+pub use futures_core::Stream;
 
 pub use self::point::{Point, Watched, Why};
 pub use self::sample::Via;

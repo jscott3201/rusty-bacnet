@@ -122,6 +122,7 @@ of the Rust `bacnet-ops` client that the `bacnet` tool is built on.
 | Describe the device | `await ahu.summary()` |
 | Inventory the points | `await ahu.inventory(types=None, values=False, settings=False, details=False)` (keywords only) |
 | Walk the points as they are read | `async for point in await ahu.points(): ...` |
+| Watch points | `async for update in await ahu.watch(["ai:1", "ao:2"]): ...` |
 
 Everything a device is asked goes through its handle. There is one way to
 spell each call, on the handle; the client itself has no `read(target, ...)`
@@ -483,6 +484,95 @@ async for point in walk:
 **Device text.** `name`, `description`, `device_type`, `profile_name` and
 the state texts are exactly as the device sent them: clean them before
 showing them, since a device can put control characters in its names.
+
+### Watching
+
+#### `watch(points, *, lifetime=300, poll_interval=10.0) -> Watch`
+
+Watches points of the device and hands out their changes as an async
+iterator of `WatchUpdate`s. Each item of `points` is what `read_many`
+takes (`"ai:1"`, `"ao:2 priority-array[8]"`, an `ObjectIdentifier`, an
+`(object, property)` or `(object, property, index)` tuple), each point
+once. A Present_Value is watched by SubscribeCOV on its object; any other
+property, or an element, by SubscribeCOVProperty.
+
+```python
+async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
+    async for update in watch:
+        if update.state == "gone":
+            print(update.object_id, "given up:", update.why)
+        elif update.value is not None:
+            print(update.object_id, update.value.text, "via", update.via)
+```
+
+- Each point is read once (its value, Status_Flags, units, name and state
+  texts), then subscribed for `lifetime` seconds at a time and renewed
+  before each lifetime ends. A point the device won't subscribe is polled,
+  with the device's other polled points, every `poll_interval` seconds (1
+  to 3600). A device that refuses COV altogether is remembered, and its
+  later points are polled without asking.
+- An update comes with each value read or notified and each change of a
+  point's state. A consumer that falls behind gets one update a point with
+  its latest value and state, never a queue of old ones: `.folded` counts
+  the changes folded away.
+- The watch never ends on its own. It ends on `close()` (or leaving
+  `async with`), when the object goes away, or on the client's `stop()`,
+  whichever comes first: a step then raises `StopAsyncIteration` and every
+  step after it, saying why, and the subscriptions are cancelled, the
+  device's answers waited for up to 5 s. Any not answered by then lapse
+  with their lifetime, which is never indefinite.
+- The watch holds the client only through a watch hub of its own, which a
+  stop ends before it stops the client, so a live watch never holds a
+  stop up. A client started again doesn't revive it: watch again. A
+  `Device` made from an instance makes its handle again after a restart,
+  so `await ahu.watch(...)` works as before.
+- The points are at the device's address now. A following handle whose
+  device moves later is reported (`why.kind == "moved"`, `why.to`) rather
+  than followed: watch again from the handle, which has moved. Another
+  device answering at the address is reported (`"replaced"`, with
+  `why.watched` and `why.found`), and nothing from it is ever taken for
+  the point; the point comes back if its device answers there again.
+- Cancelling a step loses no update: one on its way when the cancel
+  landed comes first next time. Concurrent steps complete one at a time,
+  each with the next update.
+- Raised when the call is made: `TypeError` or `ValueError` for one str,
+  no points, more than 4096, `ALL`, `REQUIRED` or `OPTIONAL`, a lifetime
+  of 0, a `poll_interval` outside 1 to 3600, or a bool for either. On
+  await: what any call raises on a stopped client, and
+  `BacnetLookupError` for a following handle whose device can't be placed.
+  Nothing is sent until the watch starts.
+- `.address`, `.points` (`(object, property, array_index)` tuples),
+  `.lifetime`, `.poll_interval`, `.folded`, `.closed`, `len()`.
+
+#### `WatchUpdate`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `.address` | `str` | Where the point's device answers, as `device()` reads back |
+| `.object_id`, `.property_id`, `.array_index` | `ObjectIdentifier`, `PropertyIdentifier`, `int \| None` | The point: Present_Value for one named by its object alone |
+| `.state` | `str` | `"starting"`, `"subscribed"`, `"polled"`, `"unreachable"` or `"gone"` |
+| `.why` | `WatchReason \| None` | Why the point isn't subscribed; None while it is, or while starting |
+| `.value` | `Value \| None` | The value as last read or notified; its text names the units or the state |
+| `.error` | `BacnetError \| None` | Why the latest read gave no value, unraised; with `.value` set too, that value is an earlier one |
+| `.status_flags` | `BitString \| None` | Status_Flags as last read or notified, the set flags in `.names` |
+| `.via` | `str \| None` | `"read"` (the first read), `"cov"` or `"poll"` |
+| `.timestamp` | `float \| None` | When the value came, POSIX seconds, as `time.time()` |
+| `.cov_support` | `str` | `"unknown"`, `"not-offered"`, `"offered"`, `"accepted"` or `"refused"` |
+
+#### `WatchReason`
+
+`.kind` names the reason and `str(why)` says it in a line:
+
+| `.kind` | Fields | Meaning |
+|---------|--------|---------|
+| `"refused"` | `.error` | The device refused the subscription; polled, not asked again |
+| `"no-answer"` | `.error` | The first read or the subscription went unanswered; asked again after a backoff |
+| `"full"` | `.error` | The device's subscription table was full; asked again after a backoff |
+| `"lapsed"` | `.error` (or None) | A renewal failed; asked again after a backoff |
+| `"missing"` | | No router to the device's remote network is known |
+| `"foreign-sender"` | `.sender` | Its notifications name device `sender`, which can't be told from another device at the address; polled |
+| `"moved"` | `.to` | The device answers at `to` now: the point is given up |
+| `"replaced"` | `.watched`, `.found` | Device `found` answers at the address now, not `watched`: the point is given up |
 
 ### Writing
 

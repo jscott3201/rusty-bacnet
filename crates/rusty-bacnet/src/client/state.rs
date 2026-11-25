@@ -20,6 +20,10 @@ use tokio::task::JoinHandle;
 mod tests;
 
 #[cfg(test)]
+#[path = "watches_tests.rs"]
+mod watches_tests;
+
+#[cfg(test)]
 impl ClientState {
     /// Another reference to the started low-level client, so a test can
     /// make its stop fail as a stray reference would.
@@ -57,9 +61,18 @@ impl Started {
 
     /// Stop the low-level client, once the high-level one has let go of
     /// it. A failed stop leaves the client closed to new operations (see
-    /// [`close`]), so the high-level client isn't needed again.
-    async fn stop(&mut self) -> Result<(), Error> {
+    /// [`close`]), so the high-level client isn't needed again. With
+    /// `settle`, a watch was made since the last stop: the tasks its hub
+    /// aborted may hold the client a moment longer, so the stop waits up
+    /// to [`SETTLE`](super::watches::SETTLE) for them to go.
+    async fn stop(&mut self, settle: bool) -> Result<(), Error> {
         self.high = None;
+        if settle {
+            let until = tokio::time::Instant::now() + super::watches::SETTLE;
+            while Arc::get_mut(&mut self.core).is_none() && tokio::time::Instant::now() < until {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }
         let core = Arc::get_mut(&mut self.core).ok_or_else(|| {
             Error::Encoding("cannot stop BACnetClient while high-level references remain".into())
         })?;
@@ -71,6 +84,10 @@ impl Started {
 #[derive(Default)]
 pub(crate) struct ClientState {
     pub(super) frames: crate::frames::FrameSubscriptions,
+    /// The live watches, each holding the high-level client through its
+    /// hub until it ends: a stop ends them before it takes the low-level
+    /// client (#2561).
+    pub(super) watches: super::watches::Watches,
     client: RwLock<Option<Started>>,
     closing: AtomicBool,
     /// Woken when close is admitted, so an operation or entry queued behind
@@ -361,6 +378,8 @@ pub(crate) async fn close(inner: ClientInner) -> PyResult<()> {
         inner.closing.store(true, Ordering::Release);
         inner.closing_admitted.notify_waiters();
         inner.frames.close();
+        // Watches' iterators end now; their hubs end once the leases drain.
+        inner.close_watch_streams();
         // This try is a new one: an earlier failure no longer stands.
         inner.set_stop_failure(None);
         let state = Arc::clone(&inner);
@@ -394,10 +413,13 @@ async fn stop_native(state: ClientInner) -> Result<(), Error> {
     // A frame subscription admitted before close may have finished while
     // close waited for its read lease. End those subscriptions too.
     state.frames.close();
-    // The handles hold the high-level client: they go first.
+    // The watches' hubs and the handles hold the high-level client: they
+    // go first. A watch's iterator ends at once; its hub's cancels get a
+    // bounded wait.
+    let settle = state.end_watches(super::watches::END_WAIT).await;
     state.drop_handles();
     if let Some(started) = client.as_mut()
-        && let Err(error) = started.stop().await
+        && let Err(error) = started.stop(settle).await
     {
         // Recorded here, so a stop() whose waiter was cancelled still
         // leaves the cause for an endpoint asked for a client (#2617).

@@ -404,29 +404,7 @@ impl<T: TransportPort + 'static> Client<T> {
         if tokio::runtime::Handle::try_current().is_err() {
             return Err(OpsError::Watch(WatchError::NoRuntime));
         }
-        let hub = self.own_hub();
-        let mut seen = HashSet::new();
-        let named: Vec<Point> = points
-            .into_iter()
-            .map(|point| hub.keyed(point))
-            .filter(|point| seen.insert(point.clone()))
-            .collect();
-        let leases = hub.watch_all(named).map_err(OpsError::Watch)?;
-        let mailbox = Arc::new(Mailbox {
-            state: Mutex::new(MailState {
-                queue: VecDeque::with_capacity(leases.len()),
-                queued: vec![false; leases.len()],
-                folded: 0,
-                waker: None,
-            }),
-        });
-        for (index, lease) in leases.iter().enumerate() {
-            lease.listen(Listener {
-                mailbox: Arc::downgrade(&mailbox),
-                index,
-            });
-        }
-        Ok(Watch { leases, mailbox })
+        self.own_hub().stream(points).map_err(OpsError::Watch)
     }
 
     /// The range of subscriber process identifiers for another hub made on
@@ -455,6 +433,45 @@ impl<T: TransportPort + 'static> Client<T> {
             .expect("the client hub's settings are valid");
         own.hub = Arc::downgrade(&hub.inner);
         hub
+    }
+}
+
+impl<T: TransportPort + 'static> Hub<T> {
+    /// Watch `points` on this hub: a [`Watch`] streaming each point's
+    /// [`Update`]s, as [`Client::watch`] gives on the client's own hub, for
+    /// a front end that runs a hub of its own settings (the Python
+    /// bindings' watches, each on a hub of its own, which their client's
+    /// stop shuts down with [`shutdown`](Self::shutdown)). A point named
+    /// twice, or one station named two ways, is watched once.
+    ///
+    /// # Errors
+    ///
+    /// [`WatchError::Full`] when the points would take the hub past
+    /// [`WatchOptions::max_points`] (nothing is watched then, and nothing
+    /// sent), and [`WatchError::Shut`] once the hub has shut down.
+    pub fn stream(&self, points: impl IntoIterator<Item = Point>) -> Result<Watch, WatchError> {
+        let mut seen = HashSet::new();
+        let named: Vec<Point> = points
+            .into_iter()
+            .map(|point| self.keyed(point))
+            .filter(|point| seen.insert(point.clone()))
+            .collect();
+        let leases = self.watch_all(named)?;
+        let mailbox = Arc::new(Mailbox {
+            state: Mutex::new(MailState {
+                queue: VecDeque::with_capacity(leases.len()),
+                queued: vec![false; leases.len()],
+                folded: 0,
+                waker: None,
+            }),
+        });
+        for (index, lease) in leases.iter().enumerate() {
+            lease.listen(Listener {
+                mailbox: Arc::downgrade(&mailbox),
+                index,
+            });
+        }
+        Ok(Watch { leases, mailbox })
     }
 }
 

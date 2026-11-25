@@ -13189,6 +13189,15 @@ polled with the device's other polled points, every 10 s at most; at most
 it, taking none and sending nothing, and `WatchError::NoRuntime` a call
 outside a Tokio runtime.
 
+A front end that picks its own settings makes a `watch::hub::Hub` with
+its `WatchOptions` and takes a `Watch` from it with `Hub::stream(points)`:
+the same updates, on that hub's own range of subscriber process
+identifiers, refused with `WatchError::Full` past its `max_points` or
+`WatchError::Shut` once `Hub::shutdown` has run. The Python bindings run
+one such hub per watch, which their client's stop shuts down (#2561).
+`watch::Stream` re-exports `futures_core::Stream`, for polling a `Watch`
+without depending on futures-core.
+
 The latest value of each point wins: a consumer that falls behind gets one
 update a point with its latest value and state (`Watch::folded` counts the
 changes folded away), nothing grows past one pending update a point, and
@@ -13346,7 +13355,8 @@ several sessions and pick their settings): `Hub::new(client, options)`
 with `WatchOptions`, `Reads`, `Backoff`, `Fallback`, `MissingDevice` and
 `Lifetime`; `Hub::watch(point)` for a `Lease` with its `Snapshot` (the
 hub's own `hub::Phase` and `hub::Source`), its change signal (`Changes`)
-and `samples()` (`Samples`, `Sample`); `peek`, `seq`, `stats`
+and `samples()` (`Samples`, `Sample`); `Hub::stream(points)` for a
+`Watch`, as an application reads one; `peek`, `seq`, `stats`
 (`HubStats`) and `shutdown`; `renewal_margin`, `first` and the poll and
 row constants.
 
