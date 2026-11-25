@@ -57,7 +57,7 @@ impl DeviceCursor {
     }
 
     /// The row as a cursor carries it: the instance and the network, big
-    /// endian, then the MAC, at most 24 octets for an 18-octet MAC.
+    /// endian, then the MAC, at most [`Self::MAX_BYTES`] octets.
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(6 + self.mac.len());
         bytes.extend_from_slice(&self.instance.to_be_bytes());
@@ -66,11 +66,17 @@ impl DeviceCursor {
         bytes
     }
 
-    /// The row [`to_bytes`](Self::to_bytes) wrote, or `None` for bytes
-    /// too short to hold one. A signed cursor carries them, so they are
-    /// this server's own; their MAC is taken at any length, so no row the
-    /// table holds can end a walk.
+    /// The longest row [`to_bytes`](Self::to_bytes) writes: an instance,
+    /// a network and an 18-octet MAC, the longest any row of the table
+    /// holds (the client bounds every way in, #2606).
+    pub(crate) const MAX_BYTES: usize = 6 + BACnetAddress::MAX_MAC_LEN;
+
+    /// The row [`to_bytes`](Self::to_bytes) wrote, or `None` for bytes too
+    /// short to hold one or longer than [`Self::MAX_BYTES`].
     pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() > Self::MAX_BYTES {
+            return None;
+        }
         let (instance, rest) = bytes.split_first_chunk::<4>()?;
         let (network, mac) = rest.split_first_chunk::<2>()?;
         Some(Self {
@@ -401,7 +407,8 @@ mod tests {
             )
         };
         let longest = row(4_194_303, 65535, &[0xAB; 18]);
-        assert_eq!(longest.to_bytes().len(), 24);
+        assert_eq!(longest.to_bytes().len(), DeviceCursor::MAX_BYTES);
+        assert_eq!(DeviceCursor::MAX_BYTES, 24);
         for row in [
             row(1201, 0, &[10, 0, 0, 2, 0xBA, 0xC0]),
             row(0, 0, &[]),
@@ -410,5 +417,6 @@ mod tests {
             assert_eq!(DeviceCursor::from_bytes(&row.to_bytes()), Some(row));
         }
         assert_eq!(DeviceCursor::from_bytes(&[0; 5]), None);
+        assert_eq!(DeviceCursor::from_bytes(&[0; 25]), None);
     }
 }

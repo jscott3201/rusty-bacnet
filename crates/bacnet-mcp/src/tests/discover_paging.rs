@@ -273,6 +273,58 @@ async fn a_boundary_between_two_claimants_lists_each_once() {
         "{second}"
     );
     assert_eq!(instances(&second)[1..], [1201, 1202, 1203, 1204, 1205]);
+    // A page that ends on the table's last row, full, is the last page.
+    assert_eq!(second["truncated"], json!(false), "{second}");
+    assert!(second["next_cursor"].is_null(), "{second}");
+    lab.stop().await;
+}
+
+/// A cursor this server signed whose row key is shorter than a row's
+/// instance and network, or longer than the longest row (24 octets), is
+/// refused as an unusable cursor; the longest row's key is taken.
+#[tokio::test(start_paused = true)]
+async fn a_signed_row_key_of_the_wrong_length_is_refused() {
+    let mut lab = Lab::start(paged(3)).await;
+    lab.agent.initialize().await;
+    let Value::Object(args) = json!({ "send": false, "scope": "global" }) else {
+        unreachable!()
+    };
+    let mut longest = vec![0, 0x3F, 0xFF, 0xFF, 0xFF, 0xFF];
+    longest.extend([0xAB; 18]);
+    let mut too_long = longest.clone();
+    too_long.push(0);
+    for (key, usable) in [
+        (vec![0; 5], false),
+        (too_long, false),
+        (vec![0; 6], true),
+        (longest, true),
+    ] {
+        let cursor = crate::tools::next_after(lab.mcp.ctx(), "bacnet_discover", &args, &key);
+        let result = lab
+            .agent
+            .call(
+                "bacnet_discover",
+                json!({ "send": false, "scope": "global", "cursor": cursor }),
+            )
+            .await;
+        if usable {
+            ok(&result);
+            continue;
+        }
+        let error = failed(&result);
+        assert_eq!(
+            error["field"],
+            json!("cursor"),
+            "{} octets: {error}",
+            key.len()
+        );
+        assert_eq!(
+            error["message"],
+            json!("not a usable cursor: malformed"),
+            "{} octets",
+            key.len()
+        );
+    }
     lab.stop().await;
 }
 

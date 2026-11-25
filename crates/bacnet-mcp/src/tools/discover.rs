@@ -39,7 +39,11 @@ pub(super) const SPEC: Spec = Spec {
                   name. send: false only lists what is known. A later page (next_cursor) sends \
                   nothing and starts after the last device listed, by instance then address, \
                   so a device heard or lost between pages makes no other repeat or go missing. \
-                  Read-only.",
+                  A device first heard behind the cursor (a late answer to the first page's \
+                  Who-Is) isn't on this walk, and one that changes address on the cursor's \
+                  instance may come once per address or not at all. A total that differs \
+                  between pages means the table changed: list again from the first page with \
+                  send false to pick up the rest. Read-only.",
     input,
     output,
     idempotent: true,
@@ -241,10 +245,14 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let cap = ctx.policy.caps.text;
     let mut rows = Vec::new();
     let mut resume = None;
-    for (at, found) in devices.iter().enumerate().skip(first) {
-        if at >= first + page || (args.names && at > first && call.out_of_time()) {
-            // The page ends on the row before: the next starts after it.
-            resume = Some(DeviceCursor::of(&devices[at - 1]));
+    // The row this page last listed: a page lists at least one before it
+    // can end, so it always ends on a row, and the next starts after it.
+    let mut last = None;
+    for found in &devices[first..] {
+        if let Some(shown) = last
+            && (rows.len() >= page || (args.names && call.out_of_time()))
+        {
+            resume = Some(DeviceCursor::of(shown));
             break;
         }
         let instance = found.object_identifier.instance_number();
@@ -268,6 +276,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
             row["name"] = name.map_or(Value::Null, |name| envelope(&name, source, cap));
         }
         rows.push(row);
+        last = Some(found);
     }
     let mut body = json!({
         "devices": rows,
