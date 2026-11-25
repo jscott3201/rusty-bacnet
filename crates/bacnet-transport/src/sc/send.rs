@@ -25,10 +25,9 @@ impl<W: WebSocketPort> ScTransport<W> {
             return Err(crate::port::stopped());
         }
         if mac.len() != 6 {
-            return Err(Error::InvalidArgument(Refusal::with_value(
-                "BACnet/SC VMAC must be 6 bytes, got {}",
-                mac.len() as u64,
-            )));
+            return Err(Error::InvalidArgument(
+                Refusal::new("BACnet/SC VMAC must be 6 bytes, got {}").with_value(mac.len() as u64),
+            ));
         }
         let mut dest_vmac = [0u8; 6];
         dest_vmac.copy_from_slice(mac);

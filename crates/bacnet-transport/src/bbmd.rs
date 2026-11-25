@@ -146,11 +146,10 @@ fn address(ip: [u8; 4], port: u16) -> SocketAddrV4 {
 /// [`Error::InvalidConfig`] for rows it can't take.
 fn bdt_error(error: BdtError) -> Error {
     if let BdtError::Capacity { needed, available } = error {
-        return Error::LimitReached(Refusal::with_values(
-            "BDT size {} exceeds maximum of {} after self-entry insertion",
-            needed as u64,
-            available as u64,
-        ));
+        return Error::LimitReached(
+            Refusal::new("BDT size {} exceeds maximum of {} after self-entry insertion")
+                .with_values(needed as u64, available as u64),
+        );
     }
     Error::InvalidConfig(Refusal::text(match error {
         BdtError::Invalid { entry, reason } => {

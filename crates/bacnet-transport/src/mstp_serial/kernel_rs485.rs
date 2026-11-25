@@ -15,12 +15,13 @@ pub(super) fn configure(
 ) -> Result<(), Error> {
     if !delay_before_send_us.is_multiple_of(1_000) || !delay_after_send_us.is_multiple_of(1_000) {
         // The port keeps the delays: configuration, not a one-call argument.
-        return Err(Error::InvalidConfig(Refusal::with_values(
-            "Kernel RS-485 delays must be multiples of 1000 microseconds: \
+        return Err(Error::InvalidConfig(
+            Refusal::new(
+                "Kernel RS-485 delays must be multiples of 1000 microseconds: \
                  delay_before_send_us={}, delay_after_send_us={}",
-            delay_before_send_us.into(),
-            delay_after_send_us.into(),
-        )));
+            )
+            .with_values(delay_before_send_us.into(), delay_after_send_us.into()),
+        ));
     }
 
     let requested = SerialRs485 {

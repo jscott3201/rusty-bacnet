@@ -372,8 +372,8 @@ form for the link), `Error::Unsupported` for what this platform, build or
 component doesn't offer, and `Error::LimitReached` for a resource cap,
 including a one-holder resource (a lock, a lease, a seat) another holds. A
 `Refusal` is the text for a person and not API: a static label with as many
-numbers as it has placeholders (`Refusal::new`, `with_value`, `with_values`),
-built when displayed, or with `std` owned text where it names a run-time
+numbers as it has placeholders (`Refusal::new(label)`, then `.with_value(v)` or
+`.with_values(a, b)`, as for `RangeError`), built when displayed, or with `std` owned text where it names a run-time
 value (`Refusal::text`). A number or fact a caller acts on has a typed variant
 or field of its own, as `Error::SendTooLong` has. Each displays as its text
 alone; `Error::with_context` puts context in front and keeps the variant.
@@ -13935,7 +13935,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Unsupported(Refusal)` | Not offered on this platform, in this build, or by this kind of component |
 | `Error::LimitReached(Refusal)` | A resource cap reached: a full table, a counter run out, a one-holder resource another holds |
 | `Error::SendTooLong { length, limit }` | A send refused for its length before anything was written |
-| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (network, endpoint, client, server, objects), and the transport's I/O failures as text and MS/TP and Ethernet NPDU-length refusals until their own change |
+| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (network, endpoint, client, server, objects), and, until their own change, the transport's I/O failures as text, the MS/TP and Ethernet NPDU-length refusals, and B/IP's refusals of an NPDU too long, a socket that can't take the datagram now and a socket's own failure |
 | `Error::Transport(io_error)` | Transport I/O failure, and a stopped transport's send (`NotConnected`) |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
 | `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles) |

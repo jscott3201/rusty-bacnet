@@ -75,12 +75,13 @@ impl ScControlRateLimit {
     /// Check the limit before any transport I/O or state change.
     pub fn validate(&self) -> Result<(), Error> {
         if self.burst == 0 || self.burst > 4096 || self.per_second == 0 {
-            return Err(Error::InvalidConfig(Refusal::with_values(
-                "BACnet/SC control-message rate needs a burst in 1..=4096 and a \
+            return Err(Error::InvalidConfig(
+                Refusal::new(
+                    "BACnet/SC control-message rate needs a burst in 1..=4096 and a \
                      nonzero rate, got burst {} at {}/s",
-                self.burst.into(),
-                self.per_second.into(),
-            )));
+                )
+                .with_values(self.burst.into(), self.per_second.into()),
+            ));
         }
         Ok(())
     }

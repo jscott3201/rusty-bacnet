@@ -294,8 +294,8 @@ pub enum Error {
     },
 
     /// A call its component's lifecycle state turns down (#1833), such as
-    /// a second start, or a send on a transport that is not running or not
-    /// connected. Nothing was done. The [`Lifecycle`] says which state; the
+    /// a second start, or a send on a BACnet/SC link whose hub connection
+    /// isn't up. Nothing was done. The [`Lifecycle`] says which state; the
     /// [`Refusal`] is text for a person.
     #[error("{1}")]
     State(Lifecycle, Refusal),

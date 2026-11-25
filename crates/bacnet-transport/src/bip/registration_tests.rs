@@ -177,10 +177,11 @@ fn a_bbmd_that_also_registers_as_a_foreign_device_has_no_single_mode() {
         ttl: 60,
     });
     assert!(both.bip_port().is_none());
-    assert!(
-        both.retain_network_port_lease_internal(Arc::new(()))
-            .is_err()
-    );
+    // Not started and holding no lease: the refusal is the configuration's.
+    assert!(matches!(
+        both.retain_network_port_lease_internal(Arc::new(())),
+        Err(Error::InvalidConfig(_))
+    ));
 }
 
 fn foreign_config() -> ForeignDeviceConfig {

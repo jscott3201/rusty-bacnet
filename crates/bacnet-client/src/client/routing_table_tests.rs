@@ -345,36 +345,62 @@ async fn a_query_that_cannot_be_sent_is_refused_before_it_goes() {
     client.stop().await.unwrap();
 }
 
-/// A link that refuses the query for its own state, as a BACnet/SC link
-/// with no hub connection does, refuses the call as an invalid argument,
-/// which the bindings raise as `ValueError`, as when the link's refusal was
-/// an untyped encoding error (#1833).
+/// A link that refuses the query on its own side, as a BACnet/SC link with
+/// no hub connection does, refuses the call as an invalid argument, which
+/// the bindings raise as `ValueError`, as when the link's refusal was an
+/// untyped encoding error (#1833); each of the five local refusals does.
+/// A stopped link's not-connected error and a send too long stay send
+/// failures.
 #[tokio::test(start_paused = true)]
 async fn a_link_refusing_the_query_refuses_the_call() {
-    const NOT_CONNECTED: &str = "BACnet/SC transport not in Connected state";
-    let (_inbound, inbound_rx) = mpsc::channel(1);
-    let transport = TestTransport::builder()
-        .local_mac(&[1])
-        .inbound(inbound_rx)
-        .egress_limit(1486)
-        .on_send(|_| async {
-            Err(Error::state(
-                bacnet_types::error::Lifecycle::NotConnected,
-                NOT_CONNECTED,
-            ))
-        })
-        .build();
-    let mut client = BACnetClient::start(ClientConfig::default(), transport)
-        .await
-        .unwrap();
-    match client
-        .routing_table(&ROUTER, RoutingTableWait::default())
-        .await
-    {
-        Err(RoutingTableError::InvalidArgument(why)) => assert_eq!(why, NOT_CONNECTED),
-        other => panic!("{other:?}"),
+    use bacnet_types::error::Lifecycle;
+    const REFUSED: &str = "BACnet/SC transport not in Connected state";
+    let cases: [(fn() -> Error, bool); 7] = [
+        (|| Error::state(Lifecycle::NotConnected, REFUSED), true),
+        (|| Error::invalid_config(REFUSED), true),
+        (|| Error::invalid_argument(REFUSED), true),
+        (|| Error::unsupported(REFUSED), true),
+        (|| Error::limit_reached(REFUSED), true),
+        (
+            || {
+                Error::Transport(std::io::Error::new(
+                    std::io::ErrorKind::NotConnected,
+                    "stopped",
+                ))
+            },
+            false,
+        ),
+        (
+            || Error::SendTooLong {
+                length: 600,
+                limit: 480,
+            },
+            false,
+        ),
+    ];
+    for (refusal, argument) in cases {
+        let (_inbound, inbound_rx) = mpsc::channel(1);
+        let transport = TestTransport::builder()
+            .local_mac(&[1])
+            .inbound(inbound_rx)
+            .egress_limit(1486)
+            .on_send(move |_| async move { Err(refusal()) })
+            .build();
+        let mut client = BACnetClient::start(ClientConfig::default(), transport)
+            .await
+            .unwrap();
+        let result = client
+            .routing_table(&ROUTER, RoutingTableWait::default())
+            .await;
+        match result {
+            Err(RoutingTableError::InvalidArgument(why)) if argument => {
+                assert_eq!(why, REFUSED);
+            }
+            Err(RoutingTableError::Send(_)) if !argument => {}
+            other => panic!("{:?}: {other:?}", refusal()),
+        }
+        client.stop().await.unwrap();
     }
-    client.stop().await.unwrap();
 }
 
 async fn i_am_router(inbound: &mpsc::Sender<ReceivedNpdu>, from: &[u8]) {

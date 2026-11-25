@@ -430,20 +430,19 @@ impl MstpConfig {
     fn config_error(&self, error: ConfigError) -> Error {
         let message = match error {
             ConfigError::MaxMasterOutOfRange { value } => {
-                return Error::InvalidConfig(Refusal::with_value(
-                    "MS/TP max_master {} exceeds MAX_MASTER (127)",
-                    value.into(),
-                ));
+                return Error::InvalidConfig(
+                    Refusal::new("MS/TP max_master {} exceeds MAX_MASTER (127)")
+                        .with_value(value.into()),
+                );
             }
             ConfigError::StationExceedsMaxMaster {
                 station,
                 max_master,
             } => {
-                return Error::InvalidConfig(Refusal::with_values(
-                    "MS/TP this_station {} exceeds configured max_master ({})",
-                    station.into(),
-                    max_master.into(),
-                ));
+                return Error::InvalidConfig(
+                    Refusal::new("MS/TP this_station {} exceeds configured max_master ({})")
+                        .with_values(station.into(), max_master.into()),
+                );
             }
             ConfigError::MaxInfoFramesOutOfRange { .. } => {
                 return Error::invalid_config("MS/TP max_info_frames must be in 1..=255");

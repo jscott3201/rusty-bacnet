@@ -134,11 +134,10 @@ impl ScNpduAdmissionPolicy {
     /// rejected rather than coerced.
     pub fn validate(&self) -> Result<(), Error> {
         if self.per_origin_limit == 0 || self.per_origin_limit > SC_NPDU_QUEUE_CAPACITY {
-            return Err(Error::InvalidConfig(Refusal::with_values(
-                "BACnet/SC NPDU per-origin limit must be in 1..={}, got {}",
-                SC_NPDU_QUEUE_CAPACITY as u64,
-                self.per_origin_limit as u64,
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new("BACnet/SC NPDU per-origin limit must be in 1..={}, got {}")
+                    .with_values(SC_NPDU_QUEUE_CAPACITY as u64, self.per_origin_limit as u64),
+            ));
         }
         self.control_rate.validate()
     }
