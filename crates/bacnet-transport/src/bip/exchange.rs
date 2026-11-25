@@ -11,7 +11,7 @@ use std::time::Duration;
 use bacnet_bip_codec::{self as codec, BdtEntries, BvlcFunction, BvlcResultCode, Bvll};
 use bacnet_bip_core::Duration as CoreDuration;
 use bacnet_bip_core::node::{ExchangeId, ExchangeRefusal, LocalFailure};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle};
 use bacnet_types::sync::MutexExt;
 use bytes::BytesMut;
 use tokio::sync::oneshot;
@@ -204,7 +204,7 @@ impl Exchange {
                 .get_mut(&self.id)
                 .and_then(|waiter| waiter.early.take());
             let outcome =
-                early.unwrap_or_else(|| Err(Error::Encoding("BVLC response lost".into())));
+                early.unwrap_or_else(|| Err(Error::state(Lifecycle::Closed, "BVLC response lost")));
             state.complete(self.id, outcome);
         });
     }
@@ -239,14 +239,15 @@ impl NodeHandle {
 /// ends it then, or keeps it from starting.
 ///
 /// A read given up, waiting for its answer or not yet started, fails with
-/// [`BvlcExchangeError::Transport`] carrying an [`Error::Encoding`] that
-/// says it was given up; one that had already ended keeps its own outcome.
+/// [`BvlcExchangeError::Transport`] carrying an [`Error::State`] with
+/// [`Lifecycle::Closed`] that says it was given up; one that had already
+/// ended keeps its own outcome.
 #[derive(Clone, Debug, Default)]
 pub struct BvlcGiveUp(Arc<Mutex<GiveUp>>);
 
 /// The error of a read given up through its [`BvlcGiveUp`].
 fn given_up() -> BvlcExchangeError {
-    BvlcExchangeError::Transport(Error::Encoding("BVLC table read given up".into()))
+    BvlcExchangeError::Transport(Error::state(Lifecycle::Closed, "BVLC table read given up"))
 }
 
 /// Where a [`BvlcGiveUp`]'s read is.

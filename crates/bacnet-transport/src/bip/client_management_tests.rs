@@ -426,7 +426,7 @@ async fn bvlc_encode_and_send_errors_release_slot_without_fabricated_timeouts() 
     ];
     assert!(matches!(
         transport.write_bdt(&target, &entries).await,
-        Err(BvlcExchangeError::Transport(Error::Encoding(_)))
+        Err(BvlcExchangeError::Transport(Error::Encode(_)))
     ));
     // A broadcast without socket permission fails locally; UDP port zero
     // does not provide the same send-error behavior on every platform.

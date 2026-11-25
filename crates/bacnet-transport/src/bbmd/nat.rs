@@ -18,7 +18,7 @@ use std::net::SocketAddrV4;
 use bacnet_bip_codec::BdtEntries;
 use bacnet_bip_core::bbmd::{BdtError, MAX_PRIVATE_RANGES, Nat};
 pub use bacnet_bip_core::bbmd::{NatError, PrivateRange};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 
 use super::{BbmdState, bdt_error};
 
@@ -81,9 +81,9 @@ pub(super) fn check_global(global: SocketAddrV4, allow_loopback: bool) -> Result
         || ip.is_multicast()
         || (ip.is_loopback() && !allow_loopback)
     {
-        return Err(Error::Encoding(format!(
+        return Err(Error::InvalidConfig(Refusal::text(format!(
             "NAT global address {global} is not a unicast address and port"
-        )));
+        ))));
     }
     Ok(())
 }
@@ -116,12 +116,14 @@ impl NatSetting {
         if !enabled {
             return Ok(None);
         }
-        let global =
-            global.ok_or_else(|| Error::Encoding("NAT traversal needs a global address".into()))?;
+        let global = global.ok_or(Error::invalid_config(
+            "NAT traversal needs a global address",
+        ))?;
         let mut nat = Nat::new(global);
         for range in &self.private_ranges {
-            nat.add_private_range(*range)
-                .map_err(|e| Error::Encoding(format!("NAT private ranges: {e}")))?;
+            nat.add_private_range(*range).map_err(|e| {
+                Error::InvalidConfig(Refusal::text(format!("NAT private ranges: {e}")))
+            })?;
         }
         Ok(Some(nat))
     }
@@ -130,10 +132,10 @@ impl NatSetting {
 /// The host's error for a NAT setting the core refused.
 fn nat_error(error: BdtError) -> Error {
     match error {
-        BdtError::Invalid { entry, reason } => Error::Encoding(format!(
+        BdtError::Invalid { entry, reason } => Error::InvalidConfig(Refusal::text(format!(
             "NAT global address {} refused: {reason}",
             entry.address
-        )),
+        ))),
         other => bdt_error(other),
     }
 }

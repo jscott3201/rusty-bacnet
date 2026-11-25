@@ -568,7 +568,7 @@ pub trait TransportPort: Send + Sync {
     /// [`Error::UnsupportedTransport`] naming this transport's data link when
     /// it is not BACnet/IP. A transport that reports no data link (a router's
     /// application port, a test double, or a wrapper that doesn't forward
-    /// [`data_link`](Self::data_link)) refuses with [`Error::Encoding`],
+    /// [`data_link`](Self::data_link)) refuses with [`Error::Unsupported`],
     /// since it can't say which link it is.
     fn as_bip(&self) -> Result<&crate::bip::BipTransport, Error> {
         self.bip_transport().ok_or_else(|| match self.data_link() {
@@ -576,7 +576,7 @@ pub trait TransportPort: Send + Sync {
                 required: DataLink::Bip,
                 actual,
             },
-            None => Error::Encoding("transport reports no B/IP link or data link".into()),
+            None => Error::unsupported("transport reports no B/IP link or data link"),
         })
     }
 
@@ -644,8 +644,8 @@ pub trait TransportPort: Send + Sync {
         &mut self,
         _lease: std::sync::Arc<()>,
     ) -> Result<(), Error> {
-        Err(Error::Encoding(
-            "transport cannot retain a registered B/IP port".into(),
+        Err(Error::unsupported(
+            "transport cannot retain a registered B/IP port",
         ))
     }
 

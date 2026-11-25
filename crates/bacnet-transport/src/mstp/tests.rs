@@ -66,7 +66,7 @@ fn configuration_is_validated_by_the_core_rules() {
     for (config, message) in cases {
         let error = config.validate().unwrap_err();
         assert!(
-            matches!(&error, Error::Encoding(text) if text.contains(message)),
+            matches!(&error, Error::InvalidConfig(text) if text.to_string().contains(message)),
             "{config:?}: {error}"
         );
     }
@@ -131,8 +131,17 @@ async fn transport_start_stop_and_sends_outside_a_run() {
     transport.send_broadcast(&[1, 0]).await.unwrap();
     transport.send_unicast(&[1, 0], &[5]).await.unwrap();
     let error = transport.send_unicast(&[1], &[1, 2, 3, 4, 5, 6]).await;
-    assert!(matches!(error, Err(Error::Encoding(_))));
-    assert!(transport.start().await.is_err(), "a second start");
+    assert!(matches!(error, Err(Error::InvalidArgument(_))));
+    assert!(
+        matches!(
+            transport.start().await,
+            Err(Error::State(
+                bacnet_types::error::Lifecycle::AlreadyStarted,
+                _
+            ))
+        ),
+        "a second start"
+    );
     transport.stop().await.unwrap();
     assert!(transport.send_broadcast(&[1, 0]).await.is_err());
 }
@@ -482,7 +491,9 @@ async fn a_zero_echo_grace_is_refused() {
     let zero = Echo::Full {
         grace: Duration::ZERO,
     };
-    assert!(matches!(zero.validate(), Err(Error::Encoding(text)) if text.contains("echo grace")));
+    assert!(
+        matches!(zero.validate(), Err(Error::InvalidConfig(text)) if text.to_string().contains("echo grace"))
+    );
     let (serial, _peer) = LoopbackSerial::pair();
     let mut transport = MstpTransport::new(serial.with_echo(zero), config(3, 127));
     assert!(transport.start().await.is_err());

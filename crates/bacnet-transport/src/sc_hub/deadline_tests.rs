@@ -49,7 +49,7 @@ fn hub_timeout_configuration_checks_phase_boundaries() {
             assert!(
                 matches!(
                     ScHubHandshakeTimeouts::new(values[0], values[1], values[2]),
-                    Err(bacnet_types::error::Error::Encoding(_))
+                    Err(bacnet_types::error::Error::InvalidConfig(_))
                 ),
                 "phase {phase}: {invalid:?}"
             );

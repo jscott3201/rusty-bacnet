@@ -1,8 +1,8 @@
 //! BDT validation regression tests for issue #529 (owner security policy).
 //!
 //! Exercises `BbmdState::set_bdt` as the central commit choke point:
-//! invalid or conflicting candidates must fail transactionally with an
-//! `Error::Encoding`-style error and preserve the committed table.
+//! invalid or conflicting candidates must fail transactionally with
+//! `Error::InvalidConfig` and preserve the committed table.
 
 use super::{BbmdState, BdtEntry, ForeignDevicePolicy};
 use bacnet_bip_codec::BvlcResultCode;
@@ -28,10 +28,10 @@ fn err_text(err: Error) -> String {
     format!("{err}")
 }
 
-fn assert_encoding_error(err: Error, fragment: &str) -> String {
+fn assert_invalid_config(err: Error, fragment: &str) -> String {
     assert!(
-        matches!(err, Error::Encoding(_)),
-        "expected Error::Encoding, got: {err:?}"
+        matches!(err, Error::InvalidConfig(_)),
+        "expected Error::InvalidConfig, got: {err:?}"
     );
     let text = err_text(err);
     assert!(
@@ -51,7 +51,7 @@ fn rejects_zero_port_and_preserves_table() {
     let err = bbmd
         .set_bdt(vec![entry([10, 0, 0, 6], 0, MASK_32)])
         .unwrap_err();
-    assert_encoding_error(err, "port");
+    assert_invalid_config(err, "port");
     assert_eq!(bbmd.bdt(), before.as_slice());
 }
 
@@ -61,7 +61,7 @@ fn rejects_unspecified_ip() {
     let err = bbmd
         .set_bdt(vec![entry([0, 0, 0, 0], PORT, MASK_32)])
         .unwrap_err();
-    assert_encoding_error(err, "unspecified");
+    assert_invalid_config(err, "unspecified");
     assert!(bbmd.bdt().is_empty());
 }
 
@@ -70,7 +70,7 @@ fn rejects_multicast_ip() {
     let mut bbmd = make_bbmd();
     for ip in [[224, 0, 0, 1], [239, 255, 255, 250]] {
         let err = bbmd.set_bdt(vec![entry(ip, PORT, MASK_32)]).unwrap_err();
-        assert_encoding_error(err, "multicast");
+        assert_invalid_config(err, "multicast");
         assert!(bbmd.bdt().is_empty(), "multicast {ip:?} must not commit");
     }
 }
@@ -81,7 +81,7 @@ fn rejects_limited_broadcast_ip() {
     let err = bbmd
         .set_bdt(vec![entry([255, 255, 255, 255], PORT, MASK_32)])
         .unwrap_err();
-    assert_encoding_error(err, "limited");
+    assert_invalid_config(err, "limited");
     assert!(bbmd.bdt().is_empty());
 }
 
@@ -91,7 +91,7 @@ fn rejects_non_contiguous_mask() {
     let err = bbmd
         .set_bdt(vec![entry([10, 0, 0, 5], PORT, [255, 0, 255, 0])])
         .unwrap_err();
-    assert_encoding_error(err, "contiguous");
+    assert_invalid_config(err, "contiguous");
     assert!(bbmd.bdt().is_empty());
 }
 
@@ -102,7 +102,7 @@ fn rejects_subnet_network_address() {
     let err = bbmd
         .set_bdt(vec![entry([192, 168, 1, 0], PORT, MASK_24)])
         .unwrap_err();
-    let text = assert_encoding_error(err, "network address");
+    let text = assert_invalid_config(err, "network address");
     assert!(
         text.contains("192.168.1.0") || text.contains("network"),
         "{text:?}"
@@ -117,7 +117,7 @@ fn rejects_subnet_broadcast_address() {
     let err = bbmd
         .set_bdt(vec![entry([192, 168, 1, 255], PORT, MASK_24)])
         .unwrap_err();
-    assert_encoding_error(err, "broadcast");
+    assert_invalid_config(err, "broadcast");
     assert!(bbmd.bdt().is_empty());
 }
 
@@ -128,7 +128,7 @@ fn rejects_slash_zero_derived_limited_broadcast() {
     let err = bbmd
         .set_bdt(vec![entry([10, 0, 0, 5], PORT, [0, 0, 0, 0])])
         .unwrap_err();
-    assert_encoding_error(err, "limited");
+    assert_invalid_config(err, "limited");
     assert!(bbmd.bdt().is_empty());
 }
 
@@ -144,7 +144,7 @@ fn rejects_same_endpoint_different_mask_conflict_and_preserves_table() {
         entry([10, 0, 0, 9], PORT, MASK_24),
     ];
     let err = bbmd.set_bdt(conflicting).unwrap_err();
-    assert_encoding_error(err, "conflict");
+    assert_invalid_config(err, "conflict");
     assert_eq!(
         bbmd.bdt(),
         before.as_slice(),
@@ -335,13 +335,13 @@ fn rejects_wide_broadcast_prefix_under_slash_8() {
     let err7 = bbmd
         .set_bdt(vec![entry([10, 0, 0, 5], PORT, [254, 0, 0, 0])])
         .unwrap_err();
-    assert_encoding_error(err7, "wide");
+    assert_invalid_config(err7, "wide");
 
     // /1 mask (128.0.0.0) is wider than /8 and must be rejected
     let err1 = bbmd
         .set_bdt(vec![entry([10, 0, 0, 5], PORT, [128, 0, 0, 0])])
         .unwrap_err();
-    assert_encoding_error(err1, "wide");
+    assert_invalid_config(err1, "wide");
 
     // Valid /8 mask (255.0.0.0) with non-255.255.255.255 directed broadcast is accepted
     let ok8 = entry([10, 0, 0, 1], PORT, [255, 0, 0, 0]);
@@ -356,7 +356,7 @@ fn rejects_resolved_limited_broadcast_at_slash_8() {
     let err = bbmd
         .set_bdt(vec![entry([255, 0, 0, 1], PORT, [255, 0, 0, 0])])
         .unwrap_err();
-    assert_encoding_error(err, "limited");
+    assert_invalid_config(err, "limited");
 }
 
 #[test]

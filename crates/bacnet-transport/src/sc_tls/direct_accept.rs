@@ -282,18 +282,15 @@ impl DirectListener {
         config: DirectAcceptConfig,
         membership: Arc<DirectMembership>,
     ) -> Result<(Self, mpsc::Receiver<ReceivedNpdu>), Error> {
-        config.max_established_peers.checked_mul(2).ok_or_else(|| {
-            Error::Encoding("direct accepted-peer limit overflows physical socket capacity".into())
-        })?;
+        let refused = |label| Err(Error::invalid_config(label));
+        if config.max_established_peers.checked_mul(2).is_none() {
+            return refused("direct accepted-peer limit overflows physical socket capacity");
+        }
         if config.device_uuid == [0; 16] {
-            return Err(Error::Encoding(
-                "direct accept device UUID is all-zero".into(),
-            ));
+            return refused("direct accept device UUID is all-zero");
         }
         if config.local_vmac == [0; 6] || config.local_vmac == [0xFF; 6] {
-            return Err(Error::Encoding(
-                "direct accept VMAC is zero or broadcast".into(),
-            ));
+            return refused("direct accept VMAC is zero or broadcast");
         }
         config.npdu_admission_policy.validate()?;
         validate_timeout(
@@ -392,8 +389,8 @@ impl Drop for DirectListener {
 /// computed in every connection task, far from overflowing.
 fn validate_timeout(name: &str, timeout: Duration, max: Duration) -> Result<(), Error> {
     if timeout.is_zero() || timeout > max {
-        return Err(Error::Encoding(format!(
-            "direct accept {name} timeout must be above zero and at most {max:?}"
+        return Err(Error::InvalidConfig(bacnet_types::error::Refusal::text(
+            format!("direct accept {name} timeout must be above zero and at most {max:?}"),
         )));
     }
     Ok(())

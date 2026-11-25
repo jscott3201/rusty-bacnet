@@ -11,8 +11,9 @@ use bytes::BytesMut;
 /// field at fault: 0 for the datagram as a whole, its type octet or a
 /// B/IPv6 address, 1 for the function, 2 for the Length field, 4 for the
 /// payload. The text is the codec's, octets in upper-case hexadecimal
-/// (#1803). Encode failures become [`Error::Encoding`], and so does an error
-/// the codec adds later, until it is placed here.
+/// (#1803). Encode failures become a static [`Error::Encode`] with the
+/// codec's text (#1833), and so does an error the codec adds later, under a
+/// label that says so, until it is placed here.
 pub fn bvll6_error(error: Bvll6Error) -> Error {
     let (offset, label, values) = match error {
         Bvll6Error::TooShort { length } => (
@@ -56,7 +57,30 @@ pub fn bvll6_error(error: Bvll6Error) -> Error {
             );
             return crate::bvll::payload_refusal(label, function.to_raw(), length);
         }
-        _ => return Error::Encoding(error.to_string()),
+        Bvll6Error::TooLong { length } => {
+            return crate::bvll::encode_refusal(
+                "BVLC6 message of {} octets exceeds the 16-bit BVLC6 length field",
+                [length, 0],
+            );
+        }
+        Bvll6Error::UndefinedResultCode { code } => {
+            return crate::bvll::encode_refusal(
+                "BVLC6 result code {:#06X} is not defined",
+                [code.into(), 0],
+            );
+        }
+        Bvll6Error::BufferExhausted { needed, available } => {
+            return crate::bvll::encode_refusal(
+                "buffer exhausted: need {}, have {}",
+                [needed, available],
+            );
+        }
+        _ => {
+            return crate::bvll::encode_refusal(
+                "BVLC6 codec error not mapped by the transport",
+                [0, 0],
+            );
+        }
     };
     let mut refused = DecodeError::new(DecodingKind::InvalidEncoding, offset, label);
     refused.values = values;
@@ -179,11 +203,14 @@ mod tests {
                 available: 0,
             },
         ];
+        // An encoder's refusal, with the codec's own text.
         for error in encoding {
-            assert!(
-                matches!(bvll6_error(error), Error::Encoding(ref message) if *message == error.to_string()),
-                "{error:?}"
-            );
+            match bvll6_error(error) {
+                Error::Encode(refused) => {
+                    assert_eq!(refused.message().to_string(), error.to_string());
+                }
+                other => panic!("{error:?} mapped to {other:?}"),
+            }
         }
     }
 
@@ -198,7 +225,7 @@ mod tests {
         };
         assert!(matches!(
             encode_bvll6(&mut buf, &undefined),
-            Err(Error::Encoding(_))
+            Err(Error::Encode(_))
         ));
         assert_eq!(buf[..], [0xAA]);
     }

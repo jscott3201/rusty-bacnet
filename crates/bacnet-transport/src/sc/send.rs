@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle, Refusal};
 
 use crate::port::DataAttribute;
 use crate::sc_frame::{BROADCAST_VMAC, Vmac, encode_sc_message};
@@ -25,10 +25,9 @@ impl<W: WebSocketPort> ScTransport<W> {
             return Err(crate::port::stopped());
         }
         if mac.len() != 6 {
-            return Err(Error::Encoding(format!(
-                "BACnet/SC VMAC must be 6 bytes, got {}",
-                mac.len()
-            )));
+            return Err(Error::InvalidArgument(
+                Refusal::new("BACnet/SC VMAC must be 6 bytes, got {}").with_value(mac.len() as u64),
+            ));
         }
         let mut dest_vmac = [0u8; 6];
         dest_vmac.copy_from_slice(mac);
@@ -125,8 +124,9 @@ impl<W: WebSocketPort> ScTransport<W> {
             };
             let mut c = conn.lock().await;
             if c.state != ScConnectionState::Connected {
-                return Err(Error::Encoding(
-                    "BACnet/SC transport not in Connected state".into(),
+                return Err(Error::state(
+                    Lifecycle::NotConnected,
+                    "BACnet/SC transport not in Connected state",
                 ));
             }
             if npdu.len() > c.hub_max_npdu_length as usize {

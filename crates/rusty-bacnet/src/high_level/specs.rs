@@ -14,7 +14,7 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyFloat, PyInt, PyList, PyString, PyTuple};
+use pyo3::types::{PyBool, PyByteArray, PyBytes, PyFloat, PyInt, PyList, PyString, PyTuple};
 
 use super::discovered::PyDiscovered;
 use crate::types::{PyDiscoveredDevice, PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
@@ -214,6 +214,22 @@ pub(crate) fn property_item(item: &Bound<'_, PyAny>) -> PyResult<PropertyRef> {
             parts.len()
         ))),
     }
+}
+
+/// A TypeError for a str, bytes or bytearray where a list is meant, since
+/// iterating one would read it a character or an octet at a time.
+/// `example` is a list of the argument's items, as Python writes it.
+pub(super) fn refuse_text(value: &Bound<'_, PyAny>, name: &str, example: &str) -> PyResult<()> {
+    if value.is_instance_of::<PyString>()
+        || value.is_instance_of::<PyBytes>()
+        || value.is_instance_of::<PyByteArray>()
+    {
+        return Err(PyTypeError::new_err(format!(
+            "{name} is a list such as {example}, not {}: put one in a list",
+            type_name(value)
+        )));
+    }
+    Ok(())
 }
 
 /// A value to write: text in the value grammar, read for the property's

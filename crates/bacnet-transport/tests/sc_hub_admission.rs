@@ -97,7 +97,7 @@ fn checked_limits_reject_zero_and_overflow() {
     for (clients, handshakes) in [(0, 1), (1, 0), (0, 0)] {
         let error = ScHubAdmissionLimits::new(clients, handshakes).unwrap_err();
         assert!(
-            matches!(error, bacnet_types::error::Error::Encoding(ref message) if message.contains("admission")),
+            matches!(error, bacnet_types::error::Error::InvalidConfig(ref message) if message.to_string().contains("admission")),
             "{error}"
         );
     }
@@ -141,7 +141,7 @@ async fn admission_limits_rejected_before_bind_on_every_start_api() {
             .err()
             .expect("invalid admission limits must fail");
             assert!(
-                matches!(error, bacnet_types::error::Error::Encoding(ref text) if text.contains("admission")),
+                matches!(error, bacnet_types::error::Error::InvalidConfig(ref text) if text.to_string().contains("admission")),
                 "API {api}, limits {limits:?}: expected admission error, got {error}"
             );
         }

@@ -23,7 +23,7 @@ use super::points::{ReadInventory, cov_label, objects_arg, once_each, options};
 use super::preview::PyWritePreview;
 use super::priorities::{PyWritten, priority_arg};
 use super::readings::{PyDeviceSummary, PyObjectList, PyReadings};
-use super::specs::{Named, object_arg, property_arg, property_item, value_arg};
+use super::specs::{Named, object_arg, property_arg, property_item, refuse_text, value_arg};
 use super::value::PyValue;
 use super::walk::PyPointIterator;
 use super::{OpsClient, OpsDevice};
@@ -258,16 +258,22 @@ impl PyDevice {
     /// device that stops answering part way ends the read with what was
     /// read, and `Readings.stopped` says so; so does a later request the
     /// client's own link fails (a route lost, a send refused). A read
-    /// raises only when nothing could be read: a bad item TypeError or
-    /// ValueError (ALL, REQUIRED and OPTIONAL among them: `read_object`
-    /// reads those) before the Future is made; on await a device that
-    /// can't be placed BacnetLookupError, and a link that fails the first
-    /// request what a single read raises for it.
+    /// raises only when nothing could be read: `properties` as one str,
+    /// bytes or bytearray, or a bad item, TypeError or ValueError (ALL,
+    /// REQUIRED and OPTIONAL among them: `read_object` reads those) before
+    /// the Future is made; on await a device that can't be placed
+    /// BacnetLookupError, and a link that fails the first request what a
+    /// single read raises for it.
     fn read_many<'py>(
         &self,
         py: Python<'py>,
         properties: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        refuse_text(
+            properties,
+            "properties",
+            "['ai:1', 'ao:2 priority-array[8]']",
+        )?;
         let wanted = properties
             .try_iter()?
             .map(|item| property_item(&item?))
@@ -285,10 +291,11 @@ impl PyDevice {
     /// Read one object's properties in one ReadPropertyMultiple (or by
     /// ReadProperty each once the device has refused that), as `Readings`:
     /// every property when `properties` is left out, else those listed
-    /// (`PropertyIdentifier`s or text, whole properties only). A property
-    /// the device refused has its `Reading.error` set. A device that stops
-    /// answering raises BacnetTimeoutError and keeps nothing, since an
-    /// object's rows go together: `stopped` is always None here.
+    /// (`PropertyIdentifier`s or text, whole properties only; one str,
+    /// bytes or bytearray raises TypeError before the Future is made). A
+    /// property the device refused has its `Reading.error` set. A device
+    /// that stops answering raises BacnetTimeoutError and keeps nothing,
+    /// since an object's rows go together: `stopped` is always None here.
     #[pyo3(signature = (object, properties=None))]
     fn read_object<'py>(
         &self,
@@ -300,6 +307,7 @@ impl PyDevice {
         let listed = properties
             .filter(|properties| !properties.is_none())
             .map(|properties| {
+                refuse_text(properties, "properties", "['pv', 'units']")?;
                 properties
                     .try_iter()?
                     .map(|item| {

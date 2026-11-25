@@ -550,7 +550,7 @@ async fn restart_that_would_overflow_the_bdt_fails_with_context_and_keeps_the_st
         };
         let err = started.unwrap_err();
 
-        assert!(matches!(err, Error::Encoding(_)), "{err:?}");
+        assert!(matches!(err, Error::LimitReached(_)), "{err:?}");
         let text = err.to_string();
         let moved = format!(
             "BBMD restart moved its own B/IP address from {LAN}:{port} to {OTHER_LAN}:{port}"

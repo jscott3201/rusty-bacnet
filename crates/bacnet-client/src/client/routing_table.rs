@@ -360,6 +360,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
             .map_err(|error| match error {
                 Error::Encoding(message) => RoutingTableError::InvalidArgument(message),
+                // The link's own refusals, typed out of `Encoding` (#1833),
+                // as before.
+                Error::State(_, refusal)
+                | Error::InvalidConfig(refusal)
+                | Error::InvalidArgument(refusal)
+                | Error::Unsupported(refusal)
+                | Error::LimitReached(refusal) => {
+                    RoutingTableError::InvalidArgument(refusal.to_string())
+                }
                 Error::Transport(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
                     RoutingTableError::InvalidArgument(e.to_string())
                 }

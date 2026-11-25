@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bacnet_types::sync::MutexExt;
 use tracing::{debug, warn};
 
@@ -52,7 +52,12 @@ impl PersistedGroup {
     }
 
     fn decode(data: &[u8]) -> Result<Self, Error> {
-        let invalid = |why: &str| Error::Encoding(format!("persisted B/IP multicast group: {why}"));
+        let invalid = |why: &'static str| {
+            Error::from(
+                DecodeError::new(DecodingKind::InvalidEncoding, 0, why)
+                    .within("persisted B/IP multicast group"),
+            )
+        };
         let [t0, t1, t2, t3, a, b, c, d, ttl, high, low] =
             <[u8; LENGTH]>::try_from(data).map_err(|_| invalid("wrong length"))?;
         if [t0, t1, t2, t3] != *TAG {

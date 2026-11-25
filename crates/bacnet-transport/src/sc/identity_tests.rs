@@ -135,7 +135,7 @@ async fn reject_identity(vmac: Vmac, uuid: Option<[u8; 16]>, expected: &str) {
     for _ in 0..2 {
         let error = transport.start().await.unwrap_err();
         assert!(
-            matches!(&error, Error::Encoding(message) if message == expected),
+            matches!(&error, Error::InvalidConfig(message) if message.to_string() == expected),
             "expected {expected}, got {error:?}; counts={counts:?}; state={:?}; connection={}",
             *states.borrow(),
             transport.connection().is_some()
@@ -220,15 +220,19 @@ async fn reconnect_then_heartbeat_then_identity_error_precedence() {
         });
     let states = transport.connection_state_changes();
     let error = transport.start().await.unwrap_err();
-    assert!(matches!(error, Error::OutOfRange(message) if message.contains("reconnect")));
+    assert!(
+        matches!(error, Error::InvalidConfig(message) if message.to_string().contains("reconnect"))
+    );
     assert_untouched(&transport, &counts, &states, [0; 6], [0; 16]);
     transport = transport.with_reconnect(ScReconnectConfig::default());
     let error = transport.start().await.unwrap_err();
-    assert!(matches!(error, Error::OutOfRange(message) if message.contains("heartbeat interval")));
+    assert!(
+        matches!(error, Error::InvalidConfig(message) if message.to_string().contains("heartbeat interval"))
+    );
     assert_untouched(&transport, &counts, &states, [0; 6], [0; 16]);
     transport = transport.with_heartbeat_interval_ms(30_000);
     let error = transport.start().await.unwrap_err();
-    assert!(matches!(error, Error::Encoding(message) if message == UUID_ERROR));
+    assert!(matches!(error, Error::InvalidConfig(message) if message.to_string() == UUID_ERROR));
     assert_untouched(&transport, &counts, &states, [0; 6], [0; 16]);
 }
 

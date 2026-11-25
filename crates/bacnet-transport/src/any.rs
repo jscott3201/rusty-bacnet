@@ -126,8 +126,8 @@ impl TransportPort for AnyTransport {
             Self::Bip(transport) => transport.retain_network_port_lease_internal(lease),
             #[cfg(feature = "ipv6")]
             Self::Bip6(transport) => transport.retain_network_port_lease_internal(lease),
-            _ => Err(Error::Encoding(
-                "registered ports require B/IP or B/IPv6".into(),
+            _ => Err(Error::unsupported(
+                "registered ports require B/IP or B/IPv6",
             )),
         }
     }

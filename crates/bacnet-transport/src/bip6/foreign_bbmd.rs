@@ -6,7 +6,7 @@ use std::fmt;
 use std::net::{Ipv6Addr, SocketAddrV6};
 use std::str::FromStr;
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 
 use super::port::DEFAULT_BACNET6_PORT;
 use crate::bbmd_lookup::BbmdName;
@@ -102,10 +102,10 @@ impl FromStr for Bip6ForeignBbmd {
     /// to say.
     fn from_str(text: &str) -> Result<Self, Error> {
         let refused = || {
-            Error::Encoding(format!(
+            Error::InvalidArgument(Refusal::text(format!(
                 "'{text}' is not a B/IPv6 BBMD address ('ip', '[ip]' or '[ip]:port'), \
                  host name or host name with :port"
-            ))
+            )))
         };
         if let Ok(address) = text.parse::<SocketAddrV6>() {
             if address.port() == 0 || address.scope_id() != 0 || address.flowinfo() != 0 {

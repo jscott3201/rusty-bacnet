@@ -21,11 +21,11 @@ use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyString, PyTuple};
+use pyo3::types::{PyString, PyTuple};
 
 use super::errors::ops_err;
 use super::readings::{PyDeviceSummary, row_error};
-use super::specs::{object_arg, property_part};
+use super::specs::{object_arg, property_part, refuse_text};
 use super::value::PyValue;
 use crate::types::{IntEnumValue, PyObjectIdentifier, PyObjectType, PyPropertyIdentifier};
 
@@ -86,18 +86,6 @@ fn object_type(item: &Bound<'_, PyAny>) -> PyResult<ObjectType> {
         "an object type is an ObjectType or text such as 'ai', not {}",
         item.get_type().name()?
     )))
-}
-
-/// A TypeError for a str or bytes where a list of them is meant, since
-/// iterating one would read it a character at a time.
-pub(super) fn refuse_text(value: &Bound<'_, PyAny>, name: &str, example: &str) -> PyResult<()> {
-    if value.is_instance_of::<PyString>() || value.is_instance_of::<PyBytes>() {
-        return Err(PyTypeError::new_err(format!(
-            "{name} is a list such as {example}, not {}: put one in a list",
-            value.get_type().name()?
-        )));
-    }
-    Ok(())
 }
 
 /// An `objects` argument: an iterable of `ObjectIdentifier`s or their text,

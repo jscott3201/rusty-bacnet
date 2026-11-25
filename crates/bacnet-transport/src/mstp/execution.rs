@@ -2,7 +2,7 @@
 //! its own, which on Linux can run under `SCHED_FIFO` and be pinned to CPUs
 //! (#501).
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle, Refusal};
 use tokio::sync::oneshot;
 
 /// Execution placement for an MS/TP transport, independent of master-node settings.
@@ -159,7 +159,7 @@ impl MstpThreadConfig {
     ///
     /// # Errors
     ///
-    /// [`Error::Encoding`] for a priority outside
+    /// [`Error::InvalidConfig`] for a priority outside
     /// [`MIN_REALTIME_PRIORITY`]..=[`MAX_REALTIME_PRIORITY`] or a CPU
     /// number of [`MAX_CPUS`] or more. On any OS but Linux, either setting
     /// at all is [`Error::Transport`] with
@@ -168,16 +168,16 @@ impl MstpThreadConfig {
         if let Some(priority) = self.realtime_priority
             && !(MIN_REALTIME_PRIORITY..=MAX_REALTIME_PRIORITY).contains(&priority)
         {
-            return Err(Error::Encoding(format!(
+            return Err(Error::InvalidConfig(Refusal::text(format!(
                 "MS/TP thread realtime_priority {priority} is outside \
                      {MIN_REALTIME_PRIORITY}..={MAX_REALTIME_PRIORITY}"
-            )));
+            ))));
         }
         if let Some(cpu) = self.cpu_affinity.iter().find(|cpu| **cpu >= MAX_CPUS) {
-            return Err(Error::Encoding(format!(
-                "MS/TP thread cpu_affinity names CPU {cpu}; CPUs are numbered 0 to {}",
-                MAX_CPUS - 1
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new("MS/TP thread cpu_affinity names CPU {}; CPUs are numbered 0 to {}")
+                    .with_values(*cpu as u64, (MAX_CPUS - 1) as u64),
+            ));
         }
         if !cfg!(target_os = "linux") && !self.is_default() {
             return Err(Error::Transport(std::io::Error::new(
@@ -419,9 +419,9 @@ impl DedicatedRuntime {
                 let _ = finished_tx.send(());
             })
             .map_err(Error::Transport)?;
-        let (handle, status) = started_rx
-            .await
-            .map_err(|_| Error::Encoding("MS/TP execution thread failed to start".into()))??;
+        let (handle, status) = started_rx.await.map_err(|_| {
+            Error::state(Lifecycle::Closed, "MS/TP execution thread failed to start")
+        })??;
         Ok((
             Self {
                 handle,

@@ -342,10 +342,10 @@ impl std::error::Error for ScTlsConfigError {
 }
 
 impl From<ScTlsConfigError> for bacnet_types::error::Error {
-    /// The error as text, for code that reports one error type for the
-    /// whole stack. Match on [`ScTlsConfigError`] itself to tell the cases
-    /// apart.
+    /// The error as [`InvalidConfig`](bacnet_types::error::Error::InvalidConfig)
+    /// with its text, for code that reports one error type for the whole
+    /// stack. Match on [`ScTlsConfigError`] itself to tell the cases apart.
     fn from(error: ScTlsConfigError) -> Self {
-        Self::Encoding(error.to_string())
+        Self::InvalidConfig(bacnet_types::error::Refusal::text(error.to_string()))
     }
 }

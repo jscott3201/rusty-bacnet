@@ -54,7 +54,9 @@ async fn bip_builder_foreign_device_validates_settings_before_io() {
             .build()
             .await;
         match result {
-            Err(Error::Encoding(message)) => assert!(message.contains("renewal interval")),
+            Err(Error::InvalidConfig(refusal)) => {
+                assert!(refusal.to_string().contains("renewal interval"));
+            }
             Err(other) => panic!("expected local configuration error, got {other}"),
             Ok(mut client) => {
                 client.stop().await.unwrap();

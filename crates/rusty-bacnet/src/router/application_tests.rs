@@ -77,7 +77,7 @@ async fn the_wrapped_port_is_the_router_port_and_has_no_link() {
     let (mut router, slots) = Slots::split(Application::Client, started);
     let mut transport = AppTransport::Router(slots.take(Role::Client).unwrap());
     assert!(transport.link().is_none());
-    assert!(matches!(transport.as_bip(), Err(Error::Encoding(_))));
+    assert!(matches!(transport.as_bip(), Err(Error::Unsupported(_))));
     assert!(transport.bip_transport().is_none());
     assert!(transport.bip6_transport().is_none());
     // The longest of the router's MACs is the port's own.

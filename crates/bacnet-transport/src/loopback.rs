@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 
 use bacnet_types::MacAddr;
 use bacnet_types::data_link::DataLink;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle};
 use bacnet_types::sync::MutexExt;
 use bytes::Bytes;
 use tokio::sync::mpsc;
@@ -219,7 +219,7 @@ impl LoopbackTransport {
 }
 
 fn peer_closed() -> Error {
-    Error::Encoding("loopback peer channel closed".to_string())
+    Error::state(Lifecycle::Closed, "loopback peer channel closed")
 }
 
 impl TransportPort for LoopbackTransport {
@@ -228,9 +228,12 @@ impl TransportPort for LoopbackTransport {
     }
 
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.self_rx
-            .take()
-            .ok_or_else(|| Error::Encoding("loopback transport already started".to_string()))
+        self.self_rx.take().ok_or_else(|| {
+            Error::state(
+                Lifecycle::AlreadyStarted,
+                "loopback transport already started",
+            )
+        })
     }
 
     /// Refuse every later send (#2617). The loopback has no task and holds
@@ -336,7 +339,10 @@ mod tests {
     async fn start_twice_fails() {
         let (mut a, _b) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
         let _rx = a.start().await.unwrap();
-        assert!(a.start().await.is_err());
+        assert!(matches!(
+            a.start().await,
+            Err(Error::State(Lifecycle::AlreadyStarted, _))
+        ));
     }
 
     #[tokio::test]
