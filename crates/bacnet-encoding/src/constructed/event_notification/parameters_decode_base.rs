@@ -1,6 +1,10 @@
 //! Test only: `parameters_decode` as it was before its per-choice split
 //! (#2558), copied unchanged below this header from dev at 8229308cd, so
 //! `parameters_decode_differential` can hold the split to it.
+//!
+//! Delete this copy and that test when a choice's decoder next changes
+//! what it decodes on purpose, or at 0.16.0, whichever comes first. Until
+//! then it must keep compiling against `NotificationParameters`.
 
 use super::decode_helpers::{
     closing_tag_start, decode_context_status_flags, decode_context_u16, decode_context_value,

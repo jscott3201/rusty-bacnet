@@ -436,6 +436,12 @@ pub(super) fn apply_updates(
 // its 568, this takes 1,872 and `evaluate_enrollment` 1,512, both less than
 // the 2,736 the whole pass took in one frame, and the image is 288 octets
 // smaller than with this inlined (384 smaller than before #2558).
+//
+// `evaluate_enrollment` stays a frame of its own only because the compiler
+// chooses not to inline it. A toolchain that inlines it into the deadline
+// handler grows that handler's frame as this did before the attribute.
+// The image has no stack budget to catch that, and riscv32imac's frames
+// weren't measured.
 #[inline(never)]
 pub(super) fn apply_updates_for_delivery(
     db: &mut ObjectDatabase,

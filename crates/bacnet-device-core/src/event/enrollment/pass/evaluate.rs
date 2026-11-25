@@ -1,7 +1,7 @@
 //! One Event Enrollment's evaluation in a pass, phase by phase: what the
 //! pass reads from the enrollment, its local configuration, the monitored
-//! object and the fault algorithm, up to the monitored value that
-//! [`detect`](super::detect) hands to the event algorithm. A phase that
+//! object and the fault algorithm, up to the monitored value, which it
+//! hands to [`detect`](super::detect) for the event algorithm. A phase that
 //! settles the enrollment's outcome for this pass stages it in `updates` and
 //! returns `None`, and the evaluation ends there.
 

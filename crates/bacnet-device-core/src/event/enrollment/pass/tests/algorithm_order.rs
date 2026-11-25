@@ -100,6 +100,8 @@ fn out_of_range() -> BACnetEventParameter {
     }
 }
 
+/// Limits at the setpoint plus 15 and less 10: unequal, so a value between
+/// the two readings of them tells the high and low limits apart.
 fn floating_limit(setpoint: ObjectIdentifier) -> BACnetEventParameter {
     BACnetEventParameter::FloatingLimit {
         time_delay: 0,
@@ -108,7 +110,7 @@ fn floating_limit(setpoint: ObjectIdentifier) -> BACnetEventParameter {
             PRESENT_VALUE.to_raw(),
         ),
         low_diff_limit: 10.0,
-        high_diff_limit: 10.0,
+        high_diff_limit: 15.0,
         deadband: 2.0,
     }
 }
@@ -171,8 +173,10 @@ fn out_of_range_commits_in_database_order() {
 #[test]
 fn floating_limit_commits_in_database_order() {
     let mut db = ObjectDatabase::new();
-    let high = analog(&mut db, 1, 65.0);
-    let low = analog(&mut db, 2, 35.0);
+    // Over 65 and under 40; with the limits swapped (60 and 35), 38 would
+    // stay NORMAL.
+    let high = analog(&mut db, 1, 70.0);
+    let low = analog(&mut db, 2, 38.0);
     let setpoint = analog(&mut db, 3, 50.0);
     let params = floating_limit(setpoint);
     let ee2 = enroll(
@@ -199,13 +203,13 @@ fn floating_limit_commits_in_database_order() {
             (ee1, low, EventState::NORMAL, EventState::LOW_LIMIT),
         ]
     );
-    let floating = |reference_value| NotificationParameters::FloatingLimit {
+    let floating = |reference_value, error_limit| NotificationParameters::FloatingLimit {
         reference_value,
         status_flags: StatusFlags::empty(),
         setpoint_value: 50.0,
-        error_limit: 10.0,
+        error_limit,
     };
-    assert_eq!(values, [floating(65.0), floating(35.0)]);
+    assert_eq!(values, [floating(70.0, 15.0), floating(38.0, 10.0)]);
 }
 
 #[test]
@@ -351,7 +355,7 @@ fn change_of_value_commits_in_database_order() {
 #[test]
 fn mixed_algorithms_commit_in_database_order() {
     let mut db = ObjectDatabase::new();
-    let high = analog(&mut db, 1, 65.0);
+    let high = analog(&mut db, 1, 70.0);
     let low = analog(&mut db, 2, 10.0);
     let setpoint = analog(&mut db, 3, 50.0);
     let active = binary(&mut db, 1, 1);
