@@ -41,7 +41,7 @@ use tokio::sync::broadcast::error::RecvError;
 use super::OpsDevice;
 use super::device::Core;
 use super::errors::ops_err;
-use super::specs::property_item;
+use super::specs::{property_item, refuse_text};
 use super::watch_update::PyWatchUpdate;
 use crate::app_transport::AppTransport;
 use crate::client::{END_WAIT, WatchTie};
@@ -260,7 +260,7 @@ fn poll_arg(interval: &Bound<'_, PyAny>) -> PyResult<Duration> {
 /// once, in order. Not one str; at least one point, at most
 /// [`MAX_WATCHED`]; no property that stands for many.
 pub(super) fn points_arg(points: &Bound<'_, PyAny>) -> PyResult<Vec<PropertyRef>> {
-    super::points::refuse_text(points, "points", "['ai:1', 'ao:2 priority-array[8]']")?;
+    refuse_text(points, "points", "['ai:1', 'ao:2 priority-array[8]']")?;
     let mut wanted: Vec<PropertyRef> = Vec::new();
     for item in points.try_iter()? {
         let point = property_item(&item?)?;

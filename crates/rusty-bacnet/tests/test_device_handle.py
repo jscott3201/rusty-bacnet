@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import copy
+import enum
 import inspect
 import pickle
 import unittest
@@ -209,6 +210,71 @@ class ReadTests(Lab):
             self.assertIsNotNone(everything.get(AO, "priority-array"))
             with self.assertRaisesRegex(ValueError, "whole properties"):
                 dev.read_object("ao:1", ["priority-array[8]"])
+
+    async def test_one_str_or_bytes_for_the_list_raises_before_the_future(self) -> None:
+        # A str iterates as its characters and bytes as ints: each is
+        # refused whole, naming the fix, before anything is sent.
+        async with client() as c:
+            dev = await c.device(self.address)
+            for call, example in (
+                (dev.read_many, r"\['ai:1', 'ao:2 priority-array\[8\]'\]"),
+                (lambda bad: dev.read_object("ao:1", bad), r"\['pv', 'units'\]"),
+            ):
+                for bad in ("ao:1 pv", "", b"ao:1 pv", bytearray(b"ao:1 pv")):
+                    kind = type(bad).__name__
+                    with self.subTest(example=example, properties=bad), self.assertRaisesRegex(
+                        TypeError,
+                        f"^properties is a list such as {example}, not {kind}: put one in a list$",
+                    ):
+                        call(bad)
+        self.assertEqual(self.relay.requests, [])
+
+    async def test_any_iterable_names_the_properties(self) -> None:
+        async with client() as c:
+            dev = await c.device(self.address)
+            many = ["ao:1 pv", ("ao:1", "units")]
+            for given in (many, tuple(many), (item for item in many)):
+                with self.subTest(properties=type(given).__name__):
+                    read = await dev.read_many(given)
+                    self.assertEqual([row.property_id for row in read],
+                                     [PV, PropertyIdentifier.UNITS])
+            some = ["pv", PropertyIdentifier.UNITS]
+            for given in (some, tuple(some), (item for item in some)):
+                with self.subTest(properties=type(given).__name__):
+                    read = await dev.read_object("ao:1", given)
+                    self.assertEqual([row.property_id for row in read],
+                                     [PV, PropertyIdentifier.UNITS])
+        self.assertEqual(self.relay.services, [READ_PROPERTY_MULTIPLE] * 6)
+
+    async def test_a_str_subclass_is_an_item_never_the_list(self) -> None:
+        class Text(str):
+            pass
+
+        texts = [(Text("ao:1 pv"), Text("pv"))]
+        if hasattr(enum, "StrEnum"):  # Python 3.11 on
+
+            class Point(enum.StrEnum):
+                DAMPER = "ao:1 pv"
+                VALUE = "pv"
+
+            texts.append((Point.DAMPER, Point.VALUE))
+        async with client() as c:
+            dev = await c.device(self.address)
+            for point, property in texts:
+                kind = type(point).__name__
+                with self.subTest(kind=kind):
+                    with self.assertRaisesRegex(TypeError, f"not {kind}: put one in a list$"):
+                        dev.read_many(point)
+                    with self.assertRaisesRegex(TypeError, f"not {kind}: put one in a list$"):
+                        dev.read_object("ao:1", property)
+                    self.assertEqual(self.relay.requests, [])
+                    read = await dev.read_many([point])
+                    self.assertEqual([(row.object_id, row.property_id) for row in read],
+                                     [(AO, PV)])
+                    read = await dev.read_object("ao:1", [property])
+                    self.assertEqual([(row.object_id, row.property_id) for row in read],
+                                     [(AO, PV)])
+                    self.relay.requests.clear()
 
     async def test_objects_and_summary(self) -> None:
         async with client() as c:

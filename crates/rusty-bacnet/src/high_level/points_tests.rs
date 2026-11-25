@@ -187,7 +187,16 @@ fn the_options_are_checked_when_the_call_is_made() {
                 .types
                 .is_none()
         );
-        for bad in ["'ai'", "b'ai'", "5", "[5]", "[None]"] {
+        // Text is refused whole, never read a character or an octet at a time.
+        for bad in ["'ai'", "b'ai'", "bytearray(b'ai')"] {
+            let error = options(Some(&eval(py, bad)), false, false, false).unwrap_err();
+            assert!(error.is_instance_of::<PyTypeError>(py), "{bad}: {error}");
+            assert!(
+                error.to_string().ends_with(": put one in a list"),
+                "{bad}: {error}"
+            );
+        }
+        for bad in ["5", "[5]", "[None]"] {
             let error = options(Some(&eval(py, bad)), false, false, false).unwrap_err();
             assert!(error.is_instance_of::<PyTypeError>(py), "{bad}: {error}");
         }
