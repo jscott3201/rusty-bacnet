@@ -133,8 +133,9 @@ pub enum RoutingTableError {
         /// Network reports lost before the collector read them.
         lost: u64,
     },
-    /// The query was not sent: the link failed or the client's node had
-    /// stopped.
+    /// The query was not sent: the link failed, refused it for its own
+    /// state, configuration, platform or limits (a BACnet/SC link not
+    /// connected to its hub, say), or the client's node had stopped.
     Send(Error),
 }
 
@@ -360,18 +361,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
             .map_err(|error| match error {
                 Error::Encoding(message) => RoutingTableError::InvalidArgument(message),
-                // The link's own refusals, typed out of `Encoding` (#1833),
-                // as before.
-                Error::State(_, refusal)
-                | Error::InvalidConfig(refusal)
-                | Error::InvalidArgument(refusal)
-                | Error::Unsupported(refusal)
-                | Error::LimitReached(refusal) => {
+                // The router's address in a form the link refuses.
+                Error::InvalidArgument(refusal) => {
                     RoutingTableError::InvalidArgument(refusal.to_string())
                 }
                 Error::Transport(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
                     RoutingTableError::InvalidArgument(e.to_string())
                 }
+                // The link's state, configuration, platform or limits
+                // refused the send, which no argument of the call caused,
+                // such as a BACnet/SC link not connected to its hub (#1833).
                 other => RoutingTableError::Send(other),
             })?;
         let mut last_ack = start;
