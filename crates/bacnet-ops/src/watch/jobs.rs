@@ -33,7 +33,7 @@ use super::shared::Shared;
 use super::support::{CovSupport, fills_table, refuses_service};
 use super::{Point, Watched};
 use crate::client::batch::{self, BatchRow, Missing};
-use crate::client::{device_error, failed_locally, unreachable};
+use crate::client::{device_error, failed_locally, timed_out, unreachable};
 use crate::device::{DeviceAddress, path_to};
 use crate::format::{PropertyError, RawRow};
 
@@ -450,18 +450,39 @@ pub(super) async fn confirm<T: TransportPort + 'static>(
     address: DeviceAddress,
     watched: u32,
 ) -> Answer {
+    confirm_by(inner, address, watched, silence).await
+}
+
+/// [`confirm`], asked whether device `watched` is still at `address` now
+/// that another address names itself so (#2812): only a request timing out
+/// is its silence ([`left_silence`]).
+pub(super) async fn still_there<T: TransportPort + 'static>(
+    inner: Arc<Inner<T>>,
+    address: DeviceAddress,
+    watched: u32,
+) -> Answer {
+    confirm_by(inner, address, watched, left_silence).await
+}
+
+/// [`confirm`], with `quiet` saying which errors are no answer.
+async fn confirm_by<T: TransportPort + 'static>(
+    inner: Arc<Inner<T>>,
+    address: DeviceAddress,
+    watched: u32,
+    quiet: fn(&Error) -> Option<Answer>,
+) -> Answer {
     let client = &inner.client;
     if !client.wildcard_refused(&address) {
         match client.ask_instance(&address).await {
             Ok(instance) => return Answer::Is(instance),
             Err(error) => {
-                if let Some(answer) = silence(&error) {
+                if let Some(answer) = quiet(&error) {
                     return answer;
                 }
             }
         }
     }
-    probe(inner, address, watched).await
+    probe_by(inner, address, watched, quiet).await
 }
 
 /// The instance the device at `address` names itself, read by the
@@ -486,6 +507,16 @@ pub(super) async fn probe<T: TransportPort + 'static>(
     address: DeviceAddress,
     instance: u32,
 ) -> Answer {
+    probe_by(inner, address, instance, silence).await
+}
+
+/// [`probe`], with `quiet` saying which errors are no answer.
+async fn probe_by<T: TransportPort + 'static>(
+    inner: Arc<Inner<T>>,
+    address: DeviceAddress,
+    instance: u32,
+    quiet: fn(&Error) -> Option<Answer>,
+) -> Answer {
     let Ok(device) = ObjectIdentifier::new(ObjectType::DEVICE, instance) else {
         return Answer::Unclear;
     };
@@ -497,7 +528,7 @@ pub(super) async fn probe<T: TransportPort + 'static>(
         .map_err(device_error)
     {
         Ok(raw) => named(&[(property, Ok(raw))]).map_or(Answer::Unclear, Answer::Has),
-        Err(error) => silence(&error).unwrap_or(match error.remote() {
+        Err(error) => quiet(&error).unwrap_or(match error.remote() {
             Some(RemoteError::Error { code, .. }) if code == ErrorCode::UNKNOWN_OBJECT => {
                 Answer::Not
             }
@@ -512,6 +543,20 @@ fn silence(error: &Error) -> Option<Answer> {
     if unreachable(error) {
         Some(Answer::Silent)
     } else if failed_locally(error) {
+        Some(Answer::Failed)
+    } else {
+        None
+    }
+}
+
+/// [`silence`] for whether a device left its address: only the request
+/// timing out is its silence. A router's reject (which anyone on a routed
+/// path can send), the link failing the send, or another of the client's
+/// own failures says nothing of the device ([`Answer::Failed`]).
+pub(super) fn left_silence(error: &Error) -> Option<Answer> {
+    if timed_out(error) {
+        Some(Answer::Silent)
+    } else if unreachable(error) || failed_locally(error) {
         Some(Answer::Failed)
     } else {
         None

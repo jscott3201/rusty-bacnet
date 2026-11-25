@@ -60,7 +60,7 @@ pub(super) const READ_PROPERTY: u8 = 12;
 /// How the client's link misbehaves.
 #[derive(Default)]
 pub(super) struct Quirks {
-    /// Nothing sent arrives.
+    /// Nothing sent arrives, but at [`ELSEWHERE`].
     pub(super) muted: AtomicBool,
     /// The link refuses to send a ReadProperty or an RPM: nothing leaves,
     /// and the send fails, as a router's application refuses a station
@@ -121,7 +121,20 @@ pub(super) struct Quirks {
     /// unknown-object, as from a device that answers a missing instance
     /// with another error.
     pub(super) deny_missing: AtomicBool,
+    /// The instance a device at [`ELSEWHERE`] names itself when its Device
+    /// object is read by the wildcard instance, as one a device is said to
+    /// have moved to; `None`, or any other request there: no answer.
+    pub(super) elsewhere: Mutex<Option<u32>>,
+    /// How a ReadProperty of the lab device's own Device object's
+    /// Object_Identifier, by its instance, is answered in place of its
+    /// server: with this instance's identifier, as by a device that ignores
+    /// the instance asked for, or with this error.
+    pub(super) own_device: Mutex<Option<Result<u32, ErrorCode>>>,
 }
+
+/// The MAC of a station on the client's link besides the lab device's,
+/// which only [`Quirks::elsewhere`] answers for.
+pub(super) const ELSEWHERE: u8 = 9;
 
 /// Device,4194303 as a context-tagged object identifier in a request.
 const WILDCARD_DEVICE: [u8; 5] = [0x0C, 0x02, 0x3F, 0xFF, 0xFF];
@@ -174,7 +187,7 @@ fn take(counter: &AtomicU8) -> bool {
 pub(super) fn link(
     inner: LoopbackTransport,
     quirks: Arc<Quirks>,
-    sent: Arc<Mutex<Vec<(u8, Instant)>>>,
+    sent: Arc<Mutex<Vec<(u8, Instant, u8)>>>,
 ) -> (TestTransport, TestTransportHandle) {
     let builder = TestTransport::builder()
         .inner(inner)
@@ -262,15 +275,74 @@ fn answer_routed(handle: &TestTransportHandle, apdu: Vec<u8>) {
 }
 
 fn inject(handle: &TestTransportHandle, frame: Vec<u8>) {
+    inject_from(handle, frame, 2);
+}
+
+/// `frame` from the station at MAC `station`.
+fn inject_from(handle: &TestTransportHandle, frame: Vec<u8>, station: u8) {
     if let Some(inject) = handle.inbound() {
         let _ = inject.try_send(ReceivedNpdu::unverified(
             Bytes::from(frame),
-            MacAddr::from_slice(&[2]),
+            MacAddr::from_slice(&[station]),
             false,
             Vec::new(),
             None,
         ));
     }
+}
+
+/// Answer request `invoke`, a read of the lab device's own Device object's
+/// Object_Identifier, as [`Quirks::own_device`] says.
+fn answer_own(handle: &TestTransportHandle, invoke: u8, own: Result<u32, ErrorCode>) {
+    let read = READ_PROPERTY;
+    let code = match own {
+        Ok(instance) => {
+            let mut value = BytesMut::new();
+            let named = oid(ObjectType::DEVICE, instance);
+            bacnet_encoding::primitives::encode_app_object_id(&mut value, &named);
+            let mut ack = BytesMut::from(&[0x30, invoke, read][..]);
+            ReadPropertyACK {
+                object_identifier: oid(ObjectType::DEVICE, LAB),
+                property_identifier: PropertyIdentifier::OBJECT_IDENTIFIER,
+                property_array_index: None,
+                property_value: value.to_vec(),
+            }
+            .encode(&mut ack)
+            .unwrap();
+            return answer(handle, ack.to_vec());
+        }
+        Err(code) => code,
+    };
+    let class = match code == ErrorCode::UNKNOWN_OBJECT {
+        true => ErrorClass::OBJECT,
+        false => ErrorClass::PROPERTY,
+    };
+    let (class, code) = (class.to_raw() as u8, code.to_raw() as u8);
+    answer(handle, vec![0x50, invoke, read, 0x91, class, 0x91, code]);
+}
+
+/// Answer a request to [`ELSEWHERE`] as [`Quirks::elsewhere`] says.
+fn answer_elsewhere(handle: &TestTransportHandle, quirks: &Quirks, apdu: &[u8]) {
+    let wildcard = apdu.windows(5).any(|bytes| bytes == WILDCARD_DEVICE);
+    let Some(named) = *quirks.elsewhere.lock().unwrap() else {
+        return;
+    };
+    if apdu[3] != READ_PROPERTY || !wildcard {
+        return;
+    }
+    let device = oid(ObjectType::DEVICE, named);
+    let mut value = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_object_id(&mut value, &device);
+    let mut ack = BytesMut::from(&[1, 0, 0x30, apdu[2], READ_PROPERTY][..]);
+    ReadPropertyACK {
+        object_identifier: device,
+        property_identifier: PropertyIdentifier::OBJECT_IDENTIFIER,
+        property_array_index: None,
+        property_value: value.to_vec(),
+    }
+    .encode(&mut ack)
+    .unwrap();
+    inject_from(handle, ack.to_vec(), ELSEWHERE);
 }
 
 /// The value the quirks answer `request` with in place of the device: its
@@ -320,7 +392,7 @@ fn faked(quirks: &Quirks, request: &ReadPropertyRequest) -> Option<Vec<u8>> {
 fn forwards(
     frame: &bacnet_transport::test_transport::SentFrame,
     quirks: &Quirks,
-    sent: &Mutex<Vec<(u8, Instant)>>,
+    sent: &Mutex<Vec<(u8, Instant, u8)>>,
     handle: &TestTransportHandle,
 ) -> bool {
     let Ok(decoded) = decode_npdu(frame.npdu.clone()) else {
@@ -329,7 +401,14 @@ fn forwards(
     let apdu = &decoded.payload;
     if !decoded.is_network_message() && apdu.len() >= 4 && apdu[0] >> 4 == 0 {
         let (invoke, service) = (apdu[2], apdu[3]);
-        sent.lock().unwrap().push((service, Instant::now()));
+        let station = frame.mac.first().copied().unwrap_or_default();
+        sent.lock()
+            .unwrap()
+            .push((service, Instant::now(), station));
+        if frame.mac.as_slice() == [ELSEWHERE] {
+            answer_elsewhere(handle, quirks, apdu);
+            return false;
+        }
         if quirks.muted.load(Ordering::Relaxed) {
             return false;
         }
@@ -353,6 +432,15 @@ fn forwards(
                     answer_routed(handle, vec![0x50, invoke, service, 0x91, class, 0x91, code]);
                 }
             }
+            return false;
+        }
+        if service == READ_PROPERTY
+            && let Some(own) = *quirks.own_device.lock().unwrap()
+            && let Ok(request) = ReadPropertyRequest::decode(&apdu[4..])
+            && request.object_identifier == oid(ObjectType::DEVICE, LAB)
+            && request.property_identifier == PropertyIdentifier::OBJECT_IDENTIFIER
+        {
+            answer_own(handle, invoke, own);
             return false;
         }
         if service == READ_PROPERTY
@@ -451,7 +539,7 @@ pub(super) struct Lab {
     pub(super) client: Client<TestTransport>,
     pub(super) server: BACnetServer<LoopbackTransport>,
     pub(super) quirks: Arc<Quirks>,
-    sent: Arc<Mutex<Vec<(u8, Instant)>>>,
+    sent: Arc<Mutex<Vec<(u8, Instant, u8)>>>,
     /// Frames from the lab device's MAC, as another device there sends.
     link: TestTransportHandle,
 }
@@ -622,7 +710,18 @@ impl Lab {
             .lock()
             .unwrap()
             .iter()
-            .filter(|(s, at)| *s == service && *at >= from)
+            .filter(|(s, at, _)| *s == service && *at >= from)
+            .count()
+    }
+
+    /// Confirmed requests of `service` sent to the station at MAC
+    /// `station` (the lab device's 2, or [`ELSEWHERE`]), at or after `from`.
+    pub(super) fn sent_to(&self, service: u8, station: u8, from: Instant) -> usize {
+        self.sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(s, at, to)| *s == service && *at >= from && *to == station)
             .count()
     }
 
@@ -632,14 +731,19 @@ impl Lab {
             .lock()
             .unwrap()
             .iter()
-            .filter(|(s, _)| *s == service)
-            .map(|(_, at)| *at)
+            .filter(|(s, _, _)| *s == service)
+            .map(|(_, at, _)| *at)
             .collect()
     }
 
     /// Every confirmed request's service, in order.
     pub(super) fn services(&self) -> Vec<u8> {
-        self.sent.lock().unwrap().iter().map(|(s, _)| *s).collect()
+        self.sent
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(s, _, _)| *s)
+            .collect()
     }
 
     /// The device's subscription table.
