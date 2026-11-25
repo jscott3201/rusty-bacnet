@@ -671,7 +671,7 @@ async fn event_options_defaults_bounds_and_builders() {
     assert_eq!(options.cov_channel_capacity, DEFAULT_COV_CHANNEL_CAPACITY);
     for capacity in [0, MAX_EVENT_CHANNEL_CAPACITY + 1, usize::MAX] {
         let options = ClientOptions::default().with_event_channel_capacity(capacity);
-        assert!(matches!(options.validate(), Err(Error::Encoding(_))));
+        assert!(matches!(options.validate(), Err(Error::InvalidConfig(_))));
         let (input, _) = mpsc::channel(1);
         let (_, receiver) = mpsc::channel(1);
         assert!(matches!(
@@ -681,7 +681,7 @@ async fn event_options_defaults_bounds_and_builders() {
                 options,
             )
             .await,
-            Err(Error::Encoding(_))
+            Err(Error::InvalidConfig(_))
         ));
     }
     assert_eq!(

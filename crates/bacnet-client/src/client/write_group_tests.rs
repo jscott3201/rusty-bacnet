@@ -124,7 +124,7 @@ async fn write_group_refuses_a_bad_request_or_network_before_sending() {
             .write_group(Broadcast::Network(network), &request())
             .await;
         assert!(
-            matches!(result, Err(Error::Encoding(_))),
+            matches!(result, Err(Error::InvalidArgument(_))),
             "{network}: {result:?}"
         );
     }

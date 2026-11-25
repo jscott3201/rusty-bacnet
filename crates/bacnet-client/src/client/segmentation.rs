@@ -417,9 +417,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 tokio::select! {
                     biased;
                     response = &mut *response_rx => {
-                        return Ok(WindowAck::Terminal(response.map_err(|_| {
-                            Error::Encoding("TSM response channel closed".into())
-                        })));
+                        return Ok(WindowAck::Terminal(
+                            response.map_err(|_| super::requests::request_cut_off()),
+                        ));
                     }
                     // A transaction that left the TSM resolves the
                     // response arm above; progress stays silent.
@@ -477,7 +477,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         return Ok(WindowAck::Ack(ack));
                         }
                         None => {
-                        return Err(Error::Encoding("SegmentAck channel closed".into()));
+                        return Err(Error::state(
+                            Lifecycle::Closed,
+                            "SegmentAck channel closed",
+                        ));
                         }
                     },
                     _ = &mut segment_timer => {

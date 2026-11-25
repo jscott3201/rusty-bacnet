@@ -1,4 +1,5 @@
-use super::{LengthBoundedBy, check_transmittable_length};
+use super::{LengthBoundedBy, check_transmittable_length, is_request_cut_off, request_cut_off};
+use bacnet_types::error::{Error, Lifecycle};
 
 #[test]
 fn conformant_lengths_pass() {
@@ -37,6 +38,11 @@ fn the_error_names_the_binding_term() {
         "peer is the binding term here, got: {peer_bound}"
     );
 
+    assert!(
+        matches!(peer_bound, Error::InvalidConfig(_)),
+        "{peer_bound:?}"
+    );
+
     let transport_bound =
         check_transmittable_length(LengthBoundedBy::DiscoveredPeer(1476), 48).unwrap_err();
     assert!(
@@ -47,4 +53,26 @@ fn the_error_names_the_binding_term() {
         !transport_bound.to_string().contains("peer's advertised"),
         "must not blame a conformant peer for the transport's limit"
     );
+}
+
+/// The error a request ends with when the client stops under it is a
+/// closed refusal that [`is_request_cut_off`] tells from the client's other
+/// closed refusals, a closed seat's and a SegmentAck channel's (#1833), and
+/// from the untyped text it replaces: the Python binding raises its own
+/// message for this one alone.
+#[test]
+fn a_cut_off_request_is_told_from_other_closed_refusals() {
+    let cut_off = request_cut_off();
+    assert!(matches!(cut_off, Error::State(Lifecycle::Closed, _)));
+    assert_eq!(cut_off.to_string(), "TSM response channel closed");
+    assert!(is_request_cut_off(&cut_off));
+    for other in [
+        crate::client::seat::seat_closed(),
+        Error::state(Lifecycle::Closed, "SegmentAck channel closed"),
+        Error::state(Lifecycle::Stopping, "TSM response channel closed"),
+        Error::invalid_config("TSM response channel closed"),
+        Error::Encoding("TSM response channel closed".into()),
+    ] {
+        assert!(!is_request_cut_off(&other), "{other:?}");
+    }
 }

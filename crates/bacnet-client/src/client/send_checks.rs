@@ -67,11 +67,11 @@ fn remote_broadcast_refused(
     } else {
         String::new()
     };
-    Error::Encoding(format!(
+    Error::InvalidArgument(Refusal::text(format!(
         "a confirmed request goes to one station, and {station} on network {network} is \
          {form}{marked}; a remote broadcast or multicast carries only an unconfirmed \
          request{way}"
-    ))
+    )))
 }
 
 /// Refuse a named router with no MAC: it names no router, and the client
@@ -80,10 +80,9 @@ fn remote_broadcast_refused(
 #[inline]
 pub(super) fn check_router_named(router: &[u8]) -> Result<(), Error> {
     if router.is_empty() {
-        return Err(Error::Encoding(
+        return Err(Error::invalid_argument(
             "an empty router MAC names no router: name the router, or send by one local \
-             broadcast with Station::RoutedViaLocalBroadcast"
-                .into(),
+             broadcast with Station::RoutedViaLocalBroadcast",
         ));
     }
     Ok(())
@@ -113,12 +112,12 @@ fn group_router_refused(link: Option<DataLink>, network: u16, router: &[u8]) -> 
         Some(link) => format!("this {link} link"),
         None => "this link".to_owned(),
     };
-    Error::Encoding(format!(
+    Error::InvalidArgument(Refusal::text(format!(
         "a routed confirmed request goes to one router by unicast, and the router {} is a \
          broadcast or group address on {on}: name the router's own address, or reach \
          network {network} by one local broadcast with no router named",
         link_text(link, router)
-    ))
+    )))
 }
 
 /// `mac` as its link writes it: an IPv4 address and port on BACnet/IP, a

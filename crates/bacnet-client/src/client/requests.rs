@@ -46,13 +46,27 @@ struct RequestSize<'a> {
     sized_by: Option<(u16, &'a [u8])>,
 }
 
+/// The text of [`request_cut_off`].
+const CUT_OFF: Refusal = Refusal::new("TSM response channel closed");
+
 /// What a confirmed request fails with when the client's tasks end under it
 /// (#2617, #2720): its open transaction is dropped by the stop, or, still
 /// waiting for its turn at the destination, it is woken by the dispatch
-/// task's end. The Python binding reads this text as that case.
+/// task's end. It is [`Error::State`] with [`Lifecycle::Closed`] (#1833);
+/// [`is_request_cut_off`] tells it from the other closed refusals.
 #[cold]
 pub(super) fn request_cut_off() -> Error {
-    Error::Encoding("TSM response channel closed".into())
+    Error::State(Lifecycle::Closed, CUT_OFF)
+}
+
+/// Whether `error` is the one a confirmed request fails with when this
+/// client's tasks end under it: its own `stop()`, or the stop of the
+/// endpoint or node it runs on, while the request waited for its answer or
+/// its turn (#2617, #2720). The request may have gone out, so whether the
+/// device carried it out is unknown. Another [`Lifecycle::Closed`] refusal,
+/// such as a send once the client's seat has closed, is not this.
+pub fn is_request_cut_off(error: &Error) -> bool {
+    matches!(error, Error::State(Lifecycle::Closed, refusal) if *refusal == CUT_OFF)
 }
 
 /// Whether `response` is the device's own answer to a confirmed request: an
@@ -104,11 +118,13 @@ fn check_transmittable_length(peer_or_local: LengthBoundedBy, transport: u16) ->
     } else {
         peer_or_local
     };
-    Err(Error::Encoding(format!(
+    // The limits are values the client keeps: its own setting, the link's,
+    // or the peer's row in its device table (#1833).
+    Err(Error::InvalidConfig(Refusal::text(format!(
         "maximum transmittable length {combined} is below the {MINIMUM_MESSAGE_SIZE}-octet \
          MinimumMessageSize every BACnet device accepts (Clause 5.2.1.2); the binding limit is \
          {binding}"
-    )))
+    ))))
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -134,7 +150,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// # Errors
     ///
-    /// Before any request state is taken: [`Error::Encoding`] for a station
+    /// Before any request state is taken: [`Error::InvalidArgument`] for a station
     /// a confirmed request can't go to. That is a MAC that reaches a group
     /// of nodes on this link ([`TransportPort::is_group_destination`]: the
     /// link's broadcast MAC, or on B/IP the limited broadcast, the
@@ -149,7 +165,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// router and no row in the discovery table, since the row is the route.
     /// Then the errors of the request itself; a request the client's stop
     /// cuts off, waiting for its turn or open, fails with
-    /// `Error::Encoding("TSM response channel closed")`.
+    /// [`Error::State`] of [`Lifecycle::Closed`], which
+    /// [`is_request_cut_off`] recognizes.
     ///
     /// [`BACnetAddress`]: bacnet_types::constructed::BACnetAddress
     pub async fn confirmed_request(
@@ -347,8 +364,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         ) {
             guard.mark_completed();
             self.abandon_unsent(&tsm_mac, invoke_id, &owner);
-            return Err(Error::Encoding(
-                "routed send lost its active path authorization".into(),
+            // The path's one active request is no longer this one.
+            return Err(Error::limit_reached(
+                "routed send lost its active path authorization",
             ));
         }
 
@@ -413,11 +431,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // With no DNET, a group destination is a local broadcast,
                 // which carries no confirmed request (Clause 6.3, #1479).
                 if self.network.transport().is_group_destination(mac) {
-                    return Err(Error::Encoding(
+                    return Err(Error::invalid_argument(
                         "a confirmed request goes to one device, not to a broadcast or group \
                          address (a local broadcast carries only an UNCONFIRMED_REQUEST APDU, \
-                         Clause 6.3)"
-                            .into(),
+                         Clause 6.3)",
                     ));
                 }
             }

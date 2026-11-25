@@ -124,10 +124,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 self.broadcast_network_unconfirmed(choice, &buf, network)
                     .await
             }
-            Broadcast::Network(network) => Err(Error::Encoding(format!(
-                "a network broadcast names one remote network, 1 to 65534, not {network}: \
-                 Broadcast::Local is this network and Broadcast::Global every network"
-            ))),
+            Broadcast::Network(network) => Err(Error::InvalidArgument(
+                Refusal::new(
+                    "a network broadcast names one remote network, 1 to 65534, not {}: \
+                     Broadcast::Local is this network and Broadcast::Global every network",
+                )
+                .with_value(u64::from(network)),
+            )),
             Broadcast::Global => self.broadcast_global_unconfirmed(choice, &buf).await,
         }
     }

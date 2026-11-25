@@ -231,9 +231,10 @@ pub(super) fn decode(
         _ => return None,
     };
     Some(decoded.map_err(|error| {
-        Error::Encoding(format!(
+        // The caller's request, refused before anything is sent (#1833).
+        Error::InvalidArgument(Refusal::text(format!(
             "an audited request must decode, to report what it names: {error}"
-        ))
+        )))
     }))
 }
 

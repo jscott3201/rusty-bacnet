@@ -202,7 +202,7 @@ impl Station {
     ///
     /// # Errors
     ///
-    /// [`Error::Encoding`], saying which check failed.
+    /// [`Error::InvalidArgument`], saying which check failed.
     pub fn check_confirmed(&self) -> Result<(), Error> {
         match self {
             Self::Local { mac } => check_station(0, mac),
@@ -807,10 +807,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         service_data: &[u8],
     ) -> Result<(), Error> {
         if self.network.transport().is_group_destination(mac) {
-            return Err(Error::Encoding(format!(
+            return Err(Error::InvalidArgument(Refusal::text(format!(
                 "{} names this network's broadcast or a group, not one station",
                 station_text(network, mac)
-            )));
+            ))));
         }
         self.unconfirmed_local(mac, service_choice, service_data)
             .await
@@ -837,8 +837,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             && let Some(router) = router
             && !self.network.is_local_unicast_station(router).await?
         {
-            return Err(Error::Encoding(
-                "a directed Who-Is needs a unicast router on this link".into(),
+            return Err(Error::invalid_argument(
+                "a directed Who-Is needs a unicast router on this link",
             ));
         }
         self.ask_before(service_choice).await?;
@@ -911,9 +911,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 /// names one station, and for a remote network one a router can carry.
 fn check_station(network: u16, mac: &[u8]) -> Result<(), Error> {
     if mac.is_empty() {
-        return Err(Error::Encoding(format!(
-            "network {network} with an empty MAC is a broadcast, not one station"
-        )));
+        return Err(Error::InvalidArgument(
+            Refusal::new("network {} with an empty MAC is a broadcast, not one station")
+                .with_value(u64::from(network)),
+        ));
     }
     if network != 0 {
         check_routed_unicast(network, mac.len())?;

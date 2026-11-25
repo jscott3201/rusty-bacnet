@@ -127,10 +127,19 @@ fn a_failed_requests_result() {
         audit_result(&Error::RoutedPathTooLong { dnet: 5 }),
         communication(ErrorCode::MESSAGE_TOO_LONG)
     );
-    assert_eq!(
-        audit_result(&Error::Encoding("local".into())),
-        communication(ErrorCode::OTHER)
-    );
+    // The client's own refusals record OTHER, as their untyped text did
+    // (#1833).
+    for local in [
+        Error::Encoding("local".into()),
+        super::requests::request_cut_off(),
+        Error::invalid_config("local"),
+        Error::invalid_argument("local"),
+        Error::unsupported("local"),
+        Error::limit_reached("local"),
+        Error::range("local"),
+    ] {
+        assert_eq!(audit_result(&local), communication(ErrorCode::OTHER));
+    }
     let refused = (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);
     assert_eq!(
         audit_result(&Error::with_detail(
@@ -168,8 +177,18 @@ fn which_requests_reached_their_target() {
     ] {
         assert!(attempted(&Err(reached)));
     }
+    // The client's own refusals, typed (#1833), count as the untyped text
+    // they replace did: not attempted.
     for refused in [
         Error::Encoding("TSM response channel closed".into()),
+        super::requests::request_cut_off(),
+        super::seat::seat_closed(),
+        Error::state(Lifecycle::Stopping, "the seat's node is stopping"),
+        Error::invalid_config("transport not set on ClientBuilder"),
+        Error::invalid_argument("routed DNET must be in 1..=65534"),
+        Error::unsupported("the node's source Audit carries out this request"),
+        Error::limit_reached("routed send lost its active path authorization"),
+        Error::range("log counts exceed the log's sequence range"),
         Error::SendTooLong {
             length: 2000,
             limit: 1497,

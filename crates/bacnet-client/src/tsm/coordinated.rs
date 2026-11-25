@@ -115,14 +115,43 @@ pub(crate) enum CoordinatedTerminalPhase {
 
 impl From<CoordinatedRegistrationError> for bacnet_types::error::Error {
     /// The typed [`Error::InitiationDisabled`](bacnet_types::error::Error::InitiationDisabled)
-    /// for a refusal DeviceCommunicationControl caused; the text of the
-    /// others.
+    /// for a refusal DeviceCommunicationControl caused, and a local refusal
+    /// with the text of each other (#1833): a coordinator gone or broken
+    /// by a panic is closed for good, invoke IDs or lease generations run
+    /// out, or one still pending, a limit reached, and a request the node's
+    /// source Audit carries out isn't one this client sends itself.
     fn from(error: CoordinatedRegistrationError) -> Self {
-        match error {
+        use bacnet_types::error::{Lifecycle, Refusal};
+        let refusal = Refusal::new(match error {
             CoordinatedRegistrationError::InitiationRestricted => {
-                Self::InitiationDisabled { sent: false }
+                return Self::InitiationDisabled { sent: false };
             }
-            other => Self::Encoding(other.to_string()),
+            CoordinatedRegistrationError::CoordinatorUnavailable => {
+                "coordinator is unavailable for client transaction"
+            }
+            CoordinatedRegistrationError::Diverted => {
+                "the node's source Audit carries out this request"
+            }
+            CoordinatedRegistrationError::Reserve(ReserveError::Exhausted) => {
+                "invoke IDs exhausted: none free in the client's share of the pool"
+            }
+            CoordinatedRegistrationError::Reserve(ReserveError::GenerationExhausted) => {
+                "invoke ID coordinator failed: lease generation exhausted"
+            }
+            CoordinatedRegistrationError::Reserve(ReserveError::StatePoisoned) => {
+                "invoke ID coordinator failed: coordinator state is poisoned"
+            }
+            CoordinatedRegistrationError::DuplicateInvokeId => {
+                "coordinator reserved an invoke ID already pending in the TSM"
+            }
+        });
+        match error {
+            CoordinatedRegistrationError::CoordinatorUnavailable
+            | CoordinatedRegistrationError::Reserve(ReserveError::StatePoisoned) => {
+                Self::State(Lifecycle::Closed, refusal)
+            }
+            CoordinatedRegistrationError::Diverted => Self::Unsupported(refusal),
+            _ => Self::LimitReached(refusal),
         }
     }
 }

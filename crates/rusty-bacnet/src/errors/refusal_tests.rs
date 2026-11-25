@@ -50,3 +50,41 @@ fn local_refusals_raise_the_base_exception_with_their_text() {
         );
     });
 }
+
+/// A request the client's stop cut off (#2617), now a closed refusal
+/// (#1833), raises the base exception with the message it raised as text;
+/// every other closed refusal, a closed seat's included, raises its own
+/// text, and so does the untyped text, which no client sends any more.
+#[test]
+fn a_cut_off_request_keeps_its_message() {
+    Python::initialize();
+    Python::attach(|py| {
+        let message = |error: Error| {
+            let raised = to_py_err(error);
+            assert!(raised.value(py).get_type().is(py.get_type::<BacnetError>()));
+            raised.value(py).str().unwrap().to_str().unwrap().to_owned()
+        };
+        let cut_off = Error::state(Lifecycle::Closed, "TSM response channel closed");
+        assert!(bacnet_client::client::is_request_cut_off(&cut_off));
+        assert_eq!(message(cut_off), REQUEST_CUT_OFF);
+        for (other, text) in [
+            (
+                Error::state(
+                    Lifecycle::Closed,
+                    "the client's seat has closed: its node or the client stopped",
+                ),
+                "the client's seat has closed: its node or the client stopped",
+            ),
+            (
+                Error::state(Lifecycle::Stopping, "TSM response channel closed"),
+                "TSM response channel closed",
+            ),
+            (
+                Error::Encoding("TSM response channel closed".into()),
+                "encoding error: TSM response channel closed",
+            ),
+        ] {
+            assert_eq!(message(other), text);
+        }
+    });
+}

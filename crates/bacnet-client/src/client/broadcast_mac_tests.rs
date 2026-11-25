@@ -43,8 +43,8 @@ async fn a_confirmed_request_to_the_broadcast_mac_is_refused_before_any_state() 
         .confirmed_request(&BROADCAST, ConfirmedServiceChoice::READ_PROPERTY, &[0x0C])
         .await;
     assert!(
-        matches!(&refused, Err(Error::Encoding(message))
-            if message.contains("not to a broadcast or group address")),
+        matches!(&refused, Err(Error::InvalidArgument(message))
+            if message.to_string().contains("not to a broadcast or group address")),
         "{refused:?}"
     );
     assert!(
@@ -77,7 +77,7 @@ async fn a_confirmed_request_to_the_broadcast_mac_is_refused_before_any_state() 
         )
         .await;
     assert!(
-        matches!(&refused, Err(Error::Encoding(message)) if message.contains("broadcast or group")),
+        matches!(&refused, Err(Error::InvalidArgument(message)) if message.to_string().contains("broadcast or group")),
         "{refused:?}"
     );
     assert!(frames.try_recv().is_err());
@@ -131,8 +131,8 @@ async fn refuses_each_group_form(groups: GroupDestinations, forms: &[Vec<u8>], u
             .confirmed_request(mac, ConfirmedServiceChoice::READ_PROPERTY, &[0x0C])
             .await;
         assert!(
-            matches!(&refused, Err(Error::Encoding(message))
-                if message.contains("not to a broadcast or group address")),
+            matches!(&refused, Err(Error::InvalidArgument(message))
+                if message.to_string().contains("not to a broadcast or group address")),
             "{mac:02X?}: {refused:?}"
         );
     }
@@ -246,8 +246,8 @@ async fn a_routed_request_to_this_networks_broadcast_mac_is_refused() {
         )
         .await;
     assert!(
-        matches!(&refused, Err(Error::Encoding(message))
-            if message.contains("not to a broadcast or group address")),
+        matches!(&refused, Err(Error::InvalidArgument(message))
+            if message.to_string().contains("not to a broadcast or group address")),
         "{refused:?}"
     );
     assert!(

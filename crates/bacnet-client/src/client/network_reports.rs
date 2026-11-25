@@ -87,13 +87,31 @@ fn record(routers: &mut Vec<DiscoveredRouter>, mac: MacAddr, listed: Vec<u16>) {
     networks.dedup();
 }
 
+/// The router core's refusal to write a network list, as the static
+/// [`Error::Encode`] (#1833).
+#[cold]
+fn network_list_refused(error: bacnet_router_core::message::DataError) -> Error {
+    use bacnet_router_core::message::DataError;
+    use bacnet_types::error::EncodeError;
+    let octets = |count: usize| u32::try_from(count).unwrap_or(u32::MAX);
+    match error {
+        DataError::NoRoom { needed, available } => {
+            EncodeError::new("message data of {} octets doesn't fit in {}")
+                .with_values(octets(needed), octets(available))
+        }
+        _ => EncodeError::new("network list refused"),
+    }
+    .into()
+}
+
 /// Refuse a network number no router can be asked about: 0, or 0xFFFF,
 /// the global broadcast.
 fn check_network(network: u16) -> Result<(), Error> {
     if network == 0 || network == u16::MAX {
-        return Err(Error::Encoding(format!(
-            "network {network} is not a network number a router can reach; use 1..=65534"
-        )));
+        return Err(Error::InvalidArgument(
+            Refusal::new("network {} is not a network number a router can reach; use 1..=65534")
+                .with_value(u64::from(network)),
+        ));
     }
     Ok(())
 }
@@ -147,8 +165,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let len = match network {
             Some(network) => {
                 check_network(network)?;
-                Networks::write([network], &mut payload)
-                    .map_err(|e| Error::Encoding(e.to_string()))?
+                Networks::write([network], &mut payload).map_err(network_list_refused)?
             }
             None => 0,
         };

@@ -26,14 +26,23 @@ async fn over_long_routed_path_macs_fail_before_registration_or_emission() {
                 &[0x0c],
             )
             .await;
-        assert!(matches!(result, Err(Error::Encoding(_))), "{result:?}");
+        // The router named for the call is an argument; the client's own
+        // MAC is its link's configuration (#1833).
+        if local.len() > bacnet_npdu::MAX_MAC_LEN {
+            assert!(matches!(result, Err(Error::InvalidConfig(_))), "{result:?}");
+        } else {
+            assert!(
+                matches!(result, Err(Error::InvalidArgument(_))),
+                "{result:?}"
+            );
+        }
         assert!(outbound.try_recv().is_err());
         assert_eq!(client.tsm.lock().pending_count(), 0);
         for refused in [
             client.configure_routed_path_max_npdu(&too_long, DNET, 1497),
             client.clear_routed_path_limit(&too_long, DNET),
         ] {
-            assert!(matches!(refused, Err(Error::Encoding(_))));
+            assert!(matches!(refused, Err(Error::InvalidArgument(_))));
         }
         client.stop().await.unwrap();
     }

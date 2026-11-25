@@ -35,11 +35,12 @@ fn int_arg(value: &Bound<'_, PyAny>, name: &str) -> PyResult<u16> {
 }
 
 /// A refused argument (a router MAC of the wrong length, a network outside
-/// 1 to 65534, a limit too small to carry a request) is a ValueError; the
+/// 1 to 65534, a limit too small to carry a request), the client's
+/// [`Error::InvalidArgument`] (#1833), is a ValueError with its text; the
 /// rest as every call raises it.
 fn path_err(error: Error) -> PyErr {
     match error {
-        Error::Encoding(message) => PyValueError::new_err(message),
+        Error::InvalidArgument(refusal) => PyValueError::new_err(refusal.to_string()),
         other => to_py_err(other),
     }
 }
@@ -149,5 +150,34 @@ impl BACnetClient {
         crate::py_async::future_into_py(py, async move {
             Ok(started(&inner).await?.below_minimum_reject_drops())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bacnet_types::error::Refusal;
+
+    /// The client refuses a path's router, network or limit as an argument
+    /// (#1833), which raises ValueError with its text alone, as the untyped
+    /// text it replaces did; a full path table raises as every call does.
+    #[test]
+    fn a_refused_argument_is_a_value_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let refused = path_err(Error::invalid_argument("routed DNET must be in 1..=65534"));
+            assert!(refused.is_instance_of::<PyValueError>(py));
+            assert_eq!(
+                refused.value(py).str().unwrap().to_str().unwrap(),
+                "routed DNET must be in 1..=65534"
+            );
+            let short = path_err(Error::InvalidArgument(Refusal::text(
+                "a routed path limit of 10 NPDU octets carries no request",
+            )));
+            assert!(short.is_instance_of::<PyValueError>(py));
+            let full = path_err(Error::RoutedPathCapacityExceeded { capacity: 256 });
+            assert!(!full.is_instance_of::<PyValueError>(py));
+            assert!(full.is_instance_of::<crate::errors::BacnetError>(py));
+        });
     }
 }

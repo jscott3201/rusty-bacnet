@@ -283,11 +283,11 @@ impl<T: TransportPort + 'static> Client<T> {
 }
 
 /// The low-level client's refusal of a change to `path`: an argument it
-/// refused as [`OpsError::Parse`], its reason naming the path, anything else
-/// as itself.
+/// refused ([`Error::InvalidArgument`], #1833) as [`OpsError::Parse`], its
+/// reason naming the path, anything else as itself.
 fn refused(path: &RoutedPath, error: Error) -> OpsError {
     match error {
-        Error::Encoding(reason) => OpsError::parse(
+        Error::InvalidArgument(reason) => OpsError::parse(
             "routed path limit",
             &path.to_string(),
             format!("{path}: {reason}"),

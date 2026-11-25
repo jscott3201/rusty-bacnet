@@ -160,10 +160,13 @@ impl ScClientBuilder {
         Error,
     > {
         self.validate()?;
-        let tls_config =
-            self.tls_config.as_ref().cloned().ok_or_else(|| {
-                Error::Encoding("SC client builder: tls_config is required".into())
-            })?;
+        let tls_config = self
+            .tls_config
+            .as_ref()
+            .cloned()
+            .ok_or(Error::invalid_config(
+                "SC client builder: tls_config is required",
+            ))?;
         // The dialer checks both URLs, and that a failover hub comes with
         // reconnect, before it dials (#1946).
         let mut hubs = bacnet_transport::sc::ScHubDialer::new(&self.hub_url, tls_config)
