@@ -1225,15 +1225,35 @@ interleaved matrix compare.
   same keys, repeat too. Since the hook relies on how the standard library
   looks the function up, the script stops a count whose runs report random
   keys, or keys unlike the first run's, rather than let it run on random
-  keys. Any seed
-  serves for a comparison; another seed can move a row's absolute count by
-  a few dozen instructions per request, and so can a change to what the
-  benchmark database holds, which `attribute` shows as hash-table lines in
-  the database lookups. The harness comes from the candidate, so an older
-  candidate brings a harness without this, and its runs keep per-process
-  keys; every row names the keys its runs had, and the workflow's
-  `harness: workflow` input builds the current harness into both trees
-  instead.
+  keys. Any seed serves for a comparison; another seed can move a row's
+  absolute count by a few dozen instructions per request (seed 1 puts
+  ReadPropertyMultiple about 23 above the common case), and so can a
+  change to what the benchmark database holds, which `attribute` shows as
+  hash-table lines in the database lookups. The harness comes from the
+  candidate, so an older candidate brings a harness without this, and its
+  runs keep per-process keys; every row names the keys its runs had, and
+  the workflow's `harness: workflow` input builds the current harness into
+  both trees instead.
+- **What fixing the keys changed.** Eight matrices against one baseline
+  (ea9f3d728), all floors in instructions per request:
+
+  | Row | Per-process keys (4 matrices) | Fixed keys (4 matrices) |
+  | --- | --- | --- |
+  | ReadPropertyMultiple, current-thread | 6.0, 39.9, 38.8, 42.5 | 7.8, 9.7, 10.0, 9.5 |
+  | ReadPropertyMultiple, multi-thread | 41.4, 78.7, 41.8, 53.9 | 33.4, 41.9, 110.9, 23.2 |
+  | WriteProperty, current-thread | 11.5, 104.9 (two matrices) | 4.0, 9.0, 7.1, 8.0 |
+  | WriteProperty, multi-thread | 103.7, 109.7 (two matrices) | 10.2, 13.0, 6.8, 11.3 |
+  | ReadProperty, both runtimes | 6.5 to 9.9 | 4.3 to 15.1 |
+
+  A candidate whose ReadPropertyMultiple rose by about 50 failed both
+  runtimes in both fixed-key matrices; with per-process keys one of two
+  matrices passed it on the multi-thread runtime. One whose
+  ReadPropertyMultiple rose by about 20 passed both per-process matrices,
+  and failed the current-thread row in both fixed-key ones. What is left on
+  the multi-thread runtime is its workers' parking and timer work, which
+  follows the runner's load: in the matrix with the floor of 110.9, the
+  values of the middle block of the order rose by 30 to 80 for both builds
+  alike, in `park_internal`, clock reads and the I/O driver.
 - **Older figures don't compare.** Counts from before
   [perf-s0b](benchmarks/results/perf-s0b/README.md) used the default release
   profile and glibc's default allocator settings, so they aren't comparable
