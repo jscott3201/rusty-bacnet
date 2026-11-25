@@ -1,5 +1,5 @@
-//! A server's start, phase by phase (#2558): what each phase must follow,
-//! the locks it takes, and what a refusal or a dropped start leaves behind.
+//! A server's start, phase by phase (#2558): what each phase must follow, the
+//! locks it takes, and what a refusal or a dropped start leaves behind.
 //! [`BACnetServer::start_on_heap`] runs the phases and owns every wait; each
 //! phase hands the next what only it makes, by value ([`Prepared`],
 //! `Started`, [`Linked`]), so none can run before the one it follows.
@@ -7,14 +7,15 @@
 //! 1. **Prepare** ([`BACnetServer::prepare`], no wait). In order: the
 //!    settings are checked against the link's transport before anything
 //!    changes the database or starts the link (a node checks the same before
-//!    its own link starts); the database is bound to the identity's Device,
-//!    which the Audit route checks then read; the Audit Log forwarder's
-//!    configured state is set while no network number is known; the settled
-//!    config is shared from here on; the clocks are bound to the timed
-//!    objects, so each starts its output on the server's clocks; the outputs
-//!    start ([`StartedOutputs`]); the membership waker is armed. A refused
-//!    setting or Audit route hands the database back as it is then (bound,
-//!    no output started), with nothing started.
+//!    its own link starts); the database is bound to the identity's Device;
+//!    the Audit routes are prepared and checked against the database; the
+//!    Audit Log forwarder's configured state is set from that binding while
+//!    no network number is known; the settled config is shared from here on;
+//!    the clocks are bound to the timed objects, so each starts its output on
+//!    the server's clocks; the outputs start ([`StartedOutputs`]); the
+//!    membership waker is armed. A refused setting hands the database back
+//!    untouched, a refused Audit route bound to the Device; neither has
+//!    started an output or the link.
 //! 2. **Link** (`Link::start`, the first wait). It takes the bound database
 //!    (a registered Network Port is reserved and published there), the
 //!    settled config and the prepared Audit routes. Refused, the start
@@ -25,11 +26,12 @@
 //!    with the start.
 //! 3. **Target Audit** (`TargetAudit::install`, no wait unless refused). The
 //!    notification retries are set first, on the transactions the
-//!    installation takes. It installs while the database is still the
-//!    start's own, so a refusal can hand it back: the link is let go of first
+//!    installation takes. It installs while the database is still the start's
+//!    own, so a refusal can hand it back. The link is let go of first, so a
+//!    Network Port it published can be withdrawn once its lease has gone
 //!    (`Link::abandon`, the second wait: a transport of the server's own is
 //!    stopped, which needs the network layer's only handle, so nothing may
-//!    clone it before this point; a seat's link is the node's and stays up),
+//!    clone it before this point; a seat's link is the node's and stays up);
 //!    then the outputs are released and the database handed back. A failed
 //!    `abandon` is only logged. Dropped during `abandon`, the stop goes no
 //!    further, the outputs are released, and the database goes with the
@@ -41,7 +43,7 @@
 //!    the target Audit owner set on the request set, before any request task
 //!    can be spawned; the dispatch context and the command runner, made
 //!    before the dispatch loop takes the context. The tasks are spawned in
-//!    this order ([`tasks`](super::tasks)): dispatch loop, COV purge, fault
+//!    this order ([`tasks`]): network number, dispatch loop, COV purge, fault
 //!    detection (opt-in), Event Enrollment (opt-in), trend logs, Schedules,
 //!    intrinsic reporting, COV revisits, Binary Lighting operation. From the
 //!    first spawn to the server that holds every handle, nothing waits or
@@ -51,20 +53,20 @@
 //!    set, which the start waits for and then joins (#2781): the dispatch
 //!    loop already serves requests, so a start left unpolled holds none up.
 //!    Dropped here, the server drops first (it seals, aborts its tasks, the
-//!    Staging task among them, and lets the database go once they have let
-//!    go of it), then the start's clone of the target Audit owner, then
+//!    Staging task among them, and lets the database go once they have let go
+//!    of it), then the start's clone of the target Audit owner, then
 //!    [`StartedOutputs`], which releases the outputs under a free guard, or
 //!    from a task once the guard is free. Completed, it releases nothing.
 //!
-//! **Locks.** Phases 1 to 4 wait for no lock: the database is the start's
-//! own until it is shared, and every other handle is new. The Staging task
-//! takes the object database before the COV table, the server's lock order,
-//! in a task of its own.
+//! **Locks.** Phases 1 to 4 wait for no lock: the database is the start's own
+//! until it is shared, and the other handles are new, so nothing else holds
+//! them. The Staging task takes its locks in a task of its own, in the
+//! server's order (object database before COV table).
 //!
 //! **Drops.** The start binds each phase's output in the order the values
 //! were made, and each phase takes its inputs in the start's own order, so a
-//! refusal or a dropped start drops what it holds in the same order as
-//! before the split.
+//! refusal or a dropped start drops what it holds in the same order as before
+//! the split.
 
 use super::super::request_tasks::RequestTasks;
 use super::super::server_seat::{Apdus, Seated};
