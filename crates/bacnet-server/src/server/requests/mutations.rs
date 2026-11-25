@@ -22,48 +22,31 @@ mod object_lifecycle;
 /// committed to under `db`, its guard ([`crate::schedule::reevaluate_written`]):
 /// the targets the pass writes commit their transitions under that guard,
 /// counted in the request's `settle` (#2535). `rows` are the timestamped
-/// rows the request's attempts queued before the pass (#2582).
-///
-/// `None` when no Schedule was written. A write to one is rare, so the pass
-/// is boxed and its caller's future holds only the box across the await.
-fn reevaluate_schedules<'a, T: TransportPort + 'static>(
-    services: &'a RequestServices<T>,
-    db: &'a mut ObjectDatabase,
-    written: &'a [ObjectIdentifier],
-    rows: &'a RequestRows,
-    settle: &'a mut Settle,
-) -> Option<SchedulePass<'a>> {
+/// rows the request's attempts queued before the pass (#2582). Boxed, and
+/// only for a Schedule: a write to one is rare, and the pass's future would
+/// size every write's.
+async fn reevaluate_schedules<T: TransportPort + 'static>(
+    services: &RequestServices<T>,
+    db: &mut ObjectDatabase,
+    written: &[ObjectIdentifier],
+    rows: &RequestRows,
+    settle: &mut Settle,
+) -> crate::committed_cov::CommittedCov {
     let schedule = |oid: &ObjectIdentifier| oid.object_type() == ObjectType::SCHEDULE;
     if !written.iter().any(schedule) {
-        return None;
+        return Default::default();
     }
-    Some(Box::pin(async move {
-        let mut transition = committing(|| services.event_delivery(), settle);
-        let (database, table) = (&services.db, &services.cov_table);
-        let pass = crate::schedule::reevaluate_written(
-            database,
-            db,
-            written,
-            table,
-            &mut transition,
-            rows,
-        );
-        pass.await
-    }))
-}
-
-/// A written Schedule's pass under its request's guard, boxed.
-type SchedulePass<'a> = std::pin::Pin<
-    Box<dyn std::future::Future<Output = crate::committed_cov::CommittedCov> + Send + 'a>,
->;
-
-/// Run `pass`, if a Schedule was written, for the COV fanout and Command
-/// runs it owes.
-async fn run_pass(pass: Option<SchedulePass<'_>>) -> crate::committed_cov::CommittedCov {
-    match pass {
-        Some(pass) => pass.await,
-        None => Default::default(),
-    }
+    let mut transition = committing(|| services.event_delivery(), settle);
+    let (database, table) = (&services.db, &services.cov_table);
+    Box::pin(crate::schedule::reevaluate_written(
+        database,
+        db,
+        written,
+        table,
+        &mut transition,
+        rows,
+    ))
+    .await
 }
 
 /// The objects a WritePropertyMultiple's successful attempts changed.
@@ -352,8 +335,8 @@ impl Request<'_> {
                 }
             }
             let written_slice = written.as_slice();
-            let pass = reevaluate_schedules(services, &mut db, written_slice, &[], settle);
-            let schedule_cov = run_pass(pass).await;
+            let schedule_cov =
+                reevaluate_schedules(services, &mut db, written_slice, &[], settle).await;
             (result.map(|_| written), changes, plans, schedule_cov)
         };
         staging_plans.extend(plans);
@@ -437,8 +420,8 @@ impl Request<'_> {
             // A target the pass changes after an attempt captured it commits
             // its transition in the pass, whose capture after it replaces the
             // newest row as the capture below would (#2582).
-            let pass = reevaluate_schedules(services, &mut db, committed_oids, &queued, settle);
-            let schedule_cov = run_pass(pass).await;
+            let schedule_cov =
+                reevaluate_schedules(services, &mut db, committed_oids, &queued, settle).await;
             // Each written object's transition commits under this guard too,
             // in the order the objects were written. Its attempts were
             // captured as they committed: an object whose transition commits
@@ -655,8 +638,7 @@ impl Request<'_> {
                 capture.run(&db);
             }
             let (settle, oids) = (&mut effects.settle, written.as_slice());
-            let pass = reevaluate_schedules(services, &mut db, oids, &[], settle);
-            let schedule_cov = run_pass(pass).await;
+            let schedule_cov = reevaluate_schedules(services, &mut db, oids, &[], settle).await;
             (result, written, schedule_cov)
         };
         // The edited object first, then a Schedule's targets, which the merge
