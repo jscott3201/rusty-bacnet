@@ -55,7 +55,7 @@ fn append_optional_u8(key: &mut Vec<u8>, value: Option<u8>) {
 
 fn append_bytes(key: &mut Vec<u8>, value: &[u8]) -> Result<(), Error> {
     let length = u32::try_from(value.len())
-        .map_err(|_| Error::OutOfRange("Audit receipt identity length exceeds u32".into()))?;
+        .map_err(|_| Error::range("Audit receipt identity length exceeds u32"))?;
     key.extend_from_slice(&length.to_be_bytes());
     key.extend_from_slice(value);
     Ok(())

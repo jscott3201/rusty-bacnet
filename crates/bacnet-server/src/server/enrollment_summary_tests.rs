@@ -57,7 +57,7 @@ async fn enrollment_summary_defaults_and_all_builders_validate_before_start() {
             .err();
         for error in [direct, generic, bip] {
             assert!(
-                matches!(error, Some(Error::Encoding(m)) if m.contains("enrollment_summary_max_"))
+                matches!(error, Some(Error::InvalidConfig(m)) if m.to_string().contains("enrollment_summary_max_"))
             );
         }
         #[cfg(feature = "sc-tls")]
@@ -72,7 +72,7 @@ async fn enrollment_summary_defaults_and_all_builders_validate_before_start() {
                 .map_err(Error::from)
                 .err();
             assert!(
-                matches!(result, Some(Error::Encoding(m)) if m.contains("enrollment_summary_max_"))
+                matches!(result, Some(Error::InvalidConfig(m)) if m.to_string().contains("enrollment_summary_max_"))
             );
         }
     }

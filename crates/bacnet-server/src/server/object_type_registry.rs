@@ -195,8 +195,11 @@ impl std::fmt::Debug for ObjectTypeRegistry {
     }
 }
 
+/// A registration the registry won't keep (#1833).
 fn registration_error(message: &str) -> Error {
-    Error::Encoding(format!("invalid object constructor: {message}"))
+    Error::InvalidConfig(bacnet_types::error::Refusal::text(format!(
+        "invalid object constructor: {message}"
+    )))
 }
 
 /// Build the object `oid` names through an application `constructor`, as

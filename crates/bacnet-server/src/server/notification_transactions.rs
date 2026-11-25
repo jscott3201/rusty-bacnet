@@ -13,7 +13,7 @@ use bacnet_endpoint_core::coordinator::{
 use bacnet_objects::audit::AuditReporterStatus;
 use bacnet_transport::warn_throttle::WarnThrottle;
 use bacnet_types::enums::ConfirmedServiceChoice;
-use bacnet_types::error::{Error, RemoteError};
+use bacnet_types::error::{Error, Lifecycle, RemoteError};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 use bacnet_types::sync::MutexExt;
 use tokio::sync::oneshot;
@@ -282,7 +282,7 @@ impl NotificationTransactions {
     ) -> Result<(), Error> {
         let workers = self.workers.locked();
         if workers.closed {
-            return Err(Error::Encoding("Audit delivery owner is closed".into()));
+            return Err(owner_closed());
         }
         commit()
     }
@@ -293,10 +293,10 @@ impl NotificationTransactions {
         prepare_commit: impl FnOnce() -> Result<F, Error>,
     ) -> Result<(), Error> {
         let handle = tokio::runtime::Handle::try_current()
-            .map_err(|_| Error::Encoding("Audit changes require a Tokio runtime".into()))?;
+            .map_err(|_| Error::unsupported("Audit changes require a Tokio runtime"))?;
         let mut workers = self.workers.locked();
         if workers.closed {
-            return Err(Error::Encoding("Audit delivery owner is closed".into()));
+            return Err(owner_closed());
         }
         let task = prepare_commit()?;
         let owner = workers
@@ -759,4 +759,10 @@ pub fn canonical_direct_peer(mac: &[u8]) -> CanonicalPeer {
 #[doc(hidden)]
 pub fn canonical_routed_peer(network: u16, address: &[u8]) -> CanonicalPeer {
     CanonicalPeer::routed(network, address)
+}
+
+/// What an Audit change fails with once the delivery owner has closed, for
+/// good (#1833).
+fn owner_closed() -> Error {
+    Error::state(Lifecycle::Closed, "Audit delivery owner is closed")
 }

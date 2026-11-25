@@ -253,8 +253,8 @@ impl ScServerBuilder {
             config.validate()?;
         }
         if self.device_uuid == [0; 16] {
-            return Err(Error::Encoding(
-                "SC server builder: device_uuid is required and must not be all zero".into(),
+            return Err(Error::invalid_config(
+                "SC server builder: device_uuid is required and must not be all zero",
             ));
         }
         // The SC link's only group address is its broadcast VMAC.
@@ -262,10 +262,9 @@ impl ScServerBuilder {
             mac == bacnet_transport::sc_frame::BROADCAST_VMAC
         })?;
 
-        let tls_config = self
-            .tls_config
-            .take()
-            .ok_or_else(|| Error::Encoding("SC server builder: tls_config is required".into()))?;
+        let tls_config = self.tls_config.take().ok_or(Error::invalid_config(
+            "SC server builder: tls_config is required",
+        ))?;
 
         self.config.request_admission_policy.validate()?;
         self.config.validate_dcc_config()?;
@@ -325,7 +324,7 @@ mod tests {
                 .err()
                 .expect("missing/zero UUID must fail before dialing");
             assert!(
-                matches!(&error, Error::Encoding(message) if message == "SC server builder: device_uuid is required and must not be all zero"),
+                matches!(&error, Error::InvalidConfig(message) if message.to_string() == "SC server builder: device_uuid is required and must not be all zero"),
                 "expected UUID configuration error, got {error:?}"
             );
             assert_eq!(
@@ -362,7 +361,7 @@ mod tests {
                 .get_alarm_summary_budget(budget);
             assert_eq!(builder.config.get_alarm_summary_budget, budget);
             assert!(
-                matches!(builder.build().await.map_err(Error::from).err(), Some(Error::Encoding(m)) if m.contains("alarm_summary_max_"))
+                matches!(builder.build().await.map_err(Error::from).err(), Some(Error::InvalidConfig(m)) if m.to_string().contains("alarm_summary_max_"))
             );
         }
     }
@@ -395,7 +394,9 @@ mod tests {
                 .map_err(Error::from)
                 .err()
                 .unwrap();
-            assert!(matches!(error, Error::Encoding(m) if m.contains("tls_config")));
+            assert!(
+                matches!(error, Error::InvalidConfig(m) if m.to_string().contains("tls_config"))
+            );
         }
     }
 
@@ -455,7 +456,7 @@ mod tests {
             }
             assert!(matches!(
                 builder.build().await.map_err(Error::from),
-                Err(Error::Encoding(message)) if message == "SC server builder: tls_config is required"
+                Err(Error::InvalidConfig(message)) if message.to_string() == "SC server builder: tls_config is required"
             ));
         }
     }
@@ -507,7 +508,9 @@ mod tests {
                 .map_err(Error::from)
                 .err()
                 .unwrap();
-            assert!(matches!(error, Error::Encoding(m) if m.contains("max_unconfirmed_in_flight")));
+            assert!(
+                matches!(error, Error::InvalidConfig(m) if m.to_string().contains("max_unconfirmed_in_flight"))
+            );
             let error = BACnetServer::sc_builder()
                 .request_admission_policy(policy)
                 .reconnect(ScReconnectConfig {
@@ -543,7 +546,7 @@ mod tests {
                 .err()
                 .unwrap();
             assert!(
-                matches!(error, Error::Encoding(m) if m.contains("confirmed_recovery_reserve"))
+                matches!(error, Error::InvalidConfig(m) if m.to_string().contains("confirmed_recovery_reserve"))
             );
             let error = BACnetServer::sc_builder()
                 .request_admission_policy(policy)
@@ -581,7 +584,7 @@ mod tests {
                     .request_admission_policy(policy);
                 assert_eq!(builder.config.request_admission_policy, policy);
                 let error = builder.build().await.map_err(Error::from).err().unwrap();
-                assert!(matches!(error, Error::Encoding(m) if m.contains(name)));
+                assert!(matches!(error, Error::InvalidConfig(m) if m.to_string().contains(name)));
             }
         }
     }

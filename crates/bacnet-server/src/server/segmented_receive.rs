@@ -310,12 +310,16 @@ pub(super) fn validate_segment_timeout(config: &ServerConfig) -> Result<Duration
         .device
         .apdu_segment_timeout_ms()
         .checked_mul(4)
-        .ok_or_else(|| Error::Encoding("receive segment timeout overflows milliseconds".into()))?;
+        .ok_or(Error::invalid_config(
+            "receive segment timeout overflows milliseconds",
+        ))?;
     let receive_timeout = Duration::from_millis(milliseconds);
     runtime_clock::now()
         .checked_add(receive_timeout)
         .and_then(|deadline| deadline.checked_add(Duration::from_nanos(1)))
-        .ok_or_else(|| Error::Encoding("receive segment deadline is not representable".into()))?;
+        .ok_or(Error::invalid_config(
+            "receive segment deadline is not representable",
+        ))?;
     Ok(segment_timeout)
 }
 

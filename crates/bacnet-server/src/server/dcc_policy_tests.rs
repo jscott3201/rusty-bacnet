@@ -41,7 +41,9 @@ async fn dcc_disable_rate_validation_before_start() {
             .map_err(Error::from)
             .err()
             .unwrap();
-        assert!(matches!(error, Error::Encoding(m) if m.contains("DCC disable rate")));
+        assert!(
+            matches!(error, Error::InvalidConfig(m) if m.to_string().contains("DCC disable rate"))
+        );
         assert!(
             BACnetServer::generic_builder()
                 .transport(never_start(&started))
@@ -58,7 +60,9 @@ async fn dcc_disable_rate_validation_before_start() {
             .map_err(Error::from)
             .err()
             .unwrap();
-        assert!(matches!(error, Error::Encoding(m) if m.contains("DCC disable rate")));
+        assert!(
+            matches!(error, Error::InvalidConfig(m) if m.to_string().contains("DCC disable rate"))
+        );
     }
     for limit in [
         DccDisableRateLimit {
@@ -97,7 +101,9 @@ async fn dcc_disable_rate_validation_before_sc_dial() {
             .map_err(Error::from)
             .err()
             .unwrap();
-        assert!(matches!(error, Error::Encoding(m) if m.contains("DCC disable rate")));
+        assert!(
+            matches!(error, Error::InvalidConfig(m) if m.to_string().contains("DCC disable rate"))
+        );
     }
 }
 
@@ -116,7 +122,7 @@ fn dcc_source_restriction_configuration_bounds() {
         ] {
             assert!(
                 matches!(DccSourceRestriction::new(vec![source]),
-                    Err(Error::Encoding(m)) if m.contains("DCC source address")),
+                    Err(Error::InvalidConfig(m)) if m.to_string().contains("DCC source address")),
                 "{length}-octet entry"
             );
         }
@@ -130,7 +136,11 @@ fn dcc_source_restriction_configuration_bounds() {
             .is_err()
         );
     }
-    assert!(DccSourceRestriction::new(vec![DccSource::Direct(vec![1]); 257]).is_err());
+    // More entries than the cap is a limit reached, not a bad entry (#1833).
+    assert!(matches!(
+        DccSourceRestriction::new(vec![DccSource::Direct(vec![1]); 257]),
+        Err(Error::LimitReached(m)) if m.to_string() == "DCC source restriction allows at most 256 entries"
+    ));
     assert!(DccSourceRestriction::new(vec![DccSource::Direct(vec![1; longest]); 256]).is_ok());
     assert!(
         DccSourceRestriction::new(vec![
@@ -195,7 +205,9 @@ async fn dcc_source_restriction_rejected_before_start() {
             .map_err(Error::from)
             .err()
             .unwrap();
-        assert!(matches!(error, Error::Encoding(m) if m.contains("source restriction")));
+        assert!(
+            matches!(error, Error::InvalidConfig(m) if m.to_string().contains("source restriction"))
+        );
         assert!(
             BACnetServer::generic_builder()
                 .transport(never_start(&started))
@@ -214,7 +226,9 @@ async fn dcc_source_restriction_rejected_before_start() {
             .map_err(Error::from)
             .err()
             .unwrap();
-        assert!(matches!(error, Error::Encoding(m) if m.contains("source restriction")));
+        assert!(
+            matches!(error, Error::InvalidConfig(m) if m.to_string().contains("source restriction"))
+        );
     }
 }
 
@@ -233,7 +247,9 @@ async fn dcc_source_restriction_rejected_before_sc_dial() {
             .map_err(Error::from)
             .err()
             .unwrap();
-        assert!(matches!(error, Error::Encoding(m) if m.contains("source restriction")));
+        assert!(
+            matches!(error, Error::InvalidConfig(m) if m.to_string().contains("source restriction"))
+        );
     }
 }
 
@@ -306,8 +322,19 @@ fn dcc_configured_validation_retains_decode_password_unknown_mode_precedence() {
         }
         .encode(&mut data)
         .unwrap();
+        // The peer's undefined mode, refused as out of range (#1833); it
+        // still goes out as SERVICES / OTHER, not as a Reject.
         let failure = validate(&data);
-        assert!(matches!(failure.error, Error::Encoding(m) if m == "unknown EnableDisable value"));
+        assert!(matches!(
+            failure.error,
+            Error::Decoding(refused)
+                if refused.kind == bacnet_types::error::DecodingKind::OutOfRange
+                    && refused.label == "unknown EnableDisable value"
+        ));
+        assert_eq!(
+            bacnet_device_core::reply::error_fields(&failure.error),
+            (ErrorClass::SERVICES, ErrorCode::OTHER)
+        );
         assert!(matches!(failure.outcome, DccOutcome::Malformed));
     }
 }
@@ -343,7 +370,9 @@ async fn dcc_require_password_rejected_before_start() {
             .map_err(Error::from)
             .err()
             .unwrap();
-        assert!(matches!(error, Error::Encoding(m) if m.contains("nonempty dcc_password")));
+        assert!(
+            matches!(error, Error::InvalidConfig(m) if m.to_string().contains("nonempty dcc_password"))
+        );
         let mut builder = BACnetServer::generic_builder()
             .transport(never_start(&started))
             .dcc_policy(DccPolicy::RequirePassword);
@@ -401,7 +430,7 @@ async fn configured_password_over_twenty_characters_rejected_before_start() {
             .err()
             .unwrap();
         assert!(
-            matches!(&error, Error::Encoding(m) if m == &format!("{name} exceeds the 20-character limit")),
+            matches!(&error, Error::InvalidConfig(m) if m.to_string() == format!("{name} exceeds the 20-character limit")),
             "{error:?}"
         );
         assert!(!started.load(Ordering::Acquire));
@@ -437,7 +466,7 @@ async fn configured_empty_password_rejected_before_start() {
                 .err()
                 .unwrap();
             assert!(
-                matches!(&error, Error::Encoding(m) if m == &format!("{name} is empty; leave it unset for no password")),
+                matches!(&error, Error::InvalidConfig(m) if m.to_string() == format!("{name} is empty; leave it unset for no password")),
                 "{error:?}"
             );
             assert!(!started.load(Ordering::Acquire));
@@ -465,7 +494,9 @@ async fn dcc_require_password_rejected_before_sc_dial() {
             builder = builder.dcc_password(password);
         }
         let error = Error::from(builder.build().await.err().unwrap());
-        assert!(matches!(error, Error::Encoding(m) if m.contains("nonempty dcc_password")));
+        assert!(
+            matches!(error, Error::InvalidConfig(m) if m.to_string().contains("nonempty dcc_password"))
+        );
     }
 }
 

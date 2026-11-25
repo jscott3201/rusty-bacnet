@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use super::request_peer::CanonicalRequester;
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bacnet_types::map_hash::BuildMapHasher;
 use bacnet_types::sync::MutexExt;
 use tokio::sync::Semaphore;
@@ -102,32 +102,37 @@ impl RequestAdmissionPolicy {
     /// Reject zero and limits above tokio's `Semaphore::MAX_PERMITS`, the
     /// bound these limits have always had.
     pub fn validate(&self) -> Result<(), Error> {
-        for (name, value) in [
-            ("max_confirmed_in_flight", self.max_confirmed_in_flight),
-            ("max_unconfirmed_in_flight", self.max_unconfirmed_in_flight),
+        for (label, value) in [
             (
-                "max_recovery_in_flight_per_peer",
+                "max_confirmed_in_flight must be in 1..={}",
+                self.max_confirmed_in_flight,
+            ),
+            (
+                "max_unconfirmed_in_flight must be in 1..={}",
+                self.max_unconfirmed_in_flight,
+            ),
+            (
+                "max_recovery_in_flight_per_peer must be in 1..={}",
                 self.max_recovery_in_flight_per_peer,
             ),
             (
-                "max_confirmed_in_flight_per_peer",
+                "max_confirmed_in_flight_per_peer must be in 1..={}",
                 self.max_confirmed_in_flight_per_peer,
             ),
             (
-                "max_unconfirmed_in_flight_per_peer",
+                "max_unconfirmed_in_flight_per_peer must be in 1..={}",
                 self.max_unconfirmed_in_flight_per_peer,
             ),
         ] {
             if value == 0 || value > Semaphore::MAX_PERMITS {
-                return Err(Error::Encoding(format!(
-                    "{name} must be in 1..={}",
-                    Semaphore::MAX_PERMITS
-                )));
+                return Err(Error::InvalidConfig(
+                    Refusal::new(label).with_value(Semaphore::MAX_PERMITS as u64),
+                ));
             }
         }
         if self.confirmed_recovery_reserve >= self.max_confirmed_in_flight {
-            return Err(Error::Encoding(
-                "confirmed_recovery_reserve must be smaller than max_confirmed_in_flight".into(),
+            return Err(Error::invalid_config(
+                "confirmed_recovery_reserve must be smaller than max_confirmed_in_flight",
             ));
         }
         Ok(())

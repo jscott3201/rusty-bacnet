@@ -94,10 +94,12 @@ pub(crate) fn stock_database(
 /// Device brings its own storage.
 pub(crate) fn refuse_unused_path(config: &ServerConfig, database: &str) -> Result<(), Error> {
     match &config.device_storage_path {
-        Some(path) => Err(Error::Encoding(format!(
-            "device_storage_path {} is for the Device a builder builds from its identity; \
-             {database} brings its Device's own storage (DeviceObject::with_tags_persistence)",
-            path.display()
+        Some(path) => Err(Error::InvalidConfig(bacnet_types::error::Refusal::text(
+            format!(
+                "device_storage_path {} is for the Device a builder builds from its identity; \
+                 {database} brings its Device's own storage (DeviceObject::with_tags_persistence)",
+                path.display()
+            ),
         ))),
         None => Ok(()),
     }

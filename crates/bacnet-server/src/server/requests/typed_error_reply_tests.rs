@@ -8,7 +8,7 @@ use bacnet_encoding::apdu::{self, Apdu};
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, RejectReason,
 };
-use bacnet_types::error::{Error, ErrorDetail};
+use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use bytes::BytesMut;
 
 /// An application-tagged ENUMERATED (tag 9) with the fewest content octets,
@@ -89,5 +89,82 @@ fn every_reject_reason_goes_out_unchanged() {
             panic!("expected a Reject PDU");
         };
         assert_eq!(pdu.reject_reason, reason);
+    }
+}
+
+/// Every kind of error the server's own refusals now take (#1833) goes out
+/// as the untyped text it replaces did: an Error PDU with SERVICES / OTHER,
+/// the plain one and each Clause 21 production alike. A refusal is never a
+/// syntax fault of the request, so `into_request_reject` leaves each as it
+/// is; only a decoding error becomes a Reject there, which is why a site
+/// typed as `Decoding` is one no request decode passes through.
+#[test]
+fn local_refusals_go_out_as_the_text_they_replace() {
+    use bacnet_types::error::{DecodeError, DecodingKind, Lifecycle, RangeError, Refusal};
+    let services = [
+        ConfirmedServiceChoice::READ_PROPERTY,
+        ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL,
+        ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
+        ConfirmedServiceChoice::ADD_LIST_ELEMENT,
+        ConfirmedServiceChoice::CREATE_OBJECT,
+        ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+    ];
+    let refusals = || {
+        let mut all = vec![
+            Error::invalid_config("cov_retry_timeout_ms is 0"),
+            Error::invalid_argument("time sync: step cap exceeded"),
+            Error::unsupported("Device clock is disabled"),
+            Error::LimitReached(Refusal::text("server I-Am broadcast capacity exhausted")),
+            Error::from(
+                RangeError::new("ConfirmedAuditNotification payload exceeds {} bytes")
+                    .with_value(65_536),
+            ),
+            Error::from(DecodeError::new(
+                DecodingKind::OutOfRange,
+                0,
+                "unknown EnableDisable value",
+            )),
+        ];
+        for state in [
+            Lifecycle::AlreadyStarted,
+            Lifecycle::NotRunning,
+            Lifecycle::Stopping,
+            Lifecycle::NotConnected,
+            Lifecycle::Closed,
+        ] {
+            all.push(Error::state(state, "Audit delivery owner is closed"));
+        }
+        all
+    };
+    for service in services {
+        let untyped = wire(
+            service,
+            &Error::Encoding("unknown EnableDisable value".into()),
+        );
+        assert_eq!(
+            untyped,
+            wire(service, &Error::OutOfRange("too large".into())),
+            "{service:?}"
+        );
+        for refusal in refusals() {
+            assert_eq!(wire(service, &refusal), untyped, "{service:?}: {refusal:?}");
+        }
+    }
+    let read = ConfirmedServiceChoice::READ_PROPERTY;
+    for refusal in refusals() {
+        let decoding = matches!(refusal, Error::Decoding(_));
+        let as_request = refusal.into_request_reject();
+        if decoding {
+            assert!(
+                matches!(as_request, Error::Remote(RemoteError::Reject { .. })),
+                "{as_request:?}"
+            );
+        } else {
+            assert_eq!(
+                wire(read, &as_request),
+                wire(read, &Error::Encoding(String::new())),
+                "{as_request:?}"
+            );
+        }
     }
 }

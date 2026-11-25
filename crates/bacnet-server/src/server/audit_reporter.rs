@@ -151,14 +151,14 @@ impl AuditReportersConfig {
                     || oid.instance_number() == ObjectIdentifier::MAX_INSTANCE
             })
         {
-            return Err(Error::Encoding(
-                "target Audit requires 1..=64 concrete Reporter identifiers".into(),
+            return Err(Error::invalid_config(
+                "target Audit requires 1..=64 concrete Reporter identifiers",
             ));
         }
         self.reporters.sort_by_key(|oid| oid.instance_number());
         if self.reporters.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(Error::Encoding(
-                "duplicate target Audit Reporter identifier".into(),
+            return Err(Error::invalid_config(
+                "duplicate target Audit Reporter identifier",
             ));
         }
         Ok(())

@@ -57,6 +57,7 @@ use bacnet_network::layer::{ApduReceiver, ReceivedApdu, ReceivedNetworkControl};
 use super::audit_recipient_routes::AuditRoutes;
 use super::*;
 use crate::device_view::DeviceExecution;
+use bacnet_types::error::Refusal;
 
 /// Where the dispatch loop takes its APDUs from.
 pub(super) trait Apdus: Send + 'static {
@@ -176,9 +177,9 @@ impl<T: TransportPort + 'static> Link<T> for Own<T> {
     }
 
     async fn abandon(network: Arc<NetworkLayer<T>>) -> Result<(), Error> {
-        let network = Arc::try_unwrap(network).map_err(|_| {
-            Error::Encoding("startup cleanup has an unexpected network owner".into())
-        })?;
+        // Another holder still has the network the cleanup must own.
+        let network = Arc::try_unwrap(network)
+            .map_err(|_| Error::limit_reached("startup cleanup has an unexpected network owner"))?;
         super::heap_futures::boxed(|| {
             super::network_port::StartingNetwork::from_network(network).cleanup()
         })
@@ -405,11 +406,10 @@ pub(super) fn follow_number<T: TransportPort + 'static>(
     })
 }
 
-/// A setting a seated build was given that contradicts the node's.
-fn contradicts(what: &str) -> Error {
-    Error::Encoding(format!(
-        "a server on a node's seat takes the node's {what}: the builder set a different one"
-    ))
+/// A setting a seated build was given that contradicts the node's, `label`
+/// naming it (#1833).
+fn contradicts(label: &'static str) -> Error {
+    Error::invalid_config(label)
 }
 
 /// The value the supplied database's Device declares for `property`, when
@@ -473,16 +473,15 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
     /// with the node's APDU timing once its Device has been given it.
     pub async fn build(mut self) -> Result<BACnetServer<T>, StartError> {
         if self.had_transport {
-            let error = Error::Encoding(
-                "a server builder with a transport of its own takes no seat as well".into(),
+            let error = Error::invalid_config(
+                "a server builder with a transport of its own takes no seat as well",
             );
             return Err(StartError::new(error, self.db));
         }
         if self.config.registered_network_port.is_some() {
-            let error = Error::Encoding(
+            let error = Error::invalid_config(
                 "a server on a node's seat takes no registered Network Port of its own: the \
-                 node reserves and publishes its port"
-                    .into(),
+                 node reserves and publishes its port",
             );
             return Err(StartError::new(error, self.db));
         }
@@ -577,9 +576,9 @@ impl<T: TransportPort + 'static> SeatedServerBuilder<T> {
     /// supplied one that declares the object model's defaults, which no
     /// identity-built database can set otherwise.
     fn take_node(&mut self, node: NodeDevice) -> Result<bool, Error> {
-        let identity = self.node_identity.take().ok_or_else(|| {
-            Error::Encoding("a server on a node's seat needs the node's Device identity".into())
-        })?;
+        let identity = self.node_identity.take().ok_or(Error::invalid_config(
+            "a server on a node's seat needs the node's Device identity",
+        ))?;
         let capacity = self.seat.network.transport().local_receive_apdu_capacity();
         let state_timing =
             node_contradictions(&self.config, &identity, node, capacity, self.db.as_ref())?;
@@ -616,7 +615,10 @@ fn node_contradictions(
     if config.device == defaults.device {
         tracing::debug!("a seated server serves the node's Device identity");
     } else if served(&config.device)? != served(identity)? {
-        return Err(contradicts("Device identity"));
+        return Err(contradicts(
+            "a server on a node's seat takes the node's Device identity: the builder set a \
+             different one",
+        ));
     } else if config.device.services() != identity.services() {
         tracing::debug!(
             "a seated server serves the node's Device identity in place of the builder's, \
@@ -647,8 +649,14 @@ fn node_contradictions(
             );
         } else if set != node {
             return Err(contradicts(match setting {
-                "cov_retry_timeout_ms" => "APDU timeout (cov_retry_timeout_ms)",
-                _ => "APDU retries (notification_retries)",
+                "cov_retry_timeout_ms" => {
+                    "a server on a node's seat takes the node's APDU timeout \
+                     (cov_retry_timeout_ms): the builder set a different one"
+                }
+                _ => {
+                    "a server on a node's seat takes the node's APDU retries \
+                     (notification_retries): the builder set a different one"
+                }
             }));
         }
     }
@@ -677,11 +685,13 @@ fn node_contradictions(
                      it is given the node's"
             );
         } else if declared != node_timing && declared != (None, None) {
-            return Err(Error::Encoding(format!(
-                "a server on a node's seat serves the node's APDU_Timeout ({} ms) and \
+            return Err(Error::InvalidConfig(
+                Refusal::new(
+                    "a server on a node's seat serves the node's APDU_Timeout ({} ms) and \
                      Number_Of_APDU_Retries ({}): the database's Device declares others",
-                node.apdu_timeout_ms, node.apdu_retries
-            )));
+                )
+                .with_values(node.apdu_timeout_ms, u64::from(node.apdu_retries)),
+            ));
         }
     }
     Ok(state_timing)

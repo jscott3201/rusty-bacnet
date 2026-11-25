@@ -27,15 +27,18 @@ impl Default for GetEnrollmentSummaryBudget {
 impl GetEnrollmentSummaryBudget {
     /// Reject zero; positive limits are local operator policy, not BACnet limits.
     pub fn validate(&self) -> Result<(), Error> {
-        for (name, value) in [
-            ("enrollment_summary_max_objects", self.max_objects),
+        for (label, value) in [
             (
-                "enrollment_summary_max_service_ack_bytes",
+                "enrollment_summary_max_objects must be positive",
+                self.max_objects,
+            ),
+            (
+                "enrollment_summary_max_service_ack_bytes must be positive",
                 self.max_service_ack_bytes,
             ),
         ] {
             if value == 0 {
-                return Err(Error::Encoding(format!("{name} must be positive")));
+                return Err(Error::invalid_config(label));
             }
         }
         Ok(())

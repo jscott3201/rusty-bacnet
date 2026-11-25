@@ -30,22 +30,22 @@ impl Default for AtomicReadFileBudget {
 impl AtomicReadFileBudget {
     /// Reject zero configuration values before startup. Request counts may be zero.
     pub fn validate(&self) -> Result<(), Error> {
-        for (name, value) in [
+        for (label, value) in [
             (
-                "atomic_read_file_max_requested_stream_octets",
+                "atomic_read_file_max_requested_stream_octets must be positive",
                 self.max_requested_stream_octets,
             ),
             (
-                "atomic_read_file_max_requested_records",
+                "atomic_read_file_max_requested_records must be positive",
                 self.max_requested_records,
             ),
             (
-                "atomic_read_file_max_service_ack_bytes",
+                "atomic_read_file_max_service_ack_bytes must be positive",
                 self.max_service_ack_bytes,
             ),
         ] {
             if value == 0 {
-                return Err(Error::Encoding(format!("{name} must be positive")));
+                return Err(Error::invalid_config(label));
             }
         }
         Ok(())

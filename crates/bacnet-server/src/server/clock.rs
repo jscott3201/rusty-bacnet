@@ -5,7 +5,7 @@ use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::durable::{SaveWait, StageStep};
 use bacnet_transport::port::TransportPort;
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error, Refusal};
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::primitives::{Date, Time};
 use bacnet_types::sync::MutexExt;
@@ -32,9 +32,10 @@ impl ClockConfig {
     /// Configure signed minutes west of UTC and daylight-saving status.
     pub fn new(utc_offset_minutes: i16, daylight_savings_status: bool) -> Result<Self, Error> {
         if !(-1440..=1440).contains(&utc_offset_minutes) || utc_offset_minutes % 15 != 0 {
-            return Err(Error::Encoding(format!(
+            // Owned text: the offset may be negative.
+            return Err(Error::InvalidConfig(Refusal::text(format!(
                 "UTC offset {utc_offset_minutes} must be within -1440..=1440 minutes in 15-minute increments"
-            )));
+            ))));
         }
         Ok(Self {
             utc_offset_minutes,
@@ -163,7 +164,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let clock = Arc::clone(
             self.clock
                 .as_ref()
-                .ok_or_else(|| Error::Encoding("Device clock is disabled".into()))?,
+                .ok_or_else(|| Error::unsupported("Device clock is disabled"))?,
         );
         let device = crate::local_device::initiating_device(&self.config.device);
         let db = Arc::clone(&self.db);
@@ -414,9 +415,10 @@ impl ServerClock {
     /// [`set_zone`](Self::set_zone) refuses it, when its local date falls
     /// outside the BACnet Date range.
     pub(super) fn check(&self, config: ClockConfig) -> Result<(), Error> {
-        self.lock().frame_in(config).map(drop).ok_or_else(|| {
-            Error::Encoding("local time in that zone is outside the BACnet Date range".into())
-        })
+        self.lock()
+            .frame_in(config)
+            .map(drop)
+            .ok_or(Error::invalid_config(ZONE_OUT_OF_RANGE))
     }
 
     /// Replace the zone, keeping the UTC instant and whether a
@@ -427,9 +429,9 @@ impl ServerClock {
     /// nothing.
     pub(super) fn set_zone(&self, config: ClockConfig) -> Result<(), Error> {
         let mut state = self.lock();
-        state.frame_in(config).ok_or_else(|| {
-            Error::Encoding("local time in that zone is outside the BACnet Date range".into())
-        })?;
+        state
+            .frame_in(config)
+            .ok_or(Error::invalid_config(ZONE_OUT_OF_RANGE))?;
         state.config = config;
         Ok(())
     }
@@ -478,8 +480,13 @@ impl ClockState {
                 }
         };
 
+        // The peer's value, refused as out of range here (#1833).
         frame_from_utc_hundredths(utc_hundredths, config).ok_or_else(|| {
-            Error::Encoding("synchronized time is outside the BACnet Date range".into())
+            Error::from(DecodeError::new(
+                DecodingKind::OutOfRange,
+                0,
+                "synchronized time is outside the BACnet Date range",
+            ))
         })?;
 
         self.synchronized_utc = Some((utc_hundredths, crate::runtime_clock::now()));
@@ -584,8 +591,15 @@ pub(super) fn date_time_to_hundredths(date: Date, time: Time) -> Result<i128, Er
     Ok(i128::from(days) * HUNDREDTHS_PER_DAY + day_hundredths)
 }
 
-fn invalid_datetime(message: &str) -> Error {
-    Error::Encoding(format!("invalid time synchronization value: {message}"))
+/// A zone whose local date now falls outside the BACnet Date range.
+const ZONE_OUT_OF_RANGE: &str = "local time in that zone is outside the BACnet Date range";
+
+/// A time synchronization's date or time the service doesn't take: the
+/// peer's value, refused as out of range (#1833).
+fn invalid_datetime(message: &'static str) -> Error {
+    DecodeError::new(DecodingKind::OutOfRange, 0, message)
+        .within("invalid time synchronization value")
+        .into()
 }
 
 fn frame_from_utc_hundredths(utc_hundredths: i128, config: ClockConfig) -> Option<ClockFrame> {

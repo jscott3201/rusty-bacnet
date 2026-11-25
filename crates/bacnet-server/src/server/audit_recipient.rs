@@ -44,7 +44,7 @@ fn device_authority(
         .and_then(|object| object.device_authority_internal())
         .filter(|authority| authority.object_identifier() == device)
         .ok_or_else(|| {
-            Error::Encoding("target Audit requires the identity's built-in Device".into())
+            Error::invalid_config("target Audit requires the identity's built-in Device")
         })
 }
 
@@ -54,7 +54,7 @@ fn provisioned_recipient(authority: &DeviceAuthority<'_>) -> Result<BACnetRecipi
         .provisioned_audit_recipient()
         .cloned()
         .ok_or_else(|| {
-            Error::Encoding("target Audit requires a provisioned built-in Device recipient".into())
+            Error::invalid_config("target Audit requires a provisioned built-in Device recipient")
         })
 }
 
@@ -68,7 +68,7 @@ fn reporter_status(
         .and_then(|object| object.audit_reporter())
         .filter(|object| object.object_identifier() == *selected)
         .map(|reporter| reporter.status_internal())
-        .ok_or_else(|| Error::Encoding("invalid audit reporter: missing read capability".into()))
+        .ok_or_else(|| Error::invalid_config("invalid audit reporter: missing read capability"))
 }
 
 /// Validate before transport startup and before installing any capability.
@@ -93,7 +93,7 @@ pub(super) fn validate(
         statuses.push(reporter_status(db, selected)?);
         db.get_mut(selected).and_then(|object| object.audit_reporter_mut())
             .filter(|object| object.object_identifier() == *selected)
-            .ok_or_else(|| Error::Encoding(format!("invalid audit reporter: selected object {selected:?} is absent or lacks the Audit Reporter capability")))?
+            .ok_or_else(|| Error::InvalidConfig(bacnet_types::error::Refusal::text(format!("invalid audit reporter: selected object {selected:?} is absent or lacks the Audit Reporter capability"))))?
             .validate_installation()?;
     }
     let route = routes.resolve(&value);

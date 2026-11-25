@@ -379,12 +379,17 @@ or field of its own, as `Error::SendTooLong` has. Each displays as its text
 alone; `Error::with_context` puts context in front and keeps the variant.
 `Error::state`, `Error::invalid_config`, `Error::invalid_argument`,
 `Error::unsupported` and `Error::limit_reached` build one from a static
-label. `bacnet-transport`, `bacnet-network`, `bacnet-endpoint-core` and
-`bacnet-endpoint` report their refusals this way; the other hosted crates
-still report theirs as `Error::Encoding` or `Error::OutOfRange` text until
-#1833 reaches them. An endpoint session or ingress that is not running says
-why with its `Lifecycle`: `NotRunning` before its start, `Stopping` while a
-stop runs, and `Closed` once stopped or shut, since each starts once. A
+label. `bacnet-transport`, `bacnet-network`, `bacnet-endpoint-core`,
+`bacnet-endpoint`, `bacnet-server` and `bacnet-client` report their refusals
+this way; the other hosted crates still report theirs as `Error::Encoding` or
+`Error::OutOfRange` text until #1833 reaches them. An endpoint session or
+ingress that is not running says why with its `Lifecycle`: `NotRunning`
+before its start, `Stopping` while a stop runs, and `Closed` once stopped or
+shut, since each starts once. A stopped server's broadcaster, a closed seat
+and a confirmed request its client's stop cut off are `Closed` too;
+`bacnet_client::client::is_request_cut_off` tells the last from the others.
+A server answers each of its own refusals with the Error PDU SERVICES /
+OTHER, as it answered their text. A
 stopped transport's send still fails with
 `Error::Transport` of kind `NotConnected`, which the client and the bindings
 treat as a link that is down; it moves to `State(NotRunning)` in a change of
@@ -7608,7 +7613,7 @@ caller dropped once Operation_Expected has changed still notifies its
 subscribers (#1520). Every local write (`write_local`,
 `write_local_encoded`, `set_present_value_local` and the other `*_local`
 setters) must therefore be awaited inside a Tokio runtime: outside one it
-fails with `Error::Encoding` before anything is written.
+fails with `Error::Unsupported` before anything is written.
 
 Whatever commits a Present_Value write owns the run it starts and finishes it,
 so no path leaves a Command in process (#1178). Without a server,
@@ -9966,7 +9971,7 @@ for path in client.routed_path_limits() {
 }
 ```
 
-`configure_routed_path_max_npdu` refuses, with `Error::Encoding`, a limit
+`configure_routed_path_max_npdu` refuses, with `Error::InvalidArgument`, a limit
 that can carry no request: one under the 50-octet minimum APDU plus the
 smallest NPCI a router adds to a request from this client (nine fixed octets,
 a one-octet DADR and the client's own MAC as SADR), so 66 on B/IP and 61 on
@@ -10008,9 +10013,10 @@ below are client-wide.
 
 Every MAC on a routed path holds to `bacnet_npdu::MAX_MAC_LEN` (18 octets), the
 longest address the NPDU codec carries and the network layer delivers (#1267).
-A routed request refuses a longer DADR or local source MAC, and a router MAC
-that is empty or longer, with `Error::Encoding` before it reserves or waits on
-the path, and both configuration methods refuse such a router MAC too.
+A routed request refuses a longer DADR, and a router MAC that is empty or
+longer, with `Error::InvalidArgument`, and a longer local source MAC with
+`Error::InvalidConfig`, before it reserves or waits on the path, and both
+configuration methods refuse such a router MAC too.
 
 A routed confirmed request goes to one device on one remote network (#1278).
 DNET must be in 1..=65534, since 0 names no network and 65535 is the global
@@ -10018,7 +10024,7 @@ broadcast, and the DADR must hold at least one octet, since an empty DADR has
 the remote router broadcast the request. Every routed confirmed request (a
 typed call or `confirmed_request` to a remote `Station` or address, a
 station from `resolve_device`, the routed COV subscriptions) refuses
-any of them with `Error::Encoding` before the path is reserved or a
+any of them with `Error::InvalidArgument` before the path is reserved or a
 transaction registered. Both configuration methods use the same DNET check,
 and `add_routed_device` refuses such a peer. Unconfirmed sends keep remote and global broadcasts,
 for example `broadcast_network_unconfirmed`.
@@ -11003,7 +11009,7 @@ this link whose NPDU names the station, takes no routed path lease and learns
 no route).
 
 A confirmed request on another network is checked before anything is sent
-or looked up, whatever form names it, and fails with `Error::Encoding`
+or looked up, whatever form names it, and fails with `Error::InvalidArgument`
 naming the address in its link's form (#2722, #2709):
 
 - a router that is this link's broadcast or a group address (a B/IP limited,
@@ -12211,7 +12217,7 @@ let server = BACnetServer::bip_builder()
   Protocol_Object_Types_Supported (`bacnet_objects::device::SUPPORTED_OBJECT_TYPES`)
   other than Device and Network Port, which model the node itself, or a
   proprietary type from 128 to 1023. Anything else, and a second
-  registration for the same type, is refused with `Error::Encoding` when it
+  registration for the same type, is refused with `Error::InvalidConfig` when it
   is registered. A registered proprietary type passes CreateObject's type
   check; Protocol_Object_Types_Supported, which lists standard types only,
   doesn't change.
@@ -12254,7 +12260,7 @@ calls it with a `ReinitializeContext` and the object database once a request
 has decoded, passed `reinit_password` and named a state Clause 16.4 defines.
 A configured `reinit_password` or `dcc_password` holds 1 to 20 characters
 (`bacnet_services::device_mgmt::MAX_PASSWORD_CHARS`, counted in characters,
-not octets); an empty or longer one fails the build with `Error::Encoding`
+not octets); an empty or longer one fails the build with `Error::InvalidConfig`
 instead of refusing every request (#2060, #2094). Leave it unset for no
 password.
 The context carries the requested `state`, the immediate `source_mac`, the
@@ -13940,7 +13946,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Unsupported(Refusal)` | Not offered on this platform, in this build, or by this kind of component |
 | `Error::LimitReached(Refusal)` | A resource cap reached: a full table, a counter run out, a one-holder resource another holds |
 | `Error::SendTooLong { length, limit }` | A send refused for its length before anything was written |
-| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (client, server, objects), and, until their own change, the transport's I/O failures as text, the MS/TP and Ethernet NPDU-length refusals, B/IP's refusals of an NPDU too long, a socket that can't take the datagram now and a socket's own failure, and an endpoint's send that waited past its deadline |
+| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (objects, device-core and the crates above the client and server), and, until their own change, the transport's I/O failures as text, the MS/TP and Ethernet NPDU-length refusals, B/IP's refusals of an NPDU too long, a socket that can't take the datagram now and a socket's own failure, an endpoint's send that waited past its deadline, a server's audit forwarding that ran out of time or found no route, and `resolve_device` for an instance not in the client's table |
 | `Error::Transport(io_error)` | Transport I/O failure, and a stopped transport's send (`NotConnected`) |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
 | `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles) |
@@ -13990,7 +13996,7 @@ let client = BACnetClient::generic_builder().transport(transport).build().await?
 #### SC Device UUID migration
 
 `ScServerBuilder::device_uuid([u8; 16])` is now required at runtime: `build()`
-returns `Error::Encoding` for omitted/all-zero identity before dialing. Reconnect
+returns `Error::InvalidConfig` for omitted/all-zero identity before dialing. Reconnect
 configuration is still checked first; the existing TLS/binding/budget checks
 retain their relative order. This is an intentional runtime compatibility break
 for SC server callers. The Rust SC client already requires a nonzero UUID; its
@@ -15058,7 +15064,8 @@ What a caller sees differently:
 - A request waiting for its turn at a destination (`min_request_interval_ms`)
   fails at once when the session stops or is dropped, as the narrow
   requester's did, but with the error an open request cut off by the stop
-  gets, `Error::Encoding("TSM response channel closed")`, where the narrow
+  gets, `Error::State(Lifecycle::Closed, _)` that
+  `bacnet_client::client::is_request_cut_off` recognizes, where the narrow
   requester returned `"endpoint shutdown"` (#2720).
 - A routed request whose router is the link's broadcast or a group address
   is refused before anything is sent, as the narrow requester refused it

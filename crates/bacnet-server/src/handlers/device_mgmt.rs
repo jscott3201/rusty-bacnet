@@ -77,8 +77,16 @@ pub(crate) fn validate_dcc(
     } else if request.enable_disable == EnableDisable::DISABLE_INITIATION {
         crate::server::DccState::DisableInitiation
     } else {
+        // A mode the service doesn't define: the peer's data, refused as
+        // out of range (#1833). It goes out as the Error PDU any refusal of
+        // a running service does, not a Reject.
         return Err(failure(
-            Error::Encoding("unknown EnableDisable value".into()),
+            bacnet_types::error::DecodeError::new(
+                bacnet_types::error::DecodingKind::OutOfRange,
+                0,
+                "unknown EnableDisable value",
+            )
+            .into(),
             DccOutcome::Malformed,
         ));
     };

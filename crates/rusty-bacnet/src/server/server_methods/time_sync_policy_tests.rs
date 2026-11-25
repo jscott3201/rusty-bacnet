@@ -154,47 +154,47 @@ fn invalid_time_sync_policy_raises_the_constructor_exception_types() {
         ),
         (
             c"{'source_restriction': [(None, b'')]}",
-            "ValueError: encoding error: time sync: source address must contain 1..=18 octets",
+            "ValueError: time sync: source address must contain 1..=18 octets",
         ),
         (
             c"{'source_restriction': [(None, bytes(19))]}",
-            "ValueError: encoding error: time sync: source address must contain 1..=18 octets",
+            "ValueError: time sync: source address must contain 1..=18 octets",
         ),
         (
             c"{'source_restriction': [(65534, bytes(19))]}",
-            "ValueError: encoding error: time sync: source address must contain 1..=18 octets",
+            "ValueError: time sync: source address must contain 1..=18 octets",
         ),
         (
             cr"{'source_restriction': [(0, b'\x01')]}",
-            "ValueError: encoding error: time sync: source network must be 1..=65534",
+            "ValueError: time sync: source network must be 1..=65534",
         ),
         (
             cr"{'source_restriction': [(65535, b'\x01')]}",
-            "ValueError: encoding error: time sync: source network must be 1..=65534",
+            "ValueError: time sync: source network must be 1..=65534",
         ),
         (
             cr"{'source_restriction': [(None, b'\x01')] * 257}",
-            "ValueError: encoding error: time sync: source restriction allows at most 256 entries",
+            "ValueError: time sync: source restriction allows at most 256 entries",
         ),
         (
             c"{'per_source_rate': (0.0, 1)}",
-            "ValueError: encoding error: time sync: rate must be positive and finite",
+            "ValueError: time sync: rate must be positive and finite",
         ),
         (
             c"{'global_rate': (float('inf'), 1)}",
-            "ValueError: encoding error: time sync: rate must be positive and finite",
+            "ValueError: time sync: rate must be positive and finite",
         ),
         (
             c"{'global_rate': (1.0, 0)}",
-            "ValueError: encoding error: time sync: rate must be positive and finite",
+            "ValueError: time sync: rate must be positive and finite",
         ),
         (
             c"{'max_sources': 0}",
-            "ValueError: encoding error: time sync: max_sources must be 1..=65536",
+            "ValueError: time sync: max_sources must be 1..=65536",
         ),
         (
             c"{'max_sources': 65537}",
-            "ValueError: encoding error: time sync: max_sources must be 1..=65536",
+            "ValueError: time sync: max_sources must be 1..=65536",
         ),
     ] {
         let error = read(source).unwrap_err().to_string();

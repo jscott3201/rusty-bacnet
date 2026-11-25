@@ -770,7 +770,7 @@ pub(crate) async fn broadcast_i_am_from<T: TransportPort + 'static>(
 ) -> Result<(), Error> {
     let guard = db.read().await;
     bacnet_device_core::discovery::announcement_device(&guard, &config.device)
-        .ok_or_else(|| Error::Encoding("no Device object in database".into()))?;
+        .ok_or(Error::invalid_config("no Device object in database"))?;
 
     // Both discovery paths encode the same frozen, resolved declarations.
     let mut service_buf = BytesMut::new();

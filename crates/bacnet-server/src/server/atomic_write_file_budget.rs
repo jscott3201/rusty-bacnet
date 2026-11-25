@@ -28,19 +28,22 @@ impl Default for AtomicWriteFileBudget {
 impl AtomicWriteFileBudget {
     /// Reject zero configuration before startup; empty requests remain permitted.
     pub fn validate(&self) -> Result<(), Error> {
-        for (name, value) in [
+        for (label, value) in [
             (
-                "atomic_write_file_max_stream_payload_octets",
+                "atomic_write_file_max_stream_payload_octets must be positive",
                 self.max_stream_payload_octets,
             ),
-            ("atomic_write_file_max_records", self.max_records),
             (
-                "atomic_write_file_max_record_payload_bytes",
+                "atomic_write_file_max_records must be positive",
+                self.max_records,
+            ),
+            (
+                "atomic_write_file_max_record_payload_bytes must be positive",
                 self.max_record_payload_bytes,
             ),
         ] {
             if value == 0 {
-                return Err(Error::Encoding(format!("{name} must be positive")));
+                return Err(Error::invalid_config(label));
             }
         }
         Ok(())

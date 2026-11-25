@@ -514,7 +514,9 @@ async fn recovery_invalid_reserve_before_direct_generic_and_bip_start() {
         .map_err(Error::from)
         .err()
         .unwrap();
-        assert!(matches!(error, Error::Encoding(m) if m.contains("confirmed_recovery_reserve")));
+        assert!(
+            matches!(error, Error::InvalidConfig(m) if m.to_string().contains("confirmed_recovery_reserve"))
+        );
         let error = BACnetServer::generic_builder()
             .transport(never_start(&started))
             .request_admission_policy(policy)
@@ -523,7 +525,9 @@ async fn recovery_invalid_reserve_before_direct_generic_and_bip_start() {
             .map_err(Error::from)
             .err()
             .unwrap();
-        assert!(matches!(error, Error::Encoding(m) if m.contains("confirmed_recovery_reserve")));
+        assert!(
+            matches!(error, Error::InvalidConfig(m) if m.to_string().contains("confirmed_recovery_reserve"))
+        );
         assert!(!started.load(Ordering::Acquire));
         assert!(
             BACnetServer::bip_builder()

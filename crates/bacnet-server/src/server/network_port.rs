@@ -49,21 +49,21 @@ pub(super) fn prepare<T: TransportPort>(
         }
         // A B/IP link that reports no mode is configured both ways.
         None if transport.bip_broadcast_endpoint().is_some() => {
-            return Err(Error::Encoding(
+            return Err(Error::invalid_config(
                 "registered Network Port refused: a BBMD that also registers as a foreign \
-                 device has no single B/IP mode"
-                    .into(),
+                 device has no single B/IP mode",
             ));
         }
         None => {
-            return Err(Error::Encoding(
-                "registered port requires B/IP or B/IPv6".into(),
-            ));
+            return Err(Error::unsupported(NOT_BIP));
         }
     };
     let (_, lease) = db.reserve_bip_port_internal(oid, address.ip().octets(), address.port())?;
     transport.retain_network_port_lease_internal(lease)
 }
+
+/// A registered port's link that is neither B/IP nor B/IPv6.
+const NOT_BIP: &str = "registered port requires B/IP or B/IPv6";
 
 /// [`prepare`] for a B/IPv6 link: its configured address must be one
 /// concrete unicast address, as a B/IP link's must, and its VMAC the served
@@ -74,9 +74,7 @@ fn prepare_bip6<T: TransportPort>(
     oid: ObjectIdentifier,
     device_instance: u32,
 ) -> Result<(), Error> {
-    let port = transport
-        .bip6_port()
-        .ok_or_else(|| Error::Encoding("registered port requires B/IP or B/IPv6".into()))?;
+    let port = transport.bip6_port().ok_or(Error::unsupported(NOT_BIP))?;
     let address = registration::bip6_address(&port, Some(device_instance))?;
     let (_, lease) = db.reserve_bip6_port_internal(oid, address.ip().octets(), address.port())?;
     transport.retain_network_port_lease_internal(lease)
@@ -98,9 +96,9 @@ pub(super) fn publish<T: TransportPort + 'static>(
             registration::publish_bip(db, oid, port, capacity)?;
         }
         _ => {
-            let port = transport.bip6_port().ok_or_else(|| {
-                Error::Encoding("registered B/IP mode changed during bind".into())
-            })?;
+            let port = transport.bip6_port().ok_or(Error::unsupported(
+                "registered B/IP mode changed during bind",
+            ))?;
             registration::publish_bip6(db, oid, port, capacity)?;
         }
     }
@@ -144,7 +142,13 @@ impl<T: TransportPort + 'static> StartingNetwork<T> {
         self.runtime
             .spawn(async move { network.stop().await })
             .await
-            .map_err(|error| Error::Encoding(format!("startup cleanup failed: {error}")))?
+            .map_err(|error| {
+                // The cleanup task panicked or was aborted (#1833).
+                Error::State(
+                    bacnet_types::error::Lifecycle::Closed,
+                    bacnet_types::error::Refusal::text(format!("startup cleanup failed: {error}")),
+                )
+            })?
     }
 }
 impl<T: TransportPort + 'static> Drop for StartingNetwork<T> {

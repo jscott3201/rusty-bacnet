@@ -15,8 +15,13 @@ pub(super) struct BroadcasterState<T: TransportPort> {
     capacity: Arc<Semaphore>,
 }
 
+/// The broadcaster is sealed when a stop begins and never reopens: closed
+/// for good (#1833).
 pub(super) fn stopped() -> Error {
-    Error::Encoding("server is stopping or stopped".into())
+    Error::state(
+        bacnet_types::error::Lifecycle::Closed,
+        "server is stopping or stopped",
+    )
 }
 
 impl<T: TransportPort> BroadcasterState<T> {
@@ -58,7 +63,7 @@ impl<T: TransportPort + 'static> BroadcasterState<T> {
         let network = Arc::clone(slot.as_ref().ok_or_else(stopped)?);
         let permit = Arc::clone(&self.capacity)
             .try_acquire_owned()
-            .map_err(|_| Error::Encoding("server I-Am broadcast capacity exhausted".into()))?;
+            .map_err(|_| Error::limit_reached("server I-Am broadcast capacity exhausted"))?;
         let requests = self.requests.upgrade().ok_or_else(stopped)?;
         let config = Arc::clone(&self.config);
         let db = self.db.upgrade().ok_or_else(stopped)?;

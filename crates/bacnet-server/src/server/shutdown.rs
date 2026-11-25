@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_types::error::{Lifecycle, Refusal};
 
 #[cfg(test)]
 #[path = "request_tasks_tests.rs"]
@@ -203,7 +204,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
         self.target_audit = None;
         if let Some(error) = &self.transport_cleanup_error {
-            return Err(Error::Encoding(error.clone()));
+            return Err(cleanup_failed(error.clone()));
         }
         if !self.owns_link() {
             // The node's layer, which the node stops: let go of it (#2617).
@@ -238,7 +239,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Err(error) => {
                 let message = format!("transport cleanup task failed: {error}");
                 self.transport_cleanup_error = Some(message.clone());
-                Err(Error::Encoding(message))
+                Err(cleanup_failed(message))
             }
         }
     }
@@ -492,4 +493,10 @@ pub fn drop_database_off_runtime(db: Arc<RwLock<ObjectDatabase>>) -> Option<Join
         return None;
     };
     Some(runtime.spawn_blocking(move || drop(db)))
+}
+
+/// A stop whose transport cleanup task panicked or was aborted: the server
+/// is shut for good, with the reason in the text (#1833).
+fn cleanup_failed(message: String) -> Error {
+    Error::State(Lifecycle::Closed, Refusal::text(message))
 }
