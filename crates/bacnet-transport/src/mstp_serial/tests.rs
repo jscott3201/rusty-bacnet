@@ -591,3 +591,51 @@ fn available_ports_lists_device_names() {
         }
     }
 }
+
+/// A port that can't be opened is a transport error of the failure's kind,
+/// whose text names the port and then gives the operating system's reason
+/// (#1833).
+#[tokio::test]
+async fn a_port_that_does_not_open_is_a_transport_error_naming_it() {
+    let path = std::env::temp_dir()
+        .join("rusty-bacnet-missing-serial")
+        .join("serial");
+    let port_name = path.to_string_lossy().into_owned();
+    let config = SerialConfig {
+        port_name: port_name.clone(),
+        baud_rate: 38_400,
+    };
+    let Err(error) = TokioSerialPort::open(&config) else {
+        panic!("{port_name} opened");
+    };
+    let Error::Transport(io) = &error else {
+        panic!("{error:?}");
+    };
+    // `NotFound` everywhere: the serial library's conversion keeps Unix's
+    // ENOENT, and makes Windows' path-not-found (no device to it) the same.
+    assert_eq!(io.kind(), std::io::ErrorKind::NotFound, "{io}");
+    let text = io.to_string();
+    assert!(
+        text.starts_with(&format!("Serial open failed for {port_name}: ")),
+        "{text}"
+    );
+}
+
+/// A GPIO failure is a transport error of the OS error's kind where the
+/// GPIO library keeps the code, and `Other` where it doesn't (#1833).
+#[cfg(feature = "serial-gpio")]
+#[test]
+fn a_gpio_failure_keeps_the_os_errors_kind() {
+    let denied = gpiocdev::Error::from(std::io::Error::from_raw_os_error(libc::EACCES));
+    let none = gpiocdev::Error::NoGpioChips();
+    for (error, kind) in [
+        (denied, std::io::ErrorKind::PermissionDenied),
+        (none, std::io::ErrorKind::Other),
+    ] {
+        let Error::Transport(io) = gpio_error(error, "GPIO request failed") else {
+            panic!("not a transport error");
+        };
+        assert_eq!(io.kind(), kind, "{io}");
+        assert!(io.to_string().starts_with("GPIO request failed: "), "{io}");
+    }
+}

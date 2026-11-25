@@ -373,8 +373,9 @@ fn transport_error_type(py: Python<'_>) -> PyResult<&Py<PyType>> {
         namespace.set_item("sc_untrusted_peer", py.None())?;
         namespace.set_item(
             "__doc__",
-            "A transport I/O failure: a bind, listen, dial or socket error. \
-             Also an OSError, with errno and strerror from the underlying error.",
+            "A transport I/O failure: a bind, listen, dial or socket error, or a serial \
+             port that doesn't open. Also an OSError, with errno and strerror from the \
+             underlying error.",
         )?;
         let class = builtins
             .getattr("type")?

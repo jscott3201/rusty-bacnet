@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use bacnet_transport::any::AnyTransport;
@@ -156,7 +156,9 @@ pub(crate) fn build_mstp_transport(options: &MstpOptions) -> PyResult<AnyTranspo
 }
 
 /// Check the options, then open the serial port they name, declaring the
-/// echo they ask for.
+/// echo they ask for. A port that doesn't open raises
+/// `BacnetTransportError` (#1833), whose message names the port and the
+/// operating system's reason.
 fn open_port(options: &MstpOptions) -> PyResult<TokioSerialPort> {
     let path = validate_mstp_config(
         options.serial_port.as_deref(),
@@ -171,17 +173,8 @@ fn open_port(options: &MstpOptions) -> PyResult<TokioSerialPort> {
         port_name: path.to_string(),
         baud_rate: options.baud,
     })
-    .map_err(serial_error)?;
+    .map_err(crate::errors::to_py_err)?;
     Ok(serial.with_echo(echo))
-}
-
-/// A serial failure as RuntimeError, with the serial layer's own message.
-fn serial_error(error: Error) -> PyErr {
-    let message = match error {
-        Error::Encoding(message) => message,
-        other => other.to_string(),
-    };
-    PyRuntimeError::new_err(message)
 }
 
 /// List the serial ports the operating system reports, as names to pass as
@@ -195,7 +188,7 @@ pub fn list_serial_ports(py: Python<'_>) -> PyResult<Vec<String>> {
     py.detach(mstp_serial::available_ports)
         .map_err(|error| match error {
             Error::Transport(io) => PyErr::from(io),
-            other => serial_error(other),
+            other => crate::errors::to_py_err(other),
         })
 }
 
@@ -400,10 +393,15 @@ mod tests {
         }
     }
 
+    /// A valid configuration gets as far as opening the port, which isn't
+    /// there: `BacnetTransportError`, an `OSError` whose `errno` is
+    /// `ENOENT` and whose `strerror` names the port (#1833).
     #[test]
     fn valid_configuration_reaches_serial_open() {
         Python::initialize();
+        let path = missing_serial_path();
         let result = build_mstp_transport(&MstpOptions {
+            serial_port: Some(path.clone()),
             baud: 115_200,
             max_info_frames: 255,
             extended_frames: true,
@@ -421,9 +419,20 @@ mod tests {
             Err(err) => err,
         };
         Python::attach(|py| {
-            assert!(err.is_instance_of::<PyRuntimeError>(py));
-            let message = err.value(py).to_string();
-            assert!(message.starts_with("Serial open failed"), "{message}");
+            let value = err.value(py);
+            assert_eq!(value.get_type().name().unwrap(), "BacnetTransportError");
+            assert!(err.is_instance_of::<crate::errors::BacnetError>(py));
+            assert!(err.is_instance_of::<pyo3::exceptions::PyOSError>(py));
+            let errno: i32 = value.getattr("errno").unwrap().extract().unwrap();
+            let enoent: i32 = py
+                .import("errno")
+                .and_then(|module| module.getattr("ENOENT"))
+                .and_then(|code| code.extract())
+                .unwrap();
+            assert_eq!(errno, enoent);
+            let message: String = value.getattr("strerror").unwrap().extract().unwrap();
+            let named = format!("Serial open failed for {path}: ");
+            assert!(message.starts_with(&named), "{message}");
             assert_eq!(
                 message.matches("Serial open failed").count(),
                 1,
