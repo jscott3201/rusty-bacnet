@@ -1,7 +1,12 @@
-//! The tasks a server's start spawns, one helper each (#2558). Each helper
-//! is a plain `fn` that makes its task's future and spawns it on the heap
-//! through `spawn_owned`, under the target Audit owner when there is one,
-//! and returns its handle; the start spawns them in a fixed order.
+//! Spawn helpers for the tasks a server's start spawns, one each (#2558);
+//! the Event Enrollment and Binary Lighting tasks have theirs beside their
+//! code. Each helper is a plain `fn` that makes its task's future, spawns it
+//! and returns its handle; the start spawns them in a fixed order. All but
+//! the network-number helper spawn through `spawn_owned`, which puts the
+//! future on the heap and has the task hold the target Audit owner, when
+//! there is one, while it runs. The network-number task holds no owner: it
+//! is spawned by the Number worker (on the heap) or, on a seat, by the
+//! follower of the node's number (a plain `tokio::spawn`).
 
 use super::super::audit_recipient::spawn_owned;
 use super::super::cov_fanout::CovFanout;

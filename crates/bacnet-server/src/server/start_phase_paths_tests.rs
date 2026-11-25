@@ -18,6 +18,8 @@ struct OutputLog {
     /// Whether the server's monotonic clock was bound when the output
     /// started.
     clocked_at_start: AtomicBool,
+    /// The runtime's live tasks when the output was released.
+    alive_at_release: AtomicUsize,
 }
 
 impl OutputLog {
@@ -58,6 +60,10 @@ impl Timed for OutputWitness {
 
     fn release_output(&mut self) {
         self.log.released.fetch_add(1, Ordering::SeqCst);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let alive = runtime.metrics().num_alive_tasks();
+            self.log.alive_at_release.store(alive, Ordering::SeqCst);
+        }
     }
 }
 
@@ -198,38 +204,52 @@ async fn a_start_dropped_while_it_lets_go_of_its_link_releases_its_outputs() {
     assert_eq!(handle.stops(), 1);
 }
 
-/// A start dropped at its last wait, with every phase before it done: the
-/// tasks it spawned end, the outputs it drove are released, and the
-/// database goes off the runtime once the tasks have let go of it.
+/// A start dropped at its last wait, with every phase before it done, with
+/// and without target Audit: the server drops first, then the outputs it
+/// drove are released, the tasks it spawned end, and the database goes off
+/// the runtime once the tasks have let go of it.
 #[tokio::test]
 async fn a_start_dropped_at_its_staging_pass_lets_its_tasks_and_database_go() {
-    let (db, log, dropped_on) = witnessed(database());
-    let link = TestTransport::new();
-    let handle = link.handle();
-    let before = alive_tasks();
-    let mut start = Box::pin(BACnetServer::start(config(), db, link));
-    // One poll runs every phase up to the Staging pass, whose task can only
-    // run once this one yields.
-    let polled = start.as_mut().poll(&mut Context::from_waker(Waker::noop()));
-    assert!(polled.is_pending());
-    assert_eq!(handle.starts(), 1, "the link is up");
-    assert!(alive_tasks() > before, "the server's tasks are spawned");
-    assert_eq!((log.started(), log.released()), (1, 0));
-    drop(start);
-    // The database's guard was free: the outputs are released at once.
-    assert_eq!((log.started(), log.released()), (1, 1));
-    let thread = tokio::task::spawn_blocking(move || {
-        dropped_on.recv_timeout(std::time::Duration::from_secs(5))
-    })
-    .await
-    .unwrap()
-    .expect("the database was dropped");
-    assert_ne!(thread, std::thread::current().id(), "off the runtime");
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while alive_tasks() > before {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("every task the start spawned ends");
+    let cases = [
+        (config(), database(), TestTransport::new()),
+        (audited_config(), audited_database(), bip_link(47812, false)),
+    ];
+    for (config, db, link) in cases {
+        let audited = config.audit_reporters.is_some();
+        let (db, log, dropped_on) = witnessed(db);
+        let handle = link.handle();
+        let before = alive_tasks();
+        let mut start = Box::pin(BACnetServer::start(config, db, link));
+        // One poll runs every phase up to the Staging pass, whose task can
+        // only run once this one yields.
+        let polled = start.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+        assert!(polled.is_pending(), "audited: {audited}");
+        assert_eq!(handle.starts(), 1, "the link is up; audited: {audited}");
+        let spawned = alive_tasks();
+        assert!(spawned > before, "the server's tasks are spawned");
+        assert_eq!((log.started(), log.released()), (1, 0));
+        drop(start);
+        // The database's guard was free: the outputs are released at once,
+        // after the server dropped, whose drop spawned the task that lets its
+        // database go.
+        assert_eq!((log.started(), log.released()), (1, 1));
+        assert!(
+            log.alive_at_release.load(Ordering::SeqCst) > spawned,
+            "the server dropped before the outputs; audited: {audited}"
+        );
+        let thread = tokio::task::spawn_blocking(move || {
+            dropped_on.recv_timeout(std::time::Duration::from_secs(5))
+        })
+        .await
+        .unwrap()
+        .expect("the database was dropped");
+        assert_ne!(thread, std::thread::current().id(), "off the runtime");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while alive_tasks() > before {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("every task the start spawned ends");
+    }
 }

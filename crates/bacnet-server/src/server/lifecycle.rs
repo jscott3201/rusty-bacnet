@@ -115,10 +115,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         };
 
-        let audit_owner = target_audit
-            .as_ref()
-            .map(|runtime| Arc::clone(&runtime.owner));
-        let server = Self::assemble(
+        // The start holds `assemble`'s clone of the target Audit owner to its
+        // end: bound before the server, it drops after it.
+        let (_audit_owner, server) = Self::assemble(
             phases::Linked {
                 config,
                 device_bindings,
@@ -139,7 +138,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 local_mac,
                 target_audit,
             },
-            &audit_owner,
             &mut outputs,
         );
         // The one wait since the database was shared, with dispatch running:

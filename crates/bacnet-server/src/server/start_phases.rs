@@ -47,7 +47,9 @@
 //!    detection (opt-in), Event Enrollment (opt-in), trend logs, Schedules,
 //!    intrinsic reporting, COV revisits, Binary Lighting operation. From the
 //!    first spawn to the server that holds every handle, nothing waits or
-//!    returns.
+//!    returns. A known limit, older than this split: a panic in that stretch
+//!    leaves the tasks already spawned running, since dropping a `JoinHandle`
+//!    detaches its task rather than aborting it.
 //! 5. **Staging** (`execute_initial_staging_plans`, the last wait). The
 //!    Staging plans due at start-up run in a task of the server's request
 //!    set, which the start waits for and then joins (#2781): the dispatch
@@ -181,13 +183,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
     /// Phase 4 (see the [module](self) documentation): share the database,
     /// make the server's handles, spawn its tasks and make the server. It
-    /// neither waits nor fails; `audit_owner` is the start's, held until it
-    /// ends.
+    /// neither waits nor fails. It hands back, beside the server, the clone
+    /// of the target Audit owner it made from `linked`, which the start holds
+    /// until it ends, so that clone still drops after the server and before
+    /// the outputs at the Staging wait.
     pub(super) fn assemble<A: Apdus>(
         linked: Linked<T, A>,
-        audit_owner: &tasks::AuditOwner,
         outputs: &mut StartedOutputs,
-    ) -> Self {
+    ) -> (tasks::AuditOwner, Self) {
         let Linked {
             config,
             device_bindings,
@@ -246,6 +249,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let config_dispatch = Arc::clone(&config);
         let notification_transactions_dispatch = Arc::clone(&notification_transactions);
 
+        let audit_owner = target_audit
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.owner));
         if let Some(owner) = &audit_owner {
             request_tasks.set_audit_owner(owner);
         }
@@ -377,7 +383,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &db,
             &comm_state,
         );
-        Self {
+        let server = Self {
             target_audit,
             config,
             discovery_limiter,
@@ -417,6 +423,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             local_mac,
             seated,
             execution,
-        }
+        };
+        (audit_owner, server)
     }
 }
