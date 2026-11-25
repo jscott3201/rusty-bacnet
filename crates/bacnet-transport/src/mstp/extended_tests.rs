@@ -143,12 +143,12 @@ async fn a_long_npdu_is_refused_by_what_the_port_sends() {
             .unwrap_err();
         let limit = refused - 1;
         assert!(
-            matches!(&error, Error::Encoding(text) if text.contains(&format!("maximum {limit}"))),
+            matches!(error, Error::SendTooLong { length, limit: max } if length == refused && max == limit),
             "{error}"
         );
         assert!(matches!(
             transport.send_broadcast(&npdu(refused, false, 2)).await,
-            Err(Error::Encoding(_))
+            Err(Error::SendTooLong { .. })
         ));
         transport
             .send_unicast(&npdu(limit, false, 3), &[5])

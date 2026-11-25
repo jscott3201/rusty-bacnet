@@ -34,9 +34,12 @@ async fn an_npdu_past_1497_octets_is_refused_and_counted() {
         transport.send_unicast(&over, &to).await,
         transport.send_broadcast(&over).await,
     ] {
+        // Typed as on MS/TP and Ethernet (#1833).
         let error = refused.unwrap_err();
-        assert!(matches!(error, Error::Encoding(_)), "{error:?}");
-        assert!(error.to_string().contains("1497 octets"), "{error}");
+        assert!(
+            matches!(error, Error::SendTooLong { length, limit: LONGEST } if length == LONGEST + 1),
+            "{error:?}"
+        );
     }
     assert_eq!(transport.send_counters().npdu_too_long, 2);
     assert!(

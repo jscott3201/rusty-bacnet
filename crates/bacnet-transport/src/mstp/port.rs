@@ -244,18 +244,14 @@ impl<S: SerialPort> MstpTransport<S> {
                 std::io::ErrorKind::NotConnected,
                 "MS/TP transport is no longer running",
             ))),
+            // Longer than the port's frames carry (#1833): a router answers
+            // it with reject reason 4, and a client may try a smaller one.
             Err(EnqueueError::Rejected(QueueRefusal::Oversize)) => {
                 increment(&counts.outbound_oversize);
-                let class = if self.config.extended_frames {
-                    "extended"
-                } else {
-                    "standard"
-                };
-                Err(Error::Encoding(format!(
-                    "MS/TP NPDU length {} exceeds {class}-frame maximum {}",
-                    npdu.len(),
-                    self.config.max_npdu_length()
-                )))
+                Err(Error::SendTooLong {
+                    length: npdu.len(),
+                    limit: self.config.max_npdu_length(),
+                })
             }
             Err(EnqueueError::Rejected(QueueRefusal::Full)) => {
                 increment(&counts.outbound_queue_full);
