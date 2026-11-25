@@ -3415,9 +3415,14 @@ class Watch:
     subscriptions are cancelled, the device's answers waited for up to
     5 s; any not answered by then lapse with their lifetime. It holds the
     client only through its own hub, which a stop ends before it stops
-    the client, so a live watch never holds a stop up. A client started
-    again doesn't revive it: watch again. Frozen; compares by identity and
-    refuses ``copy`` and ``pickle``."""
+    the client: a stop with live watches waits for their cancels, all at
+    once, up to 5 s for a device that doesn't answer, and up to 2 s more
+    for their hubs to let go of the client. A client started again
+    doesn't revive it: watch again. A client holds at most 256 live
+    watches (each runs a hub with a range of subscriber process
+    identifiers of its own): one more raises ``RuntimeError`` until one
+    ends. Frozen; compares by identity and refuses ``copy`` and
+    ``pickle``."""
 
     @property
     def address(self) -> str:
@@ -3513,7 +3518,9 @@ class WatchUpdate:
         ...
 
     @property
-    def state(self) -> str:
+    def state(
+        self,
+    ) -> Literal["starting", "subscribed", "polled", "unreachable", "gone", "other"]:
         """How the point's watch goes: ``"starting"`` (its first read and
         subscription haven't finished), ``"subscribed"`` (values come as
         COV notifications), ``"polled"`` (read with the device's other
@@ -3547,14 +3554,16 @@ class WatchUpdate:
         ...
 
     @property
-    def status_flags(self) -> Optional[BitString]:
+    def status_flags(self) -> Optional[Value]:
         """The object's Status_Flags as last read or notified with the
-        value, naming the set flags (``"IN_ALARM"``, ``"FAULT"``,
-        ``"OVERRIDDEN"``, ``"OUT_OF_SERVICE"``); None before any."""
+        value, a ``Value`` as an inventory's ``Point.status_flags`` is: its
+        ``value`` a ``PropertyValue`` whose bit string names the set flags
+        (``"IN_ALARM"``, ``"FAULT"``, ``"OVERRIDDEN"``,
+        ``"OUT_OF_SERVICE"``); None before any."""
         ...
 
     @property
-    def via(self) -> Optional[str]:
+    def via(self) -> Optional[Literal["read", "cov", "poll"]]:
         """How the value came: ``"read"`` (the watch's first read, or the
         read before a retried subscription), ``"cov"`` (a COV
         notification) or ``"poll"``; None before any value."""
@@ -3567,7 +3576,7 @@ class WatchUpdate:
         ...
 
     @property
-    def cov_support(self) -> str:
+    def cov_support(self) -> Literal["unknown", "not-offered", "offered", "accepted", "refused"]:
         """What is known of the point's COV subscription: ``"unknown"``,
         ``"not-offered"`` or ``"offered"`` (from the device's services,
         before it was asked), ``"accepted"`` or ``"refused"``."""
@@ -3583,7 +3592,19 @@ class WatchReason:
     and ``pickle``."""
 
     @property
-    def kind(self) -> str:
+    def kind(
+        self,
+    ) -> Literal[
+        "refused",
+        "no-answer",
+        "full",
+        "lapsed",
+        "missing",
+        "moved",
+        "replaced",
+        "foreign-sender",
+        "other",
+    ]:
         """The reason: ``"refused"`` (the device refused the subscription;
         not asked again), ``"no-answer"`` (the first read or the
         subscription went unanswered), ``"full"`` (the device's
@@ -4185,8 +4206,10 @@ class Device:
         or OPTIONAL, a lifetime of 0, a ``poll_interval`` outside 1 to
         3600; a bool for either); on await what any call raises on a
         stopped client, and ``BacnetLookupError`` for a following handle
-        whose device can't be placed. Nothing is sent until the watch
-        starts."""
+        whose device can't be placed, and ``RuntimeError`` when the client
+        already holds 256 live watches. Nothing is sent until the watch
+        starts. A client from ``endpoint.client()`` leaves room in each
+        renewal for a request on the default timers (6 s, 3 retries)."""
         ...
 
     def resolve_instance(self) -> Awaitable[int]:

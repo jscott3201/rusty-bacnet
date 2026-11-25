@@ -88,11 +88,6 @@ mod shared;
 mod stream;
 mod support;
 
-/// The trait a [`Watch`] hands out its [`Update`]s by, so a caller can
-/// poll one without depending on `futures-core` itself (the Python
-/// bindings do).
-pub use futures_core::Stream;
-
 pub use self::point::{Point, Watched, Why};
 pub use self::sample::Via;
 pub(crate) use self::stream::OwnHub;
@@ -115,6 +110,17 @@ pub enum WatchError {
     Shut,
     /// Called outside a Tokio runtime, which the hub's tasks need.
     NoRuntime,
+    /// [`Hub::new`](hub::Hub::new) was given settings
+    /// [`WatchOptions::validate`](hub::WatchOptions::validate) refuses, for
+    /// this reason.
+    Settings(String),
+    /// Every range of subscriber process identifiers on the client is held:
+    /// this many hubs live on it, the client's own included, or are still
+    /// cancelling. Drop one first.
+    Hubs {
+        /// The most.
+        max: usize,
+    },
 }
 
 impl std::fmt::Display for WatchError {
@@ -126,6 +132,12 @@ impl std::fmt::Display for WatchError {
             ),
             Self::Shut => f.write_str("the hub has shut down"),
             Self::NoRuntime => f.write_str("a watch needs a Tokio runtime"),
+            Self::Settings(reason) => write!(f, "the hub's settings are refused: {reason}"),
+            Self::Hubs { max } => write!(
+                f,
+                "{max} watch hubs live on this client already, each with its own range of \
+                 subscriber process identifiers: end one first"
+            ),
         }
     }
 }
@@ -140,6 +152,8 @@ mod lifecycle_tests;
 mod moves_tests;
 #[cfg(test)]
 mod naming_tests;
+#[cfg(test)]
+mod ranges_tests;
 #[cfg(test)]
 mod restart_tests;
 #[cfg(test)]

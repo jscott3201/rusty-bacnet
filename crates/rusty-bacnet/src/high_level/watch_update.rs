@@ -3,18 +3,23 @@
 //! point, its latest value, and how its watch goes, with the reason when
 //! it isn't subscribed.
 
+use bacnet_ops::format::{Floats, StateTexts, ValueFormat};
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::target::AddressStyle;
 use bacnet_ops::watch::{State, Update, Via, Why};
-use bacnet_types::enums::PropertyIdentifier;
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::primitives::{ObjectIdentifier, StatusFlags};
 use pyo3::prelude::*;
 use pyo3::types::PyString;
 
 use super::points::cov_label;
 use super::readings::row_error;
 use super::value::PyValue;
-use crate::types::{PyBitString, PyObjectIdentifier, PyPropertyIdentifier};
+use crate::types::{PyObjectIdentifier, PyPropertyIdentifier};
+
+#[cfg(test)]
+#[path = "watch_update_tests.rs"]
+mod tests;
 
 /// `state` by name, with its reason, if it carries one.
 pub(super) fn state_name(state: &State) -> (&'static str, Option<&Why>) {
@@ -26,6 +31,18 @@ pub(super) fn state_name(state: &State) -> (&'static str, Option<&Why>) {
         State::Gone { why } => ("gone", Some(why)),
         _ => ("other", None),
     }
+}
+
+/// `flags`, an object of `object_type`'s Status_Flags, as the `Value` a
+/// read of them gives (an inventory's `Point.status_flags`): the hub keeps
+/// them decoded, so they are encoded again in their four-bit wire form.
+fn status_flags_value(object_type: ObjectType, flags: StatusFlags) -> bacnet_ops::Value {
+    let mut raw = bytes::BytesMut::new();
+    bacnet_encoding::primitives::encode_app_bit_string(&mut raw, 4, &[flags.bits() << 4]);
+    let texts = StateTexts::default();
+    let format = ValueFormat::new(object_type, &texts, Floats::Exact);
+    let property = PropertyIdentifier::STATUS_FLAGS;
+    bacnet_ops::Value::new(&format, property, None, raw.to_vec(), None)
 }
 
 /// How `via`'s values came, by name.
@@ -51,7 +68,7 @@ pub(crate) struct PyWatchUpdate {
     why: Option<Py<PyWatchReason>>,
     value: Option<Py<PyValue>>,
     error: Option<Py<PyAny>>,
-    status_flags: Option<PyBitString>,
+    status_flags: Option<Py<PyValue>>,
     via: Option<&'static str>,
     timestamp: Option<f64>,
     cov_support: &'static str,
@@ -77,6 +94,17 @@ impl PyWatchUpdate {
                 )
             })
             .transpose()?;
+        let status_flags = update
+            .status_flags
+            .map(|flags| {
+                let value = status_flags_value(object.object_type(), flags);
+                let property = PropertyIdentifier::STATUS_FLAGS;
+                Py::new(
+                    py,
+                    PyValue::new(object.object_type(), property, None, &value),
+                )
+            })
+            .transpose()?;
         Ok(Self {
             address,
             object,
@@ -86,7 +114,7 @@ impl PyWatchUpdate {
             why,
             value,
             error: update.error.as_ref().map(|error| row_error(py, error)),
-            status_flags: update.status_flags.map(PyBitString::status_flags),
+            status_flags,
             via: update.via.map(via_name),
             timestamp: update.updated.map(crate::frames::posix_seconds),
             cov_support: cov_label(update.cov),
@@ -163,11 +191,12 @@ impl PyWatchUpdate {
     }
 
     /// The object's Status_Flags as last read or notified with the value,
-    /// a `BitString` naming the set flags (`"IN_ALARM"`, `"FAULT"`,
-    /// `"OVERRIDDEN"`, `"OUT_OF_SERVICE"`); None before any.
+    /// a `Value` as an inventory's `Point.status_flags` is: its `value` a
+    /// `PropertyValue` whose bit string names the set flags; None before
+    /// any.
     #[getter]
-    fn status_flags(&self) -> Option<PyBitString> {
-        self.status_flags.clone()
+    fn status_flags(&self, py: Python<'_>) -> Option<Py<PyValue>> {
+        self.status_flags.as_ref().map(|flags| flags.clone_ref(py))
     }
 
     /// How the value came: `"read"` (the watch's first read, or the read

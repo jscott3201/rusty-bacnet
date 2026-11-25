@@ -30,7 +30,6 @@ import rusty_bacnet
 from rusty_bacnet import (
     BACnetClient,
     BACnetServer,
-    BitString,
     Device,
     EngineeringUnits,
     ObjectIdentifier,
@@ -146,7 +145,7 @@ def valued(value: float):
     return lambda update: update.value is not None and update.value.value.value == value
 
 
-async def drain(watch: Watch, quiet: float = 0.5) -> None:
+async def drain(watch: Watch, quiet: float = 1.0) -> None:
     """Take updates until none comes for ``quiet`` seconds."""
     while True:
         try:
@@ -208,8 +207,9 @@ class UpdateTests(Lab):
         # The first read had the units, so the text names them.
         self.assertEqual(update.value.text, "23.5 °C")
         self.assertIsNone(update.error)
-        self.assertIsInstance(update.status_flags, BitString)
-        self.assertEqual(update.status_flags.names, [])
+        # Status_Flags as an inventory's Point has them.
+        self.assertIsInstance(update.status_flags, Value)
+        self.assertEqual(update.status_flags.value.value.names, [])
         self.assertLess(abs(update.timestamp - time.time()), 60)
         self.assertEqual(update.cov_support, "accepted")
         self.assertEqual(repr(update),
@@ -263,11 +263,12 @@ class LifetimeTests(Lab):
     async def test_subscriptions_are_renewed_before_they_lapse(self) -> None:
         async with client() as c:
             dev = await c.device(self.address)
-            watch = await dev.watch(["ai:1"], lifetime=2)
+            watch = await dev.watch(["ai:1"], lifetime=6)
             await next_where(watch, subscribed)
-            # Renewed each second or so: three requests in all well within
-            # the bound, and the device never let the subscription lapse.
-            await until(lambda: self.relay.count(SUBSCRIBE_COV) >= 3, 15, "renewals")
+            # Renewed halfway through each lifetime: three requests in all
+            # well within the bound, and the device never let the
+            # subscription lapse.
+            await until(lambda: self.relay.count(SUBSCRIBE_COV) >= 3, 20, "renewals")
             self.assertEqual(await active(self.server), 1)
             self.assertEqual((await self.server.cov_counters())["subscriptions_purged"], 0)
             await self.server.set_present_value_local(AI, PropertyValue.real(26.0))
@@ -391,9 +392,25 @@ class EndTests(Lab):
             await next_where(watch, subscribed)
             self.relay.passing = 0
             started = time.monotonic()
-        # The cancel went unanswered: the stop waited a bounded time.
-        self.assertLess(time.monotonic() - started, 12)
+        # The cancel went unanswered: the stop waited a bounded time, 5 s
+        # for the cancel and up to 2 s for the hub to let go.
+        self.assertLess(time.monotonic() - started, 15)
         self.assertTrue(watch.closed)
+
+
+class LimitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_client_holds_at_most_256_live_watches(self) -> None:
+        server = await plant()
+        self.addAsyncCleanup(cleanup, server.stop)
+        async with client() as c:
+            dev = await c.device(await server.local_address())
+            watches = [await dev.watch(["ai:1"], poll_interval=3600) for _ in range(256)]
+            with self.assertRaisesRegex(RuntimeError, "256 live watches on one client"):
+                await dev.watch(["ai:1"])
+            # A closed watch frees its place at once.
+            await watches.pop().close()
+            again = await dev.watch(["ai:1"])
+            await again.close()
 
 
 class StepTests(Lab):

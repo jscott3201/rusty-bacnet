@@ -855,9 +855,14 @@ It ends on `close()`, when the object goes away, or on its client's
 subscriptions are cancelled, the device's answers waited for up to
 5 s; any not answered by then lapse with their lifetime. It holds the
 client only through its own hub, which a stop ends before it stops
-the client, so a live watch never holds a stop up. A client started
-again doesn't revive it: watch again. Frozen; compares by identity and
-refuses `copy` and `pickle`.
+the client: a stop with live watches waits for their cancels, all at
+once, up to 5 s for a device that doesn't answer, and up to 2 s more
+for their hubs to let go of the client. A client started again
+doesn't revive it: watch again. A client holds at most 256 live
+watches (each runs a hub with a range of subscriber process
+identifiers of its own): one more raises `RuntimeError` until one
+ends. Frozen; compares by identity and refuses `copy` and
+`pickle`.
 
 Properties:
 
@@ -936,14 +941,14 @@ Properties:
 - `object_id: ObjectIdentifier`: The object.
 - `property_id: PropertyIdentifier`: The property whose value `value` is: Present\_Value for a point named by its object alone.
 - `array_index: Optional[int]`: The array element watched, None for the whole property.
-- `state: str`: How the point's watch goes: `"starting"` (its first read and subscription haven't finished), `"subscribed"` (values come as COV notifications), `"polled"` (read with the device's other polled points; `why` says why), `"unreachable"` (the device didn't answer the last request; polled again after a backoff) or `"gone"` (given up: nothing more is sent for it and nothing its address sends is taken as its own; `why` says whether the device moved or another device took its address). `"other"` for a state this version doesn't name.
+- `state: Literal["starting", "subscribed", "polled", "unreachable", "gone", "other"]`: How the point's watch goes: `"starting"` (its first read and subscription haven't finished), `"subscribed"` (values come as COV notifications), `"polled"` (read with the device's other polled points; `why` says why), `"unreachable"` (the device didn't answer the last request; polled again after a backoff) or `"gone"` (given up: nothing more is sent for it and nothing its address sends is taken as its own; `why` says whether the device moved or another device took its address). `"other"` for a state this version doesn't name.
 - `why: Optional[WatchReason]`: Why the point isn't subscribed; None while it is subscribed or starting.
 - `value: Optional[Value]`: The value as last read or notified, its text naming the object's units or state; None before any. With `error` set too, it is a value read earlier while the latest read failed.
 - `error: Optional[BacnetError]`: Why the latest read gave no value, as the exception a typed read of the property would raise, never raised here: the device's error for the property or the object, or a `BacnetError` for an answer that left it out. None once a value was read or notified since.
-- `status_flags: Optional[BitString]`: The object's Status\_Flags as last read or notified with the value, naming the set flags (`"IN_ALARM"`, `"FAULT"`, `"OVERRIDDEN"`, `"OUT_OF_SERVICE"`); None before any.
-- `via: Optional[str]`: How the value came: `"read"` (the watch's first read, or the read before a retried subscription), `"cov"` (a COV notification) or `"poll"`; None before any value.
+- `status_flags: Optional[Value]`: The object's Status\_Flags as last read or notified with the value, a `Value` as an inventory's `Point.status_flags` is: its `value` a `PropertyValue` whose bit string names the set flags (`"IN_ALARM"`, `"FAULT"`, `"OVERRIDDEN"`, `"OUT_OF_SERVICE"`); None before any.
+- `via: Optional[Literal["read", "cov", "poll"]]`: How the value came: `"read"` (the watch's first read, or the read before a retried subscription), `"cov"` (a COV notification) or `"poll"`; None before any value.
 - `timestamp: Optional[float]`: When the value came, as POSIX seconds by the wall clock, as `time.time()`; None before any.
-- `cov_support: str`: What is known of the point's COV subscription: `"unknown"`, `"not-offered"` or `"offered"` (from the device's services, before it was asked), `"accepted"` or `"refused"`.
+- `cov_support: Literal["unknown", "not-offered", "offered", "accepted", "refused"]`: What is known of the point's COV subscription: `"unknown"`, `"not-offered"` or `"offered"` (from the device's services, before it was asked), `"accepted"` or `"refused"`.
 
 ## WatchReason
 
@@ -954,7 +959,7 @@ and `pickle`.
 
 Properties:
 
-- `kind: str`: The reason: `"refused"` (the device refused the subscription; not asked again), `"no-answer"` (the first read or the subscription went unanswered), `"full"` (the device's subscription table was full) or `"lapsed"` (a renewal failed), each subscribed again after a backoff; `"missing"` (no router to a remote device's network is known); `"moved"` (the device answers at `to` now) or `"replaced"` (device `found` answers at the address now, not `watched`), either of which gives the point up; `"foreign-sender"` (its notifications name device `sender`, which can't be told from another device there, so it is polled). `"other"` for a reason this version doesn't name.
+- `kind: Literal['refused', 'no-answer', 'full', 'lapsed', 'missing', 'moved', 'replaced', 'foreign-sender', 'other']`: The reason: `"refused"` (the device refused the subscription; not asked again), `"no-answer"` (the first read or the subscription went unanswered), `"full"` (the device's subscription table was full) or `"lapsed"` (a renewal failed), each subscribed again after a backoff; `"missing"` (no router to a remote device's network is known); `"moved"` (the device answers at `to` now) or `"replaced"` (device `found` answers at the address now, not `watched`), either of which gives the point up; `"foreign-sender"` (its notifications name device `sender`, which can't be told from another device there, so it is polled). `"other"` for a reason this version doesn't name.
 - `error: Optional[str]`: The device's error, or the client's, as text, for `"refused"`, `"no-answer"`, `"full"` and `"lapsed"`; else None.
 - `to: Optional[str]`: For `"moved"`: where the device answers now, as text `BACnetClient.device` reads back; else None.
 - `watched: Optional[int]`: For `"replaced"`: the instance an earlier answer named for the point; else None.
@@ -1397,8 +1402,10 @@ the call is made (one str, no points, more than 4096, ALL, REQUIRED
 or OPTIONAL, a lifetime of 0, a `poll_interval` outside 1 to
 3600; a bool for either); on await what any call raises on a
 stopped client, and `BacnetLookupError` for a following handle
-whose device can't be placed. Nothing is sent until the watch
-starts.
+whose device can't be placed, and `RuntimeError` when the client
+already holds 256 live watches. Nothing is sent until the watch
+starts. A client from `endpoint.client()` leaves room in each
+renewal for a request on the default timers (6 s, 3 retries).
 
 ### Device.resolve_instance
 

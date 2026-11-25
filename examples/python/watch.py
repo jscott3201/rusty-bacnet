@@ -53,8 +53,10 @@ async def main():
                     print(f"{update.object_id} {update.state}: {update.why}")
                 if update.value is None:
                     continue
+                # Status_Flags come with the value, when the device sent them.
+                flags = update.status_flags.text if update.status_flags else "-"
                 print(f"{update.object_id}  {update.value.text:12} via {update.via:5} "
-                      f"flags={update.status_flags.names} ({update.state})")
+                      f"flags={flags} ({update.state})")
                 seen += update.object_id == ZONE_TEMP and update.via == "cov"
                 if seen >= 4:
                     break

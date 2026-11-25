@@ -586,9 +586,10 @@ impl PyDevice {
     /// bad argument TypeError or ValueError (one str, no points, more than
     /// 4096, ALL, REQUIRED or OPTIONAL, a lifetime of 0, a poll_interval
     /// outside 1 to 3600) before the Future is made; on await what any
-    /// call raises on a stopped client, and BacnetLookupError for a
-    /// following handle whose device can't be placed. Nothing is sent
-    /// until the watch starts.
+    /// call raises on a stopped client, BacnetLookupError for a following
+    /// handle whose device can't be placed, and RuntimeError when the
+    /// client already holds 256 live watches. Nothing is sent until the
+    /// watch starts.
     #[pyo3(
         signature = (points, *, lifetime=None, poll_interval=None),
         text_signature = "($self, points, *, lifetime=300, poll_interval=10.0)"

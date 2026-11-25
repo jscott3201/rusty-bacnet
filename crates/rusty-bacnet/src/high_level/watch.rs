@@ -22,7 +22,6 @@
 //! on its way to Python goes back into the receiver's slot and comes out
 //! first, so none is lost or handed out twice.
 
-use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -33,8 +32,8 @@ use bacnet_ops::watch::hub::{
     Backoff, Hub, Lifetime, MIN_POLL, MissingDevice, POLL_FLOOR, Reads, WatchOptions,
     renewal_margin,
 };
-use bacnet_ops::watch::{MAX_WATCHED, Stream, Update, Watch};
-use pyo3::exceptions::{PyStopAsyncIteration, PyTypeError, PyValueError};
+use bacnet_ops::watch::{MAX_WATCHED, Update, Watch, WatchError};
+use pyo3::exceptions::{PyRuntimeError, PyStopAsyncIteration, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyFloat, PyInt, PyTuple};
 use tokio::sync::broadcast::error::RecvError;
@@ -88,7 +87,7 @@ impl EventSource<Box<Update>> for Updates {
     /// The next update; the mailbox gives one up only on the poll that
     /// returns it, so a dropped read loses none.
     async fn recv(&mut self) -> Result<Box<Update>, RecvError> {
-        let next = std::future::poll_fn(|cx| Pin::new(&mut self.watch).poll_next(cx)).await;
+        let next = self.watch.next().await;
         self.folded.store(self.watch.folded(), Ordering::Relaxed);
         next.map(Box::new).ok_or(RecvError::Closed)
     }
@@ -301,11 +300,8 @@ pub(super) async fn open(
             .map_err(|error| ops_err(error, style))?;
         // Inside the runtime, as the hub's tasks need; nothing awaited
         // from here until the client keeps the watch.
-        let hub = Hub::new(device.client().clone(), settings.options(budget))
-            .map_err(PyValueError::new_err)?;
-        let watch = hub
-            .stream(points)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let hub = Hub::new(device.client().clone(), settings.options(budget)).map_err(watch_err)?;
+        let watch = hub.stream(points).map_err(watch_err)?;
         let shared = Arc::new(WatchShared::new(hub, watch));
         let tie = keeper.tie().keep_watch(Arc::clone(&shared));
         Ok(PyWatch {
@@ -318,6 +314,20 @@ pub(super) async fn open(
         })
     })
     .await
+}
+
+/// Why a watch wasn't made, as Python raises it: RuntimeError when every
+/// range of subscriber process identifiers on the client is held by a live
+/// watch (or one still cancelling), ValueError otherwise (the checked
+/// arguments leave nothing else).
+fn watch_err(error: WatchError) -> PyErr {
+    match error {
+        WatchError::Hubs { max } => PyRuntimeError::new_err(format!(
+            "{max} live watches on one client, each with its own range of subscriber process \
+             identifiers: close one first"
+        )),
+        other => PyValueError::new_err(other.to_string()),
+    }
 }
 
 /// One `__anext__` over `stream`, as an asyncio future: the next update,

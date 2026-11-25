@@ -522,10 +522,19 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
   device's answers waited for up to 5 s. Any not answered by then lapse
   with their lifetime, which is never indefinite.
 - The watch holds the client only through a watch hub of its own, which a
-  stop ends before it stops the client, so a live watch never holds a
-  stop up. A client started again doesn't revive it: watch again. A
-  `Device` made from an instance makes its handle again after a restart,
-  so `await ahu.watch(...)` works as before.
+  stop ends before it stops the client. A stop with live watches waits
+  for their cancels, all at once: up to 5 s for a device that doesn't
+  answer, and up to 2 s more for their hubs to let go of the client. A
+  client started again doesn't revive a watch: watch again. A `Device`
+  made from an instance makes its handle again after a restart, so
+  `await ahu.watch(...)` works as before.
+- Each watch's hub has a range of subscriber process identifiers of its
+  own, so two watches never share a subscription. A client holds at most
+  256 live watches (one still cancelling counts); one more raises
+  `RuntimeError` until one ends.
+- Each renewal goes early enough to cover a request with its retries on
+  the client's `apdu_timeout_ms` (three retries); a client from
+  `endpoint.client()` leaves room for the default timers' (6 s).
 - The points are at the device's address now. A following handle whose
   device moves later is reported (`why.kind == "moved"`, `why.to`) rather
   than followed: watch again from the handle, which has moved. Another
@@ -538,8 +547,9 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
 - Raised when the call is made: `TypeError` or `ValueError` for one str,
   no points, more than 4096, `ALL`, `REQUIRED` or `OPTIONAL`, a lifetime
   of 0, a `poll_interval` outside 1 to 3600, or a bool for either. On
-  await: what any call raises on a stopped client, and
-  `BacnetLookupError` for a following handle whose device can't be placed.
+  await: what any call raises on a stopped client, `BacnetLookupError`
+  for a following handle whose device can't be placed, and
+  `RuntimeError` past 256 live watches.
   Nothing is sent until the watch starts.
 - `.address`, `.points` (`(object, property, array_index)` tuples),
   `.lifetime`, `.poll_interval`, `.folded`, `.closed`, `len()`.
@@ -554,7 +564,7 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
 | `.why` | `WatchReason \| None` | Why the point isn't subscribed; None while it is, or while starting |
 | `.value` | `Value \| None` | The value as last read or notified; its text names the units or the state |
 | `.error` | `BacnetError \| None` | Why the latest read gave no value, unraised; with `.value` set too, that value is an earlier one |
-| `.status_flags` | `BitString \| None` | Status_Flags as last read or notified, the set flags in `.names` |
+| `.status_flags` | `Value \| None` | Status_Flags as last read or notified, as `Point.status_flags` has them |
 | `.via` | `str \| None` | `"read"` (the first read), `"cov"` or `"poll"` |
 | `.timestamp` | `float \| None` | When the value came, POSIX seconds, as `time.time()` |
 | `.cov_support` | `str` | `"unknown"`, `"not-offered"`, `"offered"`, `"accepted"` or `"refused"` |
