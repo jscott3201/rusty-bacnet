@@ -12953,7 +12953,8 @@ result it is pinned and knows the instance. The handle's async reads are
 `list_objects`, `describe_device`, `read_trend` (trend, event and audit log
 pages), `alarms`, `alarm_summary` and `enrollment_summary`
 ([values and errors](#values-readings-and-opserror)), `inventory`,
-`point_records` and `point_batch` ([inventory](#inventory)), and its
+`list_objects_whole`, `point_records` and `point_batch`
+([inventory](#inventory)), and its
 writes are `write`, `relinquish`, `priority_array` and `preview_write`
 ([writes and priorities](#writes-and-priorities)). A device's gate, turns,
 memory of an RPM refusal (`Client::refused_rpm`, for the client's life) and
@@ -13520,6 +13521,11 @@ std::fs::write("inputs.csv", inputs.to_csv(&CsvOptions::new())).ok();
   that device (`Client::rpm_limit`), a limit that holds under other
   options; an inventory keeps its own count instead, starting at 16
   objects each time, so its cost stays as documented (#2785).
+  `Device::list_objects_whole()` reads the Object_List to page, whole or
+  not at all, as an inventory does: a list read element by element that
+  fails at one element is `OpsError::ObjectList` naming it, a timeout
+  still `timed_out()`, where `list_objects` keeps the elements before it
+  in `ListRead` and says why as text (#2561).
 - **Without a `Client`.** `bacnet_ops::raw::read_inventory(&mut reader,
   &options)` is the layer under `Device::inventory`, for a caller that
   owns a low-level client and a `raw::Reader`. It fails with
