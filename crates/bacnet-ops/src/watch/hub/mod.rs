@@ -38,6 +38,7 @@
 //! isn't held to it.
 
 pub mod first;
+pub(crate) mod ranges;
 mod snapshot;
 
 use std::num::NonZeroU32;
@@ -94,11 +95,12 @@ pub(in crate::watch) const PROCESS_BASE: u32 = 0x4D43_0000;
 /// below the range's size.
 const PROCESS_SPAN: u32 = 0x1_0000;
 
-/// How many ranges a client hands out before it starts again from the
-/// first: more hubs than this alive on one client at once could share one.
+/// How many ranges a client has: at most this many hubs live on one client
+/// at once, its own hub included. A hub holds its range until it is gone,
+/// its cancels done or given up ([`ranges`]).
 pub(in crate::watch) const PROCESS_RANGES: u32 = 256;
 
-/// The first identifier of the range of a client's `index`-th hub.
+/// The first identifier of range `index`.
 fn process_base(index: u32) -> u32 {
     PROCESS_BASE + (index % PROCESS_RANGES) * PROCESS_SPAN
 }
@@ -272,6 +274,22 @@ pub(crate) struct Inner<T: TransportPort + 'static> {
     pub(in crate::watch) account: Arc<Account>,
     handles: Mutex<Vec<JoinHandle<()>>>,
     stop_dispatch: watch::Sender<bool>,
+    /// The range of subscriber process identifiers the hub holds, and
+    /// whether it gives it back when it goes: the client's own hub keeps
+    /// its range for the client's life.
+    range: (u32, bool),
+}
+
+impl<T: TransportPort + 'static> Drop for Inner<T> {
+    /// The hub is gone: its last clone dropped and every task that held it
+    /// ended, cancels included, so no cancel of its can still go. (A
+    /// renewal of its, aborted without a join, may still finish; it is no
+    /// cancel.)
+    fn drop(&mut self) {
+        if let (range, true) = self.range {
+            self.client.release_range(range);
+        }
+    }
 }
 
 /// The watch hub over one [`Client`]. Cheap to clone: clones share one hub.
@@ -288,22 +306,40 @@ impl<T: TransportPort + 'static> Clone for Hub<T> {
 }
 
 impl<T: TransportPort + 'static> Hub<T> {
-    /// A hub over `client`, under checked `options`. It starts its
-    /// notification receiver, so it must be made inside a Tokio runtime.
-    pub fn new(client: Client<T>, options: WatchOptions) -> Result<Self, String> {
-        let range = client.hub_range();
-        Self::in_range(client, options, range)
+    /// A hub over `client`, under checked `options`, in the next range of
+    /// subscriber process identifiers no live hub on the client holds,
+    /// going round from the one taken last; it gives the range back once it
+    /// is gone, its tasks ended. It starts its notification receiver.
+    ///
+    /// # Errors
+    ///
+    /// [`WatchError::Settings`] for `options` that
+    /// [`validate`](WatchOptions::validate) refuses, [`WatchError::NoRuntime`]
+    /// outside a Tokio runtime, which its tasks need, and
+    /// [`WatchError::Hubs`] when every range is held: 256 hubs live on the
+    /// client, its own included, or still cancelling. Nothing is taken
+    /// then.
+    pub fn new(client: Client<T>, options: WatchOptions) -> Result<Self, WatchError> {
+        options.validate().map_err(WatchError::Settings)?;
+        if tokio::runtime::Handle::try_current().is_err() {
+            return Err(WatchError::NoRuntime);
+        }
+        let range = client.take_range().ok_or(WatchError::Hubs {
+            max: PROCESS_RANGES as usize,
+        })?;
+        Ok(Self::in_range(client, options, range, true))
     }
 
-    /// A hub as [`new`](Self::new) makes it, taking the client's `range`-th
-    /// range of subscriber process identifiers: a client's own hub, made
-    /// again, takes the same one each time.
+    /// A hub as [`new`](Self::new) makes it, under `options` already
+    /// checked, in range `range`, which it gives back when it goes if
+    /// `release`: a client's own hub, made again, takes its one range each
+    /// time and keeps it.
     pub(in crate::watch) fn in_range(
         client: Client<T>,
         options: WatchOptions,
         range: u32,
-    ) -> Result<Self, String> {
-        options.validate()?;
+        release: bool,
+    ) -> Self {
         let registry = Arc::new(Registry::new(
             process_base(range),
             options.coalesce,
@@ -329,7 +365,7 @@ impl<T: TransportPort + 'static> Hub<T> {
             true => Account::agent(bucket),
             false => Account::new(bucket),
         });
-        Ok(Self {
+        Self {
             inner: Arc::new(Inner {
                 client,
                 options,
@@ -337,8 +373,9 @@ impl<T: TransportPort + 'static> Hub<T> {
                 account,
                 handles: Mutex::new(vec![dispatcher]),
                 stop_dispatch,
+                range: (range, release),
             }),
-        })
+        }
     }
 
     /// The hub's settings.
@@ -351,6 +388,11 @@ impl<T: TransportPort + 'static> Hub<T> {
     /// with it when the device has none. A station on the client's own
     /// network is keyed as the local station at its MAC once the client
     /// knows the network's number, as the device handles key it.
+    ///
+    /// # Panics
+    ///
+    /// Outside a Tokio runtime, when the point's device has no scheduler
+    /// yet: the scheduler is a task.
     pub fn watch(&self, point: Point) -> Result<Lease, WatchError> {
         let mut leases = self.watch_all(vec![self.keyed(point)])?;
         Ok(leases.pop().expect("one lease a point"))

@@ -207,6 +207,14 @@ impl Watch {
     pub fn folded(&self) -> u64 {
         lock(&self.mailbox.state).folded
     }
+
+    /// The next update, as the [`Stream`] gives it, without a stream
+    /// adapter: `None` at once for a watch of no points, else an update
+    /// whenever one comes. Cancel safe: an update leaves the mailbox only
+    /// on the poll that returns it, so a dropped call loses none.
+    pub async fn next(&mut self) -> Option<Update> {
+        std::future::poll_fn(|cx| Pin::new(&mut *self).poll_next(cx)).await
+    }
 }
 
 impl std::fmt::Debug for Watch {
@@ -398,20 +406,76 @@ impl<T: TransportPort + 'static> Client<T> {
     ///
     /// [`OpsError::Watch`]: [`WatchError::Full`] when the points would take
     /// the client's hub past [`MAX_WATCHED`] (nothing is watched then, and
-    /// nothing sent), and [`WatchError::NoRuntime`] outside a Tokio
-    /// runtime, which the hub's tasks need.
+    /// nothing sent), [`WatchError::NoRuntime`] outside a Tokio runtime,
+    /// which the hub's tasks need, and [`WatchError::Hubs`] when the
+    /// client's own hub is first made while other hubs hold every range.
     pub fn watch(&self, points: impl IntoIterator<Item = Point>) -> Result<Watch, OpsError> {
         if tokio::runtime::Handle::try_current().is_err() {
             return Err(OpsError::Watch(WatchError::NoRuntime));
         }
-        let hub = self.own_hub();
+        let hub = self.own_hub().map_err(OpsError::Watch)?;
+        hub.stream(points).map_err(OpsError::Watch)
+    }
+
+    /// The next range of subscriber process identifiers no live hub on
+    /// this client holds, going round from the one taken last, now held until [`release_range`](Self::release_range);
+    /// `None` when every one is held.
+    pub(crate) fn take_range(&self) -> Option<u32> {
+        lock(&self.shared.ranges).take()
+    }
+
+    /// Give back `range`: its hub is gone.
+    pub(crate) fn release_range(&self, range: u32) {
+        lock(&self.shared.ranges).release(range);
+    }
+
+    /// This client's own hub: the one its watches share while any holds a
+    /// point, or a new one in the client's own range, taken the first time
+    /// and kept for the client's life, over the client's base settings.
+    fn own_hub(&self) -> Result<Hub<T>, WatchError> {
+        let mut own = lock(&self.shared.hub);
+        if let Some(inner) = own.hub.upgrade() {
+            return Ok(Hub { inner });
+        }
+        let range = match own.range {
+            Some(range) => range,
+            None => self.take_range().ok_or(WatchError::Hubs {
+                max: PROCESS_RANGES as usize,
+            })?,
+        };
+        own.range = Some(range);
+        let hub = Hub::in_range(self.base(), settings(), range, false);
+        own.hub = Arc::downgrade(&hub.inner);
+        Ok(hub)
+    }
+}
+
+impl<T: TransportPort + 'static> Hub<T> {
+    /// Watch `points` on this hub: a [`Watch`] streaming each point's
+    /// [`Update`]s, as [`Client::watch`] gives on the client's own hub, for
+    /// a front end that runs a hub of its own settings (the Python
+    /// bindings' watches, each on a hub of its own, which their client's
+    /// stop shuts down with [`shutdown`](Self::shutdown)). A point named
+    /// twice, or one station named two ways, is watched once.
+    ///
+    /// # Errors
+    ///
+    /// [`WatchError::Full`] when the points would take the hub past
+    /// [`WatchOptions::max_points`] (nothing is watched then, and nothing
+    /// sent), and [`WatchError::Shut`] once the hub has shut down.
+    ///
+    /// # Panics
+    ///
+    /// Outside a Tokio runtime, when a point's device has no scheduler
+    /// yet: the scheduler is a task.
+    pub fn stream(&self, points: impl IntoIterator<Item = Point>) -> Result<Watch, WatchError> {
         let mut seen = HashSet::new();
         let named: Vec<Point> = points
             .into_iter()
-            .map(|point| hub.keyed(point))
+            .map(|point| self.keyed(point))
             .filter(|point| seen.insert(point.clone()))
             .collect();
-        let leases = hub.watch_all(named).map_err(OpsError::Watch)?;
+        let leases = self.watch_all(named)?;
         let mailbox = Arc::new(Mailbox {
             state: Mutex::new(MailState {
                 queue: VecDeque::with_capacity(leases.len()),
@@ -427,34 +491,6 @@ impl<T: TransportPort + 'static> Client<T> {
             });
         }
         Ok(Watch { leases, mailbox })
-    }
-
-    /// The range of subscriber process identifiers for another hub made on
-    /// this client: the next one, never the client's own hub's, which it
-    /// keeps for the client's life however the ranges wrap.
-    pub(crate) fn hub_range(&self) -> u32 {
-        let pinned = lock(&self.shared.hub).range;
-        loop {
-            let range = self.next_hub();
-            if pinned.is_none_or(|pinned| pinned % PROCESS_RANGES != range % PROCESS_RANGES) {
-                return range;
-            }
-        }
-    }
-
-    /// This client's own hub: the one its watches share while any holds a
-    /// point, or a new one in the client's own range, over the client's
-    /// base settings.
-    fn own_hub(&self) -> Hub<T> {
-        let mut own = lock(&self.shared.hub);
-        if let Some(inner) = own.hub.upgrade() {
-            return Hub { inner };
-        }
-        let range = *own.range.get_or_insert_with(|| self.next_hub());
-        let hub = Hub::in_range(self.base(), settings(), range)
-            .expect("the client hub's settings are valid");
-        own.hub = Arc::downgrade(&hub.inner);
-        hub
     }
 }
 

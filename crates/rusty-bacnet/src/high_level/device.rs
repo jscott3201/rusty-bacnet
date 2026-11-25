@@ -91,6 +91,11 @@ impl Core {
         result
     }
 
+    /// Its tie to the client.
+    pub(super) fn tie(&self) -> &DeviceTie {
+        &self.tie
+    }
+
     fn see(&self, seen: Seen) {
         *self.seen.locked() = seen;
     }
@@ -556,6 +561,52 @@ impl PyDevice {
         })
     }
 
+    /// Watch `points` of the device, as a `Watch`: an async iterator of
+    /// `WatchUpdate`s, each point's latest value and how its watch goes.
+    ///
+    /// Each item of `points` is what `read_many` takes: text (`"ai:1"`,
+    /// `"ao:2 priority-array[8]"`), an `ObjectIdentifier` (its
+    /// Present_Value), or an `(object, property)` or `(object, property,
+    /// index)` tuple; each point once. A Present_Value is watched by
+    /// SubscribeCOV on its object, any other property or element by
+    /// SubscribeCOVProperty. Each point is read once, then subscribed for
+    /// `lifetime` seconds at a time, renewed before each lifetime ends; a
+    /// point the device won't subscribe is polled, with the device's other
+    /// polled points, every `poll_interval` seconds (1 to 3600).
+    ///
+    /// The points are at the device's address now: a following handle
+    /// whose device moves later reports it (`why.kind == "moved"`) rather
+    /// than following, and another device answering at the address is
+    /// reported (`"replaced"`) and never taken for this one.
+    ///
+    /// The watch runs on its own until it ends: `close()` (or leaving
+    /// `async with`), the object going away, or the client's `stop()`.
+    /// Its iterator then raises StopAsyncIteration, and its subscriptions
+    /// are cancelled, waiting up to 5 s for the device's answers. Raised: a
+    /// bad argument TypeError or ValueError (one str, no points, more than
+    /// 4096, ALL, REQUIRED or OPTIONAL, a lifetime of 0, a poll_interval
+    /// outside 1 to 3600) before the Future is made; on await what any
+    /// call raises on a stopped client, BacnetLookupError for a following
+    /// handle whose device can't be placed, and RuntimeError when the
+    /// client already holds 256 live watches. Nothing is sent until the
+    /// watch starts.
+    #[pyo3(
+        signature = (points, *, lifetime=None, poll_interval=None),
+        text_signature = "($self, points, *, lifetime=300, poll_interval=10.0)"
+    )]
+    fn watch<'py>(
+        &self,
+        py: Python<'py>,
+        points: &Bound<'py, PyAny>,
+        lifetime: Option<&Bound<'py, PyAny>>,
+        poll_interval: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let wanted = super::watch::points_arg(points)?;
+        let settings = super::watch::Settings::new(lifetime, poll_interval)?;
+        let core = Arc::clone(&self.core);
+        future_into_py(py, super::watch::open(core, wanted, settings))
+    }
+
     /// The device instance: as known (`instance`), or from one read of the
     /// Device object by the wildcard instance, remembered afterwards.
     fn resolve_instance<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -603,7 +654,7 @@ fn optional_priority(
 
 /// Refuse a property that stands for many, when the call is made, as the
 /// read itself would on await.
-fn many_refused(property: PropertyIdentifier) -> PyResult<()> {
+pub(super) fn many_refused(property: PropertyIdentifier) -> PyResult<()> {
     let many = [
         PropertyIdentifier::ALL,
         PropertyIdentifier::REQUIRED,

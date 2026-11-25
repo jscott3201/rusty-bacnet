@@ -382,6 +382,9 @@ impl BACnetClient {
             }
             .map_err(to_py_err)?;
             *slot = Some(state::Started::new(c, write_policy, resolve_scope));
+            // A request with its three retries, which a watch's renewals
+            // leave room for.
+            inner.set_request_budget(std::time::Duration::from_millis(timeout_ms) * 4);
             Ok(self_ref)
         })
     }

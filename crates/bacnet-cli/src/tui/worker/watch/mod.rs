@@ -397,7 +397,7 @@ pub(crate) fn hub<T: TransportPort + 'static>(
     client: &Client<T>,
     options: &WatchOptions,
 ) -> Result<Hub<T>, String> {
-    Hub::new(client.clone(), hub_options(options))
+    Hub::new(client.clone(), hub_options(options)).map_err(|error| error.to_string())
 }
 
 /// Serve watch commands on `hub` until `commands` closes or the session

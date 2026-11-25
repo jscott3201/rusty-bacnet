@@ -52,12 +52,17 @@ pub fn benchmark_db() -> ObjectDatabase {
 
 /// A B/IP server on 127.0.0.1, ephemeral port, serving [`benchmark_db`].
 pub async fn bip_server() -> Result<BACnetServer<BipTransport>, Error> {
+    // The database before the builder. With fixed hash-map keys
+    // (`crate::hash_keys`), each new map takes the next keys of its thread,
+    // so a map the builder gains or loses would otherwise shift the
+    // database's keys, and with them its probing (#2591).
+    let db = benchmark_db();
     BACnetServer::bip_builder()
         .device(DeviceIdentity::new(DEVICE_INSTANCE, 555)?)
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .broadcast_address(Ipv4Addr::LOCALHOST)
-        .database(benchmark_db())
+        .database(db)
         .build()
         .await
         .map_err(Error::from)

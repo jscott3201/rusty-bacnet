@@ -5,11 +5,30 @@
   perf_counts.py run --baseline REF --candidate REF [options]   # A, A' and B
   perf_counts.py run --noise REF [options]                      # A and A'
   perf_counts.py run --baseline v0.13.0 --candidate REF --baseline-compat v013 --workloads codec
-  perf_counts.py analyze OUT [--aim rp,... | --aim none]
+  perf_counts.py run --baseline REF --candidate REF --aim none --allow rpm/ct:21   # an attributed rise
+  perf_counts.py analyze OUT [--aim rp,... | --aim none] [--allow ROW:BOUND,...]
   perf_counts.py attribute OUT [--workload rp] [--runtime ct]   # calls first
 
-`--aim none` is the no-regression check: accepted when no row rises above
-its noise floor and no allocation calls are added.
+Each workload and runtime is a row. Its figure is the median, over six
+ordinals per build, of the instructions per request (per iteration for a
+codec workload) without the allocators' work; its noise floor is the range
+(highest minus lowest) of the twelve values of the baseline's two builds,
+A and A'. A row aimed at must fall by at least 100 instructions per
+request (round trips) and by more than three floors, every A and B pair
+lower; any other row may rise by no more than its floor; no row may add
+more than 0.01 allocation calls per request. `--aim none` is the
+no-regression check: no row is aimed at, so it is accepted when no row
+rises above its noise floor and no allocation calls are added.
+
+`--allow ROW:BOUND[,ROW:BOUND]` is the override for a rise that `attribute`
+has explained and the PR accepts without a code fix (#2591): a named row
+that isn't aimed at passes a rise above its floor up to BOUND instructions
+per request. Rows not named are judged as always, a named row that passed
+anyway reports the override as unused, and allocation calls are never
+covered. The summary says "Accepted with override" and lists each
+override's row, bound, rise and floor. An unknown row, an aimed row, a
+repeated row or a bound that isn't a number above zero stops the run
+before any build.
 
 `run`:
 1. builds the image from scripts/perf/Dockerfile (tag rb-perf-counts:<hash
@@ -30,17 +49,34 @@ its noise floor and no allocation calls are added.
 4. runs each workload and runtime in the order A B A' A' B A (A A' A' A for
    a noise run), --blocks times, each position at the short and the long
    loop length under callgrind; every run first checks its binary's SHA-256
-   and runs without a network, and records its total, the harness's
-   counting allocator's share and the system allocator's (#2555);
+   and runs without a network, with the glibc allocator settings and the
+   harness's hash seed (--hash-seed, #2591) in its environment, and records
+   its total, the harness's counting allocator's share, the system
+   allocator's (#2555) and whether the harness fixed its hash-map keys;
 5. writes callgrind_annotate's per-function view of every run, then
    analyzes: OUT/summary.json, OUT/summary.md (the verdict table),
    OUT/profiles/*.md (per-function and per-line slopes) and OUT/items.md;
 6. removes the volumes and trees (unless --keep).
 
-A comparison exits 1 when it isn't accepted, 2 on a usage error. Quick mode
-(--noise-floors FILE) skips the A' build and takes the floors from an
-earlier noise run on the same machine; use it only for local iteration.
-The manifest records which figure those floors are of, and both `run` and
+A comparison exits 1 when it isn't accepted, 2 on a usage error. A run of
+fewer round trips than rp, wp and rpm on both runtimes judges its rows but
+isn't accepted, however they come out; its summary says so.
+
+Hash-map keys (#2591): `std` seeds each process's hash maps at random, and
+the server's object map then probes more slots in about one process in
+twelve, enough to set the ReadPropertyMultiple and WriteProperty floors
+anywhere from 6 to 300 instructions per request. The harness fixes the
+keys from --hash-seed (default 1) in every run, through the `getrandom`
+that `std` lets a measurement put in place (benchmarks/counts/src/
+hash_keys.rs); production builds are untouched. A harness from before
+#2591, which an older candidate brings, can't, and each row says which
+keys its runs had; a harness that should have fixed them and didn't stops
+the run.
+
+Quick mode (--noise-floors FILE) skips the A' build and takes the floors
+from an earlier noise run on the same machine, with the same allocator
+settings and hash seed; use it only for local iteration. The manifest
+records which figure those floors are of, and both `run` and
 `analyze` refuse floors of another (a noise run before #2555, or before its
 fix round). `analyze` of a run recorded before then takes the system
 allocator's share from the run's raw callgrind files. `attribute` marks the
@@ -80,6 +116,14 @@ GLIBC_TUNABLES = ":".join([
     "glibc.malloc.trim_threshold=1048576",
     "glibc.malloc.top_pad=1048576",
 ])
+
+
+# The harness's hash-seed variable (benchmarks/counts/src/hash_keys.rs) and
+# the seed every counted run gets unless --hash-seed says otherwise (#2591).
+# Any fixed seed makes A, A' and B probe their maps alike; another seed can
+# move a row's absolute count by a few dozen instructions per request.
+HASH_SEED_VAR = "BACNET_COUNTS_HASH_SEED"
+HASH_SEED = "1"
 
 
 def log(*parts):
@@ -330,6 +374,8 @@ def run_matrix(manifest, out, save):
                     result = ca.parse_result((raw / f"{name}.err").read_text())
                     if (result["workload"], result["runtime"], result["n"]) != (workload, runtime, n):
                         raise RuntimeError(f"{name}: RESULT line doesn't match the run")
+                    record.update(hash_keys=result["hash_keys"], hash_check=result["hash_check"])
+                    check_hash_keys(manifest, record)
                     cg_text = (raw / f"{name}.cg").read_text()
                     files, object_edges = {}, {}
                     _lines, functions, edges = ca.parse_callgrind(cg_text, files, object_edges)
@@ -344,6 +390,31 @@ def run_matrix(manifest, out, save):
                     ca.check_harness_ir(record)
                     ca.check_allocator_ir(record)
                     log("RUN", name, record["instructions"], record["allocator_ir"], record["allocs"], record["bytes"])
+
+
+def check_hash_keys(manifest, record):
+    """Stops a seeded matrix whose harness knows the seed (it reports its
+    keys) but didn't fix them alike in every process: random keys mean
+    `std` never asked the harness's `getrandom`, and a check value unlike
+    the first run's means it drew the keys some other way (a toolchain
+    whose `std` changed). Either would let the rows go back to per-process
+    keys unnoticed. A harness from before #2591 (no `src/hash_keys.rs`)
+    reports nothing, and its rows say so; one with the module that reports
+    nothing stops too. The first run's check value goes into the manifest."""
+    name, state, check = record["name"], record.get("hash_keys"), record.get("hash_check")
+    source = "benchmarks/counts/src/hash_keys.rs"
+    hooked = "src/hash_keys.rs" in ((manifest.get("harness") or {}).get("files") or {})
+    if HASH_SEED_VAR not in (manifest.get("environment") or {}) or (state is None and not hooked):
+        return
+    if state is None:
+        raise RuntimeError(f"{name}: the harness has {source} but its RESULT line reports no hash-map keys")
+    if state != "fixed" or check is None:
+        raise RuntimeError(f"{name}: the harness was given {HASH_SEED_VAR} but reports random hash-map keys, so std "
+                           f"didn't take them from the harness's getrandom ({source})")
+    first = manifest.setdefault("hash_check", check)
+    if check != first:
+        raise RuntimeError(f"{name}: hash-map keys check {check}, not the first run's {first}: the processes drew "
+                           f"different keys from one seed, so std no longer takes them from the harness ({source})")
 
 
 CALLER_DEPTH = 8
@@ -584,12 +655,41 @@ def summary_markdown(summary):
     ]
     notes = summary.get("allocator_notes") or []
     lines += notes + ([""] if notes else [])
+    lines += [hash_keys_line(summary), ""]
     if "baseline_builds_identical" in summary:
         lines.append(f"Baseline builds (A and A') byte-identical: {summary['baseline_builds_identical']}")
     if summary["mode"] != "noise":
-        lines.append(f"Gates aimed at: {', '.join(summary['aimed'])}. Accepted: {summary['accepted']}")
+        partial = not summary["accepted"] and summary["rows"] and all(r["verdict"] == "PASS" for r in summary["rows"])
+        verdict = ("Accepted with override." if summary.get("accepted_with_override")
+                   else f"Accepted: {summary['accepted']}"
+                   + (" (every row passed; the reasons this run can't accept follow)" if partial else ""))
+        lines.append(f"Gates aimed at: {', '.join(summary['aimed'])}. {verdict}")
         lines += [f"- Not acceptable as run: {problem}" for problem in summary["coverage_problems"]]
+        lines += [override_line(o) for o in summary.get("overrides") or []]
     return "\n".join(lines) + "\n"
+
+
+def override_line(override):
+    """One override under the verdict: used, unused, or exceeded."""
+    row, bound, rise, floor = override["row"], override["bound"], override["rise"], override["floor"]
+    figures = f"rise {ca.fmt(rise)}, floor {ca.fmt(floor)}, bound {bound:g} instructions per request"
+    if override["used"]:
+        return f"- Override used on {row}: {figures}; the rise is above the floor and within the bound."
+    if rise <= max(floor, ca.EXACT):
+        return f"- Override unused on {row}: {figures}; the row passed without it."
+    return f"- Override exceeded on {row}: {figures}; the rise is past the bound, so the row fails."
+
+
+def hash_keys_line(summary):
+    """What the runs' hash-map keys were (#2591), under the table."""
+    state = summary.get("hash_keys", ca.PER_PROCESS)
+    seed = (summary.get("environment") or {}).get(HASH_SEED_VAR)
+    if state == ca.FIXED_KEYS:
+        return f"Hash-map keys: fixed by the harness in every run (seed {seed})."
+    if state == ca.MIXED_KEYS:
+        return "Hash-map keys: fixed in some runs and not in others, so the builds didn't probe alike."
+    return ("Hash-map keys: per process, as in production (a harness before #2591, or no seed), so the "
+            "ReadPropertyMultiple and WriteProperty floors can reach a few hundred instructions per request.")
 
 
 def fill_allocator(manifest, raw):
@@ -606,7 +706,7 @@ def fill_allocator(manifest, raw):
             run.update(ca.allocator_record_of(text))
 
 
-def analyze(out, aim=("rp",)):
+def analyze(out, aim=("rp",), allow=None):
     """Analyzes a completed matrix in OUT and writes its tables there. A
     quick comparison's floors are those its manifest recorded, and only
     when they are of the figure gated now."""
@@ -617,7 +717,12 @@ def analyze(out, aim=("rp",)):
     floors = dict(manifest.get("recorded_floors") or {})
     if floors:
         ca.check_floors_figure(manifest.get("recorded_floors_figure"), f"{out / 'manifest.json'} (quick mode)")
-    summary = ca.analyze(manifest, floors, aim)
+    # An override as given on the command line (a spec string), the run's
+    # own when none is given, or already parsed ({row: bound}).
+    if allow is None or isinstance(allow, str):
+        spec = manifest.get("allow") if allow is None else allow
+        allow = ca.parse_allow(spec, {f"{r['workload']}/{r['runtime']}" for r in manifest["runs"]}, aim)
+    summary = ca.analyze(manifest, floors, aim, allow)
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     (out / "summary.md").write_text(summary_markdown(summary))
     write_profiles(manifest, out, summary)
@@ -644,8 +749,19 @@ def expand_workloads(spec):
 
 
 def run_environment(args):
-    """The environment every counted run gets (the glibc allocator settings)."""
-    return {"GLIBC_TUNABLES": args.glibc_tunables} if args.glibc_tunables else {}
+    """The environment every counted run gets: the glibc allocator settings
+    and the harness's hash seed, each unless turned off."""
+    environment = {"GLIBC_TUNABLES": args.glibc_tunables} if args.glibc_tunables else {}
+    seed = getattr(args, "hash_seed", HASH_SEED)
+    if seed != "none":
+        environment[HASH_SEED_VAR] = seed
+    return environment
+
+
+def check_hash_seed(seed):
+    """--hash-seed is a decimal u64, as the harness reads it, or none."""
+    if seed != "none" and not (seed.isascii() and seed.isdigit() and int(seed) < 2**64):
+        raise ValueError(f"--hash-seed must be a decimal number below 2^64 or none, not {seed!r}")
 
 
 def plan(args):
@@ -658,6 +774,7 @@ def plan(args):
     aim = tuple(a.strip() for a in args.aim.split(",") if a.strip())
     if args.blocks < 3:
         raise ValueError("--blocks must be at least 3 (six runs per build)")
+    check_hash_seed(getattr(args, "hash_seed", HASH_SEED))
     floors = {}
     if getattr(args, "baseline_compat", None) and any(w in ca.ROUND_TRIP for w in workloads):
         raise ValueError("--baseline-compat is for codec workloads only: the compat setup is compile-only, "
@@ -678,10 +795,12 @@ def plan(args):
             for path in args.noise_floors:
                 recorded = ca.load_json(path)
                 # A file without an environment was recorded with glibc's
-                # defaults (perf-s0 and earlier).
+                # defaults (perf-s0 and earlier), one without the hash seed
+                # with per-process hash-map keys (before #2591).
                 if recorded.get("environment", {}) != environment:
-                    raise ValueError(f"{path} was recorded with allocator settings {recorded.get('environment', {})}, "
-                                     f"not this run's {environment}; its floors don't apply")
+                    raise ValueError(f"{path} was recorded with allocator settings and hash seed "
+                                     f"{recorded.get('environment', {})}, not this run's {environment}; its floors "
+                                     "don't apply")
                 # Floors from before #2555 hold the system allocator's spread.
                 ca.check_floors_figure(recorded.get("figure"), str(path))
                 floors.update(recorded["noise_floors"])
@@ -691,11 +810,15 @@ def plan(args):
                 raise ValueError(f"no recorded floor for {', '.join(missing)}")
         else:
             refs, order = {"A": args.baseline, "P": args.baseline, "B": args.candidate}, "ABPPBA"
-    return mode, refs, order * args.blocks, workloads, runtimes, aim, floors
+    rows = {f"{w}/{r}" for w in workloads for r in (runtimes if w in ca.ROUND_TRIP else ["none"])}
+    allow = ca.parse_allow(getattr(args, "allow", None), rows, aim)
+    if allow and mode == "noise":
+        raise ValueError("--allow is for a comparison: a noise run has no candidate")
+    return mode, refs, order * args.blocks, workloads, runtimes, aim, allow, floors
 
 
 def run(args):
-    mode, refs, order, workloads, runtimes, aim, floors = plan(args)
+    mode, refs, order, workloads, runtimes, aim, allow, floors = plan(args)
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=False)
     run_id = uuid.uuid4().hex[:8]
@@ -710,6 +833,8 @@ def run(args):
         # The figure quick mode's floors are of; `analyze` checks it again.
         "recorded_floors_figure": ca.GATED_FIGURE if floors else None,
         "environment": run_environment(args),
+        # The override spec as given; `analyze` applies it again.
+        "allow": getattr(args, "allow", None) or "",
         "variants": {},
         "runs": [],
     }
@@ -759,7 +884,7 @@ def run(args):
             caller_split(manifest, out)
             save()
         annotate(manifest, out)
-        summary = analyze(out, aim)
+        summary = analyze(out, aim, allow)
         if args.gzip_raw:
             for path in (out / "raw").glob("*.cg"):
                 with open(path, "rb") as src, gzip.open(f"{path}.gz", "wb") as dst:
@@ -804,6 +929,14 @@ def main(argv=None):
                             help="workloads judged on the saving gate (default rp), or none: the no-regression check")
     run_parser.add_argument("--glibc-tunables", default=GLIBC_TUNABLES,
                             help=f"GLIBC_TUNABLES for every counted run (default {GLIBC_TUNABLES!r}; empty for none)")
+    run_parser.add_argument("--allow", default="", metavar="ROW:BOUND,...",
+                            help="override for an attributed rise: a named row that isn't aimed at passes a rise "
+                                 "above its floor up to BOUND instructions per request (rpm/ct:21); never covers "
+                                 "allocation calls")
+    run_parser.add_argument("--hash-seed", default=HASH_SEED,
+                            help=f"the harness's fixed hash-map keys for every counted run (default {HASH_SEED}; "
+                                 "none for per-process keys, as in production: the ReadPropertyMultiple and "
+                                 "WriteProperty floors then swing, #2591)")
     run_parser.add_argument("--callers", action="store_true",
                             help=f"also split item 2a's semaphore cost by caller (--separate-callers={CALLER_DEPTH}) "
                                  "from an extra pair of build A runs per round trip; not gated")
@@ -812,6 +945,8 @@ def main(argv=None):
     analyze_parser = commands.add_parser("analyze", help="re-analyze a completed run")
     analyze_parser.add_argument("out")
     analyze_parser.add_argument("--aim", default="rp")
+    analyze_parser.add_argument("--allow", default=None, metavar="ROW:BOUND,...",
+                                help="override for an attributed rise (default: the run's own)")
     attribute_parser = commands.add_parser(
         "attribute", help="per-function changes of a completed run: calls in first, then self instructions")
     attribute_parser.add_argument("out")
@@ -827,7 +962,7 @@ def main(argv=None):
             return 0
         else:
             aim = tuple(a.strip() for a in args.aim.split(",") if a.strip())
-            summary = analyze(Path(args.out).resolve(), aim)
+            summary = analyze(Path(args.out).resolve(), aim, args.allow)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

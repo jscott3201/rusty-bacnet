@@ -12,7 +12,8 @@ use pyo3::PyResult;
 
 use super::ClientInner;
 use super::state::{self, HandleId, Held};
-use crate::high_level::{OpsClient, OpsDevice};
+use super::watches::WatchTie;
+use crate::high_level::{OpsClient, OpsDevice, WatchShared};
 
 /// One Python `Device`'s place among its client's handles.
 pub(crate) struct DeviceTie {
@@ -39,6 +40,19 @@ impl DeviceTie {
         F: Future<Output = PyResult<OpsDevice>>,
     {
         state::held(&self.inner, self.id, make).await
+    }
+
+    /// Keep `watch`, made on this handle's device, among the client's
+    /// watches until it ends; called under the lease of the call that made
+    /// it, so a stop never misses it (see [`super::watches`]).
+    pub(crate) fn keep_watch(&self, watch: std::sync::Arc<WatchShared>) -> WatchTie {
+        WatchTie::new(std::sync::Arc::clone(&self.inner), watch)
+    }
+
+    /// A request's time with its retries on the client, which a watch's
+    /// renewals leave room for.
+    pub(crate) fn request_budget(&self) -> std::time::Duration {
+        self.inner.request_budget()
     }
 
     /// What `read` makes of the handle, when the client now started has
