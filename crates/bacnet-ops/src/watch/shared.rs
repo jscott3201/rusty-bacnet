@@ -2,18 +2,18 @@
 //! receiver share: the entry's snapshot and signals, and the hub's table
 //! of entries and devices. Every lock here is a std mutex held for a few
 //! field updates, never across an await. The order is the table's, then a
-//! device inbox's, then an entry's, then a [`Watch`](super::Watch)'s
-//! mailbox, which takes no other. A watch is woken only once the entry's
-//! lock is let go ([`release`]).
+//! device's inbox or what it heard ([`Heard`]), then an entry's, then a
+//! [`Watch`](super::Watch)'s mailbox, which takes no other. A watch is
+//! woken only once the entry's lock is let go ([`release`]).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::Waker;
 use std::time::{Duration, SystemTime};
 
 use bacnet_client::client::{COVEvent, Station};
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::sync::MutexExt;
 use tokio::sync::{Notify, broadcast, watch};
 use tokio::time::Instant;
@@ -22,7 +22,7 @@ use super::hub::{Phase, Snapshot, Source};
 use super::options::MAX_ROWS;
 use super::sample::{Sample, Via};
 use super::stream::Listener;
-use super::{Point, dispatch};
+use super::{Point, Why, dispatch};
 use crate::device::DeviceAddress;
 use crate::format::{PropertyError, RawRow};
 
@@ -61,6 +61,20 @@ pub(super) struct EntryState {
     pub(super) failure: Option<PropertyError>,
     /// When the values last changed, by the wall clock, for an update.
     pub(super) wall: Option<SystemTime>,
+    /// The instance of the point's device (#2603): what the device last
+    /// named itself to the client, else what the discovery table named at
+    /// its address when the watch started, else the first sender its
+    /// notifications named.
+    pub(super) identity: Option<u32>,
+    /// The device itself named `identity` during this watch: a
+    /// notification's sender, a poll's or a read's answer, or what it last
+    /// said to the client. Until then the instance is only the table's,
+    /// and the device's first word of another replaces it; after, another
+    /// instance at the address is another device.
+    pub(super) confirmed: bool,
+    /// The note the point had before a claim of another device at its
+    /// address put its own: given back once the claim is settled.
+    held: Option<Option<String>>,
     /// The [`Watch`](super::Watch)es told of each signalled change: at
     /// most one a watch holding the point, and those dropped until the
     /// next change prunes them.
@@ -106,6 +120,9 @@ impl Shared {
                 pending: false,
                 failure: None,
                 wall: None,
+                identity: None,
+                confirmed: false,
+                held: None,
                 listeners: Vec::new(),
                 wakers: Vec::new(),
             }),
@@ -210,6 +227,102 @@ impl Shared {
         }
         snapshot.state = state;
         snapshot.note = note;
+        self.changed(&mut entry, seq, Duration::ZERO);
+        release(entry);
+    }
+
+    /// The instance of the point's device: `found` when none was known, or
+    /// when the device itself named `found` (`confirmed`, an answer to a
+    /// request) and nothing it answered named the point's device before.
+    pub(super) fn learn(&self, found: Option<u32>, confirmed: bool) -> Option<u32> {
+        let mut entry = self.lock();
+        let take = match (entry.identity, found) {
+            (_, None) => false,
+            (None, Some(_)) => true,
+            (Some(_), Some(_)) => confirmed && !entry.confirmed,
+        };
+        if take {
+            entry.identity = found;
+            entry.confirmed = confirmed;
+        }
+        entry.identity
+    }
+
+    /// The instance of the point's device, if known.
+    pub(super) fn identity(&self) -> Option<u32> {
+        self.lock().identity
+    }
+
+    /// The point's device, when the device itself named it in an answer.
+    pub(super) fn confirmed(&self) -> Option<u32> {
+        let entry = self.lock();
+        entry.identity.filter(|_| entry.confirmed)
+    }
+
+    /// The device at the address named itself `found`: the point's device
+    /// from now on unless the device itself had named another for it, which
+    /// is returned (another device is there now).
+    pub(super) fn named(&self, found: u32, confirm: bool) -> Option<u32> {
+        let mut entry = self.lock();
+        match entry.identity {
+            Some(own) if own != found && entry.confirmed => Some(own),
+            own => {
+                if own != Some(found) {
+                    entry.confirmed = false;
+                }
+                entry.identity = Some(found);
+                entry.confirmed |= confirm;
+                None
+            }
+        }
+    }
+
+    /// Note why the point's values may be held, keeping the note it had,
+    /// unless one is held already.
+    pub(super) fn doubt(&self, seq: &AtomicU64, note: String) {
+        let mut entry = self.lock();
+        if entry.held.is_some() || entry.ended() {
+            return;
+        }
+        entry.held = Some(entry.snapshot.note.replace(note));
+        self.changed(&mut entry, seq, Duration::ZERO);
+        release(entry);
+    }
+
+    /// Give back the note a doubt replaced.
+    pub(super) fn undoubt(&self, seq: &AtomicU64) {
+        let mut entry = self.lock();
+        let Some(note) = entry.held.take() else {
+            return;
+        };
+        if !entry.ended() {
+            entry.snapshot.note = note;
+            self.changed(&mut entry, seq, Duration::ZERO);
+        }
+        release(entry);
+    }
+
+    /// Give the watch up `why`, unless it stopped: its notifications are
+    /// no longer taken (nothing from its address is the point's now), and
+    /// a point given up before takes the newer reason.
+    pub(super) fn gone(&self, seq: &AtomicU64, why: Why, note: String) {
+        let mut entry = self.lock();
+        entry.target = None;
+        let snapshot = &entry.snapshot;
+        let same = snapshot.state == Phase::Gone && snapshot.why.as_ref() == Some(&why);
+        if same || snapshot.state == Phase::Stopped {
+            return;
+        }
+        // Values read before another device was found at the address may
+        // be that device's: none is kept as the point's.
+        if matches!(why, Why::Replaced { .. }) {
+            entry.snapshot.rows.clear();
+            entry.failure = None;
+        }
+        let snapshot = &mut entry.snapshot;
+        snapshot.state = Phase::Gone;
+        snapshot.why = Some(why);
+        snapshot.note = Some(note);
         self.changed(&mut entry, seq, Duration::ZERO);
         release(entry);
     }
@@ -356,8 +469,74 @@ pub(super) struct Arrival {
     pub(super) running: Running,
 }
 
+/// Announcements, and senders, a scheduler keeps between two looks, each
+/// once in a row: more mark announcements missed (the scheduler reads the
+/// table instead), or drop the oldest sender (a later notification names
+/// it again).
+const HEARD_KEPT: usize = 8;
+
+/// What the notification receiver noted at a device's address since its
+/// scheduler last looked (#2603).
+#[derive(Debug, Default)]
+pub(super) struct Notes {
+    /// Instances announced there, in order, each with whether its I-Am is
+    /// newer than any seen there before: only a new one may be a restart,
+    /// not a row the table moved when the client learned its network.
+    pub(super) announced: Vec<(u32, bool)>,
+    /// Announcements were missed: the receiver fell behind, or more came
+    /// between two looks than are kept.
+    pub(super) missed: bool,
+    /// Instances COV notifications from the address named as their sender
+    /// although the device had named another for their point.
+    pub(super) senders: Vec<u32>,
+    /// A device at the address said it restarted (a restart notification):
+    /// its instance. Only a cue to read its restart time.
+    pub(super) restart: Option<u32>,
+    /// Instances given up here for another device at the address, heard
+    /// announcing themselves at another address since.
+    pub(super) elsewhere: Vec<u32>,
+}
+
+/// A sender name the device at an address uses for itself in its
+/// notifications (a gateway naming itself, say), taken for its points
+/// after a read showed no device of that instance answers there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Alias {
+    /// The device it stands for: only its points take the name.
+    pub(super) device: u32,
+    /// The instance the notifications name.
+    pub(super) sender: u32,
+    /// When it is checked again: taken until then.
+    pub(super) until: Instant,
+}
+
+/// What the receiver keeps of a device's address.
+#[derive(Debug)]
+struct Heard {
+    notes: Notes,
+    /// The newest I-Am seen at the address, on the discovery table's
+    /// clock: the slot's making at first.
+    seen: std::time::Instant,
+    alias: Option<Alias>,
+}
+
+/// Push `value` onto `list` unless it ends it already, keeping at most
+/// [`HEARD_KEPT`]: whether it was pushed, and whether there was room.
+fn keep<V: PartialEq>(list: &mut Vec<V>, value: V) -> (bool, bool) {
+    if list.last() == Some(&value) {
+        return (false, true);
+    }
+    let room = list.len() < HEARD_KEPT;
+    if !room {
+        list.remove(0);
+    }
+    list.push(value);
+    (true, room)
+}
+
 /// A device's scheduler, as the table knows it: entries not yet taken,
-/// where a handle following its instance moved it to, and its wake-up.
+/// where a handle following its instance moved it to, what was announced
+/// at its address, and its wake-up.
 pub(super) struct DeviceSlot {
     pub(super) inbox: Mutex<Vec<Arrival>>,
     /// Set by the notification receiver when a handle following an
@@ -366,9 +545,8 @@ pub(super) struct DeviceSlot {
     ///
     /// [`ClientEvent::Moved`]: crate::device::ClientEvent::Moved
     pub(super) moved: Mutex<Option<(u32, DeviceAddress)>>,
-    /// Set by the notification receiver when a device at the address
-    /// announces itself: the instance it named.
-    pub(super) announced: Mutex<Option<u32>>,
+    /// What the notification receiver noted at the address.
+    heard: Mutex<Heard>,
     pub(super) wake: Notify,
 }
 
@@ -377,7 +555,11 @@ impl DeviceSlot {
         Self {
             inbox: Mutex::new(Vec::new()),
             moved: Mutex::new(None),
-            announced: Mutex::new(None),
+            heard: Mutex::new(Heard {
+                notes: Notes::default(),
+                seen: tokio::time::Instant::now().into_std(),
+                alias: None,
+            }),
             wake: Notify::new(),
         }
     }
@@ -386,9 +568,79 @@ impl DeviceSlot {
         self.inbox.locked()
     }
 
-    /// The instance a device at the address last announced, once.
-    pub(super) fn take_announced(&self) -> Option<u32> {
-        self.announced.locked().take()
+    fn heard(&self) -> MutexGuard<'_, Heard> {
+        self.heard.locked()
+    }
+
+    /// A device at the address announced itself as `instance`, by an I-Am
+    /// the table took at `at`: whether that is news for the scheduler (a
+    /// flood of the same announcement wakes it once).
+    fn hear(&self, instance: u32, at: Option<std::time::Instant>) -> bool {
+        let mut heard = self.heard();
+        let new = at.is_some_and(|at| at > heard.seen);
+        if let Some(at) = at.filter(|_| new) {
+            heard.seen = at;
+        }
+        let announced = &mut heard.notes.announced;
+        match announced.last_mut() {
+            Some((last, fresh)) if *last == instance => {
+                let news = new && !*fresh;
+                *fresh |= new;
+                news
+            }
+            _ => {
+                if !keep(announced, (instance, new)).1 {
+                    heard.notes.missed = true;
+                }
+                true
+            }
+        }
+    }
+
+    /// Announcements at the address may have been missed.
+    fn miss(&self) {
+        self.heard().notes.missed = true;
+    }
+
+    /// A notification from the address named `sender` as its device,
+    /// another than its point's: whether that is news for the scheduler.
+    fn sender(&self, sender: u32) -> bool {
+        keep(&mut self.heard().notes.senders, sender).0
+    }
+
+    /// A device at the address, `instance`, said it restarted: whether
+    /// that is news for the scheduler.
+    fn restarted(&self, instance: u32) -> bool {
+        self.heard().notes.restart.replace(instance) != Some(instance)
+    }
+
+    /// `instance`, given up here, announced itself elsewhere.
+    fn elsewhere(&self, instance: u32) {
+        keep(&mut self.heard().notes.elsewhere, instance);
+    }
+
+    /// What was noted since the last look.
+    pub(super) fn take_notes(&self) -> Notes {
+        std::mem::take(&mut self.heard().notes)
+    }
+
+    /// Whether `sender` is a name the device at the address uses for
+    /// `device` (see [`Alias`]), now.
+    fn takes(&self, device: u32, sender: u32) -> bool {
+        self.heard().alias.is_some_and(|alias| {
+            alias.device == device && alias.sender == sender && Instant::now() < alias.until
+        })
+    }
+
+    /// The name the address's notifications use in place of their
+    /// device's, if one is taken; `None` to take none.
+    pub(super) fn set_alias(&self, alias: Option<Alias>) {
+        self.heard().alias = alias;
+    }
+
+    /// The name taken, if any.
+    pub(super) fn alias(&self) -> Option<Alias> {
+        self.heard().alias
     }
 
     /// The instance a following handle moved from the device's address,
@@ -404,6 +656,10 @@ pub(super) struct Table {
     pub(super) entries: HashMap<Point, Slot>,
     pub(super) by_process: HashMap<u32, Arc<Shared>>,
     pub(super) devices: HashMap<DeviceAddress, Arc<DeviceSlot>>,
+    /// The addresses whose points are given up for another device there,
+    /// by the instance given up: one announcing itself anywhere else tells
+    /// those schedulers to look for it there (#2603).
+    pub(super) replaced: HashMap<u32, BTreeSet<DeviceAddress>>,
     pub(super) next_process: u32,
     pub(super) shut: bool,
 }
@@ -421,6 +677,12 @@ pub(super) struct Registry {
     /// COV-multiple notifications the receiver left alone
     /// ([`HubStats::cov_multiple_ignored`](super::hub::HubStats::cov_multiple_ignored)).
     pub(super) cov_multiple_ignored: AtomicU64,
+    /// Notifications dropped for naming another sender than their point's
+    /// device (#2603).
+    pub(super) foreign: AtomicU64,
+    /// Claims of another device at an address that the device there
+    /// refuted when asked.
+    pub(super) refuted: AtomicU64,
     pub(super) coalesce: Duration,
     /// What an object watch keeps from a notification.
     pub(super) object_reads: Vec<PropertyIdentifier>,
@@ -450,12 +712,15 @@ impl Registry {
                 entries: HashMap::new(),
                 by_process: HashMap::new(),
                 devices: HashMap::new(),
+                replaced: HashMap::new(),
                 next_process: first_process,
                 shut: false,
             }),
             seq: AtomicU64::new(0),
             lagged: AtomicU64::new(0),
             cov_multiple_ignored: AtomicU64::new(0),
+            foreign: AtomicU64::new(0),
+            refuted: AtomicU64::new(0),
             coalesce,
             object_reads,
             property_flags,
@@ -504,12 +769,74 @@ impl Registry {
         }
     }
 
-    /// A device at `at` announced itself as `instance`: tell that address's
-    /// scheduler, if it has one.
-    pub(super) fn announced(&self, at: &DeviceAddress, instance: u32) {
+    /// A device at `at` announced itself as `instance`, by an I-Am the
+    /// table took at `when`: tell that address's scheduler, if it has one,
+    /// and those that gave points up for `instance` at another address.
+    pub(super) fn announced(
+        &self,
+        at: &DeviceAddress,
+        instance: u32,
+        when: Option<std::time::Instant>,
+    ) {
+        let (device, others) = {
+            let table = self.table();
+            let others: Vec<Arc<DeviceSlot>> = table
+                .replaced
+                .get(&instance)
+                .into_iter()
+                .flatten()
+                .filter(|address| *address != at)
+                .filter_map(|address| table.devices.get(address).cloned())
+                .collect();
+            (table.devices.get(at).cloned(), others)
+        };
+        if let Some(device) = device
+            && device.hear(instance, when)
+        {
+            device.wake.notify_one();
+        }
+        for other in others {
+            other.elsewhere(instance);
+            other.wake.notify_one();
+        }
+    }
+
+    /// The device at `at`, `instance`, said it restarted.
+    pub(super) fn restarted(&self, at: &DeviceAddress, instance: u32) {
         let device = self.table().devices.get(at).cloned();
-        if let Some(device) = device {
-            *device.announced.locked() = Some(instance);
+        if let Some(device) = device.filter(|device| device.restarted(instance)) {
+            device.wake.notify_one();
+        }
+    }
+
+    /// Points at `at` are given up for another device there: `instance`
+    /// announcing itself elsewhere is told to `at`'s scheduler.
+    pub(super) fn index_replaced(&self, instance: u32, at: &DeviceAddress) {
+        let mut table = self.table();
+        table
+            .replaced
+            .entry(instance)
+            .or_default()
+            .insert(at.clone());
+    }
+
+    /// `at` has no point given up for `instance` any more (`None`: for any).
+    pub(super) fn unindex_replaced(&self, instance: Option<u32>, at: &DeviceAddress) {
+        let mut table = self.table();
+        table.replaced.retain(|known, addresses| {
+            if instance.is_none_or(|instance| instance == *known) {
+                addresses.remove(at);
+            }
+            !addresses.is_empty()
+        });
+    }
+
+    /// Announcements may have been missed (the receiver fell behind): every
+    /// scheduler reads the discovery table at its address again.
+    pub(super) fn missed(&self) {
+        let devices: Vec<Arc<DeviceSlot>> = self.table().devices.values().cloned().collect();
+        for device in devices {
+            device.miss();
             device.wake.notify_one();
         }
     }
@@ -524,10 +851,49 @@ impl Registry {
     ) -> Option<(Instant, Arc<Shared>)> {
         let received = event.object()?;
         let process = received.notification.subscriber_process_identifier;
-        let shared = Arc::clone(self.table().by_process.get(&process)?);
-        let mut state = shared.lock();
-        if !dispatch::belongs(&shared.point, state.target.as_ref(), event, own) {
+        let (shared, device) = {
+            let table = self.table();
+            let shared = Arc::clone(table.by_process.get(&process)?);
+            let device = table.devices.get(&shared.point.device).cloned();
+            (shared, device)
+        };
+        let identity = {
+            let state = shared.lock();
+            if !dispatch::belongs(&shared.point, state.target.as_ref(), event, own) {
+                return None;
+            }
+            state.identity
+        };
+        // Every notification names the device that sent it (#2603), and
+        // none was asked for: one naming the point's device, or the name a
+        // read showed that device uses ([`Alias`]), is the point's; with no
+        // device known at all, its sender is taken, unconfirmed. Any other
+        // isn't the point's, under its process identifier or not: dropped,
+        // and its scheduler asks the device there which it is, in time.
+        // Only that answer may change or confirm the point's device.
+        let sender = received.notification.initiating_device_identifier;
+        let named = sender.instance_number();
+        let alias = match (&device, identity) {
+            (Some(device), Some(own)) => device.takes(own, named),
+            _ => false,
+        };
+        let ours = identity == Some(named) || alias;
+        let adopt = identity.is_none();
+        if sender.object_type() != ObjectType::DEVICE || !(ours || adopt) {
+            self.foreign.fetch_add(1, Ordering::Relaxed);
+            if let Some(device) = device.filter(|device| device.sender(named)) {
+                device.wake.notify_one();
+            }
             return None;
+        }
+        let mut state = shared.lock();
+        if state.identity != identity
+            || !dispatch::belongs(&shared.point, state.target.as_ref(), event, own)
+        {
+            return None;
+        }
+        if adopt {
+            state.identity = Some(named);
         }
         let merged = dispatch::merge(
             &mut state.snapshot.rows,

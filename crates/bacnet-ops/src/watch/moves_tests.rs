@@ -148,8 +148,11 @@ impl Moved {
 }
 
 /// A certain move gives the point up; a point of the old address made
-/// later starts as any other; and once the old address announces the
-/// instance again, the given-up point starts again.
+/// later starts as any other, from the table's other instance there. The
+/// device there is still the watched one: its notifications name it, so it
+/// is asked which it is (#2603), answers as the watched device, and the
+/// given-up point starts again there, the later one taking that device
+/// too.
 #[tokio::test(start_paused = true)]
 async fn a_device_whose_address_names_another_is_reported_moved() {
     let mut lab = Moved::new().await;
@@ -159,13 +162,13 @@ async fn a_device_whose_address_names_another_is_reported_moved() {
         .unwrap();
     let update = until(&mut late, |u| u.value.is_some() || u.error.is_some()).await;
     assert!(!matches!(update.state, State::Gone { .. }), "{update:?}");
-    assert!(
-        latest(&mut lab.watch).await.is_none(),
-        "the point given up stays so: the address names another instance"
-    );
-    lab.bus.i_am(2, N);
     let update = until(&mut lab.watch, |u| u.state == State::Subscribed).await;
     assert_eq!(update.point.device, at(2));
+    let update = latest(&mut late).await;
+    assert!(
+        update.is_none_or(|u| !matches!(u.state, State::Gone { .. })),
+        "the later point goes on"
+    );
     drop(late);
     lab.stop().await;
 }

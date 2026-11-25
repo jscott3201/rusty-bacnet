@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, ClientConfig};
+use bacnet_encoding::apdu::{Apdu, UnconfirmedRequest, encode_apdu};
 use bacnet_encoding::constructed::decode_cov_subscription;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogInputObject;
@@ -15,17 +16,20 @@ use bacnet_objects::device_identity::{DeviceIdentity, build_database_with_extra}
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_server::server::BACnetServer;
+use bacnet_services::cov::COVNotificationRequest;
+use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
+use bacnet_services::who_is::IAmRequest;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::test_transport::{SendMode, StartMode, TestTransport, TestTransportHandle};
 use bacnet_types::MacAddr;
-use bacnet_types::constructed::BACnetCOVSubscription;
+use bacnet_types::constructed::{BACnetCOVSubscription, BACnetPropertyValue};
 use bacnet_types::enums::{
     AbortReason, EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier,
-    RejectReason,
+    RejectReason, Segmentation, UnconfirmedServiceChoice,
 };
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use tokio::time::Instant;
 
 use super::hub::{Hub, WatchOptions};
@@ -87,7 +91,40 @@ pub(super) struct Quirks {
     /// The device's acknowledgements of SubscribeCOV come half a second
     /// late, after what it sent meanwhile: its notifications overtake them.
     pub(super) late_cov_ack: AtomicBool,
+    /// The Time_Of_Device_Restart the device answers a ReadProperty with
+    /// (an Unsigned, which the hub only compares); `None` for its server's
+    /// answer, which has no such property.
+    pub(super) restart_time: Mutex<Option<u8>>,
+    /// The instance the device names itself, in place of [`LAB`], when its
+    /// Device object is read by the wildcard instance and as the sender of
+    /// its COV notifications: another device there, as far as which device
+    /// answers goes.
+    pub(super) named: Mutex<Option<u32>>,
+    /// The instance the device's COV notifications name as their sender,
+    /// in place of [`LAB`] (and of `named`): a gateway naming itself.
+    pub(super) sender: Mutex<Option<u32>>,
+    /// A ReadProperty of the Device object by the wildcard instance draws
+    /// an unknown-object error, as from a device without the wildcard.
+    pub(super) refuse_wildcard: AtomicBool,
+    /// An RPM asking for the Device object by the wildcard instance is
+    /// rejected as an unknown service, as some devices answer a request
+    /// they can't take whole.
+    pub(super) reject_wildcard_rpm: AtomicBool,
+    /// A ReadProperty of any Device object's Object_Identifier is answered,
+    /// as by a gateway that answers for every instance.
+    pub(super) any_device: AtomicBool,
+    /// A ReadProperty of another Device object's Object_Identifier is
+    /// answered with the device's own, as by a device that ignores the
+    /// instance asked for.
+    pub(super) self_device: AtomicBool,
+    /// A ReadProperty of another Device object draws a property error, not
+    /// unknown-object, as from a device that answers a missing instance
+    /// with another error.
+    pub(super) deny_missing: AtomicBool,
 }
+
+/// Device,4194303 as a context-tagged object identifier in a request.
+const WILDCARD_DEVICE: [u8; 5] = [0x0C, 0x02, 0x3F, 0xFF, 0xFF];
 
 /// Whether `npdu` acknowledges a SubscribeCOV.
 fn is_cov_ack(npdu: &ReceivedNpdu) -> bool {
@@ -103,6 +140,27 @@ fn is_ack_of(npdu: &ReceivedNpdu, kind: u8, service: u8) -> bool {
     })
 }
 
+/// `npdu`, an unconfirmed COV notification the lab device sent, naming
+/// device `named` as its sender in place of [`LAB`].
+fn renamed(mut npdu: ReceivedNpdu, named: u32) -> ReceivedNpdu {
+    // Context tag 1, four octets: the initiating device's identifier.
+    let sender = |instance: u32| {
+        let mut value = BytesMut::new();
+        let device = oid(ObjectType::DEVICE, instance);
+        bacnet_encoding::primitives::encode_app_object_id(&mut value, &device);
+        [&[0x1C][..], &value[1..]].concat()
+    };
+    let (from, to) = (sender(LAB), sender(named));
+    let mut bytes = npdu.npdu.to_vec();
+    if bytes.get(..4) == Some(&[1, 0, 0x10, 0x02][..])
+        && let Some(at) = bytes.windows(from.len()).position(|w| w == from.as_slice())
+    {
+        bytes[at..at + to.len()].copy_from_slice(&to);
+        npdu.npdu = Bytes::from(bytes);
+    }
+    npdu
+}
+
 fn take(counter: &AtomicU8) -> bool {
     counter
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
@@ -111,21 +169,22 @@ fn take(counter: &AtomicU8) -> bool {
 
 /// The client's link to the lab device: `inner`, relayed through a channel
 /// the link can also inject answers into, recording each confirmed request
-/// in `sent` and playing `quirks`.
+/// in `sent` and playing `quirks`; with a handle a test injects frames from
+/// the lab device's MAC through.
 pub(super) fn link(
     inner: LoopbackTransport,
     quirks: Arc<Quirks>,
     sent: Arc<Mutex<Vec<(u8, Instant)>>>,
-) -> TestTransport {
+) -> (TestTransport, TestTransportHandle) {
     let builder = TestTransport::builder()
         .inner(inner)
         .unicast(SendMode::Forward)
         .broadcast(SendMode::Forward)
         .start(StartMode::Relay(256));
-    let (late, injecting) = (builder.handle(), builder.handle());
+    let (late, injecting, test) = (builder.handle(), builder.handle(), builder.handle());
     let inbound_quirks = Arc::clone(&quirks);
     let send_quirks = Arc::clone(&quirks);
-    builder
+    let link = builder
         .on_send(move |frame| {
             let reads = send_quirks.unsent_reads.load(Ordering::Relaxed);
             let cov = send_quirks.unsent_cov.load(Ordering::Relaxed);
@@ -149,6 +208,12 @@ pub(super) fn link(
         .on_inbound(move |npdu| {
             let quirks = Arc::clone(&inbound_quirks);
             let late = late.clone();
+            let sender = *quirks.sender.lock().unwrap();
+            let named = sender.or(*quirks.named.lock().unwrap());
+            let npdu = match named {
+                Some(named) => renamed(npdu, named),
+                None => npdu,
+            };
             async move {
                 if quirks.slow_cov_ack.load(Ordering::Relaxed) && is_cov_ack(&npdu) {
                     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -176,7 +241,8 @@ pub(super) fn link(
             };
             async move { verdict }
         })
-        .build()
+        .build();
+    (link, test)
 }
 
 /// Answer request `invoke` with `apdu`'s tail, as the device would.
@@ -204,6 +270,47 @@ fn inject(handle: &TestTransportHandle, frame: Vec<u8>) {
             Vec::new(),
             None,
         ));
+    }
+}
+
+/// The value the quirks answer `request` with in place of the device: its
+/// Time_Of_Device_Restart, or the instance it names itself by the
+/// wildcard.
+fn faked(quirks: &Quirks, request: &ReadPropertyRequest) -> Option<Vec<u8>> {
+    let device = request.object_identifier;
+    match request.property_identifier {
+        PropertyIdentifier::TIME_OF_DEVICE_RESTART => {
+            let time = (*quirks.restart_time.lock().unwrap())?;
+            Some(vec![0x21, time])
+        }
+        PropertyIdentifier::OBJECT_IDENTIFIER
+            if device.object_type() == ObjectType::DEVICE
+                && device.instance_number() != ObjectIdentifier::WILDCARD_INSTANCE
+                && device.instance_number() != LAB
+                && (quirks.any_device.load(Ordering::Relaxed)
+                    || quirks.self_device.load(Ordering::Relaxed)) =>
+        {
+            let answered = match quirks.any_device.load(Ordering::Relaxed) {
+                true => device,
+                false => oid(ObjectType::DEVICE, LAB),
+            };
+            let mut value = BytesMut::new();
+            bacnet_encoding::primitives::encode_app_object_id(&mut value, &answered);
+            Some(value.to_vec())
+        }
+        PropertyIdentifier::OBJECT_IDENTIFIER
+            if device.object_type() == ObjectType::DEVICE
+                && device.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE =>
+        {
+            let named = (*quirks.named.lock().unwrap())?;
+            let mut value = BytesMut::new();
+            bacnet_encoding::primitives::encode_app_object_id(
+                &mut value,
+                &oid(ObjectType::DEVICE, named),
+            );
+            Some(value.to_vec())
+        }
+        _ => None,
     }
 }
 
@@ -246,6 +353,54 @@ fn forwards(
                     answer_routed(handle, vec![0x50, invoke, service, 0x91, class, 0x91, code]);
                 }
             }
+            return false;
+        }
+        if service == READ_PROPERTY
+            && quirks.deny_missing.load(Ordering::Relaxed)
+            && let Ok(request) = ReadPropertyRequest::decode(&apdu[4..])
+            && request.object_identifier.object_type() == ObjectType::DEVICE
+            && ![LAB, ObjectIdentifier::WILDCARD_INSTANCE]
+                .contains(&request.object_identifier.instance_number())
+        {
+            let class = ErrorClass::PROPERTY.to_raw() as u8;
+            let code = ErrorCode::UNKNOWN_PROPERTY.to_raw() as u8;
+            answer(handle, vec![0x50, invoke, service, 0x91, class, 0x91, code]);
+            return false;
+        }
+        if service == READ_PROPERTY
+            && let Ok(request) = ReadPropertyRequest::decode(&apdu[4..])
+            && let Some(value) = faked(quirks, &request)
+        {
+            let mut ack = BytesMut::from(&[0x30, invoke, READ_PROPERTY][..]);
+            // A device read by the wildcard instance answers as itself.
+            let named = *quirks.named.lock().unwrap();
+            let object = match (request.property_identifier, named) {
+                (PropertyIdentifier::OBJECT_IDENTIFIER, Some(named)) => {
+                    oid(ObjectType::DEVICE, named)
+                }
+                _ => request.object_identifier,
+            };
+            ReadPropertyACK {
+                object_identifier: object,
+                property_identifier: request.property_identifier,
+                property_array_index: None,
+                property_value: value,
+            }
+            .encode(&mut ack)
+            .unwrap();
+            answer(handle, ack.to_vec());
+            return false;
+        }
+        let wildcard = apdu.windows(5).any(|bytes| bytes == WILDCARD_DEVICE);
+        if service == READ_PROPERTY && wildcard && quirks.refuse_wildcard.load(Ordering::Relaxed) {
+            let class = ErrorClass::OBJECT.to_raw() as u8;
+            let code = ErrorCode::UNKNOWN_OBJECT.to_raw() as u8;
+            answer(handle, vec![0x50, invoke, service, 0x91, class, 0x91, code]);
+            return false;
+        }
+        if service == RPM && wildcard && quirks.reject_wildcard_rpm.load(Ordering::Relaxed) {
+            let reason = RejectReason::UNRECOGNIZED_SERVICE.to_raw();
+            answer(handle, vec![0x60, invoke, reason]);
             return false;
         }
         if service == RPM {
@@ -297,6 +452,8 @@ pub(super) struct Lab {
     pub(super) server: BACnetServer<LoopbackTransport>,
     pub(super) quirks: Arc<Quirks>,
     sent: Arc<Mutex<Vec<(u8, Instant)>>>,
+    /// Frames from the lab device's MAC, as another device there sends.
+    link: TestTransportHandle,
 }
 
 pub(super) fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
@@ -358,8 +515,8 @@ impl Lab {
             apdu_retries: 0,
             ..ClientConfig::default()
         };
-        let link = link(client_port, Arc::clone(&quirks), Arc::clone(&sent));
-        let low = BACnetClient::start(config, link).await.unwrap();
+        let (port, link) = link(client_port, Arc::clone(&quirks), Arc::clone(&sent));
+        let low = BACnetClient::start(config, port).await.unwrap();
         low.add_device(LAB, &[2]).await.unwrap();
         let client = Client::new(Arc::new(low), Arc::new(RequestLimits::new(0)));
         let hub = Hub::new(client.clone(), options).unwrap();
@@ -369,7 +526,75 @@ impl Lab {
             server,
             quirks,
             sent,
+            link,
         }
+    }
+
+    /// An I-Am for device `instance` from the lab device's MAC: another
+    /// device announcing itself there when `instance` isn't [`LAB`].
+    pub(super) fn announce(&self, instance: u32) {
+        let mut service = BytesMut::new();
+        IAmRequest {
+            object_identifier: oid(ObjectType::DEVICE, instance),
+            max_apdu_length: 1476,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
+            vendor_id: 42,
+        }
+        .encode(&mut service);
+        self.unconfirmed(UnconfirmedServiceChoice::I_AM, service);
+    }
+
+    /// An UnconfirmedCOVNotification from the lab device's MAC to
+    /// subscriber `process`, as from device `instance`: `object`'s
+    /// Present_Value is `value`.
+    pub(super) fn notify(&self, process: u32, instance: u32, object: ObjectIdentifier, value: f32) {
+        let real = [&[0x44][..], &value.to_be_bytes()].concat();
+        let values = vec![(PropertyIdentifier::PRESENT_VALUE, real)];
+        self.notify_values(process, instance, object, values);
+    }
+
+    /// An UnconfirmedCOVNotification from the lab device's MAC to
+    /// subscriber `process`, as from device `instance`, about `object`,
+    /// carrying `values` (encoded).
+    pub(super) fn notify_values(
+        &self,
+        process: u32,
+        instance: u32,
+        object: ObjectIdentifier,
+        values: Vec<(PropertyIdentifier, Vec<u8>)>,
+    ) {
+        let mut service = BytesMut::new();
+        COVNotificationRequest {
+            subscriber_process_identifier: process,
+            initiating_device_identifier: oid(ObjectType::DEVICE, instance),
+            monitored_object_identifier: object,
+            time_remaining: 300,
+            list_of_values: values
+                .into_iter()
+                .map(|(property_identifier, value)| BACnetPropertyValue {
+                    property_identifier,
+                    property_array_index: None,
+                    value,
+                    priority: None,
+                })
+                .collect(),
+        }
+        .encode(&mut service)
+        .unwrap();
+        self.unconfirmed(
+            UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION,
+            service,
+        );
+    }
+
+    fn unconfirmed(&self, service_choice: UnconfirmedServiceChoice, service: BytesMut) {
+        let apdu = Apdu::UnconfirmedRequest(UnconfirmedRequest {
+            service_choice,
+            service_request: service.freeze(),
+        });
+        let mut frame = BytesMut::from(&[1u8, 0][..]);
+        encode_apdu(&mut frame, &apdu).unwrap();
+        inject(&self.link, frame.to_vec());
     }
 
     /// Give the client's discovery table a router to [`routed_at`]'s

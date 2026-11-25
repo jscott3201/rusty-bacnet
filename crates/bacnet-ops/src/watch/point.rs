@@ -110,4 +110,33 @@ pub enum Why {
         /// Where the device answers now.
         to: DeviceAddress,
     },
+    /// Another device answers at the point's address now: asked (after an
+    /// announcement there, the discovery table, or a notification naming
+    /// another sender said so), or in a poll's own answer, the device there
+    /// names itself `found`, not `watched`, the instance an earlier answer
+    /// named for the point. Nothing from the address is taken as
+    /// the point's from then on, its values are dropped, and nothing more
+    /// is sent for it: its old subscription, which the new device never
+    /// held, lapses with its lifetime. The point is given up
+    /// ([`State::Gone`](super::State::Gone)), becomes
+    /// [`Moved`](Self::Moved) once `watched` announces itself at one other
+    /// address, and starts again when its address answers for `watched`
+    /// again.
+    Replaced {
+        /// The instance an earlier answer named for the point.
+        watched: u32,
+        /// The instance the device there answers for now.
+        found: u32,
+    },
+    /// The device's COV notifications name device `sender` as their
+    /// sender, and a read at its address couldn't tell that name from
+    /// another device there (one answers for it, or the device couldn't
+    /// say), so they aren't taken (#2603): the point is polled instead, its
+    /// subscription cancelled. Nothing is remembered of the device's COV
+    /// service: the point is subscribed and the name read again when it
+    /// starts again, as is another watch of the device.
+    ForeignSender {
+        /// The instance the notifications name.
+        sender: u32,
+    },
 }
