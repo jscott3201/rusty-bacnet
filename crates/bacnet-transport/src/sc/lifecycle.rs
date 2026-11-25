@@ -42,11 +42,7 @@ impl<W: WebSocketPort> ScTransport<W> {
         let hub = self.say_goodbye_to_hub(budget);
         // A primary restore's goodbye to the failover hub finishes in the
         // same budget rather than being cut off (#2520).
-        let restore = self
-            .restore_disconnect_task
-            .lock()
-            .ok()
-            .and_then(|mut task| task.take());
+        let restore = self.restore_disconnect_task.locked().take();
         let restore = async {
             if let Some(mut task) = restore
                 && tokio::time::timeout_at(budget, &mut task).await.is_err()
@@ -141,11 +137,7 @@ impl<W: WebSocketPort> ScTransport<W> {
     ) -> (Option<JoinHandle<()>>, Option<JoinHandle<()>>) {
         self.end_at_once();
         let task = self.recv_task.locked().take();
-        let restore_task = self
-            .restore_disconnect_task
-            .lock()
-            .ok()
-            .and_then(|mut task| task.take());
+        let restore_task = self.restore_disconnect_task.locked().take();
         (task, restore_task)
     }
 
@@ -156,9 +148,7 @@ impl<W: WebSocketPort> ScTransport<W> {
         if let Some(task) = &*self.recv_task.locked() {
             task.abort();
         }
-        if let Ok(task) = self.restore_disconnect_task.lock()
-            && let Some(task) = &*task
-        {
+        if let Some(task) = &*self.restore_disconnect_task.locked() {
             task.abort();
         }
         if let Some(conn) = &self.connection

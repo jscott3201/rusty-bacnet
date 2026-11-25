@@ -39,7 +39,7 @@ impl BACnetServer {
         operation: impl FnOnce(&dyn FileConfiguration) -> PyResult<R>,
     ) -> PyResult<R> {
         let oid = file_oid(instance)?;
-        let guard = self.lock_pending()?;
+        let guard = self.lock_pending();
         self.check_start_not_in_flight()?;
         if self.started.load(Ordering::Acquire) {
             return Err(PyRuntimeError::new_err(STARTED_CONFIGURATION));
@@ -60,7 +60,7 @@ impl BACnetServer {
         operation: impl FnOnce(&mut dyn FileConfiguration) -> PyResult<R>,
     ) -> PyResult<R> {
         let oid = file_oid(instance)?;
-        let mut guard = self.lock_pending()?;
+        let mut guard = self.lock_pending();
         self.check_start_not_in_flight()?;
         if self.started.load(Ordering::Acquire) {
             return Err(PyRuntimeError::new_err(STARTED_CONFIGURATION));
@@ -286,7 +286,7 @@ mod tests {
                 .unwrap();
         });
 
-        let guard = server.lock_pending().unwrap();
+        let guard = server.lock_pending();
         assert_eq!(
             guard[0]
                 .file_configuration()
@@ -388,7 +388,7 @@ mod tests {
             assert_eq!(py_message(py, &error), STARTED_CONFIGURATION);
         });
         assert_eq!(
-            started.lock_pending().unwrap()[0]
+            started.lock_pending()[0]
                 .file_configuration()
                 .unwrap()
                 .stream_data()
@@ -400,7 +400,7 @@ mod tests {
         drained
             .push_pending(Box::new(file(9, "DRAINED", b"gone")))
             .unwrap();
-        drained.lock_pending().unwrap().drain(..);
+        drained.lock_pending().drain(..);
         Python::attach(|py| {
             let error = drained.get_file_data(py, 9).unwrap_err();
             assert!(error.is_instance_of::<PyValueError>(py));

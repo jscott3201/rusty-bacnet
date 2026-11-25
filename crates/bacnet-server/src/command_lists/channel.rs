@@ -67,6 +67,7 @@ use bacnet_objects::command::{CommandRun, WriteFailure};
 use bacnet_types::constructed::BACnetActionCommand;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::sync::MutexExt;
 use futures_util::StreamExt;
 use futures_util::stream::{self, FuturesUnordered};
 use tokio::time::Instant;
@@ -87,15 +88,11 @@ struct Shared {
 
 impl Shared {
     fn is_silent(&self, device: ObjectIdentifier) -> bool {
-        self.silent
-            .lock()
-            .is_ok_and(|silent| silent.contains(&device))
+        self.silent.locked().contains(&device)
     }
 
     fn found_silent(&self, device: ObjectIdentifier) {
-        if let Ok(mut silent) = self.silent.lock() {
-            silent.push(device);
-        }
+        self.silent.locked().push(device);
     }
 
     fn due(&self, member: &ChannelMember) -> Instant {

@@ -353,9 +353,7 @@ impl BipTransport {
     /// Set the broadcast forwarding fanout policy and rate limits.
     pub fn set_fanout_policy(&mut self, policy: FanoutPolicy) {
         let policy = policy.sanitized();
-        if let Ok(mut limiter) = self.fanout_limiter.lock() {
-            limiter.set_policy(policy.clone());
-        }
+        self.fanout_limiter.locked().set_policy(policy.clone());
         self.fanout_policy = policy;
     }
 

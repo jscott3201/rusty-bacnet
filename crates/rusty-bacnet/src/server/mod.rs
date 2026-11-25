@@ -49,6 +49,7 @@ use bacnet_types::constructed::{
 };
 use bacnet_types::enums::{EventType, ObjectType};
 use bacnet_types::primitives::PropertyValue;
+use bacnet_types::sync::MutexExt;
 
 use crate::errors::to_py_err;
 use crate::point_registration::admit;
@@ -199,13 +200,10 @@ type ForwarderSaveCounterEntry = (
 );
 
 impl BACnetServer {
-    /// Lock the pending_objects mutex, converting poison errors into PyRuntimeError.
-    fn lock_pending(
-        &self,
-    ) -> PyResult<std::sync::MutexGuard<'_, Vec<Box<dyn BACnetObject + Send>>>> {
-        self.pending_objects
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("internal lock poisoned"))
+    /// Lock the pending_objects mutex, poisoned or not: a panic under it
+    /// leaves whole objects, each pushed or drained in one step (#2559).
+    fn lock_pending(&self) -> std::sync::MutexGuard<'_, Vec<Box<dyn BACnetObject + Send>>> {
+        self.pending_objects.locked()
     }
 
     /// Keep `object` for start, once [`admit`] has checked its identifier
@@ -252,7 +250,7 @@ impl BACnetServer {
         build: impl FnOnce() -> PyResult<Box<dyn BACnetObject + Send>>,
         kept: impl FnOnce() -> PyResult<()>,
     ) -> PyResult<()> {
-        let mut pending = self.lock_pending()?;
+        let mut pending = self.lock_pending();
         self.check_takes_objects()?;
         let taken = self.taken(&pending);
         let object = admit(identity, taken, check, build)?;
@@ -265,7 +263,7 @@ impl BACnetServer {
     /// clears a file (#2748): the same ones [`push_pending`](Self::push_pending)
     /// repeats under the lock when the object is kept.
     fn precheck_pending(&self, object_type: ObjectType, instance: u32, name: &str) -> PyResult<()> {
-        let pending = self.lock_pending()?;
+        let pending = self.lock_pending();
         self.check_takes_objects()?;
         let taken = self.taken(&pending);
         admit((object_type, instance, name), taken, || Ok(()), || Ok(()))
