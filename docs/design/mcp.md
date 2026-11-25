@@ -277,7 +277,7 @@ openWorldHint: false`.
 
 | Tool | Phase | Annotations | Inputs (outline) | Result (outline) |
 |---|---|---|---|---|
-| `bacnet_discover` | 1 | RO, idempotent | `send` (default true), `scope` (local, network, directed, global), `network`, `address`, `range`, `wait_s` (1 to 30), `cursor` | devices: instance, address, network, vendor, max APDU, segmentation, last seen; names only on request |
+| `bacnet_discover` | 1 | RO, idempotent | `send` (default true), `scope` (local, network, directed, global), `network`, `address`, `range`, `wait_s` (1 to 30), `cursor` | devices: instance, address, network, vendor, max APDU, segmentation, last seen; names only on request; a cursor naming the last row listed (instance, network, MAC), so the next page starts after it (#2606) |
 | `bacnet_find_object` | 1 | RO | `name`, `description`, `object` or `types`; `range`, `cursor` | matches: device, object, name and description (untrusted); devices incomplete or skipped |
 | `bacnet_network_map` | 1 | RO | `send`, `network`, `wait_s`, `bbmd` and `bbmds` (built in #2102) | routers and the networks they reach; networks with routers, speed, rate and devices; with `bbmd`, the BBMDs' BDT and FDT and a consistency verdict |
 | `bacnet_read` | 1 | RO, idempotent | `device`, `reads` (up to 100: object, properties or `all`/`required`, index), `preset` (`point`, `device`), `format` (display, typed, both) | results per property: value or BACnet error; `via` rpm or rp |

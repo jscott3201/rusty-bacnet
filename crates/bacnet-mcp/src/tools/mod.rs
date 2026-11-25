@@ -561,7 +561,7 @@ pub(crate) fn start<T: TransportPort + 'static>(
         Some(token) => ctx
             .cursors
             .open(token, tool, &ctx.principal, args)
-            .map_err(|why| ToolError::invalid("cursor", format!("not a usable cursor: {why}"))),
+            .map_err(unusable),
     }
 }
 
@@ -573,6 +573,38 @@ pub(crate) fn next<T: TransportPort + 'static>(
     position: u64,
 ) -> Value {
     json!(ctx.cursors.seal(tool, &ctx.principal, args, position))
+}
+
+/// Where a call paged by row starts: the key of the row its cursor resumes
+/// after, or `None` on its first page (#2606).
+pub(crate) fn start_after<T: TransportPort + 'static>(
+    ctx: &Ctx<T>,
+    tool: &str,
+    cursor: Option<&str>,
+    args: &Map<String, Value>,
+) -> Result<Option<Vec<u8>>, ToolError> {
+    cursor
+        .map(|token| {
+            ctx.cursors
+                .open_after(token, tool, &ctx.principal, args)
+                .map_err(unusable)
+        })
+        .transpose()
+}
+
+/// The cursor resuming `tool` after the row whose key is `key`.
+pub(crate) fn next_after<T: TransportPort + 'static>(
+    ctx: &Ctx<T>,
+    tool: &str,
+    args: &Map<String, Value>,
+    key: &[u8],
+) -> Value {
+    json!(ctx.cursors.seal_after(tool, &ctx.principal, args, key))
+}
+
+/// A cursor that didn't open, and why.
+pub(crate) fn unusable(why: &str) -> ToolError {
+    ToolError::invalid("cursor", format!("not a usable cursor: {why}"))
 }
 
 /// Structured content past this is paged.

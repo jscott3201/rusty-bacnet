@@ -15,6 +15,7 @@ mod attach_shared;
 mod bbmd;
 mod budget;
 mod confirm;
+mod discover_paging;
 mod discovery;
 mod export;
 mod handoff;
