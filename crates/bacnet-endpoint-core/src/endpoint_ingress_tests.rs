@@ -218,7 +218,8 @@ async fn direct_egress_preserves_npdu_flags_priority_and_destination() {
                 Vec::new(),
             )
             .await,
-        Err(Error::Encoding(message)) if message == "endpoint shutdown"
+        Err(Error::State(error::Lifecycle::Closed, message))
+            if message.to_string() == "endpoint shutdown"
     ));
 }
 
@@ -273,7 +274,8 @@ async fn saturated_egress_is_bounded_and_stop_cancels_accepted_commands() {
                 Vec::new(),
             )
             .await,
-        Err(Error::Encoding(message)) if message == "endpoint egress queue is full"
+        Err(Error::LimitReached(message))
+            if message.to_string() == "endpoint egress queue is full"
     ));
 
     handle
@@ -295,7 +297,8 @@ async fn saturated_egress_is_bounded_and_stop_cancels_accepted_commands() {
     for result in [first.await.unwrap(), second.await.unwrap()] {
         assert!(matches!(
             result,
-            Err(Error::Encoding(message)) if message == "endpoint shutdown"
+            Err(Error::State(error::Lifecycle::Closed, message))
+                if message.to_string() == "endpoint shutdown"
         ));
     }
 }

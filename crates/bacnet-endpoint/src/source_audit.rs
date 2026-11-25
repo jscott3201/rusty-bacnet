@@ -191,7 +191,7 @@ impl SourceAudit {
         if unicast {
             Ok(())
         } else {
-            Err(Error::Encoding(one_station_rule(runtime).into()))
+            Err(Error::invalid_argument(one_station_rule(runtime)))
         }
     }
 

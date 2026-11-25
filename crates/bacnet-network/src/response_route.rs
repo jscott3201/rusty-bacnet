@@ -3,7 +3,7 @@ use crate::layer::ReceivedApdu;
 use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
 use bacnet_npdu::NetworkPriority;
 use bacnet_transport::port::{DirectResponse, TransportProvenance};
-use bacnet_types::error::Error;
+use bacnet_types::error::{EncodeError, Error};
 use bytes::{Bytes, BytesMut};
 
 #[cfg(test)]
@@ -151,8 +151,8 @@ impl ResponseRoute {
         priority: NetworkPriority,
     ) -> Result<BytesMut, Error> {
         if self.direct()?.is_some() {
-            return Err(Error::Encoding(
-                "a direct response requires its original socket".into(),
+            return Err(Error::unsupported(
+                "a direct response requires its original socket",
             ));
         }
         if let Some(router) = &self.router {
@@ -176,8 +176,7 @@ impl ResponseRoute {
         if let Some(router) = &self.router {
             let npdu = router.plan().npdu(apdu, expecting_reply, priority);
             let mut encoded = BytesMut::zeroed(npdu.encoded_len());
-            npdu.encode_into(&mut encoded)
-                .map_err(|error| Error::Encoding(error.to_string()))?;
+            npdu.encode_into(&mut encoded).map_err(npdu_encode_error)?;
             return Ok(encoded);
         }
         encode_response_npdu(apdu, destination, expecting_reply, priority)
@@ -229,10 +228,30 @@ pub(crate) fn check_response_destination(destination: Option<&NpduAddress>) -> R
     match destination {
         Some(destination) => crate::layer::check_destination(
             destination.network,
-            "pass no destination (no DNET) for a local peer",
+            "dest_network 0 is not a network number; \
+             pass no destination (no DNET) for a local peer",
         ),
         None => Ok(()),
     }
+}
+
+/// The NPDU encoder's refusal of a reply plan's NPDU as a static
+/// [`Error::Encode`], in the encoder's words (#1833).
+pub(crate) fn npdu_encode_error(error: bacnet_npdu::EncodeError) -> Error {
+    use bacnet_npdu::EncodeError as Refused;
+    let octets = |count: usize| u32::try_from(count).unwrap_or(u32::MAX);
+    match error {
+        Refused::NoRoom { needed, available } => {
+            EncodeError::new("an NPDU of {} octets doesn't fit in {}")
+                .with_values(octets(needed), octets(available))
+        }
+        Refused::ReservedNetwork => EncodeError::new("NPDU names a reserved network number"),
+        Refused::EmptySource => EncodeError::new("NPDU source SLEN=0 is invalid"),
+        Refused::AddressTooLong => EncodeError::new("NPDU address exceeds the {}-octet limit")
+            .with_value(octets(bacnet_npdu::MAX_MAC_LEN)),
+        _ => EncodeError::new("NPDU encoding refused"),
+    }
+    .into()
 }
 
 /// [`encode_response_npdu`] once [`check_response_destination`] has passed.

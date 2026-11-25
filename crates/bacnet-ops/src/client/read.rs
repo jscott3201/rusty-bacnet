@@ -161,17 +161,17 @@ pub fn unreachable(error: &Error) -> bool {
 ///   retry withheld; either way no word of the device's, and the next
 ///   request fails the same way until the node is enabled again.
 /// - [`Error::Encoding`], the client's untyped error (#1833 types it). A
-///   link refusing the send comes as this (a router's application given a
-///   station that names no network), and so do a client out of invoke IDs
-///   and a response channel closed under a request, which **had already
-///   left**. So this is not "never sent", and nothing may send again on the
-///   strength of it: reads only stop on it. They are kept in because they
-///   have no type to tell them from the refusal this exists for, and each
-///   ends a read for the same reason: the client, not the property, failed.
+///   client out of invoke IDs comes as this, and so does a response channel
+///   closed under a request, which **had already left**. So this is not
+///   "never sent", and nothing may send again on the strength of it: reads
+///   only stop on it. They are kept in because they have no type to tell
+///   them from the refusal this exists for, and each ends a read for the
+///   same reason: the client, not the property, failed.
 /// - The local refusals #1833 typed out of it: [`Error::State`] (a
 ///   BACnet/SC link that isn't connected to its hub, a closed loopback
 ///   channel), [`Error::InvalidConfig`], [`Error::InvalidArgument`] (a MAC
-///   of the wrong form for the link), [`Error::Unsupported`] and
+///   of the wrong form for the link, or a router's application given a
+///   station that names no network), [`Error::Unsupported`] and
 ///   [`Error::LimitReached`]. Each is the client's or the link's own
 ///   refusal, as the untyped error was. A stopped transport's send is
 ///   [`Error::Transport`], which [`unreachable()`] counts instead.

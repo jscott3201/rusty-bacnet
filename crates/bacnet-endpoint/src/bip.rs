@@ -289,24 +289,24 @@ impl BipEndpointBuilder {
 
     /// Builds the concrete B/IP transport with all pre-start controls applied.
     ///
-    /// Returns a typed [`Error::Encoding`] when any session-owned
+    /// Returns [`Error::InvalidConfig`] when any session-owned
     /// configuration is set, since a bare transport would discard it: a
     /// Network Port registration, source Audit route data or a Device
     /// storage path. Those require [`build_session`](Self::build_session).
     pub fn build_transport(self) -> Result<BipTransport, Error> {
         if self.registered_network_port.is_some() {
-            return Err(Error::Encoding(
-                "Network Port registration requires build_session()".into(),
+            return Err(Error::invalid_config(
+                "Network Port registration requires build_session()",
             ));
         }
         if self.device_storage_path.is_some() {
-            return Err(Error::Encoding(
-                "a Device storage path requires build_session()".into(),
+            return Err(Error::invalid_config(
+                "a Device storage path requires build_session()",
             ));
         }
         if !self.source_audit_bindings.is_empty() || !self.source_audit_routed.is_empty() {
-            return Err(Error::Encoding(
-                "source Audit route data requires build_session()".into(),
+            return Err(Error::invalid_config(
+                "source Audit route data requires build_session()",
             ));
         }
         let mut transport = BipTransport::new(self.interface, self.port, self.broadcast_address);

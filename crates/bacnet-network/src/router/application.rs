@@ -46,7 +46,7 @@ use bacnet_npdu::{MAX_NPDU, Npdu, NpduLimits};
 use bacnet_router_core::router::{OriginateError, Request, SourceSelection};
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_types::MacAddr;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle, Refusal};
 use bacnet_types::sync::MutexExt;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -86,7 +86,8 @@ const NPCI_ROOM: u16 = (MAX_NPDU - 1476) as u16;
 /// are included. A port that refuses its copy fails the send, but the
 /// other copies still go, as for a global broadcast. A unicast with no
 /// DNET, whose MAC names a station on no one network, is refused with
-/// [`Error::Encoding`], and so is a network message.
+/// [`Error::InvalidArgument`], and so is an NPDU that doesn't decode; a
+/// network message is refused with [`Error::Unsupported`].
 ///
 /// The stack's answers to confirmed requests it receives, such as the
 /// acknowledgement of a confirmed COV notification, go back through the
@@ -329,21 +330,20 @@ impl RouterApplicationPort {
         if self.stopped.load(std::sync::atomic::Ordering::Acquire) {
             return Err(bacnet_transport::port::stopped());
         }
-        let npdu = Npdu::decode(npdu)
-            .map_err(|error| Error::Encoding(format!("router application send: {error}")))?;
+        let npdu = Npdu::decode(npdu).map_err(|error| {
+            Error::InvalidArgument(Refusal::text(format!("router application send: {error}")))
+        })?;
         if npdu.message_type.is_some() {
-            return Err(Error::Encoding(
+            return Err(Error::unsupported(
                 "the router's application port carries APDUs only; network messages are \
-                 the router's own"
-                    .into(),
+                 the router's own",
             ));
         }
         let Some(destination) = npdu.destination else {
             if !broadcast {
-                return Err(Error::Encoding(
+                return Err(Error::invalid_argument(
                     "the router's application is on each of the router's networks, so a \
-                     link MAC alone names no one station: address the device by its network"
-                        .into(),
+                     link MAC alone names no one station: address the device by its network",
                 ));
             }
             return originate_attached(&self.outputs, &self.shared, &npdu, self.source)
@@ -412,8 +412,9 @@ impl std::fmt::Debug for RouterApplicationPort {
 impl TransportPort for RouterApplicationPort {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         if std::mem::replace(&mut self.started, true) {
-            return Err(Error::Encoding(
-                "router application port already started".to_string(),
+            return Err(Error::state(
+                Lifecycle::AlreadyStarted,
+                "router application port already started",
             ));
         }
         // Publish each change of the router's limits, capped. Nothing is

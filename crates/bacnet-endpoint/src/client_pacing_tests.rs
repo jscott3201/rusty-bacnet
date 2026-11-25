@@ -268,5 +268,9 @@ fn an_endpoint_interval_past_an_hour_is_refused() {
     };
     let hour = bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS;
     assert!(new(hour).is_ok());
-    assert!(matches!(new(hour + 1), Err(Error::Encoding(_))));
+    assert!(matches!(
+        new(hour + 1),
+        Err(Error::InvalidConfig(text)) if text.to_string()
+            == "endpoint session min-request-interval 3600001 ms is more than 3600000 ms"
+    ));
 }
