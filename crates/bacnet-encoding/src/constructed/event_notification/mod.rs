@@ -31,9 +31,15 @@ use property_states::{
     decode_device_obj_prop_ref, decode_property_states, encode_property_states, extract_raw_context,
 };
 
+mod decode_changes;
 mod decode_helpers;
+mod decode_ranges;
 mod decode_timer;
 mod parameters_decode;
+#[cfg(test)]
+mod parameters_decode_base;
+#[cfg(test)]
+mod parameters_decode_differential;
 mod parameters_encode;
 mod property_states;
 mod structured;

@@ -428,6 +428,21 @@ pub(super) fn apply_updates(
     apply_updates_for_delivery(db, oids, updates, database_eval_sources).report
 }
 
+// Out of line since the pass's per-enrollment evaluation moved into
+// `evaluate::evaluate_enrollment` (#2558). The pass's loop is then small
+// enough to inline into its caller, and this with it: in the enrollment
+// image on thumbv7m the Reporter's deadline handler's frame grew from 568
+// to 1,920 octets, on every path through it. Out of line, the handler keeps
+// its 568, this takes 1,872 and `evaluate_enrollment` 1,512, both less than
+// the 2,736 the whole pass took in one frame, and the image is 288 octets
+// smaller than with this inlined (384 smaller than before #2558).
+//
+// `evaluate_enrollment` stays a frame of its own only because the compiler
+// chooses not to inline it. A toolchain that inlines it into the deadline
+// handler grows that handler's frame as this did before the attribute.
+// The image has no stack budget to catch that, and riscv32imac's frames
+// weren't measured.
+#[inline(never)]
 pub(super) fn apply_updates_for_delivery(
     db: &mut ObjectDatabase,
     oids: &[ObjectIdentifier],

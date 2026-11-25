@@ -151,6 +151,7 @@ pub(super) fn invalid_indexed_target_error(error: &Error) -> bool {
 
 /// The enrollment under evaluation and the reliability, event state and
 /// Event_Enable it held when the pass read it.
+#[derive(Clone, Copy)]
 pub(super) struct ReliabilitySubject<'a> {
     pub(super) db: &'a ObjectDatabase,
     pub(super) enrollment: &'a dyn BACnetObject,
