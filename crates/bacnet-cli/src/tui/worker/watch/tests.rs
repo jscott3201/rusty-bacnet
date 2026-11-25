@@ -133,6 +133,13 @@ fn a_snapshot_reads_as_the_row_source() {
                 "device 1002 answers at mstp:9 now, not device 1001".into(),
             )),
         ),
+        // Notifications naming a sender that can't be told apart: polled.
+        (
+            snapshot(poll, Some(Why::ForeignSender { sender: 1002 }), None),
+            Some(Source::Polled(
+                "notifications name device 1002, which can't be told apart".into(),
+            )),
+        ),
         // Between the steps of a change: no source yet.
         (snapshot(poll, None, Some("timeout")), None),
         (

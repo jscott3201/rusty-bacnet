@@ -132,6 +132,8 @@ mod lifecycle_tests;
 #[cfg(test)]
 mod moves_tests;
 #[cfg(test)]
+mod naming_tests;
+#[cfg(test)]
 mod restart_tests;
 #[cfg(test)]
 mod scheduler_tests;

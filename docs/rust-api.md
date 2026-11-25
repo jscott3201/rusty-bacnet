@@ -13251,9 +13251,11 @@ its last refutation says otherwise, a notification naming another
 sender) is a claim: the device there is asked which it is, by one
 ReadProperty of its Device object by the wildcard instance, or by the
 watched instance for a device that refused the wildcard; that one
-missing, the claimed instance is read, then the one the table names, and
-the points take the one that answers (a confirmed point is given up for
-it), through the device's gate and the client's rate. Answered as the
+missing (or, for points no answer named, not shown: another error or
+another device's identifier), the claimed instance is read, then the one
+the table names, and the points take the one that answers, unconfirmed
+(a confirmed point is given up for it), through the device's gate and the
+client's rate. The client's own failure refutes nothing. Answered as the
 watched device, the claim is ignored: a stray or forged I-Am ends nothing.
 Not answered, the device is unreachable, as for any unanswered request.
 The first claim is asked at once, the next after 60 s, the wait doubling
@@ -13262,9 +13264,11 @@ minutes and then one a lifetime (twelve an hour for a client's own hub),
 however many frames come. Meanwhile the points carry a note saying a
 claim waits. While an ask runs (it goes first in the device's queue), a
 start answered while the table named another instance, and polls
-without the identity row, are held; between asks their values are taken,
-the poll's answer being the device's, so a flood naming a new instance
-every second holds values for one ask's round trip a few times an hour.
+without the identity row, are held, for the whole chain at most: up to
+four requests, one of which may time out. Between asks their values are
+taken, the poll's answer being the device's, so a flood naming a new
+instance every second holds values for one such chain a few times an
+hour.
 The last claim refuted is kept by the address's scheduler and isn't cued
 again from the table. A sender a notification named in place of the
 watched device (a gateway that names itself, say) is taken as the
@@ -13302,7 +13306,8 @@ most: when it moved, its subscribed points are read and subscribed again
 (`NoAnswer`, `Full`, `Lapsed`, `Missing`) tried again, rather than at
 their next renewal or retry; unchanged, nothing more is sent. A read
 finding no such Device object learns nothing and asks the device its
-name. The time a restart notification carries isn't taken, so a forged
+name, and one finding no such property is kept only for an instance an
+answer named, so a forged row can't turn restart reads off. The time a restart notification carries isn't taken, so a forged
 one costs one read at most a lifetime, and one from another device than
 the points' is ignored. A device without the property is sent nothing
 more, and like one whose restart time never moves (it has no clock), is

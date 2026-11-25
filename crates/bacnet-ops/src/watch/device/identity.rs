@@ -29,17 +29,20 @@
 //! once a start or poll is answered, a notification naming another sender)
 //! is a claim: the device there is asked which it is, by one read of its
 //! Device object by the wildcard instance, or, for a device that refused
-//! that, by the watched instance; that one missing, the claimed instance is
-//! read, then the one the table names, and the points take the one that
-//! answers (a confirmed point is given up for it). The first claim is asked
+//! that, by the watched instance; that one missing (or, for points no
+//! answer named, not shown: another error, another device's identifier),
+//! the claimed instance is read, then the one the table names, and the
+//! points take the one that answers, unconfirmed (a confirmed point is
+//! given up for it). The client's own failure refutes nothing. The first claim is asked
 //! at once, the next after 60 s, the wait doubling up to the subscription
 //! lifetime ([`WatchOptions::lifetime`]) and staying there: at most four
 //! asks in the first seven minutes, then one a lifetime (twelve an hour for
 //! the five-minute default), however many frames come. A claim waiting puts
 //! a note on the points. While an ask runs (it goes first in the device's
 //! queue), a start answered while the table named another instance, and
-//! polls without the identity row, are held; between asks their values are
-//! taken, the poll's answer being the device's. The last claim refuted is
+//! polls without the identity row, are held, for the whole chain at most:
+//! up to four requests, one of which may time out. Between asks their
+//! values are taken, the poll's answer being the device's. The last claim refuted is
 //! kept by the address's scheduler, and isn't cued again from the table. A
 //! given-up point's renewals stop and nothing more is sent for it; its
 //! instance announcing itself at another address has the scheduler look
@@ -133,10 +136,10 @@ pub(super) enum Check {
     /// Ask the device at the address which instance it is: another,
     /// `claimed`, was said to be there while the points watch `watched`.
     Confirm { watched: u32, claimed: u32 },
-    /// Whether Device `instance` (else the one the table names) answers at
-    /// the address, whose points' device has no Device object there; for
-    /// the claim `claim`.
-    Probe { claim: u32, instance: Option<u32> },
+    /// For a claim, whether a Device object (the instance given, else the
+    /// one the table names) answers at the address, whose points' device
+    /// has none there.
+    Probe(u32, Option<u32>),
     /// Ask the device at the address its name, by the wildcard instance.
     Name,
     /// Whether device `sender`'s Device object answers at the address,
@@ -157,13 +160,14 @@ pub(super) enum Checked {
     /// For the claim, whether the instance read was the claimed one (not
     /// the table's), and the answer.
     Probed(u32, bool, Answer),
+    /// The instance read, and its restart time.
     Named(Option<u32>),
     Alias {
         device: u32,
         sender: u32,
         answer: Answer,
     },
-    RestartTime(Restart),
+    RestartTime(u32, Restart),
 }
 
 /// What a scheduler knows of which device answers at its address and of
@@ -266,7 +270,7 @@ impl<T: TransportPort + 'static> Device<T> {
                     answer,
                 })
             }),
-            Check::Probe { claim, instance } => Box::pin(async move {
+            Check::Probe(claim, instance) => Box::pin(async move {
                 let first = instance.is_some();
                 let instance = match instance {
                     Some(instance) => Some(instance),
@@ -292,7 +296,7 @@ impl<T: TransportPort + 'static> Device<T> {
             }),
             Check::RestartTime { instance } => Box::pin(async move {
                 let time = charged(account, jobs::restart_time(inner, address, instance)).await;
-                Done::Checked(Checked::RestartTime(time))
+                Done::Checked(Checked::RestartTime(instance, time))
             }),
         }
     }
@@ -324,7 +328,7 @@ impl<T: TransportPort + 'static> Device<T> {
                 sender,
                 answer,
             } => self.aliased(device, sender, answer),
-            Checked::RestartTime(time) => self.timed(time),
+            Checked::RestartTime(instance, time) => self.timed(instance, time),
         }
     }
 
@@ -424,8 +428,8 @@ impl<T: TransportPort + 'static> Device<T> {
     fn doubt(&self, claimed: u32) {
         let at = &self.address;
         let note = format!(
-            "device {claimed} is said to answer at {at}; what it sends isn't taken \
-             until the device there is asked which it is"
+            "device {claimed} is said to answer at {at}; notifications naming it aren't \
+             taken, and the device there will be asked which it is"
         );
         let seq = &self.inner.registry.seq;
         for row in self.rows.values().filter(|row| live(row)) {
@@ -463,6 +467,16 @@ impl<T: TransportPort + 'static> Device<T> {
     /// while the points watch `watched`.
     fn confirmed(&mut self, watched: u32, claimed: u32, answer: Answer) {
         self.ids.confirming = false;
+        // For points no answer named, a read of the watched instance that
+        // doesn't show it (another error, another device's identifier) is
+        // as good as its absence.
+        let rows = || self.rows.values().filter(|row| live(row));
+        let named = rows().any(|row| row.shared.confirmed() == Some(watched));
+        let answer = match answer {
+            Answer::Unclear if !named => Answer::Not,
+            Answer::Has(found) if found != watched && !named => Answer::Not,
+            answer => answer,
+        };
         match answer {
             Answer::Is(found) => {
                 self.ids.deferred = None;
@@ -485,11 +499,8 @@ impl<T: TransportPort + 'static> Device<T> {
             Answer::Not => {
                 self.ids.confirming = true;
                 let instance = (claimed != watched).then_some(claimed);
-                let check = Check::Probe {
-                    claim: claimed,
-                    instance,
-                };
-                self.ops.push_front(Op::Check(check));
+                self.ops
+                    .push_front(Op::Check(Check::Probe(claimed, instance)));
                 return;
             }
             Answer::Unclear => {
@@ -498,6 +509,7 @@ impl<T: TransportPort + 'static> Device<T> {
                 }
                 self.ids.sender = None;
             }
+            Answer::Failed => self.ids.sender = None,
             Answer::Silent => {
                 self.ids.sender = None;
                 if !self.backing_off() {
@@ -533,19 +545,16 @@ impl<T: TransportPort + 'static> Device<T> {
                 }
                 self.answered_for(Some(found));
             }
-            _ if first => {
+            Answer::Not | Answer::Unclear if first => {
                 self.ids.confirming = true;
-                let check = Check::Probe {
-                    claim,
-                    instance: None,
-                };
-                self.ops.push_front(Op::Check(check));
+                self.ops.push_front(Op::Check(Check::Probe(claim, None)));
                 return;
             }
-            _ => {
+            Answer::Not | Answer::Unclear => {
                 self.refute(claim);
                 self.ids.sender = None;
             }
+            Answer::Silent | Answer::Failed => self.ids.sender = None,
         }
         self.release_held();
         self.undoubt();
@@ -609,7 +618,7 @@ impl<T: TransportPort + 'static> Device<T> {
                     until,
                 }));
             }
-            Answer::Silent => {}
+            Answer::Silent | Answer::Failed => {}
             Answer::Is(_) | Answer::Has(_) | Answer::Unclear => self.poll_instead(device, sender),
         }
     }
@@ -916,15 +925,19 @@ impl<T: TransportPort + 'static> Device<T> {
         }
     }
 
-    /// The points' device's Time_Of_Device_Restart, as read: when it moved
+    /// Device `instance`'s Time_Of_Device_Restart, as read: when it moved
     /// since the last read, the device restarted. The first read only
     /// learns it; one finding no such Device object learns nothing, and
-    /// asks the device its name.
-    fn timed(&mut self, time: Restart) {
+    /// asks the device its name; one finding no such property is kept only
+    /// for an instance an answer named.
+    fn timed(&mut self, instance: u32, time: Restart) {
         self.ids.timing = false;
         match time {
             Restart::Silent => {}
             Restart::NoDevice => self.name_device(),
+            // Of an instance no answer named (a forged row's, say): it may
+            // not be the device's, so it doesn't turn restart reads off.
+            Restart::Absent if self.known() != Some(instance) => {}
             time => {
                 let before = self.ids.restart_time.replace(time.clone());
                 if let (Some(Restart::At(before)), Restart::At(now)) = (before, time)

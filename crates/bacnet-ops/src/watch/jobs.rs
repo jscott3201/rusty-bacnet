@@ -433,6 +433,9 @@ pub(super) enum Answer {
     Not,
     /// It answered with another error, which says neither.
     Unclear,
+    /// The client's own failure (a request never sent, or cut short):
+    /// nothing from the device.
+    Failed,
     /// It didn't answer.
     Silent,
 }
@@ -509,7 +512,7 @@ fn silence(error: &Error) -> Option<Answer> {
     if unreachable(error) {
         Some(Answer::Silent)
     } else if failed_locally(error) {
-        Some(Answer::Unclear)
+        Some(Answer::Failed)
     } else {
         None
     }
