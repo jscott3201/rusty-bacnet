@@ -185,6 +185,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// The one request path: `attributes` are the data attributes each
     /// frame carries (#2723), `None` for none.
+    ///
+    /// The checks and endings it calls are its own code moved out (#2558),
+    /// and their attributes were measured on the ReadProperty, WriteProperty
+    /// and ReadPropertyMultiple round trips, on both runtimes, in local
+    /// `scripts/perf/perf_counts.py` runs against e5061ee1b with the
+    /// hash-map keys fixed (#2591). `send_target` and `size_request` are
+    /// `#[inline(always)]`: without it, the pace guard's drop costs 15
+    /// instructions more, and each request 5.5 to 8.8 more.
+    /// `check_segmented_send` and `abandon_unsent`, which a request that
+    /// goes unsegmented and is sent never reaches, are `#[cold]
+    /// #[inline(never)]`: without all four attributes,
+    /// `cap_max_apdu_to_transport` is no longer inlined here, and each
+    /// request costs 26.6 to 30.6 more.
     pub(super) async fn confirmed_request_inner(
         &self,
         target: ConfirmedTarget<'_>,

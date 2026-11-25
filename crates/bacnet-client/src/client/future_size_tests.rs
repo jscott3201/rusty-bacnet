@@ -9,8 +9,9 @@
 //! 1 MiB thread stacks CI's stack step gives Windows, and 48 bytes more
 //! still cost 16 KiB. Users on small stacks pay the same.
 //!
-//! The bounds are the sizes at 54fec70ed (debug, 64-bit, Rust 1.99.0) plus
-//! 32 bytes. State that only an audited or otherwise cold request needs
+//! The bounds are the sizes after #2558's splits (debug, 64-bit, Rust
+//! 1.99.0, measured on macOS aarch64 only) plus 32 bytes. State that only
+//! an audited or otherwise cold request needs
 //! goes behind a box on that path, out of these futures; a change that has
 //! to grow them past a bound first shows the stack step still passes on
 //! Windows, then moves the bound. A toolchain bump can move these layouts
@@ -18,12 +19,19 @@
 //! again with the new compiler and setting the bounds from those, not a
 //! regression to chase here.
 //!
-//! The dispatch and segmented-receive bounds come from #2558, not
-//! 54fec70ed: the sizes after its split, measured on macOS aarch64 only.
-//! Nothing those futures hold is laid out by platform: no field under a
-//! `target_os`, `unix` or `windows` cfg, and the one feature-gated field, a
-//! direct BACnet/SC peer's certificate, sits behind an `Arc`. So they take
-//! the same 32-byte margin.
+//! Nothing the dispatch and segmented-receive futures hold is laid out by
+//! platform: no field under a `target_os`, `unix` or `windows` cfg, and the
+//! one feature-gated field, a direct BACnet/SC peer's certificate, sits
+//! behind an `Arc`. So they take the same 32-byte margin. The request
+//! futures' bounds were measured the same way; CI checks every bound on
+//! Linux and Windows as well.
+//!
+//! The wait for the answer, `wait_for_confirmed_response`, has no bound of
+//! its own: its future went from 1,024 to 1,120 bytes in #2558, the timer
+//! expiries' captures, and neither future that holds it grew. In
+//! `confirmed_request_inner` it sits beside the larger segmented request;
+//! in the segmented request, inside `send_segments`, beside the larger wait
+//! for a window's acknowledgement.
 
 use super::segmentation_context::SegmentedRequestLimits;
 use super::station::ConfirmedTarget;
@@ -32,14 +40,17 @@ use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
-/// `confirmed_request_inner`'s future was 2,640 bytes at 54fec70ed.
-const REQUEST_BOUND: usize = 2_640 + 32;
+/// `confirmed_request_inner`'s future was 2,640 bytes before #2558 split
+/// the request side, and 2,576 after.
+const REQUEST_BOUND: usize = 2_576 + 32;
 
-/// `read_property(&Station)`'s future was 2,888 bytes at 54fec70ed.
-const READ_PROPERTY_BOUND: usize = 2_888 + 32;
+/// `read_property(&Station)`'s future was 2,904 bytes before that split,
+/// and 2,840 after.
+const READ_PROPERTY_BOUND: usize = 2_840 + 32;
 
-/// `segmented_confirmed_request`'s future was 2,064 bytes at 54fec70ed.
-const SEGMENTED_BOUND: usize = 2_064 + 32;
+/// `segmented_confirmed_request`'s future was 1,976 bytes before that
+/// split, and 1,920 after.
+const SEGMENTED_BOUND: usize = 1_920 + 32;
 
 #[tokio::test]
 async fn the_request_futures_stay_within_their_bounds() {
