@@ -70,7 +70,7 @@ impl From<EndpointEgressAdmissionError> for Error {
     fn from(error: EndpointEgressAdmissionError) -> Self {
         match error {
             EndpointEgressAdmissionError::QueueFull => {
-                Error::Encoding("endpoint egress queue is full".into())
+                Error::limit_reached("endpoint egress queue is full")
             }
             EndpointEgressAdmissionError::Closed => shutdown_error(),
         }
@@ -236,8 +236,8 @@ impl EndpointEgress {
             || npdu[5] > 1
             || matches!(u16::from_be_bytes([npdu[3], npdu[4]]), 0 | 65535)
         {
-            return Err(Error::Encoding(
-                "invalid local Network-Number-Is NPDU".into(),
+            return Err(Error::invalid_argument(
+                "invalid local Network-Number-Is NPDU",
             ));
         }
         if !self.is_open() {

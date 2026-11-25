@@ -215,44 +215,52 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let Some(builder) = &self.server_builder else {
             return Ok(());
         };
-        let refused = |why: &str| Err(Error::Encoding(format!("no full server here: {why}")));
+        // Each a static label: the reason after one shared lead-in.
+        macro_rules! refused {
+            ($why:literal) => {
+                Err(Error::invalid_config(concat!(
+                    "no full server here: ",
+                    $why
+                )))
+            };
+        }
         if !matches!(self.role, SessionRole::ServerOnly | SessionRole::Both) {
-            return refused("the session has no server role (ServerOnly or Both)");
+            return refused!("the session has no server role (ServerOnly or Both)");
         }
         if self.identity.is_none() {
-            return refused(
+            return refused!(
                 "a session with a server role runs a full server, which needs the node's \
                  Device identity, its one set of device settings: compose one with device(), \
                  or make a node that only asks a SessionRole::ClientOnly session (a link \
-                 builder's role(), or the role EndpointSession::new takes)",
+                 builder's role(), or the role EndpointSession::new takes)"
             );
         }
         let facts = builder.node_facts();
         if facts.transport {
-            return refused("the builder has a transport: the server takes the session's link");
+            return refused!("the builder has a transport: the server takes the session's link");
         }
         if facts.database {
-            return refused(
+            return refused!(
                 "the builder has a database: give it to the session (with_database), whose \
-                 database the server serves",
+                 database the server serves"
             );
         }
         if facts.registered_network_port {
-            return refused(
+            return refused!(
                 "the builder names a registered Network Port: name it on the session \
-                 (with_registered_network_port), which reserves and publishes it",
+                 (with_registered_network_port), which reserves and publishes it"
             );
         }
         if facts.device_storage {
-            return refused(
+            return refused!(
                 "the builder names a Device storage path: name it on the session \
-                 (with_device_storage_path), which builds the node's Device",
+                 (with_device_storage_path), which builds the node's Device"
             );
         }
         if self.source_audit_reporter.is_some() && facts.audit_reporters {
-            return refused(
+            return refused!(
                 "the builder has Audit Reporters beside the session's source Audit Reporter: \
-                 the Device has one Audit recipient",
+                 the Device has one Audit recipient"
             );
         }
         Ok(())
@@ -365,9 +373,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 Ok(db) => builder.database(db.into_inner()),
                 Err(db) => {
                     self.database = Some(db);
-                    return Err(Error::Encoding(
-                        "endpoint database is shared at start".into(),
-                    ));
+                    // Another holder keeps the database the server takes.
+                    return Err(Error::limit_reached("endpoint database is shared at start"));
                 }
             },
             None => builder,
@@ -469,8 +476,13 @@ pub fn read_only_server<T: TransportPort + 'static>() -> ServerBuilder<T> {
         })
 }
 
-fn missing_ingress() -> Error {
-    Error::Encoding("endpoint session ingress owner is missing".into())
+/// A session without its ingress, which it keeps from `new` to its drop, so
+/// this is never met: one without it could never run again (#1833).
+pub(super) fn missing_ingress() -> Error {
+    Error::state(
+        bacnet_types::error::Lifecycle::Closed,
+        "endpoint session ingress owner is missing",
+    )
 }
 
 /// Pauses a test puts into a start (#2617), to widen the windows the start

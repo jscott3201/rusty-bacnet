@@ -532,10 +532,21 @@ pub(crate) enum Role {
 }
 
 impl Role {
-    fn name(self) -> &'static str {
+    /// The refusal of a seat queue with no room, a static label for each
+    /// role (#1833).
+    fn no_room(self) -> &'static str {
         match self {
-            Self::Client => "client",
-            Self::Server => "server",
+            Self::Client => "client seat queue capacity must be greater than zero",
+            Self::Server => "server seat queue capacity must be greater than zero",
+        }
+    }
+
+    /// The refusal of a second full role of this kind, which one at a time
+    /// holds (#1833).
+    fn taken(self) -> &'static str {
+        match self {
+            Self::Client => "the endpoint already has a full client: drop it before making another",
+            Self::Server => "the endpoint already has a full server: drop it before making another",
         }
     }
 }
@@ -721,23 +732,17 @@ impl SeatSlot {
         capacity: usize,
     ) -> Result<Made, Error> {
         if capacity == 0 {
-            return Err(Error::Encoding(format!(
-                "{} seat queue capacity must be greater than zero",
-                role.name()
-            )));
+            return Err(Error::invalid_config(role.no_room()));
         }
         let mut state = self.state();
         let Some(holds) = state.holds.as_ref().map(mpsc::Sender::downgrade) else {
-            return Err(Error::Encoding("endpoint shutdown".into()));
+            return Err(crate::endpoint_ingress::shutdown_error());
         };
         if state.seats[role as usize]
             .as_ref()
             .is_some_and(Attached::occupied)
         {
-            return Err(Error::Encoding(format!(
-                "the endpoint already has a full {}: drop it before making another",
-                role.name()
-            )));
+            return Err(Error::limit_reached(role.taken()));
         }
         // Answers go to a seat by the lease its coordinator names, so every
         // role on one node leases from the same pool.
@@ -746,8 +751,8 @@ impl SeatSlot {
             .as_ref()
             .is_some_and(|other| other.occupied() && !Arc::ptr_eq(&other.coordinator, coordinator))
         {
-            return Err(Error::Encoding(
-                "every seat on one endpoint shares its pool of invoke IDs".into(),
+            return Err(Error::invalid_config(
+                "every seat on one endpoint shares its pool of invoke IDs",
             ));
         }
         let (apdu_tx, apdus) = mpsc::channel(capacity);

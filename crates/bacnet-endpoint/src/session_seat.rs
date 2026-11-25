@@ -9,12 +9,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// client's to receive.
     fn client_seat(&self) -> Result<ClientSeat<T>, Error> {
         if !self.is_running() {
-            return Err(Error::Encoding("endpoint session is not running".into()));
+            return Err(self.not_running());
         }
         let server = matches!(self.role, SessionRole::ServerOnly | SessionRole::Both);
         self.ingress
             .as_ref()
-            .ok_or_else(|| Error::Encoding("endpoint session ingress owner is missing".into()))?
+            .ok_or_else(server_seat::missing_ingress)?
             .client_seat(
                 Arc::clone(&self.coordinator),
                 SeatRoles::new(server),

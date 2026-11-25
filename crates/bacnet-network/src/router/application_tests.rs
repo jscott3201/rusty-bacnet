@@ -156,17 +156,18 @@ async fn refusals_keep_their_reason() {
     let local = [&[1, 0x04][..], &READ_PROPERTY].concat();
     assert!(matches!(
         port.send_unicast(&local, &[5]).await,
-        Err(Error::Encoding(_))
+        Err(Error::InvalidArgument(refusal)) if refusal.to_string().contains("names no one station")
     ));
-    // A network message, a router query.
+    // A network message, a router query: not what this port carries.
     assert!(matches!(
         port.send_broadcast(&[1, 0x80, 0x00]).await,
-        Err(Error::Encoding(_))
+        Err(Error::Unsupported(refusal)) if refusal.to_string().contains("APDUs only")
     ));
     // Not an NPDU at all.
     assert!(matches!(
         port.send_unicast(&[2, 0], &[5]).await,
-        Err(Error::Encoding(_))
+        Err(Error::InvalidArgument(refusal))
+            if refusal.to_string().starts_with("router application send: ")
     ));
 
     // No route: refused as the router refuses it, and searched for.
@@ -203,7 +204,7 @@ async fn refusals_keep_their_reason() {
         "{error:?}"
     );
     assert_eq!(
-        OriginateFailure::from_error(&Error::Encoding("x".into())),
+        OriginateFailure::from_error(&Error::invalid_argument("x")),
         None
     );
 

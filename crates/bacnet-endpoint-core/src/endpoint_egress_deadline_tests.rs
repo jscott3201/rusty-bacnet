@@ -133,13 +133,16 @@ async fn network_number_egress_cancellation_retracts_queued_and_in_progress_comm
     );
     assert_eq!(emissions.recv().await.unwrap(), vec![4]);
     assert!(emissions.try_recv().is_err());
-    assert!(
+    assert!(matches!(
         receivers
             .egress
             .send_network_number_is(vec![1, 0, 0x10, 8])
-            .await
-            .is_err()
-    );
+            .await,
+        Err(Error::InvalidArgument(_))
+    ));
     ingress.stop().await.unwrap();
-    assert!(receivers.egress.send_network_number_is(npdu).await.is_err());
+    assert!(matches!(
+        receivers.egress.send_network_number_is(npdu).await,
+        Err(Error::State(error::Lifecycle::Closed, _))
+    ));
 }

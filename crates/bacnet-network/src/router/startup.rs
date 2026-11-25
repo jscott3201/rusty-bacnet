@@ -1,6 +1,27 @@
 //! Sequential startup with retained rollback for failures and cancelled waits.
 
+use bacnet_router_core::router::ConfigError;
+use bacnet_types::error::Refusal;
+
 use super::*;
+
+/// The router core's refusal of the ports and options (#1833):
+/// [`Error::LimitReached`] for more than its tables hold, and
+/// [`Error::InvalidConfig`] for the rest, in the core's words.
+fn config_error(error: ConfigError) -> Error {
+    let text = Refusal::text(error.to_string());
+    match error {
+        ConfigError::TooManyPorts { .. }
+        | ConfigError::RouteCap { .. }
+        | ConfigError::TableTooSmall => Error::LimitReached(text),
+        // NoPorts, DuplicateNetwork, ReservedNetwork, Limit, ZeroSweep,
+        // NoDuplicateRecord and Congestion. The core's error is
+        // `#[non_exhaustive]`, so a wildcard is needed, and it also takes a
+        // refusal the core adds later as configuration; the mapping's test
+        // lists the variants known today.
+        _ => Error::InvalidConfig(text),
+    }
+}
 
 impl BACnetRouter {
     pub(super) async fn start_dispatch<T: TransportPort + 'static>(
@@ -10,27 +31,33 @@ impl BACnetRouter {
         network_control: Option<AdmissionSender<ReceivedNetworkControl>>,
         engine_options: bacnet_router_core::router::Options,
     ) -> Result<(Self, mpsc::Receiver<ReceivedApdu>, QueueAdmissionCounters), Error> {
-        if ports.is_empty() || ports.len() > PORTS {
-            return Err(Error::Encoding(format!(
-                "A router needs 1 to {PORTS} ports, not {}",
-                ports.len()
-            )));
+        // One text, the variant by cause: no port at all, or more than a
+        // routing table's Port ID can name.
+        let count = || {
+            Refusal::new("A router needs 1 to {} ports, not {}")
+                .with_values(PORTS as u64, ports.len() as u64)
+        };
+        if ports.is_empty() {
+            return Err(Error::InvalidConfig(count()));
+        }
+        if ports.len() > PORTS {
+            return Err(Error::LimitReached(count()));
         }
         // Refuse reserved and duplicate network numbers
         {
             let mut seen = std::collections::HashSet::new();
             for port in &ports {
                 if matches!(port.network_number, 0 | 0xFFFF) {
-                    return Err(Error::Encoding(format!(
-                        "A router port can't be on network {}: ports take 1 to 65534",
-                        port.network_number
-                    )));
+                    return Err(Error::InvalidConfig(
+                        Refusal::new("A router port can't be on network {}: ports take 1 to 65534")
+                            .with_value(port.network_number.into()),
+                    ));
                 }
                 if !seen.insert(port.network_number) {
-                    return Err(Error::Encoding(format!(
-                        "Duplicate network number {} in router ports",
-                        port.network_number
-                    )));
+                    return Err(Error::InvalidConfig(
+                        Refusal::new("Duplicate network number {} in router ports")
+                            .with_value(port.network_number.into()),
+                    ));
                 }
             }
         }
@@ -55,11 +82,13 @@ impl BACnetRouter {
                 let rx = port.transport.start().await?;
                 port_receivers.push(rx);
                 let mac = Mac::from_slice(port.transport.local_mac()).map_err(|_| {
-                    Error::Encoding(format!(
-                        "Router port on network {} has a MAC longer than {} octets",
-                        port.network_number,
-                        bacnet_npdu::MAX_MAC_LEN
-                    ))
+                    Error::Unsupported(
+                        Refusal::new("Router port on network {} has a MAC longer than {} octets")
+                            .with_values(
+                                port.network_number.into(),
+                                bacnet_npdu::MAX_MAC_LEN as u64,
+                            ),
+                    )
                 })?;
                 port_info.push(RouterPortInfo {
                     index: index as u8,
@@ -85,8 +114,7 @@ impl BACnetRouter {
                 limit_changes.push(port.transport.max_npdu_changes());
                 networks.push(port.network_number);
             }
-            Engine::new(&configs, tokio_clock(), engine_options)
-                .map_err(|error| Error::Encoding(error.to_string()))
+            Engine::new(&configs, tokio_clock(), engine_options).map_err(config_error)
         }
         .await;
         let engine = match setup {
@@ -287,6 +315,55 @@ impl<T: TransportPort> Drop for Rollback<T> {
             if !self.stopped[index] {
                 port.transport.abort();
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The core's configuration refusals keep its words and take their
+    /// variant by cause: more than the tables hold is a limit reached, the
+    /// rest invalid configuration (#1833).
+    #[test]
+    fn the_cores_refusals_take_their_variant_by_cause() {
+        let limits = [
+            ConfigError::TooManyPorts {
+                count: 300,
+                capacity: 255,
+            },
+            ConfigError::RouteCap {
+                cap: 300,
+                capacity: 256,
+            },
+            ConfigError::TableTooSmall,
+        ];
+        for error in limits {
+            assert!(
+                matches!(config_error(error), Error::LimitReached(ref text)
+                    if text.to_string() == error.to_string()),
+                "{error:?}"
+            );
+        }
+        let invalid = [
+            ConfigError::NoPorts,
+            ConfigError::DuplicateNetwork(5),
+            ConfigError::ReservedNetwork {
+                port: PortId(1),
+                network: 0,
+            },
+            ConfigError::Limit(PortId(2)),
+            ConfigError::ZeroSweep,
+            ConfigError::NoDuplicateRecord,
+            ConfigError::Congestion,
+        ];
+        for error in invalid {
+            assert!(
+                matches!(config_error(error), Error::InvalidConfig(ref text)
+                    if text.to_string() == error.to_string()),
+                "{error:?}"
+            );
         }
     }
 }

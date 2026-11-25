@@ -68,9 +68,10 @@ impl SourceAuditor for SeatAuditor {
     }
 }
 
-/// What a request cut off by the session's stop or drop fails with.
+/// What a request cut off by the session's stop or drop fails with: the
+/// session is closed for good, as a stopped one never starts again.
 fn shutdown() -> Error {
-    Error::Encoding("endpoint shutdown".into())
+    Error::state(bacnet_types::error::Lifecycle::Closed, "endpoint shutdown")
 }
 
 /// What the Reporter selects, as it stood when a request was admitted.
@@ -281,26 +282,26 @@ impl SourceAudit {
         let reporter = db
             .get(&self.selected)
             .and_then(|object| object.audit_reporter())
-            .ok_or_else(|| Error::Encoding("source Reporter is unavailable".into()))?;
+            .ok_or(Error::invalid_config("source Reporter is unavailable"))?;
         if has_property(
             &reporter.property_metadata(),
             PropertyIdentifier::MONITORED_OBJECTS,
         ) {
             reporter.status_internal().set_configured(false);
-            return Err(Error::Encoding(
-                "source Audit does not support Monitored_Objects".into(),
+            return Err(Error::unsupported(
+                "source Audit does not support Monitored_Objects",
             ));
         }
         let level = match reporter.read_property(PropertyIdentifier::AUDIT_LEVEL, None)? {
             PropertyValue::Enumerated(level) => AuditLevel::from_raw(level),
-            _ => return Err(Error::Encoding("invalid source audit level".into())),
+            _ => return Err(Error::invalid_config("invalid source audit level")),
         };
         let operations =
             match reporter.read_property(PropertyIdentifier::AUDITABLE_OPERATIONS, None)? {
                 PropertyValue::BitString { unused_bits, data } => {
                     AuditOperationFlags::from_bacnet(unused_bits, &data)?
                 }
-                _ => return Err(Error::Encoding("invalid source operation flags".into())),
+                _ => return Err(Error::invalid_config("invalid source operation flags")),
             };
         let priorities = if request
             .targets()
@@ -311,7 +312,7 @@ impl SourceAudit {
                 PropertyValue::BitString { unused_bits, data } => {
                     Some(BACnetPriorityFilter::from_bacnet(unused_bits, &data)?)
                 }
-                _ => return Err(Error::Encoding("invalid source priority filter".into())),
+                _ => return Err(Error::invalid_config("invalid source priority filter")),
             }
         } else {
             None
@@ -342,7 +343,7 @@ impl SourceAudit {
         let device = self.device;
         if db.local_device().identifier() != Some(device) {
             status.set_configured(false);
-            return Err(Error::Encoding("source Device is unavailable".into()));
+            return Err(Error::invalid_config("source Device is unavailable"));
         }
         // Again just before the sequence number: one that took effect while
         // the request waited for the database is refused here, taking none.

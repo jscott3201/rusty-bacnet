@@ -43,7 +43,9 @@ async fn rejected_start(invalid_mac: bool) {
     };
     if invalid_mac {
         assert!(
-            matches!(error, Error::Encoding(ref text) if text.contains("network 2") && text.contains("MAC longer"))
+            matches!(error, Error::Unsupported(ref text)
+                if text.to_string() == "Router port on network 2 has a MAC longer than 18 octets"),
+            "{error:?}"
         );
     } else {
         assert!(matches!(error, Error::Transport(ref error) if error.raw_os_error() == Some(13)));

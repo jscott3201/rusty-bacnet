@@ -2,6 +2,7 @@ use super::*;
 use bacnet_npdu::NetworkMessageType;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::test_transport::TestTransport;
+use bacnet_types::error::Lifecycle;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 
@@ -484,28 +485,33 @@ async fn admission_opt_in_preserves_control_enable_guards() {
     let _controls = network
         .enable_network_control_receiver_with_admission()
         .unwrap();
-    assert_eq!(
-        network
-            .enable_network_control_receiver()
-            .unwrap_err()
-            .to_string(),
-        "encoding error: network-control receiver is already enabled"
-    );
-    assert_eq!(
+    // The one control stream is held: a cap of one reached (#1833).
+    let held = |error: Error| {
+        matches!(&error, Error::LimitReached(refusal)
+            if refusal.to_string() == "network-control receiver is already enabled")
+    };
+    assert!(held(network.enable_network_control_receiver().unwrap_err()));
+    assert!(held(
         network
             .enable_network_control_receiver_with_admission()
             .unwrap_err()
-            .to_string(),
-        "encoding error: network-control receiver is already enabled"
-    );
+    ));
     let _apdus = network.start_with_admission().await.unwrap();
-    assert_eq!(
-        network
-            .enable_network_control_receiver_with_admission()
-            .unwrap_err()
-            .to_string(),
-        "encoding error: network-control receiver must be enabled before NetworkLayer::start"
+    let late = network
+        .enable_network_control_receiver_with_admission()
+        .unwrap_err();
+    assert!(
+        matches!(&late, Error::State(Lifecycle::AlreadyStarted, refusal) if refusal.to_string()
+            == "network-control receiver must be enabled before NetworkLayer::start"),
+        "{late:?}"
     );
+    // Either start, once one has run.
+    let again = |error: Error| {
+        matches!(&error, Error::State(Lifecycle::AlreadyStarted, refusal)
+            if refusal.to_string() == "NetworkLayer is already started")
+    };
+    assert!(again(network.start().await.unwrap_err()));
+    assert!(again(network.start_with_admission().await.unwrap_err()));
     network.stop().await.unwrap();
 }
 

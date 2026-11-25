@@ -56,31 +56,25 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let Some(oid) = self.registered_network_port else {
             return Ok(());
         };
-        let ingress = self
-            .ingress
-            .as_mut()
-            .ok_or_else(|| invalid("missing ingress"))?;
+        let ingress = self.ingress.as_mut().ok_or_else(missing_ingress)?;
         let address = match ingress.bip_port() {
             Some(port) => registration::bip_address(&port, ingress.bip_broadcast_endpoint())?,
             None if ingress.bip6_port().is_some() => return self.prepare_bip6(oid).await,
             // A B/IP link that reports no mode is configured both ways.
             None if ingress.bip_broadcast_endpoint().is_some() => {
-                return Err(invalid(
+                return Err(Error::invalid_config(
                     "registered Network Port refused: a BBMD that also registers as a \
                      foreign device has no single B/IP mode",
                 ));
             }
-            None => return Err(invalid("registration requires B/IP or B/IPv6")),
+            None => return Err(not_ip()),
         };
-        let db = self
-            .database
-            .as_ref()
-            .ok_or_else(|| invalid("registered port requires database"))?;
+        let db = self.database.as_ref().ok_or_else(no_database)?;
         let mut db = db.write().await;
         // Validate identity before reservation so a rejected configuration has no effects.
         let configured = db
             .configured_bip_port_internal(&oid)
-            .ok_or_else(|| invalid("selected built-in B/IP port missing"))?;
+            .ok_or(Error::invalid_config("selected built-in B/IP port missing"))?;
         if let Some(identity) = &self.identity {
             identity.validate_registered_bip_internal(oid, &configured)?;
         }
@@ -95,17 +89,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Device's instance (#2057) and the identity entry, all checked before
     /// the port is reserved.
     async fn prepare_bip6(&mut self, oid: ObjectIdentifier) -> Result<(), Error> {
-        let ingress = self
-            .ingress
-            .as_mut()
-            .ok_or_else(|| invalid("missing ingress"))?;
-        let port = ingress
-            .bip6_port()
-            .ok_or_else(|| invalid("registration requires B/IP or B/IPv6"))?;
-        let db = self
-            .database
-            .as_ref()
-            .ok_or_else(|| invalid("registered port requires database"))?;
+        let ingress = self.ingress.as_mut().ok_or_else(missing_ingress)?;
+        let port = ingress.bip6_port().ok_or_else(not_ip)?;
+        let db = self.database.as_ref().ok_or_else(no_database)?;
         let mut db = db.write().await;
         // The served Device: the identity's, else the database's own.
         let served = self
@@ -121,7 +107,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         // Validate identity before reservation so a rejected configuration has no effects.
         let configured = db
             .configured_bip6_port_internal(&oid)
-            .ok_or_else(|| invalid("selected built-in B/IPv6 port missing"))?;
+            .ok_or(Error::invalid_config(
+                "selected built-in B/IPv6 port missing",
+            ))?;
         if let Some(identity) = &self.identity {
             identity.validate_registered_bip6_internal(oid, &configured)?;
         }
@@ -158,7 +146,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     registration::publish_bip6(&mut db, oid, port, capacity.into())?;
                 Bound::V6(address, vmac)
             }
-            (None, None) => return Err(invalid("registered B/IP mode changed during bind")),
+            // The started link reports neither bind its preflight saw.
+            (None, None) => {
+                return Err(Error::unsupported(
+                    "registered B/IP mode changed during bind",
+                ));
+            }
         };
         // Written values activate only through a server's ReinitializeDevice
         // handler, which the server's build sets; the reservation left the
@@ -187,6 +180,19 @@ enum Bound {
     V4(std::net::SocketAddrV4),
     V6(std::net::SocketAddrV6, [u8; 3]),
 }
-fn invalid(message: &str) -> Error {
-    Error::Encoding(message.into())
+
+/// A session without its ingress, which it keeps from `new` to its drop, so
+/// this is never met: one without it could never run again (#1833).
+fn missing_ingress() -> Error {
+    Error::state(bacnet_types::error::Lifecycle::Closed, "missing ingress")
+}
+
+/// A link that can't serve a registered Network Port.
+fn not_ip() -> Error {
+    Error::unsupported("registration requires B/IP or B/IPv6")
+}
+
+/// A session with no database to hold the registered port.
+fn no_database() -> Error {
+    Error::invalid_config("registered port requires database")
 }

@@ -110,7 +110,7 @@ use bacnet_transport::port::{
 };
 use bacnet_types::MacAddr;
 use bacnet_types::enums::PduType;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bytes::{Bytes, BytesMut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -285,35 +285,33 @@ impl std::fmt::Debug for ReceivedApdu {
     }
 }
 
-/// Refuse a caller-supplied DNET that a send naming one network cannot take.
-/// Network numbers start at 1 (Clause 6.2.2.1); the local network is reached
-/// with no DNET at all, and `local_form` tells the caller how to do that.
-/// DNET 0xFFFF selects every device on every network (Clauses 6.1 and
-/// 6.3.2), and its sender puts it on its own network with the broadcast MAC
-/// so that each router there can pass it on. Only
-/// [`NetworkLayer::broadcast_global_apdu`] sends it that way, so every send
-/// that checks here refuses DNET 0xFFFF, with or without a DADR (#1340,
-/// #1380), and points to that method.
-pub(crate) fn check_destination(network: u16, local_form: &str) -> Result<(), Error> {
+/// Refuse, as [`Error::InvalidArgument`], a caller-supplied DNET that a send
+/// naming one network cannot take. Network numbers start at 1 (Clause
+/// 6.2.2.1); the local network is reached with no DNET at all, and `zero`,
+/// the refusal of DNET 0, tells the caller how to do that. DNET 0xFFFF
+/// selects every device on every network (Clauses 6.1 and 6.3.2), and its
+/// sender puts it on its own network with the broadcast MAC so that each
+/// router there can pass it on. Only [`NetworkLayer::broadcast_global_apdu`]
+/// sends it that way, so every send that checks here refuses DNET 0xFFFF,
+/// with or without a DADR (#1340, #1380), and points to that method.
+pub(crate) fn check_destination(network: u16, zero: &'static str) -> Result<(), Error> {
     match network {
-        0 => Err(Error::Encoding(format!(
-            "dest_network 0 is not a network number; {local_form}"
-        ))),
-        0xFFFF => Err(Error::Encoding(
+        0 => Err(Error::invalid_argument(zero)),
+        0xFFFF => Err(Error::invalid_argument(
             "dest_network 0xFFFF is the global broadcast; \
-             use broadcast_global_apdu for a global broadcast"
-                .into(),
+             use broadcast_global_apdu for a global broadcast",
         )),
         _ => Ok(()),
     }
 }
 
-/// Refuse an APDU that a broadcast may not carry, before anything is encoded
-/// or sent. Clause 6.3 lets only an Unconfirmed-Request PDU go to a broadcast
-/// network address, whether local, remote or global: any other PDU names one
-/// peer's transaction, and every device reached would have to answer it or
-/// act on it (#1479). `what` names the broadcast for the error, which also
-/// names the PDU type the APDU's first octet gives (Clause 20.1).
+/// Refuse, as [`Error::InvalidArgument`], an APDU that a broadcast may not
+/// carry, before anything is encoded or sent. Clause 6.3 lets only an
+/// Unconfirmed-Request PDU go to a broadcast network address, whether local,
+/// remote or global: any other PDU names one peer's transaction, and every
+/// device reached would have to answer it or act on it (#1479). `what` names
+/// the broadcast for the error, which also names the PDU type the APDU's
+/// first octet gives (Clause 20.1).
 pub(crate) fn check_broadcast_apdu(apdu: &[u8], what: &str) -> Result<(), Error> {
     let pdu_type = match apdu.first() {
         Some(&first) if PduType::from_raw(first >> 4) == PduType::UNCONFIRMED_REQUEST => {
@@ -322,10 +320,10 @@ pub(crate) fn check_broadcast_apdu(apdu: &[u8], what: &str) -> Result<(), Error>
         Some(&first) => format!("PDU type {}", PduType::from_raw(first >> 4)),
         None => "an empty APDU".to_string(),
     };
-    Err(Error::Encoding(format!(
+    Err(Error::InvalidArgument(Refusal::text(format!(
         "{what} carries only an UNCONFIRMED_REQUEST APDU (Clause 6.3), not {pdu_type}; \
          send anything else to one device"
-    )))
+    ))))
 }
 
 /// A remote device reached through a local router.
@@ -599,7 +597,10 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
-        check_destination(dest_network, "use broadcast_apdu for the local network")?;
+        check_destination(
+            dest_network,
+            "dest_network 0 is not a network number; use broadcast_apdu for the local network",
+        )?;
         check_broadcast_apdu(apdu, "a broadcast to one network")?;
         let npdu = Npdu {
             expecting_reply,
@@ -667,7 +668,10 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
-        check_destination(target.network, "use send_apdu for a local device")?;
+        check_destination(
+            target.network,
+            "dest_network 0 is not a network number; use send_apdu for a local device",
+        )?;
         if target.mac.is_empty() {
             check_broadcast_apdu(
                 apdu,
@@ -731,12 +735,18 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         priority: NetworkPriority,
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
-        check_destination(dest_network, "use send_apdu for a local device")?;
+        check_destination(
+            dest_network,
+            "dest_network 0 is not a network number; use send_apdu for a local device",
+        )?;
         if dest_mac.is_empty() {
-            return Err(Error::Encoding(format!(
-                "an empty dest_mac addresses the broadcast on network {dest_network}, \
-                 not one device; use broadcast_to_network for a remote broadcast"
-            )));
+            return Err(Error::InvalidArgument(
+                Refusal::new(
+                    "an empty dest_mac addresses the broadcast on network {}, \
+                     not one device; use broadcast_to_network for a remote broadcast",
+                )
+                .with_value(dest_network.into()),
+            ));
         }
         let buf =
             Self::encode_routed_npdu_buf(apdu, dest_network, dest_mac, expecting_reply, priority)?;

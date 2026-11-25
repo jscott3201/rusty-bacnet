@@ -379,11 +379,15 @@ or field of its own, as `Error::SendTooLong` has. Each displays as its text
 alone; `Error::with_context` puts context in front and keeps the variant.
 `Error::state`, `Error::invalid_config`, `Error::invalid_argument`,
 `Error::unsupported` and `Error::limit_reached` build one from a static
-label. `bacnet-transport` reports its refusals this way, its I/O failures as
-`Error::Transport` with the OS error kept as the source, and an NPDU too long
-for the link as `Error::SendTooLong`; the other hosted
+label. `bacnet-transport`, `bacnet-network`, `bacnet-endpoint-core` and
+`bacnet-endpoint` report their refusals this way, and `bacnet-transport` its
+I/O failures as `Error::Transport` with the OS error kept as the source and
+an NPDU too long for the link as `Error::SendTooLong`; the other hosted
 crates still report theirs as `Error::Encoding` or `Error::OutOfRange` text
-until #1833 reaches them. A stopped transport's send still fails with
+until #1833 reaches them. An endpoint session or ingress that is not running
+says why with its `Lifecycle`: `NotRunning` before its start, `Stopping`
+while a stop runs, and `Closed` once stopped or shut, since each starts once.
+A stopped transport's send still fails with
 `Error::Transport` of kind `NotConnected`, which the client and the bindings
 treat as a link that is down; it moves to `State(NotRunning)` in a change of
 its own.
@@ -4213,14 +4217,14 @@ destination naming their own network's number as local traffic (#1358).
 
 The routed sends (`send_apdu_routed`, `send_apdu_routed_via_local_broadcast`
 and their `_with_data_attributes` forms), `send_apdu_on_issuance` and
-`broadcast_to_network` refuse DNET 0 and DNET 0xFFFF with `Error::Encoding`
+`broadcast_to_network` refuse DNET 0 and DNET 0xFFFF with `Error::InvalidArgument`
 before anything is sent (#1314, #1340, #1380). A global broadcast goes out only
 through `broadcast_global_apdu`, with DLEN 0 and the broadcast MAC, so that
 every router on the network can pass it on (Clause 6.3.2); a unicast would
 reach a single router.
 
 A broadcast carries only an Unconfirmed-Request APDU (Clause 6.3). Any other
-PDU type fails with an `Error::Encoding` naming it, before anything is sent,
+PDU type fails with an `Error::InvalidArgument` naming it, before anything is sent,
 from `broadcast_apdu`, `broadcast_global_apdu` and `broadcast_to_network`, and
 from a routed or on-issuance send with an empty DADR (a remote broadcast), in
 every `_with_data_attributes` form too (#1479).
@@ -4380,7 +4384,8 @@ let ack = client
   local. A copy a port refuses fails the send, while the other copies still
   go, as for a global broadcast: an error from a local broadcast doesn't mean
   nothing was sent. A unicast with no DNET names a MAC on no one network and
-  fails with `Error::Encoding`, and so do network messages.
+  fails with `Error::InvalidArgument`, and a network message with
+  `Error::Unsupported`.
 - A server on the port (`RouterApplicationPorts::server`) sends its local
   broadcasts the same way: `BACnetServer::broadcast_i_am`, an unconfirmed
   event notification to a local-broadcast recipient, a Notification
@@ -13938,7 +13943,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Unsupported(Refusal)` | Not offered on this platform, in this build, or by this kind of component |
 | `Error::LimitReached(Refusal)` | A resource cap reached: a full table, a counter run out, a one-holder resource another holds |
 | `Error::SendTooLong { length, limit }` | A send refused for its length before anything was written: an NPDU too long for B/IP, MS/TP or Ethernet, and BACnet/SC's NPDU and frame bounds (#1833). A router answers it with reject reason 4; the high-level client asks again with smaller requests |
-| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (network, endpoint, client, server, objects) |
+| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (client, server, objects), and, until its own change, an endpoint's send that waited past its deadline |
 | `Error::Transport(io_error)` | Transport I/O failure, with the OS error as its source where one caused it: a socket's, a serial port's open, read or write, GPIO, the RS-485 ioctl, entropy (#1833), an SC dial's TLS handshake; and a stopped transport's send (`NotConnected`) |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
 | `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles) |

@@ -255,7 +255,11 @@ async fn a_gone_server_gives_the_endpoint_its_requests_back() {
     } = node(8).await;
     // One server at a time, on the node's one pool of invoke IDs.
     let second = endpoint.server_seat(Arc::clone(&coordinator));
-    assert!(second.unwrap_err().to_string().contains("already has"));
+    assert!(matches!(
+        second.unwrap_err(),
+        Error::LimitReached(text)
+            if text.to_string() == "the endpoint already has a full server: drop it before making another"
+    ));
 
     // A server that is dropped frees its seat at once, before its tasks
     // have let go of the queue.
@@ -263,12 +267,10 @@ async fn a_gone_server_gives_the_endpoint_its_requests_back() {
     server.holds.alive_while(Arc::downgrade(&alive));
     drop(alive);
     let other_pool = endpoint.server_seat(Arc::new(OutboundTransactionCoordinator::new()));
-    assert!(
-        other_pool
-            .unwrap_err()
-            .to_string()
-            .contains("pool of invoke IDs")
-    );
+    assert!(matches!(
+        other_pool.unwrap_err(),
+        Error::InvalidConfig(text) if text.to_string().contains("pool of invoke IDs")
+    ));
     let again = endpoint.server_seat(Arc::clone(&coordinator)).unwrap();
 
     // With its queue gone too, a request goes where it went with no seat.
@@ -298,11 +300,10 @@ async fn one_stop_ends_both_seats_and_never_waits_for_the_server() {
     assert_eq!(link.stops(), 1);
     assert!(server.apdus.recv().await.is_none());
     assert!(server.holds.hold().is_none());
-    assert!(
-        endpoint
-            .server_seat(Arc::new(OutboundTransactionCoordinator::new()))
-            .is_err()
-    );
+    assert!(matches!(
+        endpoint.server_seat(Arc::new(OutboundTransactionCoordinator::new())),
+        Err(Error::State(error::Lifecycle::Closed, _))
+    ));
     drop((server, client));
     assert_eq!(link.stops(), 1);
 }

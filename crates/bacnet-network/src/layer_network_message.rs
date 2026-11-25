@@ -185,10 +185,10 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         destination_mac: Option<&[u8]>,
     ) -> Result<(), Error> {
         if !SENDABLE_NETWORK_MESSAGES.contains(&message_type) {
-            return Err(Error::Encoding(format!(
+            return Err(Error::InvalidArgument(Refusal::text(format!(
                 "network message type {message_type} is not one a non-routing node sends; \
                  only Who-Is-Router-To-Network and What-Is-Network-Number are"
-            )));
+            ))));
         }
         self.send_local_message(message_type, payload, false, destination_mac)
             .await
