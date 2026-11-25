@@ -144,10 +144,43 @@ fn whole_text(result: &Value) -> &str {
     text
 }
 
-/// The lab's six objects fit one page: the Object_List, then one request
-/// an object, N + 1. The records have the CLI's fields, device text in
-/// envelopes; the summary counts them; the result fits the output schema
-/// and its text holds it whole.
+/// The frames the client has sent so far, for [`asked`] to start after.
+pub(super) fn sent_frames(lab: &Lab) -> usize {
+    lab.frames.frames().len()
+}
+
+/// The objects each ReadPropertyMultiple the client sent after its first
+/// `from` frames asked for, as `type:instance`, a list a request.
+pub(super) fn asked(lab: &Lab, from: usize) -> Vec<Vec<String>> {
+    use bacnet_services::rpm::ReadPropertyMultipleRequest;
+    lab.frames.frames()[from..]
+        .iter()
+        .filter_map(|frame| {
+            // A local, unsegmented confirmed request for service 14.
+            let rest = match &frame.npdu[..] {
+                [0x01, control, apdu, _, _, 14, rest @ ..]
+                    if control & 0x28 == 0 && apdu & 0xF8 == 0 =>
+                {
+                    rest
+                }
+                _ => return None,
+            };
+            let request = ReadPropertyMultipleRequest::decode(rest).ok()?;
+            let objects = request.list_of_read_access_specs.iter().map(|spec| {
+                let object = spec.object_identifier;
+                let kind = bacnet_ops::label::kebab(object.object_type());
+                format!("{kind}:{}", object.instance_number())
+            });
+            Some(objects.collect())
+        })
+        .collect()
+}
+
+/// The lab's six objects fit one page and one request: the Object_List,
+/// then one ReadPropertyMultiple for all six (2 + 3 + 3 + 3 + 4 + 5 = 20
+/// properties, under the batch's 32). The records have the CLI's fields,
+/// device text in envelopes; the summary counts them; the result fits the
+/// output schema and its text holds it whole.
 #[tokio::test(start_paused = true)]
 async fn a_small_device_is_one_page() {
     let mut lab = inventory_lab(Policy::default(), Duration::ZERO, 0, false).await;
@@ -155,8 +188,8 @@ async fn a_small_device_is_one_page() {
     let before = lab.sends().len();
     let result = lab.agent.call(TOOL, json!({ "device": LAB })).await;
     let body = ok(&result);
-    assert_eq!(lab.sends().len() - before, 6 + 1);
-    assert_eq!(body["cost"]["requests"], json!(6 + 1));
+    assert_eq!(lab.sends().len() - before, 1 + 1);
+    assert_eq!(body["cost"]["requests"], json!(1 + 1));
     assert_eq!(
         (
             &body["listed"],
@@ -228,23 +261,28 @@ async fn a_small_device_is_one_page() {
     lab.stop().await;
 }
 
-/// Each option adds its properties to the same one request an object:
-/// values the run-time state and the priority in control, settings the
-/// relinquish default and COV increment, details nothing the lab's objects
-/// have (optional, so no problem). The list is read once, for the first.
+/// Each option adds its properties to the batches, so fewer objects fit a
+/// request: values the run-time state and the priority in control,
+/// settings the relinquish default and COV increment, details nothing the
+/// lab's objects have (optional, so no problem). The list is read once,
+/// for the first.
 #[tokio::test(start_paused = true)]
 async fn each_option_adds_its_properties() {
     let mut lab = inventory_lab(Policy::default(), Duration::ZERO, 0, false).await;
     lab.agent.initialize().await;
     let mut calls = Vec::new();
-    for option in ["values", "settings", "details"] {
+    // Device, two analog inputs, an analog output, a binary output and a
+    // multi-state value: with values 6 + 7 + 7 + 8 | 9 + 9 properties, two
+    // requests; with settings 2 + 6 + 6 + 7 + 6 | 6, two; with details
+    // 4 + 5 + 5 + 5 + 6 + 7 = 32, one.
+    for (option, batches) in [("values", 2), ("settings", 2), ("details", 1)] {
         let before = lab.sends().len();
         let result = lab
             .agent
             .call(TOOL, json!({ "device": LAB, option: true }))
             .await;
         let list = usize::from(calls.is_empty());
-        assert_eq!(lab.sends().len() - before, list + 6, "{option}");
+        assert_eq!(lab.sends().len() - before, list + batches, "{option}");
         assert_eq!(ok(&result)["problems"]["count"], json!(0), "{option}");
         super::schema::check_output(&mut lab.agent, TOOL, ok(&result)).await;
         calls.push(result);
@@ -280,8 +318,10 @@ async fn each_option_adds_its_properties() {
 
 /// A device of 136 objects comes in pages that follow one another: each
 /// object on exactly one page, in Object_List order, and nothing read
-/// twice: the list once and one request an object, however many pages. A
-/// types filter pages only its objects and costs only them, the list
+/// twice: the list once and the objects in batches, each object asked
+/// for in exactly one request, however many pages; a page costs its
+/// batches, at most one more than ten analog inputs a request would take.
+/// A types filter pages only its objects and costs only them, the list
 /// coming from the cache.
 #[tokio::test(start_paused = true)]
 async fn pages_cover_every_object_once() {
@@ -297,17 +337,34 @@ async fn pages_cover_every_object_once() {
             .iter()
             .filter(|name| list == 1 || name.starts_with("analog-input:"))
             .collect();
+        let from = sent_frames(&lab);
         let pages = all_pages(&mut lab, &args).await;
         assert!(pages.len() >= 3, "{} pages", pages.len());
+        // Each object asked for once, in order, by a request of its own
+        // batch: nothing read twice.
+        let batches = asked(&lab, from);
+        let on_the_wire: Vec<&String> = batches.iter().flatten().collect();
+        assert_eq!(on_the_wire, wanted, "{args}");
         let mut seen = Vec::new();
         let mut sent = 0;
+        let mut batch = 0;
         for (n, (result, requests)) in pages.iter().enumerate() {
             let body = ok(result);
             assert_eq!(body["matching"], json!(wanted.len()));
             assert_eq!(body["start"], json!(seen.len()), "page {n}");
             let read = points(result).len();
             assert_eq!(body["read"], json!(read));
-            assert_eq!(*requests, usize::from(n == 0) * list + read, "page {n}");
+            // The page's own batches, which end where the page does.
+            let mut own = 0;
+            let mut held = 0;
+            while held < read {
+                held += batches[batch + own].len();
+                own += 1;
+            }
+            assert_eq!(held, read, "page {n} ends with a batch");
+            batch += own;
+            assert_eq!(*requests, usize::from(n == 0) * list + own, "page {n}");
+            assert!(own <= read.div_ceil(10) + 1, "page {n}: {own} for {read}");
             seen.extend(points(result).iter().map(object));
             assert_eq!(body["remaining"], json!(wanted.len() - seen.len()));
             let more = n + 1 < pages.len();
@@ -322,7 +379,8 @@ async fn pages_cover_every_object_once() {
             sent += requests;
         }
         assert_eq!(seen.iter().collect::<Vec<_>>(), wanted, "{args}");
-        assert_eq!(sent, list + wanted.len(), "no re-scan, no re-read: {args}");
+        assert_eq!(batch, batches.len());
+        assert_eq!(sent, list + batches.len(), "no re-scan, no re-read: {args}");
     }
     lab.stop().await;
 }
@@ -447,9 +505,9 @@ async fn problems_are_data_not_errors() {
 
 /// Device text up to 4,096 characters a string makes large records: the
 /// pages keep under the bound, whole in their text, each object once. A
-/// record that takes a page past it goes back to the next page, read
-/// again there, where, larger than the bound alone, it goes out alone,
-/// flagged oversized: the one request a page reads twice.
+/// record that takes a page past it goes back to the next page with the
+/// records read after it, read again there, where, larger than the bound
+/// alone, it goes out alone, flagged oversized.
 #[tokio::test(start_paused = true)]
 async fn pages_stay_within_the_bound() {
     let policy = fast(Duration::from_secs(30), 4_096);
@@ -470,7 +528,9 @@ async fn pages_stay_within_the_bound() {
         lab.add_object(Box::new(ai)).await;
     }
     lab.agent.initialize().await;
+    let from = sent_frames(&lab);
     let pages = all_pages(&mut lab, &json!({ "device": LAB })).await;
+    let batches: Vec<usize> = asked(&lab, from).iter().map(Vec::len).collect();
     let mut seen = BTreeSet::new();
     let mut oversized = 0;
     let mut sent = 0;
@@ -502,10 +562,18 @@ async fn pages_stay_within_the_bound() {
         sent += requests;
     }
     assert_eq!((oversized, seen.len()), (1, 6 + 1 + 40));
+    // The lab doesn't segment, and two such records don't fit one answer:
+    // the first page's batch of nine is refused and read an object at a
+    // time, and the client halves the batch for the next calls, refused
+    // at four and at two too, then one object a request. The first page
+    // hands back the large state object and the two inputs read with it;
+    // the second, which holds it alone, the three inputs read with it.
+    let refused: Vec<usize> = batches.iter().copied().filter(|&n| n > 1).collect();
+    assert_eq!(refused, [9, 4, 2]);
     assert_eq!(
         sent,
-        1 + 47 + 1,
-        "the list, each object, and one read again"
+        1 + 47 + 3 + (3 + 3),
+        "the list, each object, the refused batches and the records read again"
     );
     assert!(pages.len() >= 4, "{} pages", pages.len());
     lab.stop().await;
@@ -513,26 +581,34 @@ async fn pages_stay_within_the_bound() {
 
 /// A call budget that runs out mid-page ends the page with what was read,
 /// naming what wasn't and where the cursor goes on; the next pages hold
-/// the rest, each object once.
+/// the rest, each object once. The budget is checked between batches, so
+/// a batch answered after it is spent is kept, never lost.
 #[tokio::test(start_paused = true)]
 async fn a_spent_budget_ends_the_page_and_says_what_is_left() {
-    // The list, then an object each 0.3 s: the 2 s budget is spent with
-    // the sixth object in.
+    // The list, then a batch each 0.3 s: the Device object, the analog
+    // inputs 1 and 3, the analog output and seven more inputs (2 + 3 * 10
+    // = 32 properties) by 0.6 s, ten inputs by 0.9 s, past the 0.8 s
+    // budget: 21 records, well under the page's bound.
     let delay = Duration::from_millis(300);
-    let mut lab = inventory_lab(fast(Duration::from_secs(2), 256), delay, 20, false).await;
+    let policy = fast(Duration::from_millis(800), 256);
+    let mut lab = inventory_lab(policy, delay, 60, false).await;
     lab.agent.initialize().await;
     let listed = listed(&lab).await;
+    let from = sent_frames(&lab);
     let pages = all_pages(&mut lab, &json!({ "device": LAB })).await;
     let first = ok(&pages[0].0);
-    assert_eq!(first["read"], json!(6), "{first}");
+    assert_eq!(first["read"], json!(11 + 10), "{first}");
+    let batches = asked(&lab, from);
+    assert_eq!((batches[0].len(), batches[1].len()), (11, 10));
+    assert_eq!(pages[0].1, 1 + 2, "the list and two batches");
     assert_eq!(
         (&first["truncated"], &first["remaining"]),
-        (&json!(true), &json!(20))
+        (&json!(true), &json!(66 - 21))
     );
-    assert_eq!(first["next_object"], json!(listed[6]));
+    assert_eq!(first["next_object"], json!(listed[21]));
     assert_eq!(first["ended"], json!("budget"));
     assert!(
-        first["cost"]["elapsed_ms"].as_u64().unwrap() <= 2_100,
+        first["cost"]["elapsed_ms"].as_u64().unwrap() <= 1_000,
         "{first}"
     );
     let mut seen = 0;
@@ -540,24 +616,26 @@ async fn a_spent_budget_ends_the_page_and_says_what_is_left() {
         assert_eq!(ok(result)["start"], json!(seen));
         seen += points(result).len();
     }
-    assert_eq!(seen, 26);
+    assert_eq!(seen, 66);
     lab.stop().await;
 }
 
 /// A device that stops answering partway through a page: the page holds
-/// what was read, says why under `stopped`, names what is left, counts
-/// the timeout, and its cursor tries that object again.
+/// the batches read before it, says why under `stopped`, names what is
+/// left, counts the timeout, and its cursor tries the first object not
+/// read again.
 #[tokio::test(start_paused = true)]
 async fn a_device_silent_mid_page() {
-    let mut lab = inventory_lab(Policy::default(), Duration::ZERO, 0, false).await;
+    let mut lab = inventory_lab(Policy::default(), Duration::ZERO, 20, false).await;
     lab.agent.initialize().await;
-    // The list and two objects; the third goes unanswered.
-    lab.go_silent_after(3);
+    // The list and the first batch (eleven objects, 32 properties); the
+    // second goes unanswered.
+    lab.go_silent_after(2);
     let result = lab.agent.call(TOOL, json!({ "device": LAB })).await;
     let body = ok(&result);
     assert_eq!(
         (&body["read"], &body["remaining"]),
-        (&json!(2), &json!(4)),
+        (&json!(11), &json!(15)),
         "{body}"
     );
     assert_eq!(body["stopped"]["error"], json!("timeout"));
@@ -570,7 +648,7 @@ async fn a_device_silent_mid_page() {
         .call(TOOL, json!({ "device": LAB, "cursor": cursor }))
         .await;
     let rest = ok(&rest);
-    assert_eq!((&rest["start"], &rest["read"]), (&json!(2), &json!(4)));
+    assert_eq!((&rest["start"], &rest["read"]), (&json!(11), &json!(15)));
     assert_eq!(rest["next_cursor"], Value::Null);
     lab.stop().await;
 }
@@ -580,21 +658,23 @@ async fn a_device_silent_mid_page() {
 /// unanswered, as MCP has it.
 #[tokio::test(start_paused = true)]
 async fn a_cancel_sends_nothing_more() {
-    let mut lab = inventory_lab(Policy::default(), Duration::from_millis(500), 20, false).await;
+    let mut lab = inventory_lab(Policy::default(), Duration::from_millis(500), 60, false).await;
     lab.agent.initialize().await;
     let before = lab.sends().len();
     let cancel = CancellationToken::new();
     let args = json!({ "device": LAB }).as_object().unwrap().clone();
     let call = crate::tools::call(lab.mcp.ctx(), TOOL, args, cancel.clone());
-    // The list and three objects are in; the fourth is on its way.
+    // The list and two batches are in by 1.5 s; the third is on its way.
     let cancelling = async {
-        tokio::time::sleep(Duration::from_millis(2_200)).await;
+        tokio::time::sleep(Duration::from_millis(1_700)).await;
         cancel.cancel();
+        lab.sends().len()
     };
-    let (result, ()) = tokio::join!(call, cancelling);
+    let (result, at_cancel) = tokio::join!(call, cancelling);
     assert_eq!(result.unwrap_err().message, "the call was cancelled");
+    assert_eq!(at_cancel - before, 1 + 3);
     tokio::time::sleep(Duration::from_secs(20)).await;
-    assert_eq!(lab.sends().len() - before, 1 + 4, "none after the cancel");
+    assert_eq!(lab.sends().len(), at_cancel, "none after the cancel");
     let id = lab
         .agent
         .post(

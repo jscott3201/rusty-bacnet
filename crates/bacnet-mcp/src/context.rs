@@ -53,6 +53,14 @@ pub(crate) struct Ctx<T: TransportPort + 'static> {
     /// Object names and descriptions read by `bacnet_find_object`, by the
     /// device's address, so its later pages don't read them again.
     pub(crate) names: Mutex<HashMap<DeviceAddress, CachedNames>>,
+    /// For each device a batch of several point records outlasted a
+    /// call's budget on, the most properties a batch asks it for: half the
+    /// properties of the batch let go, so the next attempt asks for fewer
+    /// objects, down to one (#2785, `tools::batches`). Each is forgotten
+    /// [`LIST_TTL`] after it was learned, or once the device at the address
+    /// has another instance; at most [`LIST_CAP`] devices, the oldest going
+    /// first.
+    pub(crate) slow: Mutex<HashMap<DeviceAddress, SlowLimit>>,
     /// What Who-Is-Router-To-Network queries found, and when the last one
     /// went; at most one goes a minute for the principal.
     pub(crate) routers: Arc<Mutex<Routers>>,
@@ -221,6 +229,17 @@ pub(crate) const PARTIAL_TTL: Duration = Duration::from_secs(600);
 
 /// The most devices whose lists are kept; past it the oldest goes.
 pub(crate) const LIST_CAP: usize = 64;
+
+/// A device's slow limit ([`Ctx::slow`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SlowLimit {
+    /// The most properties a batch asks the device for.
+    pub(crate) properties: usize,
+    /// The instance the device at the address had.
+    pub(crate) instance: u32,
+    /// When the limit was last learned.
+    pub(crate) learned: Instant,
+}
 
 /// One tool call's budget and tally.
 pub(crate) struct Call {

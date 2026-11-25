@@ -11,6 +11,7 @@
 //! is more than a rendering: its second text block is the Turtle.
 
 pub(crate) mod alarms;
+mod batches;
 mod bbmd;
 mod decode;
 pub(crate) mod describe;
@@ -110,6 +111,17 @@ fn listed(policy: &Policy) -> impl Iterator<Item = (&'static Spec, bool)> + '_ {
                 .filter(move |_| writes)
                 .map(|spec| (spec, true)),
         )
+}
+
+/// The tool `name`'s description, for the tests that tie the numbers it
+/// quotes to measured ones.
+#[cfg(test)]
+pub(crate) fn description(name: &str) -> &'static str {
+    let spec = SPECS
+        .iter()
+        .chain(WRITE_SPECS)
+        .find(|spec| spec.name == name);
+    spec.expect("a tool of this server").description
 }
 
 /// Every tool's name, in list order, for the given policy.

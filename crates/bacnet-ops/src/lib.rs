@@ -34,7 +34,8 @@
 //!   ([`Written`], [`PriorityView`]), and what
 //!   [`Device::preview_write`] reads ([`WritePreview`]);
 //! - [`inventory`]: a device's objects as [`PointRecord`]s
-//!   ([`Device::inventory`]): each one's name, units, state texts and
+//!   ([`Device::inventory`], or some of them, a page a call:
+//!   [`Device::point_records`]): each one's name, units, state texts and
 //!   whether it takes commands, with its value when asked, read in batches
 //!   and written as JSON or CSV;
 //! - [`error`](mod@error): [`OpsError`], why a call failed as a whole;
@@ -84,7 +85,7 @@ pub use client::{
 pub use device::{Device, DeviceAddress};
 pub use error::OpsError;
 pub use format::{PropertyError, Value};
-pub use inventory::{Inventory, InventoryOptions, PointRecord};
+pub use inventory::{Inventory, InventoryOptions, PointRecord, PointRecords};
 pub use reading::{IntoObject, IntoProperty, ObjectRead, PropertyRef, Reading, Readings};
 pub use watch::{CovSupport, Update, Watch};
 pub use write::{
