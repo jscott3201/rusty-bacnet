@@ -40,6 +40,7 @@ use bacnet_bip_core::node::{Cast, Link, Mode};
 use bacnet_npdu::NpduLimits;
 use bacnet_types::bip_port::{BbmdTables, BipPortMode, ForeignRegistration};
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 
 mod bbmd_receive;
 mod bbmd_start;
@@ -425,10 +426,7 @@ impl BipTransport {
     /// Let go of a registered Network Port's lease, as a stop or an abort
     /// does.
     fn release_network_port_lease(&self) {
-        self.network_port_lease
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        self.network_port_lease.locked().take();
     }
 
     /// Whether the transport is running: started, and not stopped since.
@@ -455,11 +453,7 @@ impl TransportPort for BipTransport {
     }
 
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
-        let held = self
-            .network_port_lease
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_some();
+        let held = self.network_port_lease.get_mut_locked().is_some();
         if self.registration_closed
             || self.node.is_some()
             || self.tasks.is_running()
@@ -470,10 +464,7 @@ impl TransportPort for BipTransport {
                 "registered B/IP lease requires an unstarted transport in one B/IP mode".into(),
             ));
         }
-        *self
-            .network_port_lease
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
+        *self.network_port_lease.get_mut_locked() = Some(lease);
         Ok(())
     }
     /// A foreign device's registration after a loss (#2572), counted
@@ -572,11 +563,7 @@ impl TransportPort for BipTransport {
         let listener_interface = plan.local.and_then(|local| local.index);
         let bound = socket::bind(plan).map_err(Error::Transport)?;
         loopback_guard::warn_at_start(&plan, multicast.is_some(), foreign_config.is_some());
-        let lease = self
-            .network_port_lease
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let lease = self.network_port_lease.get_mut_locked().clone();
         let listeners = Listeners::open(bound, lease, &self.frame_tap).map_err(Error::Transport)?;
         let socket = Arc::clone(listeners.primary());
 

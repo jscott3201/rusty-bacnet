@@ -277,6 +277,7 @@ pub fn decode_ethernet_frame(data: &[u8]) -> Result<EthernetFrame, Error> {
 mod transport {
     use super::*;
     use bacnet_types::data_link::DataLink;
+    use bacnet_types::sync::RwLockExt;
     use nix::ifaddrs::getifaddrs;
     use nix::net::if_::if_nametoindex;
     use nix::sys::socket::LinkAddr;
@@ -284,7 +285,7 @@ mod transport {
     use std::io::Read;
     use std::os::fd::AsRawFd;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Arc, PoisonError, RwLock};
+    use std::sync::{Arc, RwLock};
     use tokio::sync::mpsc;
     use tracing::{debug, warn};
 
@@ -540,11 +541,7 @@ mod transport {
         fn abort(&self) {
             self.stop_gate.abort();
             self.tasks.abort();
-            let socket = self
-                .socket
-                .write()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take();
+            let socket = self.socket.write_locked().take();
             drop(socket);
         }
 
@@ -593,10 +590,7 @@ mod transport {
             }
 
             let socket = Arc::new(socket);
-            *self
-                .socket
-                .get_mut()
-                .unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&socket));
+            *self.socket.get_mut_locked() = Some(Arc::clone(&socket));
 
             /// NPDU receive channel capacity for high-throughput raw socket transports.
             const NPDU_CHANNEL_CAPACITY: usize = 256;
@@ -696,11 +690,7 @@ mod transport {
             let Some(stopping) = self.stop_gate.enter().await else {
                 return Ok(());
             };
-            let socket = self
-                .socket
-                .write()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take();
+            let socket = self.socket.write_locked().take();
             drop(socket);
             self.tasks.stop().await;
             debug!("Ethernet transport stopped");
@@ -710,7 +700,7 @@ mod transport {
 
         async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
             // Held over the synchronous send only: there is no await here.
-            let socket = self.socket.read().unwrap_or_else(PoisonError::into_inner);
+            let socket = self.socket.read_locked();
             let socket = socket.as_ref().ok_or_else(|| {
                 if self.stop_gate.is_stopped() {
                     return crate::port::stopped();

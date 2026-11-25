@@ -12,9 +12,10 @@
 //! lends the NPDU, which can't stay borrowed from inside the lock, so it is
 //! copied there under the lock and lent from there.
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use bacnet_mstp_codec::{MAX_EXTENDED_MPDU_DATA, MAX_STANDARD_MPDU_DATA};
+use bacnet_types::sync::MutexExt;
 
 use bacnet_mstp_core::{
     AllocQueues, DequeuedNpdu, Duration as CoreDuration, Instant as CoreInstant, QueueCounters,
@@ -68,7 +69,7 @@ impl SharedQueues {
     }
 
     fn lock(&self) -> MutexGuard<'_, Shared> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.0.locked()
     }
 
     /// Refuse every later send.

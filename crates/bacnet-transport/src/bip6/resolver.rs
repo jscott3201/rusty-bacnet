@@ -9,9 +9,10 @@
 use std::future::Future;
 use std::io;
 use std::net::SocketAddrV6;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 use tokio::sync::{Notify, oneshot};
 use tokio::time::Instant;
 use tracing::debug;
@@ -117,7 +118,7 @@ fn original_unicast(
 
 impl Resolver {
     fn lock(&self) -> MutexGuard<'_, Neighbours> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.locked()
     }
 
     /// Set this node's own VMAC, which the table never learns.

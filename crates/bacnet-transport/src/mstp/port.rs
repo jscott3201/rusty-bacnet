@@ -3,7 +3,8 @@ use bacnet_mstp_core::{Duration as CoreDuration, QueueRefusal};
 use bacnet_time::HostClock;
 use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
-use std::sync::{Mutex as StdMutex, PoisonError};
+use bacnet_types::sync::MutexExt;
+use std::sync::Mutex as StdMutex;
 use tokio::sync::{Mutex, mpsc};
 
 use super::adapter::Task;
@@ -76,7 +77,7 @@ impl Drop for Joining<'_> {
 }
 
 fn lock(running: &StdMutex<Running>) -> std::sync::MutexGuard<'_, Running> {
-    running.lock().unwrap_or_else(PoisonError::into_inner)
+    running.locked()
 }
 
 /// What a send needs from a started transport.
@@ -197,9 +198,7 @@ impl<S: SerialPort> MstpTransport<S> {
     }
 
     fn running_mut(&mut self) -> &mut Running {
-        self.running
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner)
+        self.running.get_mut_locked()
     }
 
     /// End the node without waiting, through `&self` (#2617): what an

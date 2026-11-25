@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bacnet_bip_codec::Bvll;
+use bacnet_types::sync::MutexExt;
 use bytes::Bytes;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -304,10 +305,7 @@ impl FanoutDispatcher {
 
         let packet_bytes = frame.len();
         let (admitted_count, throttled_count) = {
-            let mut limiter = match self.limiter.lock() {
-                Ok(l) => l,
-                Err(p) => p.into_inner(),
-            };
+            let mut limiter = self.limiter.locked();
             limiter.check_and_admit(origin_ip, targets.len(), packet_bytes, Instant::now())
         };
 

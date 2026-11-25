@@ -82,6 +82,7 @@ use tracing::{debug, warn};
 
 use bacnet_types::MacAddr;
 use bacnet_types::error::Error;
+use bacnet_types::sync::MutexExt;
 
 use super::control_rate::{ControlRate, ControlSource, ScControlRateLimit, is_network_message};
 use super::{ScTransport, WebSocketPort, data_attributes};
@@ -300,10 +301,7 @@ impl ScNpduAdmission {
     }
 
     pub(crate) fn drop_counts(&self) -> ScNpduDropCounts {
-        self.state
-            .lock()
-            .expect("SC NPDU admission state poisoned")
-            .drops
+        self.state.locked().drops
     }
 
     /// Core gate: Closed > control rate > fairness > Full. Holds only the
@@ -318,7 +316,7 @@ impl ScNpduAdmission {
         item: ReceivedNpdu,
         charge_control: bool,
     ) -> AdmissionOutcome {
-        let mut state = self.state.lock().expect("SC NPDU admission state poisoned");
+        let mut state = self.state.locked();
         if tx.is_closed() {
             state.note_closed();
             return AdmissionOutcome::ClosedDrop(item);
