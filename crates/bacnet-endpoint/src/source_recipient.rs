@@ -156,13 +156,13 @@ impl SourceRoutes {
         if device.object_type() != ObjectType::DEVICE
             || device.instance_number() == ObjectIdentifier::MAX_INSTANCE
         {
-            return Err(Error::Encoding(
-                "source Audit binding requires a concrete Device".into(),
+            return Err(Error::invalid_config(
+                "source Audit binding requires a concrete Device",
             ));
         }
         if self.devices.insert(device, route).is_some() {
-            return Err(Error::Encoding(
-                "duplicate source Audit Device binding".into(),
+            return Err(Error::invalid_config(
+                "duplicate source Audit Device binding",
             ));
         }
         Ok(())

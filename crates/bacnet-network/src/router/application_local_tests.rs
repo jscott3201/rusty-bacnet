@@ -151,7 +151,8 @@ async fn a_unicast_with_no_network_names_no_station() {
     let read = [1, 0x04, 0x00, 0x05, 0x01, 0x0C];
     let error = port.send_unicast(&read, &[5]).await.unwrap_err();
     assert!(
-        matches!(&error, Error::Encoding(text) if text.contains("address the device by its network")),
+        matches!(&error, Error::InvalidArgument(text)
+            if text.to_string().contains("address the device by its network")),
         "{error:?}"
     );
     port.send_broadcast(&GLOBAL_WHO_IS).await.unwrap();

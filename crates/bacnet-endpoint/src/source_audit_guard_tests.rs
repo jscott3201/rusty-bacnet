@@ -306,7 +306,8 @@ async fn a_stop_ends_a_read_whose_caller_stopped_polling() {
     bounded(stop).await.unwrap();
     assert!(matches!(
         bounded(parked).await,
-        Err(Error::Encoding(message)) if message == "endpoint shutdown"
+        Err(Error::State(bacnet_types::error::Lifecycle::Closed, message))
+            if message.to_string() == "endpoint shutdown"
     ));
     assert!(endpoint.sent.try_recv().is_err(), "nothing was sent");
 }

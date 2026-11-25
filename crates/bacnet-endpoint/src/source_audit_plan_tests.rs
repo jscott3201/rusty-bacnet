@@ -78,7 +78,9 @@ async fn a_refused_plan_reaches_its_caller_on_either_path() {
     let station = broadcast();
     let mut free = read_of(&client, &station);
     match poll_once(&mut free) {
-        Poll::Ready(Err(Error::Encoding(message))) => assert_eq!(message, ONE_STATION),
+        Poll::Ready(Err(Error::InvalidArgument(message))) => {
+            assert_eq!(message.to_string(), ONE_STATION);
+        }
         other => panic!("refused in the admitting poll, not {other:?}"),
     }
     drop(free);
@@ -89,7 +91,7 @@ async fn a_refused_plan_reaches_its_caller_on_either_path() {
     assert_eq!(source.available_operations(), SLOTS - 1);
     drop(guard);
     match bounded(busy).await {
-        Err(Error::Encoding(message)) => assert_eq!(message, ONE_STATION),
+        Err(Error::InvalidArgument(message)) => assert_eq!(message.to_string(), ONE_STATION),
         other => panic!("handed back refused, not {other:?}"),
     }
     assert_eq!(source.available_operations(), SLOTS);
@@ -111,7 +113,10 @@ async fn a_refused_spawn_ends_the_read_with_the_shutdown_error() {
     let client = endpoint.the_client();
     endpoint.session.notifications.as_ref().unwrap().close();
     let station = direct_read();
-    let shutdown = |result: Result<ReadPropertyACK, Error>| matches!(result, Err(Error::Encoding(message)) if message == "endpoint shutdown");
+    let shutdown = |result: Result<ReadPropertyACK, Error>| {
+        matches!(result, Err(Error::State(bacnet_types::error::Lifecycle::Closed, message))
+            if message.to_string() == "endpoint shutdown")
+    };
     assert!(shutdown(bounded(read_of(&client, &station)).await), "free");
     assert_eq!(source.available_operations(), SLOTS);
     let guard = db.write().await;
@@ -143,7 +148,8 @@ async fn a_stop_just_after_the_task_was_handed_the_guard() {
     bounded(endpoint.session.stop()).await.unwrap();
     assert!(matches!(
         bounded(parked).await,
-        Err(Error::Encoding(message)) if message == "endpoint shutdown"
+        Err(Error::State(bacnet_types::error::Lifecycle::Closed, message))
+            if message.to_string() == "endpoint shutdown"
     ));
     while let Ok(sent) = endpoint.sent.try_recv() {
         assert_eq!(sent.link, mac(PEER), "only the read itself, no record");

@@ -177,7 +177,14 @@ async fn success(role: SessionRole) {
     tokio::task::yield_now().await;
     assert_eq!(observed.sends.load(Ordering::SeqCst), 0);
     assert_eq!(session.active_leases(), 0);
-    assert!(session.start().await.is_err());
+    // A session starts once (#1833).
+    assert!(matches!(
+        session.start().await.map_err(Error::from),
+        Err(Error::State(
+            bacnet_types::error::Lifecycle::AlreadyStarted,
+            _
+        ))
+    ));
     assert_eq!(observed.starts.load(Ordering::SeqCst), 1);
     if role == SessionRole::Both {
         // The server sees the same promoted object, not a second database.
@@ -201,6 +208,12 @@ async fn success(role: SessionRole) {
     session.stop().await.unwrap();
     assert_eq!(observed.stops.load(Ordering::SeqCst), 1);
     assert!(!session.is_running());
+    // Stopped, it is closed for good: what needs it running says so.
+    assert!(matches!(
+        session.stop().await,
+        Err(Error::State(bacnet_types::error::Lifecycle::Closed, ref text))
+            if text.to_string() == "endpoint session is not running"
+    ));
     assert!(!source(
         &*session.database.as_ref().unwrap().read().await,
         selected()
@@ -250,18 +263,28 @@ async fn rejected(
     } else {
         None
     };
+    // The session's refusals of its configuration; "must match identity" is
+    // bacnet-objects' identity check, text until #1833 reaches that crate.
+    let objects = expected.contains("must match identity");
     for _ in 0..2 {
         let result = session.start().await.map_err(Error::from);
-        assert!(
-            matches!(&result, Err(Error::Encoding(message)) if message.contains(expected)),
-            "expected {expected}: {result:?}"
-        );
+        let refused = match &result {
+            Err(Error::InvalidConfig(refusal)) if !objects => refusal.to_string(),
+            Err(Error::Encoding(message)) if objects => message.clone(),
+            other => panic!("expected {expected}: {other:?}"),
+        };
+        assert!(refused.contains(expected), "expected {expected}: {refused}");
         assert_eq!(
             session.lifecycle.load(Ordering::Acquire),
             Lifecycle::Ready as u8
         );
         assert!(!session.is_running());
-        assert!(session.client().is_err() && session.server.is_none());
+        // Refused before its link started, it can start again.
+        assert!(matches!(
+            session.client(),
+            Err(Error::State(bacnet_types::error::Lifecycle::NotRunning, _))
+        ));
+        assert!(session.server.is_none());
         assert!(session.dispatch_task.is_none() && session.egress.is_none());
         assert_eq!(observed.starts.load(Ordering::SeqCst), 0);
         assert_eq!(observed.sends.load(Ordering::SeqCst), 0);

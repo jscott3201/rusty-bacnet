@@ -70,7 +70,7 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
-use bacnet_types::error::Error;
+use bacnet_types::error::{self, Error, Refusal};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bacnet_types::sync::MutexExt;
 use tokio::sync::{RwLock, mpsc, oneshot};
@@ -225,7 +225,7 @@ pub struct SessionConfig {
     /// and [`apdu_retries`](Self::apdu_retries), where bursts are expected.
     ///
     /// Must be greater than zero; [`EndpointSession::new`] returns
-    /// [`Error::Encoding`] otherwise.
+    /// [`Error::InvalidConfig`] otherwise.
     pub queue_capacity: usize,
     /// The node's APDU timeout in milliseconds (default 6000): how long the
     /// client waits for an answer before it sends a request again,
@@ -257,7 +257,8 @@ pub struct SessionConfig {
     /// Stopping or dropping the session ends a wait at once with the
     /// shutdown error. At
     /// most [`MAX_MIN_REQUEST_INTERVAL_MS`](bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS),
-    /// an hour; [`EndpointSession::new`] returns [`Error::Encoding`] past it.
+    /// an hour; [`EndpointSession::new`] returns [`Error::InvalidConfig`]
+    /// past it.
     pub min_request_interval_ms: u64,
     /// Whether the client role takes a Complex-ACK for a service
     /// acknowledged with a Simple-ACK as a success (default `false`), as
@@ -271,16 +272,16 @@ impl SessionConfig {
     /// builder that dials can make them before it does (#1946).
     pub(crate) fn validate(&self) -> Result<(), Error> {
         if self.queue_capacity == 0 {
-            return Err(Error::Encoding(
-                "endpoint session queue capacity must be greater than zero".into(),
+            return Err(Error::invalid_config(
+                "endpoint session queue capacity must be greater than zero",
             ));
         }
         let interval = self.min_request_interval_ms;
         if interval > bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS {
-            return Err(Error::Encoding(format!(
-                "endpoint session min-request-interval {interval} ms is more than {} ms",
-                bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new("endpoint session min-request-interval {} ms is more than {} ms")
+                    .with_values(interval, bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS),
+            ));
         }
         Ok(())
     }
@@ -459,7 +460,7 @@ pub enum SessionExit {
 impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Creates a session owning `transport` (not yet started).
     ///
-    /// Returns [`Error::Encoding`] when `config.queue_capacity` is zero or
+    /// Returns [`Error::InvalidConfig`] when `config.queue_capacity` is zero or
     /// `config.min_request_interval_ms` is more than an hour. Normally built
     /// via
     /// [`BipEndpointBuilder`](crate::bip::BipEndpointBuilder),
@@ -657,9 +658,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 
     /// Starts ingress, roles and the single dispatch consumer once.
     ///
-    /// Start-once: a second call returns
-    /// [`Error::Encoding`] without
-    /// binding again. Takes `&mut self` so only the owner can start.
+    /// Start-once: a second call returns [`Error::State`] with
+    /// [`AlreadyStarted`](bacnet_types::error::Lifecycle::AlreadyStarted)
+    /// without binding again. Takes `&mut self` so only the owner can start.
     /// Source-profile validation runs before lifecycle consumption or ingress
     /// startup; its errors leave the session ready for correction and retry.
     /// Profile initialization errors after ingress starts cancel and join ingress
@@ -704,10 +705,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// after the link started also leaves the database with the session.
     pub async fn start(&mut self) -> Result<(), StartError> {
         let kept = |error| start_refused(error, None);
+        let again = || {
+            kept(Error::state(
+                error::Lifecycle::AlreadyStarted,
+                "endpoint session cannot be started more than once",
+            ))
+        };
         if self.lifecycle.load(Ordering::Acquire) != Lifecycle::Ready as u8 {
-            return Err(kept(Error::Encoding(
-                "endpoint session cannot be started more than once".into(),
-            )));
+            return Err(again());
         }
         let source_routes = self.prepare_start().await.map_err(kept)?;
         if self.lifecycle.compare_exchange(
@@ -717,9 +722,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             Ordering::Acquire,
         ) != Ok(Lifecycle::Ready as u8)
         {
-            return Err(kept(Error::Encoding(
-                "endpoint session cannot be started more than once".into(),
-            )));
+            return Err(again());
         }
         if let Err(error) = self.start_link(source_routes).await {
             // Keep cleanup ownership in self before awaiting. Cancellation leaves
@@ -777,8 +780,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///
     /// Returns the dispatch [`SessionExit`]. A canceled stop retains its joins
     /// and sealed membership protection; a later call finishes teardown. Calling before
-    /// `start()` or twice returns
-    /// [`Error::Encoding`]. Takes
+    /// `start()` returns [`Error::State`] with
+    /// [`NotRunning`](bacnet_types::error::Lifecycle::NotRunning), and once
+    /// stopped with [`Closed`](bacnet_types::error::Lifecycle::Closed). Takes
     /// `&mut self` so only the owner can stop.
     ///
     /// The session's server ([`with_server`](Self::with_server), or the
@@ -816,7 +820,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     pub async fn stop(&mut self) -> Result<SessionExit, Error> {
         let state = self.lifecycle.load(Ordering::Acquire);
         if state != Lifecycle::Running as u8 && state != Lifecycle::Stopping as u8 {
-            return Err(Error::Encoding("endpoint session is not running".into()));
+            return Err(self.not_running());
         }
         self.lifecycle
             .store(Lifecycle::Stopping as u8, Ordering::Release);
@@ -840,8 +844,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         }
         if self.stop_exit.is_none() {
             self.stop_exit = Some(match self.dispatch_task.as_mut() {
-                Some(task) => task.await.map_err(|error| {
-                    Error::Encoding(format!("endpoint session dispatch failed: {error}"))
+                // A dispatch task that panicked or was aborted: the session
+                // is shut for good, as every stopped one is.
+                Some(task) => task.await.map_err(|join| {
+                    Error::State(
+                        error::Lifecycle::Closed,
+                        Refusal::text(format!("endpoint session dispatch failed: {join}")),
+                    )
                 }),
                 None => Ok(SessionExit::ReceiversClosed),
             });
@@ -1001,6 +1010,23 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.lifecycle.load(Ordering::Acquire) == Lifecycle::Running as u8
     }
 
+    /// The state a call that needs the session running finds it in instead,
+    /// from its own lifecycle (#1833): not started yet, which it can be, a
+    /// stop under way, or stopped for good, as a session starts once.
+    pub(crate) fn not_running_state(&self) -> error::Lifecycle {
+        match self.lifecycle.load(Ordering::Acquire) {
+            state if state == Lifecycle::Ready as u8 => error::Lifecycle::NotRunning,
+            state if state == Lifecycle::Stopping as u8 => error::Lifecycle::Stopping,
+            _ => error::Lifecycle::Closed,
+        }
+    }
+
+    /// The refusal of a call that needs the session running, in
+    /// [`not_running_state`](Self::not_running_state).
+    pub(crate) fn not_running(&self) -> Error {
+        Error::state(self.not_running_state(), "endpoint session is not running")
+    }
+
     /// Broadcasts an I-Am consistent with the composed identity.
     ///
     /// Missing-identity path: errors without sending (no invented device).
@@ -1009,15 +1035,16 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// egress. Field-for-field identical to the server discovery I-Am built
     /// from [`server_config`](crate::identity::server_config).
     /// Transport-dependent: B/IP reaches the local subnet broadcast; SC
-    /// relays via the hub as a broadcast NPDU. Fails when the session is not
-    /// running, and with [`Error::InitiationDisabled`] while the session's
+    /// relays via the hub as a broadcast NPDU. Fails with [`Error::State`]
+    /// when the session is not running, with [`Error::InvalidConfig`] for a
+    /// session with no identity or database, and with
+    /// [`Error::InitiationDisabled`] while the session's
     /// server ([`with_server`](Self::with_server)) holds a DeviceCommunicationControl
     /// DISABLE_INITIATION: this I-Am answers no Who-Is (Clause 16.1).
     pub async fn broadcast_i_am(&self) -> Result<(), Error> {
-        let identity = self
-            .identity
-            .as_ref()
-            .ok_or_else(|| Error::Encoding("endpoint I-Am requires a composed identity".into()))?;
+        let identity = self.identity.as_ref().ok_or(Error::invalid_config(
+            "endpoint I-Am requires a composed identity",
+        ))?;
         if self
             .ingress
             .as_ref()
@@ -1026,17 +1053,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         {
             return Err(Error::InitiationDisabled { sent: false });
         }
-        let egress = self
-            .egress
-            .as_ref()
-            .ok_or_else(|| Error::Encoding("endpoint session is not running".into()))?;
+        let egress = self.egress.as_ref().ok_or_else(|| self.not_running())?;
         if !self.is_running() {
-            return Err(Error::Encoding("endpoint session is not running".into()));
+            return Err(self.not_running());
         }
-        let database = self
-            .database
-            .as_ref()
-            .ok_or_else(|| Error::Encoding("endpoint I-Am has no Device database".into()))?;
+        let database = self.database.as_ref().ok_or(Error::invalid_config(
+            "endpoint I-Am has no Device database",
+        ))?;
         // The guard covers only this check, never the send below (#2199),
         // and is never waited for in the caller's task (#2772): with the
         // database busy, a task of the session's waits and checks.
@@ -1072,7 +1095,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             None => is_present(&*database.read().await),
         };
         if !present {
-            return Err(Error::Encoding("endpoint I-Am Device is absent".into()));
+            return Err(Error::invalid_config("endpoint I-Am Device is absent"));
         }
         let apdu = crate::identity::encode_iam_apdu(identity)?;
         egress

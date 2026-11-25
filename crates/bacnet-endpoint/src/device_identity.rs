@@ -2,7 +2,7 @@
 use crate::session::EndpointSession;
 use bacnet_objects::object_profile::FileTagsPersistence;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -82,12 +82,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     }
 }
 
-/// A start refused for its Device storage path: `why`.
+/// A start refused for its Device storage path: `why`. Owned text, as it
+/// names the path.
 fn storage_refused(path: &std::path::Path, why: &str) -> Error {
-    Error::Encoding(format!(
+    Error::InvalidConfig(Refusal::text(format!(
         "device storage path {} is for the Device the session builds from its identity: {why}",
         path.display()
-    ))
+    )))
 }
 
 /// Keep generated declarations local to a successful preflight. In particular,
@@ -169,7 +170,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         if let Some(database) = &self.database {
             database
                 .try_write()
-                .map_err(|_| Error::Encoding("endpoint database is locked at start".into()))?
+                // Another holder has the database's lock.
+                .map_err(|_| Error::limit_reached("endpoint database is locked at start"))?
                 .bind_local_device_internal(device);
         }
         Ok(())

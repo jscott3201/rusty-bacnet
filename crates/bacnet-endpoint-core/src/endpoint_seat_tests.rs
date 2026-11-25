@@ -479,7 +479,11 @@ async fn one_client_at_a_time_and_a_seat_whose_client_is_gone_takes_nothing() {
         seat,
     } = seated(true, 8).await;
     let second = endpoint.client_seat(Arc::clone(&coordinator), SeatRoles::new(true), 8);
-    assert!(second.unwrap_err().to_string().contains("already has"));
+    assert!(matches!(
+        second.unwrap_err(),
+        Error::LimitReached(text)
+            if text.to_string() == "the endpoint already has a full client: drop it before making another"
+    ));
 
     // With the client gone its notification goes where it went before any
     // seat, and the endpoint takes another client.
@@ -497,15 +501,15 @@ async fn one_client_at_a_time_and_a_seat_whose_client_is_gone_takes_nothing() {
         receive(&mut again.apdus).await.apdu.as_ref(),
         COV_NOTIFICATION
     );
-    assert!(
-        endpoint
-            .client_seat(
-                Arc::new(OutboundTransactionCoordinator::new()),
-                SeatRoles::new(true),
-                0
-            )
-            .is_err()
-    );
+    assert!(matches!(
+        endpoint.client_seat(
+            Arc::new(OutboundTransactionCoordinator::new()),
+            SeatRoles::new(true),
+            0
+        ),
+        Err(Error::InvalidConfig(text))
+            if text.to_string() == "client seat queue capacity must be greater than zero"
+    ));
 }
 
 /// An I-Am-Router-To-Network for network 7, from [`PEER`].
@@ -673,11 +677,10 @@ async fn one_stop_stops_the_link_while_a_seat_still_keeps_the_layer() {
     ));
     assert_eq!(link.stops(), 1);
     assert!(seat.holds.hold().is_none());
-    assert!(
-        endpoint
-            .client_seat(coordinator, SeatRoles::new(true), 8)
-            .is_err()
-    );
+    assert!(matches!(
+        endpoint.client_seat(coordinator, SeatRoles::new(true), 8),
+        Err(Error::State(error::Lifecycle::Closed, _))
+    ));
     // The layer the seat still keeps has stopped: what goes through it,
     // or straight to its transport, fails as a stopped link's send does.
     let sent = link.counters.sent().len();

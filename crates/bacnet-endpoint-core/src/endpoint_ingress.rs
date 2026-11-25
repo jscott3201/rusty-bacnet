@@ -6,7 +6,7 @@ use bacnet_network::layer::{NetworkLayer, ReceivedApdu, RoutedTarget};
 use bacnet_npdu::NetworkPriority;
 use bacnet_transport::port::{DataAttribute, TransportPort};
 use bacnet_types::MacAddr;
-use bacnet_types::error::Error;
+use bacnet_types::error::{self, Error, Refusal};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -16,8 +16,16 @@ use crate::seat::SeatSlot;
 /// layer queues for a control receiver.
 const NUMBER_CONTROL_QUEUE: usize = 256;
 
-fn shutdown_error() -> Error {
-    Error::Encoding("endpoint shutdown".into())
+/// What a send or a seat meets once the endpoint has shut: closed for good,
+/// as a started endpoint never starts again (#1833).
+pub(crate) fn shutdown_error() -> Error {
+    Error::state(error::Lifecycle::Closed, "endpoint shutdown")
+}
+
+/// A start of an ingress that has started, or whose network a start took
+/// (#1833).
+fn started_once(label: &'static str) -> Error {
+    Error::state(error::Lifecycle::AlreadyStarted, label)
 }
 
 const EFFECTIVE_GROUP_APDU_ERROR: &str =
@@ -257,11 +265,11 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
     #[doc(hidden)]
     pub fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
         if self.lifecycle != Lifecycle::Ready {
-            return Err(Error::Encoding("ingress already started".into()));
+            return Err(started_once("ingress already started"));
         }
         self.network
             .as_mut()
-            .ok_or_else(|| Error::Encoding("missing network".into()))?
+            .ok_or_else(|| started_once("missing network"))?
             .retain_network_port_lease_internal(lease)
     }
 
@@ -295,20 +303,20 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         Error,
     > {
         if self.lifecycle != Lifecycle::Ready {
-            return Err(Error::Encoding(
-                "endpoint ingress cannot be started more than once".into(),
+            return Err(started_once(
+                "endpoint ingress cannot be started more than once",
             ));
         }
         if self.queue_capacity == 0 {
-            return Err(Error::Encoding(
-                "endpoint ingress queue capacity must be greater than zero".into(),
+            return Err(Error::invalid_config(
+                "endpoint ingress queue capacity must be greater than zero",
             ));
         }
 
         let network = self
             .network
             .as_mut()
-            .ok_or_else(|| Error::Encoding("endpoint ingress network owner is missing".into()))?;
+            .ok_or_else(|| started_once("endpoint ingress network owner is missing"))?;
         self.lifecycle = Lifecycle::Starting;
         // Every link's controls are taken, for a client seat (#2617). The
         // endpoint's own Number owner gets them only on a link that takes
@@ -364,10 +372,11 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             local_network: network.local_network_number().clone(),
             group_destinations: network.transport().group_destinations(),
         };
-        let network =
-            Arc::new(self.network.take().ok_or_else(|| {
-                Error::Encoding("endpoint ingress network owner is missing".into())
-            })?);
+        let network = Arc::new(
+            self.network
+                .take()
+                .ok_or_else(|| started_once("endpoint ingress network owner is missing"))?,
+        );
         self.started = Arc::downgrade(&network);
         let seat_number = seats.number().clone();
         let server_seat = server.map(|coordinator| {
@@ -420,7 +429,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         roles: crate::seat::SeatRoles,
         capacity: usize,
     ) -> Result<crate::seat::ClientSeat<T>, Error> {
-        let not_running = || Error::Encoding("endpoint ingress is not running".into());
+        let not_running = || self.not_running();
         if self.lifecycle != Lifecycle::Running {
             return Err(not_running());
         }
@@ -443,7 +452,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         &self,
         coordinator: Arc<crate::coordinator::OutboundTransactionCoordinator>,
     ) -> Result<crate::seat::ServerSeat<T>, Error> {
-        let not_running = || Error::Encoding("endpoint ingress is not running".into());
+        let not_running = || self.not_running();
         if self.lifecycle != Lifecycle::Running {
             return Err(not_running());
         }
@@ -453,6 +462,21 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             coordinator,
             self.queue_capacity,
         )
+    }
+
+    /// What a call that needs the ingress running finds instead, from its
+    /// own state (#1833): not started yet, a stop under way, or shut for
+    /// good, as a start that failed, a stop that ended or a layer that has
+    /// gone leaves it: an ingress starts once.
+    fn not_running(&self) -> Error {
+        let state = match self.lifecycle {
+            Lifecycle::Ready => error::Lifecycle::NotRunning,
+            Lifecycle::Stopping => error::Lifecycle::Stopping,
+            Lifecycle::Starting | Lifecycle::Running | Lifecycle::Stopped => {
+                error::Lifecycle::Closed
+            }
+        };
+        Error::state(state, "endpoint ingress is not running")
     }
 
     /// What ingress dropped because a queue of its own was full, by class
@@ -499,7 +523,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             self.lifecycle,
             Lifecycle::Starting | Lifecycle::Running | Lifecycle::Stopping
         ) {
-            return Err(Error::Encoding("endpoint ingress is not running".into()));
+            return Err(self.not_running());
         }
         if self.lifecycle == Lifecycle::Starting
             && let Some(network) = self.network.take()
@@ -524,12 +548,17 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         let result = match self.session_task.as_mut() {
             Some(task) => match task.await {
                 Ok(result) => result,
-                Err(error) => Err(Error::Encoding(format!(
-                    "endpoint ingress session failed: {error}"
-                ))),
+                // The task panicked or was aborted: whatever it held is
+                // gone with it, and the ingress never starts again.
+                Err(join) => Err(Error::State(
+                    error::Lifecycle::Closed,
+                    Refusal::text(format!("endpoint ingress session failed: {join}")),
+                )),
             },
-            None => Err(Error::Encoding(
-                "endpoint ingress session task is missing".into(),
+            // Only a stop takes the task: this one found it gone.
+            None => Err(Error::state(
+                error::Lifecycle::Closed,
+                "endpoint ingress session task is missing",
             )),
         };
         self.session_task.take();
@@ -813,7 +842,7 @@ fn validate_effective_group_apdu(
 
     match decode_apdu(apdu.to_vec().into()) {
         Ok(Apdu::UnconfirmedRequest(_)) => Ok(()),
-        _ => Err(Error::Encoding(EFFECTIVE_GROUP_APDU_ERROR.into())),
+        _ => Err(Error::invalid_argument(EFFECTIVE_GROUP_APDU_ERROR)),
     }
 }
 

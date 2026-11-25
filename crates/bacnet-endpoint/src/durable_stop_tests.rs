@@ -117,6 +117,11 @@ async fn retained_dispatch_and_ingress_errors_still_wait_for_settlement() {
             endpoint.session.lifecycle.load(Ordering::Acquire),
             Lifecycle::Stopping as u8
         );
+        // A stop under way says so (#1833).
+        assert!(matches!(
+            endpoint.session.client(),
+            Err(Error::State(bacnet_types::error::Lifecycle::Stopping, _))
+        ));
         tokio::spawn(async move {
             let _ = progress.send(());
         })
@@ -128,6 +133,15 @@ async fn retained_dispatch_and_ingress_errors_still_wait_for_settlement() {
         assert!(!stalled);
         let error = bounded(endpoint.session.stop()).await.unwrap_err();
         assert!(error.to_string().contains(expected_error), "{error}");
+        // An aborted dispatch task leaves the session shut for good.
+        assert!(
+            ingress_error
+                || matches!(
+                    error,
+                    Error::State(bacnet_types::error::Lifecycle::Closed, _)
+                ),
+            "{error:?}"
+        );
         assert_eq!(*storage.saved.lock().unwrap(), Some(expected));
         assert_eq!(
             endpoint.session.lifecycle.load(Ordering::Acquire),

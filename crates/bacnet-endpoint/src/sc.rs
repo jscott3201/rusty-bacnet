@@ -37,7 +37,7 @@ use bacnet_server::server::{__endpoint_start_refused as start_refused, StartErro
 use bacnet_transport::sc::{ScReconnectConfig, ScTransport};
 use bacnet_transport::sc_frame::Vmac;
 use bacnet_types::MacAddr;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::session::{EndpointSession, SessionConfig, SessionRole};
@@ -218,13 +218,13 @@ impl ScEndpointBuilder {
 
     fn validate(&self) -> Result<(), Error> {
         if self.vmac == [0; 6] || self.vmac == bacnet_transport::sc_frame::BROADCAST_VMAC {
-            return Err(Error::Encoding(
-                "SC endpoint builder: vmac must not be zero or broadcast".into(),
+            return Err(Error::invalid_config(
+                "SC endpoint builder: vmac must not be zero or broadcast",
             ));
         }
         if self.device_uuid == [0; 16] {
-            return Err(Error::Encoding(
-                "SC endpoint builder: device_uuid is required and must not be all zero".into(),
+            return Err(Error::invalid_config(
+                "SC endpoint builder: device_uuid is required and must not be all zero",
             ));
         }
         if let Some(config) = &self.reconnect {
@@ -243,16 +243,21 @@ impl ScEndpointBuilder {
         // here without hub I/O so misconfiguration fails fast at composition
         // time. Duplicated (not imported) to keep the transport seam narrow.
         if !(3_000..=300_000).contains(&self.heartbeat_interval_ms) {
-            return Err(Error::Encoding(format!(
-                "SC endpoint builder: heartbeat interval must be 3000..=300000 ms, got {} ms",
-                self.heartbeat_interval_ms
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new(
+                    "SC endpoint builder: heartbeat interval must be 3000..=300000 ms, got {} ms",
+                )
+                .with_value(self.heartbeat_interval_ms),
+            ));
         }
         if self.heartbeat_timeout_ms <= self.heartbeat_interval_ms {
-            return Err(Error::Encoding(format!(
-                "SC endpoint builder: heartbeat timeout must exceed interval, got interval={} ms timeout={} ms",
-                self.heartbeat_interval_ms, self.heartbeat_timeout_ms
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new(
+                    "SC endpoint builder: heartbeat timeout must exceed interval, \
+                     got interval={} ms timeout={} ms",
+                )
+                .with_values(self.heartbeat_interval_ms, self.heartbeat_timeout_ms),
+            ));
         }
         Ok(())
     }
@@ -261,9 +266,8 @@ impl ScEndpointBuilder {
     ///
     /// Checks VMAC reservation, UUID presence, heartbeat range, reconnect
     /// config, source Audit bindings and the session settings (queue
-    /// capacity, pacing interval). Returns a typed
-    /// [`Error::Encoding`] on the first
-    /// violation, before any dial.
+    /// capacity, pacing interval). Returns [`Error::InvalidConfig`] on the
+    /// first violation, before any dial.
     pub fn validate_only(&self) -> Result<(), Error> {
         self.validate()
     }
@@ -407,8 +411,8 @@ impl ScEndpointBuilder {
         // otherwise the identity carries no VMAC and the builder VMAC wins.
         // UUID must always agree when both are present (durable-caller-owned).
         if identity.device_uuid() != [0; 16] && identity.device_uuid() != self.device_uuid {
-            return Err(Error::Encoding(
-                "SC endpoint: identity device UUID must equal builder device_uuid".into(),
+            return Err(Error::invalid_config(
+                "SC endpoint: identity device UUID must equal builder device_uuid",
             ));
         }
         let sc_macs: Vec<_> = identity
@@ -421,8 +425,8 @@ impl ScEndpointBuilder {
             .map(|p| p.mac.as_slice().to_vec())
             .collect();
         if !sc_macs.is_empty() && !sc_macs.iter().any(|m| m.as_slice() == self.vmac) {
-            return Err(Error::Encoding(
-                "SC endpoint: identity SC port VMAC must equal builder vmac".into(),
+            return Err(Error::invalid_config(
+                "SC endpoint: identity SC port VMAC must equal builder vmac",
             ));
         }
         Ok(())
