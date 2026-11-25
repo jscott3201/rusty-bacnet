@@ -244,8 +244,10 @@ pub(super) fn decode(
 /// sending, a router's refusal of a request that went out (#2724), and a
 /// request sent before the node's
 /// DeviceCommunicationControl withheld its retry did; a refusal before
-/// anything was sent, and a request whose transaction its client's or
-/// node's stop ended, did not.
+/// anything was sent did not. A request whose transaction its client's or
+/// node's stop ended ([`Error::RequestCutOff`]) is not counted either, even
+/// with `sent: true`, when it may have reached its target; that is tracked
+/// on #1833.
 pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
     match result {
         Ok(_) => true,

@@ -115,6 +115,23 @@ impl fmt::Display for Initiation {
     }
 }
 
+/// [`Error::RequestCutOff`]'s text, which says whether the device may
+/// have carried the request out.
+struct CutOff {
+    sent: bool,
+}
+
+impl fmt::Display for CutOff {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the request ended without an answer: the client stopped ")?;
+        if self.sent {
+            f.write_str("while it waited, and the device may have carried it out")
+        } else {
+            f.write_str("before it was sent")
+        }
+    }
+}
+
 /// [`Error::AmbiguousDevice`]'s addresses, in the CLI's target grammar where
 /// it has a form for one: a routed station as `2:0x05`; on the local
 /// network, by the MAC's length, which names its link among this stack's
@@ -174,9 +191,10 @@ impl fmt::Display for Candidates<'_> {
 /// [`Error::LimitReached`]) is for a person to read and may change; a
 /// number or fact a caller acts on has a typed variant or field of its own,
 /// as [`Error::SendTooLong`] carries its length and limit. What a component
-/// is built or started with (a builder setting, an option, a table it is
-/// configured with, or a value made to configure it) that it refuses is
-/// [`Error::InvalidConfig`], wherever the check runs. A value refused at the
+/// is built or started with (a value given to a builder's setter, an option,
+/// a table it is configured with, or a value made to configure it) that it
+/// refuses is [`Error::InvalidConfig`], wherever the check runs, even when the
+/// setter is the call that hands the value over. A value refused at the
 /// call that hands it to a component is [`Error::InvalidArgument`], even
 /// when the component would keep it (a device added to the client's table,
 /// a routed path's limit, a server's new clock zone), and so is text parsed
@@ -469,7 +487,7 @@ pub enum Error {
     /// It is that one transaction's outcome, not a lifecycle state of the
     /// client: a call made after the stop gets its own refusal. No answer
     /// will come for it.
-    #[error("the request ended without an answer: the client stopped while it waited")]
+    #[error("{}", CutOff { sent: *.sent })]
     RequestCutOff {
         /// `false`: nothing of the request left, as it was still waiting
         /// for its turn. `true`: the request, or some of its segments, may

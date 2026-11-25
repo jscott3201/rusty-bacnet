@@ -366,9 +366,10 @@ with a peer, is a local refusal with a variant per kind (#1833), so a caller
 matches the kind without reading text: `Error::State(Lifecycle, Refusal)` for
 a lifecycle state (`AlreadyStarted`, `NotRunning`, `Stopping`,
 `NotConnected`, `Closed`), `Error::InvalidConfig` for what the component is
-built or started with (a builder setting, an option, a table it is configured
-with), `Error::InvalidArgument` for a value refused at the call that hands it
-over, even one the component would keep (an address or MAC of the wrong form
+built or started with (a value given to a builder's setter, an option, a table
+it is configured with), even when a setter is the call that refuses it,
+`Error::InvalidArgument` for a value refused at a running component's call
+that hands it over, even one the component would keep (an address or MAC of the wrong form
 for the link, a device added to the client's table, a routed path's limit),
 or text parsed once, `Error::Unsupported` for what this platform, build or
 component doesn't offer, and `Error::LimitReached` for a resource cap,
@@ -13979,7 +13980,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Decoding(DecodeError)` | Malformed received data, with its offset and `DecodingKind` |
 | `Error::Encode(EncodeError)`, `Error::Range(RangeError)` | A value an encoder, validator or constructor refused, with a static label |
 | `Error::State(Lifecycle, Refusal)` | A call the component's lifecycle state refuses: already started, not running, stopping, not connected to its peer, or closed (#1833) |
-| `Error::InvalidConfig(Refusal)` | What the component is built or started with (a builder setting, an option, a table it is configured with) refused |
+| `Error::InvalidConfig(Refusal)` | What the component is built or started with (a value given to a builder's setter, an option, a table it is configured with) refused |
 | `Error::InvalidArgument(Refusal)` | A value refused at the call that hands it over, even one the component would keep, or text parsed once, before anything was sent, such as a MAC of the wrong form for the link |
 | `Error::Unsupported(Refusal)` | Not offered on this platform, in this build, or by this kind of component |
 | `Error::LimitReached(Refusal)` | A resource cap reached: a full table, a counter run out, a one-holder resource another holds |
@@ -13987,7 +13988,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (objects, device-core and the crates above the client and server), and, until their own change, an endpoint's send that waited past its deadline, a server's audit forwarding that ran out of time, and `resolve_device` for an instance not in the client's table |
 | `Error::Transport(io_error)` | Transport I/O failure, with the OS error as its source where one caused it: a socket's, a serial port's open, read or write, GPIO, the RS-485 ioctl, entropy (#1833), an SC dial's TLS handshake; and a stopped transport's send (`NotConnected`) |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
-| `Error::RequestCutOff { sent }` | The client's stop, or its endpoint's or node's, ended a confirmed request before an answer came (#1833). `sent: false`: it was still waiting for its turn and nothing left. `sent: true`: it, or some of its segments, may have gone out and been carried out, so don't send a write again blindly |
+| `Error::RequestCutOff { sent }` | The client's stop, or its endpoint's or node's, ended a confirmed request before an answer came (#1833). `sent: false`: it was still waiting for its turn and nothing left. `sent: true`: it, or some of its segments, may have gone out and been carried out, so don't send a write again blindly. The text says which; an endpoint whose audited request's task its stop ended reports it with `sent: true` too |
 | `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles); a server's audit send to a recipient with no router known fails this way too, and counts as not sent |
 
 ---

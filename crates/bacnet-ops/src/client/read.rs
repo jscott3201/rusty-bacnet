@@ -172,8 +172,8 @@ pub fn unreachable(error: &Error) -> bool {
 ///   transport's send is [`Error::Transport`], which [`unreachable()`]
 ///   counts instead.
 /// - [`Error::RequestCutOff`]: the client's own stop, or its node's, ended
-///   the request before an answer came. With `sent` it **may already have
-///   left**, and the device may have carried it out.
+///   the request before an answer came. With `sent: true` it **may already
+///   have left**, and the device may have carried it out.
 ///
 /// So a failure here is not "never sent", and nothing may send again on the
 /// strength of one: reads only stop on it, since the client, not the

@@ -320,14 +320,16 @@ impl NotificationTransactions {
         Ok(())
     }
 
+    /// Run `task` as one of the owner's workers: `false`, with `task`
+    /// dropped unpolled, once the owner has closed.
     #[doc(hidden)]
-    pub fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
+    pub fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) -> bool {
         let mut workers = self.workers.locked();
         if workers.closed {
             // A rejected future may own an operation and resource guards.
             drop(workers);
             drop(task);
-            return;
+            return false;
         }
         let owner = workers
             .audit_owner
@@ -344,6 +346,7 @@ impl NotificationTransactions {
         if let Some(waiter) = waiter {
             waiter.wake();
         }
+        true
     }
 
     /// Seal the event notification lanes (#2537), dropping what they hold,

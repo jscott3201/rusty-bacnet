@@ -140,8 +140,8 @@ impl AuditedRequest {
     ///
     /// # Errors
     ///
-    /// The error of a request cut off in flight, when the client's tasks end
-    /// first: its stop, or its node's stop or drop (#2720).
+    /// [`Error::RequestCutOff`] with `sent: false` when the client's tasks
+    /// end first: its stop, or its node's stop or drop (#2720).
     pub async fn turn_due(&mut self) -> Result<(), Error> {
         match &self.turn {
             Some(turn) if !turn.due().await => Err(Error::RequestCutOff { sent: false }),

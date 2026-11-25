@@ -179,8 +179,9 @@ fn which_requests_reached_their_target() {
         assert!(attempted(&Err(reached)));
     }
     // The client's own refusals, typed (#1833), count as the untyped text
-    // they replace did: not attempted. So does a request its client's stop
-    // cut off, either way: its record says it ended without an answer.
+    // they replace did: not attempted. A request its client's stop cut off
+    // is not recorded as attempted today even with `sent: true`, when it may
+    // have reached its target; that is tracked on #1833.
     for refused in [
         Error::Encoding("TSM response channel closed".into()),
         Error::RequestCutOff { sent: false },

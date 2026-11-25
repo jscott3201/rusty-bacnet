@@ -477,10 +477,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         return Ok(WindowAck::Ack(ack));
                         }
                         None => {
-                        return Err(Error::state(
-                            Lifecycle::Closed,
-                            "SegmentAck channel closed",
-                        ));
+                        // Can't happen: the request holds a sender of this
+                        // channel until its transfer ends. Were it to, the
+                        // segments sent so far may have reached the device.
+                        return Err(Error::RequestCutOff { sent: true });
                         }
                     },
                     _ = &mut segment_timer => {
