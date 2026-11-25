@@ -367,7 +367,8 @@ Attributes:
 Raised when a transport socket or I/O operation fails.
 
 Covers a failed bind or listen (B/IP, B/IPv6, `ScHub.start`), a refused
-or failed dial, and other socket errors. It is also an `OSError`:
+or failed dial, other socket errors, and an MS/TP serial port that
+doesn't open, whose message names the port. It is also an `OSError`:
 `errno` is the operating system's code when it reported one, else the
 code for the failure's kind (for example `errno.EADDRINUSE`), else
 `None`; `strerror` is the message. `except OSError` and

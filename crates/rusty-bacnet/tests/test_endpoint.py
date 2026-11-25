@@ -20,6 +20,7 @@ reported separately from protocol failures via skips/explicit asserts.
 from __future__ import annotations
 
 import asyncio
+import errno
 import socket
 import tempfile
 import unittest
@@ -30,6 +31,7 @@ from rusty_bacnet import (
     BacnetAbortError,
     BacnetError,
     BacnetProtocolError,
+    BacnetTransportError,
     BACnetClient,
     BACnetServer,
     BipEndpoint,
@@ -835,18 +837,24 @@ class FailedStartPreservationTests(unittest.IsolatedAsyncioTestCase):
 
 class MstpStartupTests(unittest.IsolatedAsyncioTestCase):
     async def test_nonexistent_serial_fails_as_setup_not_protocol(self):
-        endpoint = MstpEndpoint(
-            device_instance=8001,
-            serial_port="/tmp/rusty-bacnet-nonexistent-serial",
-            mstp_mac=3,
+        # In a directory that isn't there, on every platform.
+        path = str(
+            Path(tempfile.gettempdir()) / "rusty-bacnet-nonexistent" / "serial"
         )
-        # Native-dependency/setup failure: RuntimeError from serial open,
-        # distinct from BacnetError protocol failures. Pending preserved.
+        endpoint = MstpEndpoint(device_instance=8001, serial_port=path, mstp_mac=3)
+        # A serial port that fails to open is a transport error (#1833):
+        # BacnetTransportError, an OSError naming the port, not a protocol
+        # failure. Pending preserved.
         endpoint.add_analog_input(instance=1, name="Pending serial")
         startup = endpoint.start()
         self.assertTrue(asyncio.isfuture(startup))
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(BacnetTransportError) as caught:
             await asyncio.wait_for(startup, 10)
+        self.assertEqual(caught.exception.errno, errno.ENOENT)
+        self.assertTrue(
+            caught.exception.strerror.startswith(f"Serial open failed for {path}: "),
+            caught.exception.strerror,
+        )
         self.assertEqual(endpoint._pending_registration_count(), 1)
         self.assertIsNone(await asyncio.wait_for(endpoint.close(), 5))
 

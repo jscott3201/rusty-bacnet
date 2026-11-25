@@ -345,22 +345,23 @@ async fn a_query_that_cannot_be_sent_is_refused_before_it_goes() {
     client.stop().await.unwrap();
 }
 
-/// A link that refuses the query on its own side, as a BACnet/SC link with
-/// no hub connection does, refuses the call as an invalid argument, which
-/// the bindings raise as `ValueError`, as when the link's refusal was an
-/// untyped encoding error (#1833); each of the five local refusals does.
-/// A stopped link's not-connected error and a send too long stay send
-/// failures.
+/// A link that refuses the query for the router's address, which the call
+/// was given, refuses the call as an invalid argument, which the bindings
+/// raise as `ValueError`. One that refuses it for its own state (a
+/// BACnet/SC link with no hub connection), configuration, platform or
+/// limits, a stopped link and a send too long are send failures, which
+/// keep the link's error and which the bindings raise as they raise that
+/// error (#1833).
 #[tokio::test(start_paused = true)]
 async fn a_link_refusing_the_query_refuses_the_call() {
     use bacnet_types::error::Lifecycle;
     const REFUSED: &str = "BACnet/SC transport not in Connected state";
     let cases: [(fn() -> Error, bool); 7] = [
-        (|| Error::state(Lifecycle::NotConnected, REFUSED), true),
-        (|| Error::invalid_config(REFUSED), true),
+        (|| Error::state(Lifecycle::NotConnected, REFUSED), false),
+        (|| Error::invalid_config(REFUSED), false),
         (|| Error::invalid_argument(REFUSED), true),
-        (|| Error::unsupported(REFUSED), true),
-        (|| Error::limit_reached(REFUSED), true),
+        (|| Error::unsupported(REFUSED), false),
+        (|| Error::limit_reached(REFUSED), false),
         (
             || {
                 Error::Transport(std::io::Error::new(
@@ -396,7 +397,9 @@ async fn a_link_refusing_the_query_refuses_the_call() {
             Err(RoutingTableError::InvalidArgument(why)) if argument => {
                 assert_eq!(why, REFUSED);
             }
-            Err(RoutingTableError::Send(_)) if !argument => {}
+            Err(RoutingTableError::Send(error)) if !argument => {
+                assert_eq!(error.to_string(), refusal().to_string());
+            }
             other => panic!("{:?}: {other:?}", refusal()),
         }
         client.stop().await.unwrap();

@@ -387,14 +387,17 @@ async fn queue_bounds_are_reported_at_once() {
     assert!(
         matches!(full, Error::Transport(ref io) if io.kind() == std::io::ErrorKind::WouldBlock)
     );
-    assert!(matches!(
+    // Too long for the link, with the length and the limit (#1833).
+    for refused in [
         bus.transport.send_broadcast(&oversize).await,
-        Err(Error::Encoding(_))
-    ));
-    assert!(matches!(
         bus.transport.send_unicast(&oversize, &[4]).await,
-        Err(Error::Encoding(_))
-    ));
+    ] {
+        assert!(
+            matches!(refused, Err(Error::SendTooLong { length, limit })
+                if length == MAX_STANDARD_MPDU_DATA + 1 && limit == MAX_STANDARD_MPDU_DATA),
+            "{refused:?}"
+        );
+    }
     bus.transport.send_unicast(&[1, 0], &[4]).await.unwrap();
     let counts = bus.transport.diagnostics().snapshot();
     assert_eq!(counts.outbound_queue_full, 1);

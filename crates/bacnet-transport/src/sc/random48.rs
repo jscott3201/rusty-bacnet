@@ -16,7 +16,7 @@ pub fn generate_random48_vmac() -> Result<Vmac, Error> {
 
     let mut vmac = [0u8; 6];
     getrandom::fill(&mut vmac)
-        .map_err(|e| Error::Encoding(format!("failed to generate Random-48 VMAC: {e}")))?;
+        .map_err(|e| crate::io_context::entropy(e, "failed to generate Random-48 VMAC"))?;
     vmac[0] = (vmac[0] & 0xF0) | 0x02;
     Ok(vmac)
 }

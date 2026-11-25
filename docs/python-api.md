@@ -2376,7 +2376,13 @@ polled station, and `mstp_reply_timeout_ms` (255 to 300, default 300) how
 long it waits for an answer to a request; the defaults leave room for a USB
 adapter's receive latency. A value outside those ranges raises `ValueError`
 at start, before the port opens (`MstpEndpoint` raises it when it is built);
-a negative one raises `OverflowError` when the object is built.
+a negative one raises `OverflowError` when the object is built. A port that
+doesn't open raises `BacnetTransportError` at start: an `OSError` whose
+`errno` is the failure's kind and whose `strerror` names the port and gives
+the operating system's reason, such as `Serial open failed for /dev/ttyUSB0:
+No such file or directory`. `errno.ENOENT` means the port isn't there, or
+that another program holds it (on Windows also that access was denied): the
+serial library reports all of these as no device, so `strerror` tells which.
 
 The port is taken not to hear its own frames (transceiver receiver off while
 transmitting). `mstp_echo=True` declares an adapter that returns every octet
@@ -3223,6 +3229,10 @@ number can appear twice.
   `reason` octet and `network`. Rejects with reasons 1, 2 and 4 concern a
   DNET and are ignored for a local query.
 - A client stopped mid-call raises `RuntimeError`.
+- A link that can't send the query for its own state or kind, such as a
+  BACnet/SC link not connected to its hub, or a router-application client's
+  link, which carries APDUs only, raises what that send's error raises
+  (`BacnetError` for both), not `ValueError` (#1833).
 
 Each bound is 0 to 3600 seconds, and `wait` may not exceed `total`
 (`ValueError` otherwise). An acknowledgement from the router's own address

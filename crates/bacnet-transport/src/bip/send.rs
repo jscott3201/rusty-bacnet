@@ -49,7 +49,7 @@ impl NodeHandle {
             let dest = codec::address_from_slice(mac).map_err(bvll_error)?;
             let outgoing = link
                 .unicast(dest, npdu)
-                .map_err(|refusal| self.refuse_send(refusal))?;
+                .map_err(|refusal| self.refuse_send(refusal, npdu.len()))?;
             // An Original-Unicast-NPDU is a four-octet header and `npdu`.
             let datagram = OutgoingDatagram::split(&outgoing.message, npdu).ok_or_else(|| {
                 Error::encode("a unicast BVLL message is not a header and its NPDU")
@@ -80,7 +80,7 @@ impl NodeHandle {
         let mut decided = match link.broadcast(npdu) {
             Ok(decided) => Some(decided),
             Err(SendRefusal::NoBbmd) => None,
-            Err(refusal) => return Err(self.refuse_send(refusal)),
+            Err(refusal) => return Err(self.refuse_send(refusal, npdu.len())),
         };
 
         // A foreign device asks its node first, which holds the broadcast
@@ -110,7 +110,7 @@ impl NodeHandle {
                     // `forward_own` (false for a foreign device), stays.
                     let again = admitted
                         .broadcast(npdu)
-                        .map_err(|refusal| self.refuse_send(refusal))?;
+                        .map_err(|refusal| self.refuse_send(refusal, npdu.len()))?;
                     decided = Some(again);
                 }
                 Some(_) => {}
@@ -118,7 +118,7 @@ impl NodeHandle {
         }
         // Only a waiting foreign device has none, and its node never sends.
         let (outgoing, forward_own) =
-            decided.ok_or_else(|| self.refuse_send(SendRefusal::NoBbmd))?;
+            decided.ok_or_else(|| self.refuse_send(SendRefusal::NoBbmd, npdu.len()))?;
         let mut buf = BytesMut::with_capacity(4 + npdu.len());
         encode_bvll(&mut buf, &outgoing.message)?;
 

@@ -154,7 +154,7 @@ async fn a_1497_octet_npdu_passes_with_the_option() {
         .await
         .unwrap_err();
     assert!(
-        matches!(&refused, Error::Encoding(text) if text.contains("standard-frame maximum 501")),
+        matches!(refused, Error::SendTooLong { limit: 501, .. }),
         "{refused}"
     );
     standard.stop().await.unwrap();

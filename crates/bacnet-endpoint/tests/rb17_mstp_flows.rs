@@ -237,8 +237,14 @@ async fn mstp_queue_and_admission_bounds_release() {
         .await
         .unwrap_err();
     assert!(
-        big.to_string().contains("exceeds standard-frame maximum"),
-        "oversized NPDU must be rejected: {big}"
+        matches!(
+            big,
+            bacnet_types::error::Error::SendTooLong {
+                length: 502,
+                limit: 501
+            }
+        ),
+        "oversized NPDU must be refused as too long: {big}"
     );
     transport.stop().await.expect("transport must stop");
 

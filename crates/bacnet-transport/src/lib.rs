@@ -71,6 +71,7 @@ mod direct_response;
 #[cfg(feature = "ethernet")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ethernet")))]
 pub mod ethernet;
+mod io_context;
 mod local_addresses;
 pub mod loopback;
 pub mod mstp;

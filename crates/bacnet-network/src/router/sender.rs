@@ -28,17 +28,19 @@ pub(super) async fn run<T: TransportPort>(
     shared: Arc<Shared>,
     outputs: Weak<Outputs>,
 ) {
-    run_loop(&transport, port, queue, shared, outputs).await;
+    // The send loop alone: its warnings name no network.
+    run_loop(&transport, port, 0, queue, shared, outputs).await;
 }
 
 async fn run_loop<T: TransportPort>(
     transport: &T,
     port: PortId,
+    network: u16,
     mut queue: send_queue::Receiver,
     shared: Arc<Shared>,
     outputs: Weak<Outputs>,
 ) {
-    let warnings = SendWarnings::default();
+    let warnings = SendWarnings::new(network);
     while let Some(request) = queue.recv().await {
         // The slot is free before the send starts: a congested port
         // reports its backlog as it drains (#1697).
@@ -134,7 +136,7 @@ pub(super) fn owned<T: TransportPort>(
             _ = async {
                 if !*stop.borrow_and_update() { let _ = stop.changed().await; }
             } => Ok(()),
-            result = observe(run_loop(&owner.transport, port, queue, shared, outputs)) => result,
+            result = observe(run_loop(&owner.transport, port, network_number, queue, shared, outputs)) => result,
         };
         if let Err(detail) = send_result {
             failures.push(RouterStopFailure::Worker {
