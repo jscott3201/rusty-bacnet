@@ -57,7 +57,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::command_lists::{SharedRuns, TakenRuns};
-use crate::committed_cov::{BackgroundCommit, CommitTransition, CommittedCov};
+use crate::committed_cov::{BackgroundCommit, CommitTransition, CommittedCov, RequestRows};
 use crate::cov::CovSubscriptionTable;
 use bacnet_device_core::write::local;
 use bacnet_objects::clock::ClockFrame;
@@ -174,6 +174,10 @@ pub(crate) async fn tick_schedules_committed(
 /// owed for the objects they wrote, and any Command runs those writes
 /// started, once that guard is dropped. Each object the pass changed
 /// commits its transition under that guard through `transition` (#2535).
+/// `rows` are the timestamped rows the write's own captures queued before
+/// the pass: an object the pass changes too is captured as one more write
+/// of it ([`BackgroundCommit::finish_in_request`], #2582). They are empty
+/// for a write captured after its transition.
 ///
 /// This is the pass [`tick_schedules_committed`] runs, limited to those
 /// Schedules, so the new contents take effect without waiting for the next
@@ -184,6 +188,7 @@ pub(crate) async fn reevaluate_written(
     written: &[ObjectIdentifier],
     cov_table: &RwLock<CovSubscriptionTable>,
     transition: CommitTransition<'_>,
+    rows: &RequestRows,
 ) -> CommittedCov {
     let schedules: Vec<_> = written
         .iter()
@@ -194,7 +199,9 @@ pub(crate) async fn reevaluate_written(
         return CommittedCov::default();
     }
     let commit = pass(db_w, schedules);
-    commit.finish(db, db_w, cov_table, transition).await
+    commit
+        .finish_in_request(db, db_w, cov_table, transition, rows)
+        .await
 }
 
 /// Retry, under `db_w`, the refused references that name objects just added
