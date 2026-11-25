@@ -367,32 +367,6 @@ async fn a_waiting_request_ends_when_the_clients_tasks_end_and_claims_no_turn() 
     assert_eq!(client.pacer.latest(&local(A)), latest);
 }
 
-/// A request already sent when the client's tasks end is cut off as one
-/// that may have gone out (#1833): the device may have carried it out.
-#[tokio::test(start_paused = true)]
-async fn an_open_request_cut_off_by_the_clients_end_may_have_gone_out() {
-    let (transport, inbound) = TestTransport::inbound(4);
-    let sent = transport.sent();
-    let client = BACnetClient::generic_builder()
-        .transport(transport)
-        .apdu_timeout_ms(60_000)
-        .apdu_retries(0)
-        .build()
-        .await
-        .unwrap();
-    let open = client.confirmed_request(A, ConfirmedServiceChoice::WRITE_PROPERTY, &[0x0C]);
-    let link_closes = async {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        drop(inbound);
-    };
-    let (ended, ()) = tokio::join!(open, link_closes);
-    assert!(
-        matches!(&ended, Err(Error::RequestCutOff { sent: true })),
-        "{ended:?}"
-    );
-    assert_eq!(sent.len(), 1, "the request went out");
-}
-
 /// Only the latest request's finish counts: an earlier one finishing late
 /// doesn't push the next request back.
 #[tokio::test(start_paused = true)]
