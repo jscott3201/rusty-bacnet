@@ -82,20 +82,21 @@ displayed `bacnet` command against the CLI's argument definitions without a
 build. The TUI's profile tables and command-bar lines are parsed by the CLI's
 own code in `crates/bacnet-cli/src/tui/site_samples_tests.rs`.
 
-The programs under `examples/` follow the `dev` branch between releases
-(#2648): the workspace compiles the Rust ones as `bacnet-integration-tests`
-bins and CI runs the Python ones against a development build, and each Rust
-manifest takes the BACnet crates from `dev` with a git dependency. A page that
-imports one gives its note with `<SampleNote sample="…" />`; the note comes
-from `src/lib/samples.mjs`, which lists every sample, and says the sample
-follows `dev` and links it at the release's tag, or, once a release has
-pinned the manifests (`scripts/release/website_samples.py --pin`), that they
-pin it. A sample no release has yet takes a `since` key there: its note
-links `tagPage`, the page that showed the release's version inline (as the
-start pages did at 0.15.0), or else says the sample is new. A Python note
-gives the pip line for its state: from `dev`, or the release from PyPI.
-`tests/unit/sample-notes.test.mjs` checks the registry, the notes, the
-manifests and, with the tag fetched, that each linked file is at the tag.
+The programs under `examples/` (#2648) are listed in `src/data/samples.json`.
+The workspace compiles the Rust ones as `bacnet-integration-tests` bins and CI
+runs the Python ones against a development build. A sample whose files are the
+last release's stays on it: its Rust manifest pins each BACnet crate to its
+published version. One changed since follows the `dev` branch: its manifest
+takes the crates from `dev` with a git dependency, or, for Python, its entry
+has `"follows": "dev"`. A page that imports one gives its note with
+`<SampleNote sample="…" />` (`src/lib/samples.mjs`): how to get the release
+from crates.io or PyPI, or that the sample follows `dev`, with the pip line
+and a link to the release's copy. A sample that was inline on a page at the
+release names that page in `tagPage`; one no release has in any form takes
+`since`, and its note says it is new. `scripts/release/website_samples.py
+--follow-dev <sample>` moves a sample a change touches; `--pin` puts samples
+back on a release. `tests/unit/sample-notes.test.mjs` checks the registry, the
+notes, the manifests and, with the tag fetched, each state against the tag.
 
 ## Tutorial validation
 

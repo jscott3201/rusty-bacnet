@@ -8,7 +8,7 @@ publish = false
 [workspace]
 
 [dependencies]
-bacnet-client = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
-bacnet-encoding = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
-bacnet-types = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
+bacnet-client = "=0.15.0"
+bacnet-encoding = "=0.15.0"
+bacnet-types = "=0.15.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

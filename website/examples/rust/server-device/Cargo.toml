@@ -8,8 +8,8 @@ publish = false
 [workspace]
 
 [dependencies]
-bacnet-objects = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
-bacnet-server = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
-bacnet-transport = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
-bacnet-types = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
+bacnet-objects = "=0.15.0"
+bacnet-server = "=0.15.0"
+bacnet-transport = "=0.15.0"
+bacnet-types = "=0.15.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "time"] }

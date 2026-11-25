@@ -82,11 +82,6 @@ path = "../../examples/rust/readme_read.rs"
 name = "readme_server"
 path = "../../examples/rust/readme_server.rs"
 
-# The website's PICS task page block (#1496), checked the same way.
-[[example]]
-name = "generate_pics"
-path = "../../examples/rust/generate_pics.rs"
-
 # Rewrites the website's capability tables, website/src/data/support.json,
 # and its sample PICS, website/src/content/docs/project/sample-pics.md
 # (#1496); tests/support_tables.rs fails when either committed file is stale.

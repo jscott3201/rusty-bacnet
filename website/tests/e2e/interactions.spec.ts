@@ -196,11 +196,15 @@ test('native code copy writes the displayed code to the clipboard', async ({ pag
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(source.trimEnd());
 });
 
-// The start pages' programs are files under examples/ (#2648): each page says
-// which release they need, shows them byte for byte and serves them.
-test('the start pages say which release their programs need and show them as their files', async ({ page, request }) => {
+// The start and PICS pages' programs are files under examples/ (#2648): each
+// page says which release they need, shows them byte for byte and serves them.
+test('the start and PICS pages say which release their programs need and show them as their files', async ({ page, request }) => {
   for (const [path, name, files] of [
     ['start/local-lab/', 'loopback_lab.py', []],
+    ['integrate/pics/', 'pics', [
+      ['rust/pics/Cargo.toml', 'examples/rust/pics/Cargo.toml'],
+      ['rust/pics/src/main.rs', 'examples/rust/pics/src/main.rs'],
+    ]],
     ['start/python/', 'first_read.py', [['python/first_read.py', 'examples/first_read.py']]],
     ['start/rust/', 'first-read', [
       ['rust/first-read/Cargo.toml', 'examples/rust/first-read/Cargo.toml'],

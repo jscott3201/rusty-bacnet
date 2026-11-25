@@ -1,0 +1,47 @@
+{
+  "bip-router": {
+    "path": "rust/bip-router",
+    "language": "rust"
+  },
+  "first-read": {
+    "path": "rust/first-read",
+    "language": "rust",
+    "tagPage": "start/rust.md"
+  },
+  "pics": {
+    "path": "rust/pics",
+    "language": "rust",
+    "tagPage": "integrate/pics.mdx"
+  },
+  "sc-operator-policy": {
+    "path": "rust/sc-operator-policy",
+    "language": "rust"
+  },
+  "server-device": {
+    "path": "rust/server-device",
+    "language": "rust"
+  },
+  "shared-endpoint": {
+    "path": "rust/shared-endpoint",
+    "language": "rust"
+  },
+  "bip_router.py": {
+    "path": "python/bip_router.py",
+    "language": "python",
+    "follows": "dev"
+  },
+  "first_read.py": {
+    "path": "python/first_read.py",
+    "language": "python",
+    "follows": "dev",
+    "tagPage": "start/python.md"
+  },
+  "loopback_lab.py": {
+    "path": "python/loopback_lab.py",
+    "language": "python"
+  },
+  "server_device.py": {
+    "path": "python/server_device.py",
+    "language": "python"
+  }
+}

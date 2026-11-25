@@ -16,8 +16,8 @@ table; `test_site_samples.py` fails when this file is out of date. Run
 | python | run against a loopback server | 2 |
 | python | run or compiled by another CI test | 5 |
 | python | run: builds configuration objects only | 3 |
-| rust | compiled: a Cargo example's exact text | 3 |
-| rust | run or compiled by another CI test | 5 |
+| rust | compiled: a Cargo example's exact text | 2 |
+| rust | run or compiled by another CI test | 6 |
 | sh | CLI arguments parsed by the CLI (--help) | 29 |
 | sh | host example run with cargo | 1 |
 | sh | not checked (class C) | 1 |
@@ -28,8 +28,8 @@ table; `test_site_samples.py` fails when this file is out of date. Run
 | text | not checked (class G) | 2 |
 | text | run or compiled by another CI test | 9 |
 | toml | dependency table checked against the workspace | 1 |
-| toml | run or compiled by another CI test | 9 |
-| all | | 125 |
+| toml | run or compiled by another CI test | 10 |
+| all | | 126 |
 
 ## Blocks
 
@@ -78,7 +78,8 @@ table; `test_site_samples.py` fails when this file is out of date. Run
 | guides/safe-writes.md:28 | sh | `bacnet write 192.168.1.100 av:1 pv 72.5 --priority 8` | run against a loopback server |  |
 | guides/safe-writes.md:39 | sh | `bacnet write 192.168.1.100 av:1 pv null --priority 8` | run against a loopback server |  |
 | guides/safe-writes.md:52 | sh | `bacnet --allow-write write 192.168.1.100 av:1 pv 72.5 --p...` | run against a loopback server |  |
-| integrate/pics.mdx:26 | rust | `use bacnet_objects::DeviceIdentity;` | compiled: a Cargo example's exact text |  |
+| integrate/pics.mdx:32 | toml | `<Code code={picsManifest} lang="toml" title="Cargo.toml" />` | run or compiled by another CI test |  |
+| integrate/pics.mdx:34 | rust | `<Code code={picsSource} lang="rust" title="src/main.rs" />` | run or compiled by another CI test |  |
 | integrate/router.mdx:42 | sh | `bacnet whois-router` | CLI arguments parsed by the CLI (--help) |  |
 | integrate/router.mdx:98 | toml | `<Code code={routerManifest} lang="toml" title="Cargo.toml...` | run or compiled by another CI test |  |
 | integrate/router.mdx:100 | rust | `<Code code={routerSource} lang="rust" title="src/main.rs" />` | run or compiled by another CI test |  |

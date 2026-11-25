@@ -8,6 +8,6 @@ publish = false
 [workspace]
 
 [dependencies]
-bacnet-server = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev", features = ["sc-tls"] }
-bacnet-transport = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
-bacnet-types = { git = "https://github.com/jscott3201/rusty-bacnet", branch = "dev" }
+bacnet-server = { version = "=0.15.0", features = ["sc-tls"] }
+bacnet-transport = "=0.15.0"
+bacnet-types = "=0.15.0"

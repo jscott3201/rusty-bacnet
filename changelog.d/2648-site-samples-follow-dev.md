@@ -1,7 +1,7 @@
 ---
 section: Changed
 ---
-- The documentation site's sample programs follow the `dev` branch between
-  releases: each page says so and links the same sample at the last release
-  tag, and the release pins and builds them against the published crates
-  (#2648).
+- Each documentation-site sample stays on the last release until it changes,
+  then follows the `dev` branch; its page says which, how to install it and
+  where the release's copy is, and the release pins, builds and runs the
+  samples against the published crates and wheels (#2648).

@@ -1,24 +1,33 @@
-//! The published manifest of a website guide program (#2648). Between
-//! releases its BACnet crates come from the repository's `dev` branch, a git
-//! dependency, since the workspace compiles the program against `dev`; a
-//! release pins them to itself (`scripts/release/website_samples.py --pin`).
-//! [`as_dev`] takes either form and returns the dev form, so one expected
-//! manifest covers both. Include it as a module named `guide_manifest`.
+//! The published manifest of a website guide program (#2648). A program
+//! unchanged since the release pins each BACnet crate to its published
+//! version; one changed since takes them from the repository's `dev` branch,
+//! a git dependency, since the workspace compiles it against `dev`
+//! (`scripts/release/website_samples.py --pin` and `--follow-dev`). [`as_dev`]
+//! takes either form and returns the dev form, so one expected manifest covers
+//! both. Include it as a module named `guide_manifest`.
 
+use std::path::Path;
 use toml::Value;
 use toml::map::Map;
 
 pub const REPOSITORY: &str = "https://github.com/jscott3201/rusty-bacnet";
-const SITE: &str = include_str!("../../../../website/src/lib/site.mjs");
 
-/// The release the website describes, from `website/src/lib/site.mjs`.
-pub fn site_release() -> &'static str {
-    SITE.lines()
-        .find_map(|line| {
-            line.strip_prefix("export const release = '")?
-                .strip_suffix("';")
-        })
-        .expect("site.mjs exports the release")
+fn read(path: &Path) -> Value {
+    toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// The version the workspace gives a crate, which a release publishes: its
+/// own (bacnet-time versions on its own) or the workspace's.
+pub fn published_version(krate: &str) -> String {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let package = &read(&crates.join(krate).join("Cargo.toml"))["package"];
+    match &package["version"] {
+        Value::String(own) => own.clone(),
+        _ => read(&crates.parent().unwrap().join("Cargo.toml"))["workspace"]["package"]["version"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    }
 }
 
 /// A BACnet crate from the dev branch, as the manifests write it.
@@ -27,10 +36,10 @@ pub fn dev(krate: &str) -> String {
 }
 
 /// `manifest` with each `bacnet-*` dependency in the dev form. Fails on one in
-/// neither form, on a pin to another release than the site's, and on a mix.
+/// neither form, on a pin to another version than the crate's published one,
+/// and on a mix.
 pub fn as_dev(manifest: &str) -> Result<Value, String> {
     let mut value: Value = toml::from_str(manifest).map_err(|e| e.to_string())?;
-    let pin = format!("={}", site_release());
     let deps = value
         .get_mut("dependencies")
         .and_then(Value::as_table_mut)
@@ -40,6 +49,7 @@ pub fn as_dev(manifest: &str) -> Result<Value, String> {
         .iter_mut()
         .filter(|(name, _)| name.starts_with("bacnet-"))
     {
+        let pin = format!("={}", published_version(name));
         let mut table = match dep {
             Value::String(version) => {
                 Map::from_iter([("version".into(), Value::from(version.as_str()))])
@@ -71,32 +81,46 @@ pub fn as_dev(manifest: &str) -> Result<Value, String> {
     }
 }
 
-/// `manifest` as the release script pins it to the site's release.
-pub fn pinned(manifest: &str) -> String {
-    let release = site_release();
+/// Each `bacnet-*` line of `manifest` mapped by `line`.
+fn lines(manifest: &str, line: impl Fn(&str, &str) -> String) -> String {
     manifest
-        .replace(
-            &format!("{{ git = \"{REPOSITORY}\", branch = \"dev\" }}"),
-            &format!("\"={release}\""),
-        )
-        .replace(
-            &format!("{{ git = \"{REPOSITORY}\", branch = \"dev\", "),
-            &format!("{{ version = \"={release}\", "),
-        )
+        .split_inclusive('\n')
+        .map(|text| match text.split_once(" = ") {
+            Some((krate, rest)) if krate.starts_with("bacnet-") => {
+                let newline = if rest.ends_with('\n') { "\n" } else { "" };
+                format!("{krate} = {}{newline}", line(krate, rest.trim_end()))
+            }
+            _ => text.to_owned(),
+        })
+        .collect()
+}
+
+/// `manifest` as the release script pins it: each crate at its published version.
+pub fn pinned(manifest: &str) -> String {
+    let dev = format!("{{ git = \"{REPOSITORY}\", branch = \"dev\"");
+    lines(manifest, |krate, value| {
+        let version = published_version(krate);
+        match value.strip_prefix(&dev) {
+            Some(" }") => format!("\"={version}\""),
+            Some(rest) => format!("{{ version = \"={version}\"{rest}"),
+            None => value.to_owned(),
+        }
+    })
 }
 
 /// `manifest` as the release script takes it back to the dev branch.
 pub fn on_dev(manifest: &str) -> String {
-    let release = site_release();
-    manifest
-        .replace(
-            &format!("{{ version = \"={release}\", "),
-            &format!("{{ git = \"{REPOSITORY}\", branch = \"dev\", "),
-        )
-        .replace(
-            &format!("\"={release}\""),
-            &format!("{{ git = \"{REPOSITORY}\", branch = \"dev\" }}"),
-        )
+    let dev = format!("{{ git = \"{REPOSITORY}\", branch = \"dev\"");
+    lines(manifest, |krate, value| {
+        let version = published_version(krate);
+        if value == format!("\"={version}\"") {
+            format!("{dev} }}")
+        } else if let Some(rest) = value.strip_prefix(&format!("{{ version = \"={version}\"")) {
+            format!("{dev}{rest}")
+        } else {
+            value.to_owned()
+        }
+    })
 }
 
 /// The committed manifest, in whichever form, passes `contract`; so do its dev
@@ -111,12 +135,13 @@ pub fn check_forms(manifest: &str, contract: impl Fn(&str) -> Result<(), String>
         contract(form).unwrap();
     }
     let source = format!("{{ git = \"{REPOSITORY}\", branch = \"dev\"");
+    let crates: Vec<_> = dev.lines().filter(|line| line.contains(&source)).collect();
+    let first = crates[0].split_once(" = ").unwrap().0;
+    let pin = format!("\"={}\"", published_version(first));
+    let pinned_first = pinned(crates[0]);
     let mut invalid = vec![
-        release.replace(&format!("\"={}\"", site_release()), "\"=0.1.0\""),
-        release.replace(
-            &format!("\"={}\"", site_release()),
-            &format!("\"{}\"", site_release()),
-        ),
+        release.replacen(&pin, "\"=0.1.0\"", 1),
+        release.replacen(&pin, &pin.replace('=', ""), 1),
         dev.replacen(
             &source,
             &format!("{{ git = \"{REPOSITORY}\", branch = \"main\""),
@@ -135,9 +160,8 @@ pub fn check_forms(manifest: &str, contract: impl Fn(&str) -> Result<(), String>
         dev.replace("rust-version = \"1.95\"", "rust-version = \"1.93\""),
     ];
     // One crate pinned, the rest on dev.
-    let crates: Vec<_> = dev.lines().filter(|line| line.contains(&source)).collect();
     if crates.len() > 1 {
-        invalid.push(dev.replacen(crates[0], &pinned(crates[0]), 1));
+        invalid.push(dev.replacen(crates[0], &pinned_first, 1));
     }
     for invalid in invalid {
         assert!(contract(&invalid).is_err(), "accepted drift: {invalid}");
