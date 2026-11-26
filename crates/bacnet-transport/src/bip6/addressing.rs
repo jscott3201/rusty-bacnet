@@ -29,14 +29,15 @@ impl Bip6Transport {
 
     /// The error for a send while the transport isn't running: the one for
     /// a stopped transport after a stop (#2617), else the one before start.
+    /// It starts again after a stop, so both are
+    /// [`NotRunning`](bacnet_types::error::Lifecycle::NotRunning) (#1833).
+    #[cold]
+    #[inline(never)]
     pub(super) fn not_running(&self) -> Error {
         if self.stop_gate.is_stopped() {
             return crate::port::stopped();
         }
-        Error::Transport(std::io::Error::new(
-            std::io::ErrorKind::NotConnected,
-            "Transport not started",
-        ))
+        super::resolver::not_started()
     }
 
     /// The B/IPv6 address the transport has learned for `vmac`, if any. The
@@ -56,21 +57,20 @@ impl Bip6Transport {
     /// is unicast it works for a foreign device too, and wherever multicast
     /// doesn't reach.
     ///
-    /// Fails with [`TimedOut`](std::io::ErrorKind::TimedOut) when nothing
-    /// answers within three seconds, with
+    /// Fails with an [`Error::Transport`] of kind
+    /// [`TimedOut`](std::io::ErrorKind::TimedOut) when nothing answers
+    /// within three seconds,
     /// [`ConnectionRefused`](std::io::ErrorKind::ConnectionRefused) when the
-    /// node answers with a NAK, with
-    /// [`NotConnected`](std::io::ErrorKind::NotConnected) when the transport
-    /// isn't running, and with
+    /// node answers with a NAK, and
     /// [`QuotaExceeded`](std::io::ErrorKind::QuotaExceeded) when sixteen
-    /// lookups are already running. This is the only place the transport
-    /// turns an IPv6 address into a VMAC: `send_unicast` never does.
+    /// lookups are already running; with an [`Error::State`] of
+    /// [`NotRunning`](bacnet_types::error::Lifecycle::NotRunning) when the
+    /// transport isn't running, before start, after a stop or when a stop
+    /// ends the lookup (#1833). This is the only place the transport turns
+    /// an IPv6 address into a VMAC: `send_unicast` never does.
     pub async fn resolve_virtual_address(&self, peer: SocketAddrV6) -> Result<Bip6Vmac, Error> {
         let Some(local) = self.local_address() else {
-            return Err(Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "Transport not started",
-            )));
+            return Err(self.not_running());
         };
         if peer.ip() == local.ip() && peer.port() == local.port() {
             return Ok(self.source_vmac);

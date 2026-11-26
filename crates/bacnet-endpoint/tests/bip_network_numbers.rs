@@ -189,11 +189,14 @@ async fn a_session_stopped_or_dropped_under_a_live_client_releases_its_port() {
                     .is_err()
             );
             let sent = bounded(client.transport().send_broadcast(&[1, 0])).await;
+            // The B/IP link's stopped state: it starts again (#1833).
             assert!(
                 matches!(
                     &sent,
-                    Err(bacnet_types::error::Error::Transport(io))
-                        if io.kind() == std::io::ErrorKind::NotConnected
+                    Err(bacnet_types::error::Error::State(
+                        bacnet_types::error::Lifecycle::NotRunning,
+                        _
+                    ))
                 ),
                 "bare drop {bare_drop}: {sent:?}"
             );

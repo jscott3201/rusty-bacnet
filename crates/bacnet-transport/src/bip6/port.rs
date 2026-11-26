@@ -558,10 +558,11 @@ impl TransportPort for Bip6Transport {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.registration_closed = true;
         if self.tasks.is_running() {
-            return Err(Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
+            return Err(crate::stopping::start_refused(
+                &self.stop_gate,
                 "BIP6 transport already started",
-            )));
+                "BIP6 transport aborted: stop it before starting again",
+            ));
         }
         let configured_vmac = self
             .device_instance
@@ -841,9 +842,9 @@ impl TransportPort for Bip6Transport {
     /// queued and the call returns at once. A VMAC that failed fails a send
     /// at once for the next ten seconds, unless the transport hears from it.
     ///
-    /// Errors (all [`Error::Transport`]): `NotConnected` before start and
-    /// after stop, a stop included that comes while the send waits for the
-    /// resolution;
+    /// Errors: an [`Error::State`] of [`Lifecycle::NotRunning`] before start
+    /// and after stop, a stop included that comes while the send waits for
+    /// the resolution (#1833); otherwise an [`Error::Transport`] of kind
     /// `InvalidInput` for a MAC that isn't three octets, or this node's own
     /// VMAC; `TimedOut` when nothing answered the resolution;
     /// `ConnectionRefused` when the BBMD refused to pass it on and nothing
@@ -869,10 +870,12 @@ impl TransportPort for Bip6Transport {
             // Waiting for the BBMD's host name: no hold queue, so refused.
             let Some(bbmd_addr) = fd.bbmd_addr() else {
                 fd.broadcast_refused();
-                return Err(Error::Transport(std::io::Error::new(
-                    std::io::ErrorKind::NotConnected,
+                // A state of this node, not a link failure, as B/IP's
+                // refusal of a broadcast before its BBMD is known (#1833).
+                return Err(Error::state(
+                    Lifecycle::NotConnected,
                     "the foreign device's BBMD isn't known yet: its host name hasn't resolved",
-                )));
+                ));
             };
             let mut buf = BytesMut::new();
             encode_bvll6(

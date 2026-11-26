@@ -1,7 +1,8 @@
-//! What the full client's source Audit holds and lets go (#2617): a stop
-//! cuts an operation off and records nothing, a caller that gives up
-//! before admission sends nothing, requests the Reporter doesn't cover go
-//! as they are, and a segmented request takes the same path.
+//! What the full client's source Audit holds and lets go (#2617): the
+//! session's stop cuts an operation off and records nothing, the client's
+//! records one that went out with its outcome unknown, a caller that gives
+//! up before admission sends nothing, requests the Reporter doesn't cover
+//! go as they are, and a segmented request takes the same path.
 use super::*;
 use bacnet_encoding::apdu::{SegmentAck, UnconfirmedRequest};
 use bacnet_services::file::FileWriteAccessMethod;
@@ -10,10 +11,13 @@ use bacnet_services::who_is::IAmRequest;
 use bacnet_types::enums::{MessagePriority, Segmentation};
 
 /// An audited read waiting for its answer when the session stops gets an
-/// error, frees its invoke ID and records nothing. So does one whose
-/// caller went away, cut off by the client's own stop or drop.
+/// error, frees its invoke ID and records nothing. One whose caller went
+/// away, cut off by the client's own stop or drop after it went out, may
+/// have been carried out, so it is recorded, as a request whose retry
+/// DeviceCommunicationControl withheld is, with COMMUNICATION, OTHER for
+/// its unknown outcome (#1833).
 #[tokio::test(start_paused = true)]
-async fn an_audited_operation_cut_off_by_a_stop_is_not_recorded() {
+async fn an_audited_operation_cut_off_by_a_stop_is_recorded_unless_the_session_stopped() {
     let (peer, mut requests) = network().await;
     let (sink, mut records) = network().await;
     for cut in ["session stop", "client stop", "client drop"] {
@@ -28,6 +32,7 @@ async fn an_audited_operation_cut_off_by_a_stop_is_not_recorded() {
             None,
         );
         let request = receive(&mut requests).await;
+        let (invoke, rp) = read_request(&request);
         if cut == "session stop" {
             session.stop().await.unwrap();
             assert!(timeout(WAIT, read).await.unwrap().unwrap().is_err());
@@ -61,19 +66,32 @@ async fn an_audited_operation_cut_off_by_a_stop_is_not_recorded() {
             }
             drop(client);
         }
-        let (invoke, rp) = read_request(&request);
         send(&peer, &request.source_mac, ack(invoke, &rp)).await;
         eventually(WAIT, "invoke IDs are free", async || {
             session.coordinator.active_count().unwrap() == 0
         })
         .await;
-        assert!(
-            timeout(Duration::from_millis(100), records.recv())
-                .await
-                .is_err(),
-            "{cut}"
-        );
-        if cut != "session stop" {
+        if cut == "session stop" {
+            assert!(
+                timeout(Duration::from_millis(100), records.recv())
+                    .await
+                    .is_err(),
+                "{cut}"
+            );
+        } else {
+            let (record, _) = notification(&receive(&mut records).await, false);
+            assert_eq!(record.invoke_id, Some(invoke), "{cut}");
+            assert_eq!(
+                record.result,
+                Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER)),
+                "{cut}"
+            );
+            assert!(
+                timeout(Duration::from_millis(100), records.recv())
+                    .await
+                    .is_err(),
+                "{cut}: one record"
+            );
             session.stop().await.unwrap();
         }
     }
@@ -450,8 +468,9 @@ async fn an_unaudited_service_and_an_unconfirmed_send_go_as_they_are() {
 }
 
 /// A client dropped with an audited request in flight, then a new client
-/// on the same session: the first request is not recorded, the new
-/// client's is, and every invoke ID comes back.
+/// on the same session: the first request, which went out, is recorded
+/// with its outcome unknown (#1833), the new client's with its success,
+/// each once, and every invoke ID comes back.
 #[tokio::test(start_paused = true)]
 async fn a_new_client_after_one_dropped_mid_request_is_audited_alone() {
     let (peer, mut requests) = network().await;
@@ -473,8 +492,14 @@ async fn a_new_client_after_one_dropped_mid_request_is_audited_alone() {
         panic!("the read's task let its client go")
     };
     drop(client);
-    let client = client_of(&session);
     let (invoke, rp) = read_request(&first);
+    let (record, _) = notification(&receive(&mut records).await, false);
+    assert_eq!(record.invoke_id, Some(invoke));
+    assert_eq!(
+        record.result,
+        Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER))
+    );
+    let client = client_of(&session);
     send(&peer, &first.source_mac, ack(invoke, &rp)).await;
     let read = start_read(
         &client,
@@ -488,6 +513,7 @@ async fn a_new_client_after_one_dropped_mid_request_is_audited_alone() {
     assert!(timeout(WAIT, read).await.unwrap().unwrap().is_ok());
     let (record, _) = notification(&receive(&mut records).await, false);
     assert_eq!(record.invoke_id, Some(invoke));
+    assert_eq!(record.result, None);
     assert!(
         timeout(Duration::from_millis(100), records.recv())
             .await

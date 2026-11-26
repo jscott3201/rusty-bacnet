@@ -357,7 +357,7 @@ class FullClientTests(unittest.IsolatedAsyncioTestCase):
         # open requests and releases the link, then the client closes.
         await asyncio.wait_for(self.endpoint.close(), 1.5)
         for read in reads:
-            with self.assertRaisesRegex(rb.BacnetError, "the client stopped while it waited"):
+            with self.assertRaisesRegex(rb.BacnetError, "after it went out, and the device may have carried it out"):
                 await asyncio.wait_for(read, 1)
         self.assertLess(loop.time() - started, 1.5)
         with self.assertRaisesRegex(RuntimeError, "ran on an endpoint"):

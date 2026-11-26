@@ -4979,6 +4979,31 @@ class BacnetTransportError(BacnetError, OSError):
     an authenticated peer or a history of background reconnect failures.
     """
 
+class BacnetStateError(BacnetError, RuntimeError):
+    """Raised when a call is refused for the state its component is in
+    (#1833): a send on a transport that isn't started or has stopped (a
+    router-application client's router closed, say), a second start, a
+    channel closed under the call, or a BACnet/SC node whose hub connection
+    isn't up. Nothing was done, and the link did not fail: ``except
+    BacnetTransportError`` does not catch it. Also a ``RuntimeError``, which
+    the bindings' own "not started" checks raise, so ``except RuntimeError``
+    catches both.
+
+    A request that went out before the client or its link stopped under it
+    is not one: it raises ``BacnetError`` whose message says the device may
+    have carried it out.
+
+    Attributes:
+        state: Which state refused the call: ``"not_running"`` (not started
+            yet, or stopped and able to start again), ``"closed"`` (stopped
+            for good, or the channel closed), ``"stopping"`` (a stop is under
+            way, or an abort ended it and a start waits for the stop to
+            finish), ``"already_started"`` (a second start) or
+            ``"not_connected"`` (running, but its hub or BBMD isn't
+            connected). None on the class.
+    """
+    state: Literal["already_started", "not_running", "stopping", "not_connected", "closed"] | None
+
 
 # ---------------------------------------------------------------------------
 # Serial ports
@@ -5246,8 +5271,9 @@ class Bip6ForeignRegistrationStatus(TypedDict):
     true. ``bbmd_name`` is the host name the BBMD is known by,
     ``"host:port"`` (configured, or written to FD_BBMD_Address), or None for
     a BBMD known by address; a waiting device waits for it. While waiting,
-    nothing is registered, broadcasts are refused (counted in
-    ``broadcasts_refused``), and the name is tried again 30 seconds after
+    nothing is registered, broadcasts are refused with BacnetStateError
+    (``state`` ``"not_connected"``) and counted in ``broadcasts_refused``,
+    and the name is tried again 30 seconds after
     each failure. ``bbmd_lookups``, ``bbmd_lookup_failures`` and
     ``last_bbmd_lookup_failure`` are as in ``ForeignRegistrationStatus``,
     with ``"no_ipv6_address"`` for a name with no IPv6 address. The
@@ -6199,8 +6225,8 @@ class BACnetClient:
         ``_from_device`` / ``_to_device`` methods. The local scope is each
         of the router's networks (#2601). A send to an ``ip:port`` names no
         one of them and raises BacnetError. Once the router closes,
-        each request fails at once with BacnetTransportError (errno
-        ENOTCONN); stop the client as usual. With
+        each request fails at once with BacnetStateError (state
+        ``"closed"``), with nothing sent; stop the client as usual. With
         ``application="client_and_server"`` the APDU timeout must be under
         60000 ms. ``router`` without ``transport="router"``, or the reverse,
         raises ValueError.
@@ -6748,7 +6774,8 @@ class BACnetClient:
         that can't send the query for its own state or kind, such as a
         BACnet/SC link not connected to its hub, or a router-application
         client's link, which carries APDUs only, raises what that send's
-        error raises (BacnetError for both), not ValueError. A
+        error raises (BacnetStateError with state ``"not_connected"`` for
+        the first, BacnetError for the second), not ValueError. A
         RoutedTarget selects the remote router, using its explicit or cached
         next hop. Without either, one router-discovery window of up to
         ``wait`` seconds must identify a single local next hop for its network.
@@ -11917,7 +11944,7 @@ class BACnetRouter:
     between a ``BACnetClient`` and a ``BACnetServer``. Build each with
     ``transport="router", router=router``; each takes its share when it
     starts, once per router start. Closing the router ends both shares:
-    their requests then fail with BacnetTransportError, and a restarted
+    their requests then fail with BacnetStateError, and a restarted
     router makes new shares for newly started stacks. The network-control
     receiver stays internal.
 

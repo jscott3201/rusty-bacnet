@@ -28,18 +28,25 @@ use super::decode::{placeholder_count, write_label};
 /// a time (a lock, a lease, a seat) that another holder has is a cap of one
 /// reached, [`Error::LimitReached`](super::Error::LimitReached): the call
 /// may succeed once the holder lets go. And an I/O failure the operating
-/// system or a socket reported is `Error::Transport`, as is a send on a
-/// transport that has stopped.
+/// system or a socket reported is `Error::Transport`.
 ///
-/// The transport reports `AlreadyStarted`, `NotConnected` and `Closed`, and
-/// the network layer and the router's application port `AlreadyStarted`.
+/// A transport reports `AlreadyStarted` for a second start, `NotRunning`
+/// for a send before start or, when it can start again (B/IP, B/IPv6,
+/// Ethernet), after a stop, `Closed` for a send after the stop of one that
+/// can't (a loopback, BACnet/SC, MS/TP), and `NotConnected` while its hub
+/// or BBMD isn't known. Nothing of such a send was attempted. The network
+/// layer and the router's application port report `AlreadyStarted`, and
+/// the router's application port, its replies and the network layer's
+/// sealed responses `Closed`.
 /// The endpoint's session and ingress report all but `NotConnected`,
 /// deciding between `NotRunning`, `Stopping` and `Closed` from their own
 /// state. The server reports `Closed` once its stop has begun or a cleanup
 /// task failed, and the client `Stopping` while its seat's node stops and
-/// `Closed` once its seat or its coordinator has closed. A request the client's stop cut off is not a
-/// lifecycle state but its own outcome,
-/// [`Error::RequestCutOff`](super::Error::RequestCutOff).
+/// `Closed` once its seat or its coordinator has closed. A request that
+/// went out before the client or its link stopped under it, or the client's
+/// stop cut off while it waited, is not a lifecycle state but its own
+/// outcome, [`Error::RequestCutOff`](super::Error::RequestCutOff): a state
+/// refusal promises nothing of the request went out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Lifecycle {
@@ -51,7 +58,8 @@ pub enum Lifecycle {
     /// or it stopped in a way that lets it start again.
     NotRunning,
     /// A stop has begun and not finished; the call is refused while it
-    /// completes.
+    /// completes. Also a transport an abort ended, whose start is refused
+    /// until a stop has joined what the abort left.
     Stopping,
     /// Running, but its session with the peer it works through, such as a
     /// BACnet/SC node's hub, is not up.
@@ -59,6 +67,29 @@ pub enum Lifecycle {
     /// Closed for good: it can't be started again, or the channel to it
     /// closed under the call.
     Closed,
+}
+
+impl Lifecycle {
+    /// The state's name in lowercase snake case, which stays the same from
+    /// release to release (#1833): `already_started`, `not_running`,
+    /// `stopping`, `not_connected` or `closed`. The Python bindings give it
+    /// as `BacnetStateError.state`.
+    ///
+    /// ```
+    /// use bacnet_types::error::Lifecycle;
+    ///
+    /// assert_eq!(Lifecycle::NotRunning.name(), "not_running");
+    /// ```
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::AlreadyStarted => "already_started",
+            Self::NotRunning => "not_running",
+            Self::Stopping => "stopping",
+            Self::NotConnected => "not_connected",
+            Self::Closed => "closed",
+        }
+    }
 }
 
 /// The text of a local refusal (#1833), for a person to read: a static
@@ -196,6 +227,21 @@ mod tests {
             (Error::LimitReached(label), "3 of 4 slots"),
         ] {
             assert_eq!(error.to_string(), text);
+        }
+    }
+
+    /// Each state's name is the one the Python bindings expose, which a
+    /// script may compare: pinned (#1833).
+    #[test]
+    fn each_state_keeps_its_name() {
+        for (state, name) in [
+            (Lifecycle::AlreadyStarted, "already_started"),
+            (Lifecycle::NotRunning, "not_running"),
+            (Lifecycle::Stopping, "stopping"),
+            (Lifecycle::NotConnected, "not_connected"),
+            (Lifecycle::Closed, "closed"),
+        ] {
+            assert_eq!(state.name(), name);
         }
     }
 

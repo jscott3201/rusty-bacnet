@@ -721,8 +721,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
     /// Stop through a shared reference (#2617): the hub hears a
     /// Disconnect-Request and a close, within the stop's budget, the direct
     /// links end, the receive task is joined, and the hub socket is taken
-    /// out, after which every send fails with [`crate::port::stopped`]'s
-    /// error. The transport does not start again.
+    /// out, after which every send fails with
+    /// [`crate::port::stopped_for_good`]'s error. The transport does not
+    /// start again.
     async fn stop(&self) -> Result<(), Error> {
         let Some(stopping) = self.stop_gate.enter().await else {
             return Ok(());

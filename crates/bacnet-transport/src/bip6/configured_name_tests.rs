@@ -136,8 +136,19 @@ async fn a_failing_name_waits_and_registers_once_it_resolves() {
     assert!(waiting.waiting_for_bbmd);
     assert_eq!(waiting.bbmd, None);
     assert_eq!((waiting.lookups.lookups, waiting.lookups.failures), (1, 1));
+    // Refused as B/IP refuses one before its BBMD is known: a state of
+    // this node, not a failure of the link (#1833).
     let refused = transport.send_broadcast(&[0x01, 0x00]).await;
-    assert!(refused.is_err(), "{refused:?}");
+    assert!(
+        matches!(
+            &refused,
+            Err(bacnet_types::error::Error::State(
+                bacnet_types::error::Lifecycle::NotConnected,
+                _
+            ))
+        ),
+        "{refused:?}"
+    );
     assert_eq!(status(&transport).broadcasts_refused, 1);
     assert_eq!(status(&transport).registrations_sent, 0);
 

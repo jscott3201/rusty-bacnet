@@ -221,7 +221,15 @@ async fn held_broadcasts_count_as_discarded_when_the_node_stops() {
     // stop, or by a call that raced it (stopped between the call's read of
     // the link and its admission), fails as a stopped transport's send does
     // (#2617), and a second stop drops nothing more.
-    let is_stopped = |sent: Result<(), bacnet_types::error::Error>| matches!(sent, Err(bacnet_types::error::Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected);
+    let is_stopped = |sent: Result<(), bacnet_types::error::Error>| {
+        matches!(
+            sent,
+            Err(bacnet_types::error::Error::State(
+                bacnet_types::error::Lifecycle::NotRunning,
+                _
+            ))
+        )
+    };
     assert!(is_stopped(broadcast(&device, 3).await));
     let raced = Device::new(Duration::from_secs(10)).await;
     let stopper = Arc::clone(&raced.ctx.node);

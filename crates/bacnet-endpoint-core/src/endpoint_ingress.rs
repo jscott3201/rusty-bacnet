@@ -687,6 +687,22 @@ enum EgressDrive {
     Exit(ClassifierExit),
 }
 
+/// A deadline-bound send whose deadline passed (#1833): before the send
+/// began (`started` false: nothing went), or while the transport carried
+/// it (it may have gone). This side's link didn't carry it in time, so an
+/// I/O timeout of the link, not [`Error::Timeout`], which says a peer gave
+/// no answer.
+#[cold]
+#[inline(never)]
+fn send_deadline_expired(started: bool) -> Error {
+    let text = if started {
+        "endpoint send deadline expired"
+    } else {
+        "endpoint send expired before execution"
+    };
+    Error::Transport(std::io::Error::new(std::io::ErrorKind::TimedOut, text))
+}
+
 // A select! result consumed on the spot, never stored: boxing the APDU would
 // add a heap allocation per APDU received while a send is in flight.
 #[allow(clippy::large_enum_variant)]
@@ -718,9 +734,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
         || deadline.is_some_and(|deadline| deadline <= tokio::time::Instant::now())
     {
         let _ = completion.send(EndpointSendOutcome {
-            result: Err(Error::Encoding(
-                "endpoint send expired before execution".into(),
-            )),
+            result: Err(send_deadline_expired(false)),
             attempted: false,
         });
         return EgressDrive::Complete;
@@ -759,7 +773,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
                     _ = &mut *cancel_rx => PendingEvent::Cancelled,
                     _ = &mut expiry => {
                         let _ = completion.send(EndpointSendOutcome {
-                            result: Err(Error::Encoding("endpoint send deadline expired".into())), attempted: true,
+                            result: Err(send_deadline_expired(true)), attempted: true,
                         });
                         return EgressDrive::Complete;
                     },
@@ -773,7 +787,7 @@ async fn drive_network_service<T: TransportPort + 'static>(
                     _ = &mut *cancel_rx => PendingEvent::Cancelled,
                     _ = &mut expiry => {
                         let _ = completion.send(EndpointSendOutcome {
-                            result: Err(Error::Encoding("endpoint send deadline expired".into())), attempted: true,
+                            result: Err(send_deadline_expired(true)), attempted: true,
                         });
                         return EgressDrive::Complete;
                     },

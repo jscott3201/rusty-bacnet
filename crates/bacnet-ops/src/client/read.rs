@@ -163,17 +163,19 @@ pub fn unreachable(error: &Error) -> bool {
 /// - [`Error::Encoding`], the untyped error of the crates #1833 has not
 ///   reached yet: the client's or the link's own failure there too.
 /// - The local refusals #1833 typed out of it: [`Error::State`] (a
-///   BACnet/SC link that isn't connected to its hub, a closed loopback
-///   channel, a client seat that has closed), [`Error::InvalidConfig`],
-///   [`Error::InvalidArgument`] (a MAC of the wrong form for the link, or a
-///   router's application given a station that names no network),
-///   [`Error::Unsupported`] and [`Error::LimitReached`] (a client out of
-///   invoke IDs). Each is the client's or the link's own refusal. A stopped
-///   transport's send is [`Error::Transport`], which [`unreachable()`]
-///   counts instead.
-/// - [`Error::RequestCutOff`]: the client's own stop, or its node's, ended
-///   the request before an answer came. With `sent: true` it **may already
-///   have left**, and the device may have carried it out.
+///   transport not started or stopped, a router-application client's
+///   router closed, a BACnet/SC link that isn't connected to its hub, a
+///   closed loopback channel, a client seat that has closed),
+///   [`Error::InvalidConfig`], [`Error::InvalidArgument`] (a MAC of the
+///   wrong form for the link, or a router's application given a station
+///   that names no network), [`Error::Unsupported`] and
+///   [`Error::LimitReached`] (a client out of invoke IDs). Each is the
+///   client's or the link's own refusal: a stopped local link is not a
+///   device that stopped answering, so [`unreachable()`] doesn't count it.
+/// - [`Error::RequestCutOff`]: the client or its link stopped under the
+///   request before an answer came (the client's own stop, its node's, or
+///   the link's after the request went out). With `sent: true` it **may
+///   already have left**, and the device may have carried it out.
 ///
 /// So a failure here is not "never sent", and nothing may send again on the
 /// strength of one: reads only stop on it, since the client, not the
@@ -184,7 +186,7 @@ pub fn unreachable(error: &Error) -> bool {
 /// needs segments the client or the device can't use
 /// ([`Error::Segmentation`]), is not one: a smaller request may pass, so
 /// those fall back as an answer too large does ([`rpm_failure`]).
-pub(crate) fn failed_locally(error: &Error) -> bool {
+pub fn failed_locally(error: &Error) -> bool {
     matches!(
         error,
         Error::Encoding(_)

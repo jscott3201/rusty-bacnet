@@ -11,7 +11,7 @@ use std::io;
 use std::net::SocketAddrV6;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle};
 use bacnet_types::sync::MutexExt;
 use tokio::sync::{Notify, oneshot};
 use tokio::time::Instant;
@@ -291,17 +291,30 @@ impl Resolver {
     }
 }
 
+/// A send or lookup a stop ended while it waited for a resolution: the
+/// NPDU was not sent. The transport starts again, so
+/// [`Lifecycle::NotRunning`] (#1833).
+#[cold]
+#[inline(never)]
 fn stopped() -> Error {
-    failed(
-        io::ErrorKind::NotConnected,
-        "the B/IPv6 transport stopped while resolving".to_string(),
+    Error::state(
+        Lifecycle::NotRunning,
+        "the B/IPv6 transport stopped while resolving",
     )
+}
+
+/// The error for a send before start (#1833): it can start, so
+/// [`Lifecycle::NotRunning`].
+#[cold]
+#[inline(never)]
+pub(super) fn not_started() -> Error {
+    Error::state(Lifecycle::NotRunning, "Transport not started")
 }
 
 /// The error for a send or lookup while the transport isn't running.
 fn not_running(closed: Closed) -> Error {
     match closed {
-        Closed::NotStarted => failed(io::ErrorKind::NotConnected, "Transport not started".into()),
+        Closed::NotStarted => not_started(),
         Closed::Stopped => crate::port::stopped(),
     }
 }

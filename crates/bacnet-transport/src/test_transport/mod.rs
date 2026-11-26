@@ -59,7 +59,7 @@ use std::sync::{Arc, PoisonError};
 use bacnet_npdu::NpduLimits;
 use bacnet_types::MacAddr;
 use bacnet_types::data_link::DataLink;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle};
 use bytes::Bytes;
 use tokio::sync::{mpsc, watch};
 
@@ -498,10 +498,10 @@ impl TransportPort for TestTransport {
         self.shared.starts.fetch_add(1, Ordering::SeqCst);
         // As on a real link, a start after an abort waits for a stop.
         if self.stop_gate.is_aborted() {
-            return Err(Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
+            return Err(Error::state(
+                Lifecycle::Stopping,
                 "test transport aborted: stop it before starting again",
-            )));
+            ));
         }
         self.shared.stopped.store(false, Ordering::Release);
         self.stop_gate.open();

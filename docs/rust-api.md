@@ -393,14 +393,19 @@ the OS error kept as the source and an NPDU too long for the link as
 endpoint session or ingress that is not running says why with its
 `Lifecycle`: `NotRunning` before its start, `Stopping` while a stop runs, and
 `Closed` once stopped or shut, since each starts once. A stopped server's
-broadcaster and a closed client seat are `Closed` too. A confirmed request
-its client's stop cut off is no lifecycle refusal but its own outcome,
-`Error::RequestCutOff { sent }`. A server answers each of its own refusals
-with the Error PDU SERVICES / OTHER, as it answered their text. A stopped
-transport's send still fails with
-`Error::Transport` of kind `NotConnected`, which the client and the bindings
-treat as a link that is down; it moves to `State(NotRunning)` in a change of
-its own.
+broadcaster and a closed client seat are `Closed` too. A request that
+ended because the client or its link stopped under it is no lifecycle
+refusal but its own outcome, `Error::RequestCutOff { sent }`: so is a
+request that went out before its link stopped, whose retry or later segment
+the stopped link then refused. A server answers each of its own refusals
+with the Error PDU SERVICES / OTHER, as it answered their text. A send on a
+transport that isn't started, or has stopped, is a lifecycle refusal too: `NotRunning`
+before start and after the stop of a transport that starts again, `Closed`
+after the stop of one that doesn't, and a second start `AlreadyStarted`
+(below). Nothing of such a send was attempted, and nothing of its request had gone out: the client's source Audit
+doesn't count it, `bacnet-ops` treats it as the client's own failure rather
+than a device that stopped answering, a router draws no reject from it, and
+the bindings raise `BacnetStateError`.
 
 `Error::UnsupportedTransport { required, actual }` reports an operation the
 endpoint's data link cannot carry, such as a BBMD request through an
@@ -1047,8 +1052,10 @@ Transport-layer implementations. All implement the `TransportPort` trait.
 `TransportPort::stop` takes `&self` (#2617), and so does `NetworkLayer::stop`:
 the owner of a link stops it while a client or another holder of the
 `Arc<NetworkLayer>` still has it. Once a stop returns, every send fails with
-an `Error::Transport` of kind `NotConnected`, the kind a send before start
-gets (`bacnet_transport::port::stopped()` makes one); the receiver `start`
+an `Error::State` (#1833): `NotRunning`, the state a send before start finds,
+for a transport that starts again (`bacnet_transport::port::stopped()` makes
+one), and `Closed` for one that doesn't (`port::stopped_for_good()`); a
+second start while it runs is `AlreadyStarted`. The receiver `start`
 returned yields what was queued and then ends; the background tasks are joined;
 and sockets and Network Port leases are let go of, so the port can be bound
 again at once. A send already under way may finish. A stop is idempotent, and
@@ -1063,7 +1070,7 @@ while others still hold it, as a dropped `EndpointSession` does under a
 live `client()`. An abort never waits and needs no runtime: the background
 tasks are aborted, not joined, so their sockets close as the runtime drops
 them; the transport lets go of what it holds itself; every later send fails
-with the same `NotConnected` error as after a stop; and nothing graceful
+with the same `Error::State` as after a stop; and nothing graceful
 goes out (no BACnet/SC Disconnect-Request). The aborted tasks stay with
 the transport: a stop after an abort joins them, and until that stop a
 start is refused; after it, B/IP, B/IPv6 and Ethernet start again as after
@@ -1565,7 +1572,7 @@ address found becomes the registration's once the start succeeds: a start that
 fails later keeps the name, and the next start looks it up again. On an
 explicit interface the start goes ahead and the device waits: no registration, no
 Address-Resolution, no Forwarded-NPDU or Forwarded-Address-Resolution taken, and its
-broadcasts are refused (`NotConnected`) and counted, since B/IPv6 keeps no hold
+broadcasts are refused (`Error::State` of `NotConnected`, as B/IP's before its BBMD is known) and counted, since B/IPv6 keeps no hold
 queue. The name is tried again 30 seconds after the newest failure, and the first
 usable answer registers at once. A stop ends the retry; a restart looks the name up
 at once.
@@ -14041,17 +14048,17 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::UnsupportedTransport { required, actual }` | The client's data link cannot carry the operation (a BBMD helper on a non-B/IP transport) |
 | `Error::Decoding(DecodeError)` | Malformed received data, with its offset and `DecodingKind` |
 | `Error::Encode(EncodeError)`, `Error::Range(RangeError)` | A value an encoder, validator or constructor refused, with a static label |
-| `Error::State(Lifecycle, Refusal)` | A call the component's lifecycle state refuses: already started, not running, stopping, not connected to its peer, or closed (#1833) |
+| `Error::State(Lifecycle, Refusal)` | A call the component's lifecycle state refuses, with nothing done: already started, not running, stopping, not connected to its peer, or closed (#1833). A send on a transport that isn't started gets `NotRunning`; after a stop, `NotRunning` from one that starts again (B/IP, B/IPv6, Ethernet; `bacnet_transport::port::stopped`) and `Closed` from one that doesn't (loopback, BACnet/SC, MS/TP, a router's application port; `stopped_for_good`). It is the client's own refusal: the source Audit doesn't count it as attempted, and `bacnet-ops` as failed locally, not unreachable. `Lifecycle::name()` gives the state's stable name, which Python exposes as `BacnetStateError.state` |
 | `Error::InvalidConfig(Refusal)` | What the component is built or started with (a value given to a builder's setter, an option, a table it is configured with) refused |
 | `Error::InvalidArgument(Refusal)` | A value refused at the call that hands it over, even one the component would keep, or text parsed once, before anything was sent, such as a MAC of the wrong form for the link |
 | `Error::Unsupported(Refusal)` | Not offered on this platform, in this build, or by this kind of component |
 | `Error::LimitReached(Refusal)` | A resource cap reached: a full table, a counter run out, a one-holder resource another holds |
 | `Error::SendTooLong { length, limit }` | A send refused for its length before anything was written: an NPDU too long for B/IP, MS/TP or Ethernet, and BACnet/SC's NPDU and frame bounds (#1833). A router answers it with reject reason 4; the high-level client asks again with smaller requests |
-| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (objects, device-core and the crates above the client and server), and, until their own change, an endpoint's send that waited past its deadline, a server's audit forwarding that ran out of time, and `resolve_device` for an instance not in the client's table |
-| `Error::Transport(io_error)` | Transport I/O failure, with the OS error as its source where one caused it: a socket's, a serial port's open, read or write, GPIO, the RS-485 ioctl, entropy (#1833), an SC dial's TLS handshake; and a stopped transport's send (`NotConnected`) |
+| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (objects, device-core and the crates above the client and server) |
+| `Error::Transport(io_error)` | Transport I/O failure, with the OS error as its source where one caused it: a socket's, a serial port's open, read or write, GPIO, the RS-485 ioctl, entropy (#1833), an SC dial's TLS handshake. A send this side's link didn't carry before its deadline (an endpoint's deadline-bound send, a server's audit forwarding) is one of kind `TimedOut`, not `Error::Timeout` (#1833). A stopped transport's send is `Error::State` |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
-| `Error::RequestCutOff { sent }` | The client's stop, or its endpoint's or node's, ended a confirmed request before an answer came (#1833). `sent: false`: it was still waiting for its turn and nothing left. `sent: true`: it, or some of its segments, may have gone out and been carried out, so don't send a write again blindly. The text says which; an endpoint whose audited request's task its stop ended reports it with `sent: true` too |
-| `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles); a server's audit send to a recipient with no router known fails this way too, and counts as not sent |
+| `Error::RequestCutOff { sent }` | A request ended before an answer came because the client or its link stopped under it (#1833): the client's stop, its endpoint's or node's, or the link stopping after the request went out, refusing its retry or a later segment or dropping a B/IP BVLC management request's wait. `sent: false`: it was still waiting for its turn and nothing left. `sent: true`: it, or some of its segments, may have gone out and been carried out, so don't send a write again blindly. The text says which; an endpoint whose audited request's task its stop ended reports it with `sent: true` too. The source Audit records one with `sent: true`, its outcome unknown (COMMUNICATION, OTHER), and not one with `sent: false` |
+| `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles); `BACnetClient::resolve_device` and the calls that look a device up by its instance refuse an instance the table doesn't hold this way (#1833); a server's audit send to a recipient with no router known fails this way too, and counts as not sent |
 
 ---
 

@@ -691,10 +691,11 @@ fn a_disabled_node_fails_locally() {
 }
 
 /// The local refusals #1833 typed out of the encoding error fail locally,
-/// as it did; a stopped transport's not-connected error is a link that is
-/// down instead.
+/// as it did, and so does a send on a stopped transport (#1833): a stopped
+/// local link is the client's own state, not a device that stopped
+/// answering. A link that failed a send is still unreachable.
 #[test]
-fn local_refusals_fail_locally_and_a_stopped_link_is_unreachable() {
+fn local_refusals_and_a_stopped_link_fail_locally() {
     use bacnet_types::error::{Error, Lifecycle};
     for error in [
         Error::state(
@@ -705,16 +706,16 @@ fn local_refusals_fail_locally_and_a_stopped_link_is_unreachable() {
         Error::invalid_argument("a unicast can't go to a group address"),
         Error::unsupported("transport reports no B/IP link or data link"),
         Error::limit_reached("no room to hold a broadcast until registration"),
+        bacnet_transport::port::stopped(),
+        bacnet_transport::port::stopped_for_good(),
     ] {
         assert!(super::failed_locally(&error), "{error}");
         assert!(!super::unreachable(&error), "{error}");
+        assert!(!super::timed_out(&error), "{error}");
     }
-    let stopped = Error::Transport(std::io::Error::new(
-        std::io::ErrorKind::NotConnected,
-        "transport stopped",
-    ));
-    assert!(!super::failed_locally(&stopped), "{stopped}");
-    assert!(super::unreachable(&stopped), "{stopped}");
+    let failed = Error::Transport(std::io::Error::other("send failed"));
+    assert!(!super::failed_locally(&failed), "{failed}");
+    assert!(super::unreachable(&failed), "{failed}");
 }
 
 /// A request the client's stop cut off fails locally, as its untyped text

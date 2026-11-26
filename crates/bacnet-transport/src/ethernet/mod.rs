@@ -277,7 +277,7 @@ pub fn decode_ethernet_frame(data: &[u8]) -> Result<EthernetFrame, Error> {
 mod transport {
     use super::*;
     use bacnet_types::data_link::DataLink;
-    use bacnet_types::error::Refusal;
+    use bacnet_types::error::{Lifecycle, Refusal};
     use bacnet_types::sync::RwLockExt;
     use nix::ifaddrs::getifaddrs;
     use nix::net::if_::if_nametoindex;
@@ -389,6 +389,19 @@ mod transport {
         pub fn reply_send_failures(&self) -> u64 {
             self.reply_failures.count()
         }
+    }
+
+    /// What a send gets while the transport isn't running (#1833): the
+    /// error for a stopped transport once `stopped`, else the one before
+    /// start. The transport starts again after a stop, so both are
+    /// [`Lifecycle::NotRunning`].
+    #[cold]
+    #[inline(never)]
+    fn not_running(stopped: bool) -> Error {
+        if stopped {
+            return crate::port::stopped();
+        }
+        Error::state(Lifecycle::NotRunning, "Transport not started")
     }
 
     /// An error about the interface `name`, of `kind`.
@@ -561,10 +574,11 @@ mod transport {
 
         async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
             if self.tasks.is_running() {
-                return Err(Error::Transport(std::io::Error::new(
-                    std::io::ErrorKind::AlreadyExists,
+                return Err(crate::stopping::start_refused(
+                    &self.stop_gate,
                     "Ethernet transport already started",
-                )));
+                    "Ethernet transport aborted: stop it before starting again",
+                ));
             }
 
             let link = interface_link(&self.interface_name)?;
@@ -715,15 +729,9 @@ mod transport {
         async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
             // Held over the synchronous send only: there is no await here.
             let socket = self.socket.read_locked();
-            let socket = socket.as_ref().ok_or_else(|| {
-                if self.stop_gate.is_stopped() {
-                    return crate::port::stopped();
-                }
-                Error::Transport(std::io::Error::new(
-                    std::io::ErrorKind::NotConnected,
-                    "Transport not started",
-                ))
-            })?;
+            let socket = socket
+                .as_ref()
+                .ok_or_else(|| not_running(self.stop_gate.is_stopped()))?;
 
             if mac.len() != 6 {
                 return Err(Error::InvalidArgument(

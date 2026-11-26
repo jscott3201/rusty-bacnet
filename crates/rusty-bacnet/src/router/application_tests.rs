@@ -94,13 +94,12 @@ async fn the_wrapped_port_is_the_router_port_and_has_no_link() {
         Err(Error::InvalidArgument(message)) if message.to_string().contains("names no one station")
     ));
     router.stop().await.unwrap();
-    // Every send after the router stops fails as not connected.
+    // Every send after the router stops fails as this side's closed state
+    // (#1833), not as a link's failure.
     let global_who_is = [0x01, 0x20, 0xFF, 0xFF, 0x00, 0xFF, 0x10, 0x08];
     match transport.send_broadcast(&global_who_is).await {
-        Err(Error::Transport(error)) => {
-            assert_eq!(error.kind(), std::io::ErrorKind::NotConnected);
-        }
-        other => panic!("expected a transport error, got {other:?}"),
+        Err(Error::State(bacnet_types::error::Lifecycle::Closed, _)) => {}
+        other => panic!("expected the closed state, got {other:?}"),
     }
     transport.stop().await.unwrap();
 }

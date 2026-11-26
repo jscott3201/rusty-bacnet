@@ -390,3 +390,72 @@ async fn a_peer_answering_segment_zero_late_stays_remembered() {
     assert_eq!(rig.remembers(), Some(true), "a late answer forgets nothing");
     rig.stop().await;
 }
+
+/// Segment zero went out and its answer granted the window; the client's
+/// link then refused the next segment's first send for its state, as a
+/// link that stopped does (#1833). The request ends cut off as one that
+/// went out, not with that refusal, which says nothing was done.
+#[tokio::test(start_paused = true)]
+async fn a_later_segment_its_stopped_link_refuses_ends_the_request_cut_off_as_sent() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let config = ClientConfig {
+        apdu_timeout_ms: TSEG.as_millis() as u64,
+        apdu_retries: 0,
+        max_apdu_length: 50,
+        proposed_window_size: 2,
+        ..ClientConfig::default()
+    };
+    let (inbound, inbound_rx) = mpsc::channel(16);
+    let (frames_tx, mut frames) = mpsc::unbounded_channel();
+    let unicasts = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&unicasts);
+    let transport = TestTransport::builder()
+        .local_mac(&[1])
+        .inbound(inbound_rx)
+        .on_send(move |frame: SentFrame| {
+            let later = !frame.broadcast && counted.fetch_add(1, Ordering::SeqCst) > 0;
+            let _ = frames_tx.send(frame);
+            async move {
+                match later {
+                    true => Err(bacnet_transport::port::stopped()),
+                    false => Ok(()),
+                }
+            }
+        })
+        .build();
+    let client = Arc::new(BACnetClient::start(config, transport).await.unwrap());
+    let request = tokio::spawn({
+        let client = Arc::clone(&client);
+        let data: Vec<u8> = (0..SIX_SEGMENTS).map(|i| i as u8).collect();
+        async move {
+            let service = ConfirmedServiceChoice::WRITE_PROPERTY;
+            client.confirmed_request(&PEER, service, &data).await
+        }
+    });
+    let zero = timeout(Duration::from_secs(60), frames.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let npdu = decode_npdu(zero.npdu).unwrap();
+    let Apdu::ConfirmedRequest(zero) = apdu::decode_apdu(npdu.payload).unwrap() else {
+        panic!("expected segment zero")
+    };
+    assert_eq!(zero.sequence_number, Some(0));
+    let ack = SegmentAck {
+        negative_ack: false,
+        sent_by_server: true,
+        invoke_id: zero.invoke_id,
+        sequence_number: 0,
+        actual_window_size: 2,
+    };
+    inject_apdu(&inbound, &PEER, None, Apdu::SegmentAck(ack)).await;
+    let ended = timeout(Duration::from_secs(60), request)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(ended, Err(Error::RequestCutOff { sent: true })),
+        "{ended:?}"
+    );
+    assert_eq!(unicasts.load(Ordering::SeqCst), 2, "segment 1 was refused");
+}

@@ -317,8 +317,10 @@ async fn bip6_stop_with_another_holder_alive_fails_later_sends_and_frees_the_por
         other.send_unicast(&[0x01, 0x00], &[0x00, 0x00, 0x02]).await,
     ] {
         assert!(
-            matches!(&sent, Err(bacnet_types::error::Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected
-                && io.to_string().contains("transport stopped")),
+            matches!(&sent, Err(bacnet_types::error::Error::State(
+                bacnet_types::error::Lifecycle::NotRunning,
+                text,
+            )) if text.to_string().contains("transport stopped")),
             "{sent:?}"
         );
     }
@@ -345,8 +347,10 @@ async fn bip6_abort_with_another_holder_alive_fails_later_sends_and_lets_go_of_t
             .await,
     ] {
         assert!(
-            matches!(&sent, Err(bacnet_types::error::Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected
-                && io.to_string().contains("transport stopped")),
+            matches!(&sent, Err(bacnet_types::error::Error::State(
+                bacnet_types::error::Lifecycle::NotRunning,
+                text,
+            )) if text.to_string().contains("transport stopped")),
             "{sent:?}"
         );
     }
@@ -361,7 +365,18 @@ async fn bip6_abort_with_another_holder_alive_fails_later_sends_and_lets_go_of_t
     .expect("the socket closed");
     drop(other);
     let mut transport = std::sync::Arc::into_inner(transport).unwrap();
-    assert!(transport.start().await.is_err(), "a start waits for a stop");
+    // An abort's tasks wait for a stop to join them: stopping (#1833).
+    let refused = transport.start().await;
+    assert!(
+        matches!(
+            &refused,
+            Err(bacnet_types::error::Error::State(
+                bacnet_types::error::Lifecycle::Stopping,
+                _
+            ))
+        ),
+        "a start waits for a stop: {refused:?}"
+    );
     transport.stop().await.unwrap();
 }
 
@@ -370,7 +385,15 @@ async fn bip6_abort_with_another_holder_alive_fails_later_sends_and_lets_go_of_t
 /// resolution; and a restart begins with none left over (#2617).
 #[tokio::test]
 async fn bip6_a_stop_ends_waiting_sends_and_a_restart_starts_clean() {
-    let is_stopped = |sent: &Result<(), bacnet_types::error::Error>| matches!(sent, Err(bacnet_types::error::Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected);
+    let is_stopped = |sent: &Result<(), bacnet_types::error::Error>| {
+        matches!(
+            sent,
+            Err(bacnet_types::error::Error::State(
+                bacnet_types::error::Lifecycle::NotRunning,
+                _
+            ))
+        )
+    };
     let resolving =
         |transport: &Bip6Transport| transport.resolver.with_state(|state, _| state.resolving());
     let nobody = [0x00, 0x00, 0x09];

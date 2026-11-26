@@ -28,7 +28,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::format::{LogColumns, PropertyError, RawRow, StateTexts};
-use bacnet_ops::raw::{RpmFailure, rpm_failure, rpm_rows, unreachable};
+use bacnet_ops::raw::{RpmFailure, failed_locally, rpm_failure, rpm_rows, unreachable};
 use bacnet_ops::target::{Target, bip6_vmac, parse_target_on};
 
 mod services;
@@ -474,7 +474,9 @@ impl Destination {
             .read_state_texts(log_device, |object| async move {
                 match self.state_text_rows(client, object, no_rpm).await {
                     Ok(rows) => ControlFlow::Continue(StateTexts::from_rows(&rows)),
-                    Err(error) if unreachable(&error) => ControlFlow::Break(()),
+                    Err(error) if unreachable(&error) || failed_locally(&error) => {
+                        ControlFlow::Break(())
+                    }
                     Err(_) => ControlFlow::Continue(StateTexts::default()),
                 }
             })
@@ -491,8 +493,9 @@ impl Destination {
     /// one refused RPM in all, not one an object.
     /// Best effort: a refused or failed read gives no texts. The error
     /// comes back only when the device, or the way to it, stopped
-    /// answering ([`unreachable()`]), so a caller reading several objects
-    /// stops asking. Clean the texts before showing them
+    /// answering ([`unreachable()`]), or the client's own link failed
+    /// ([`failed_locally()`], a stopped transport say, #1833), so a caller
+    /// reading several objects stops asking. Clean the texts before showing them
     /// ([`StateTexts::cleaned`]).
     pub async fn state_texts<T: TransportPort + 'static>(
         &self,
@@ -505,7 +508,7 @@ impl Destination {
         }
         match self.state_text_rows(client, object, no_rpm).await {
             Ok(rows) => Ok(StateTexts::from_rows(&rows)),
-            Err(error) if unreachable(&error) => Err(error),
+            Err(error) if unreachable(&error) || failed_locally(&error) => Err(error),
             Err(_) => Ok(StateTexts::default()),
         }
     }
@@ -526,7 +529,9 @@ impl Destination {
             for property in properties {
                 match self.read_property(client, object, *property, None).await {
                     Ok(ack) => rows.push((*property, Ok(ack.property_value))),
-                    Err(error) if unreachable(&error) => return Err(error),
+                    Err(error) if unreachable(&error) || failed_locally(&error) => {
+                        return Err(error);
+                    }
                     Err(error) => rows.push((*property, Err(PropertyError::from(error)))),
                 }
             }

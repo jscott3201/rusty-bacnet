@@ -26,7 +26,10 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
-use crate::client::{Scope, timed_out as is_timed_out, unreachable as is_unreachable};
+use crate::client::{
+    Scope, failed_locally as is_failed_locally, timed_out as is_timed_out,
+    unreachable as is_unreachable,
+};
 use crate::device::DeviceAddress;
 use crate::format::PropertyError;
 use crate::label::kebab;
@@ -223,6 +226,23 @@ impl OpsError {
             Self::Unreachable { .. } => true,
             Self::Client(error) => is_unreachable(error),
             Self::ObjectList { source, .. } => source.unreachable(),
+            _ => false,
+        }
+    }
+
+    /// True when the client or its own link failed the request on this
+    /// side, with no word from the device (#1833): a transport that isn't
+    /// started or has stopped, a client that stopped, and the client's
+    /// other refusals ([`failed_locally`](crate::raw::failed_locally) lists
+    /// them). The next request fails the same way, so a caller reading
+    /// several properties stops on it, as on [`unreachable`](Self::unreachable),
+    /// rather than taking it as one property's answer. It is never also
+    /// unreachable: a stopped local link is not a device that stopped
+    /// answering.
+    pub fn failed_locally(&self) -> bool {
+        match self {
+            Self::Client(error) => is_failed_locally(error),
+            Self::ObjectList { source, .. } => source.failed_locally(),
             _ => false,
         }
     }

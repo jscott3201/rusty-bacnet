@@ -838,6 +838,7 @@ ask only the instances between them: give both or neither.
 | `BacnetNetworkRejectError` | A router on the way refused the request (#2724); `reached_device` is `False` when it never reached the device, `None` when an earlier attempt may have |
 | `BacnetError` | Among others, an acknowledgement of the wrong kind for the service: a write may or may not have been applied (#2721). For a device in the field that acknowledges writes with a Complex-ACK, `BACnetClient(..., accept_complex_ack_for_simple_services=True)` takes that as success |
 | `BacnetTransportError` | The link failed |
+| `BacnetStateError` (also `RuntimeError`) | The link's own state refused the request before it went: not started, stopped, or a router-application client's router closed. `state` says which. Nothing was sent, and the device wasn't asked. A request that went out before its link stopped raises `BacnetError` whose message says the device may have carried it out |
 | `BacnetReadBackError`, `BacnetNoPriorityArrayError` | A relinquish the device acknowledged whose read back failed, or found no Priority_Array |
 | `BacnetPagingError` | A device broke a paged read's rules. No call pages yet |
 | `RuntimeError` | The client isn't started |
@@ -1075,8 +1076,8 @@ a split entity, the client's `apdu_timeout_ms` and the server's
 request 60 seconds after its last segment, retry or answer. Starting a stack
 before the router, or a second stack of the same role on one router start,
 raises `RuntimeError`. Closing the router ends both shares: each request
-then fails at once with `BacnetTransportError` (errno `ENOTCONN`); stop the
-stacks as usual. A restarted router makes new shares for stacks started
+then fails at once with `BacnetStateError` (`state` `"closed"`, also a
+`RuntimeError`), with nothing sent; stop the stacks as usual. A restarted router makes new shares for stacks started
 after it. The router's network-control messages stay internal.
 
 ## Enums
@@ -2196,8 +2197,8 @@ A host name in `ForeignDevice` serves B/IPv6 too (#2365), with the IPv6 addresse
 stands for. An owner on `ipv6_interface="::"` picks its source address from the route
 to the BBMD, so its start looks the name up first and fails if it has no usable IPv6
 address. On an explicit interface the owner starts and waits: nothing is registered,
-broadcasts raise `OSError` (the transport error), and the name is tried again 30
-seconds after each failure. On a B/IPv6 owner `foreign_registration()` returns a
+broadcasts raise `BacnetStateError` (`state` `"not_connected"`, as on B/IP before its
+BBMD is known; #1833), and the name is tried again 30 seconds after each failure. On a B/IPv6 owner `foreign_registration()` returns a
 `Bip6ForeignRegistrationStatus`: `bbmd` (the address in use, or None while waiting),
 `bbmd_name` (the host name it is known by, `"host:port"`, or None for an address),
 `waiting_for_bbmd`, `bbmd_lookups`, `bbmd_lookup_failures`, `last_bbmd_lookup_failure`
@@ -2358,7 +2359,11 @@ raises `BacnetBvlcNakError` with the code in `result_code`; no answer raises
 `BacnetBvlcUnexpectedResponseError` with the `expected` and `got` BVLC
 function codes. A second request to the same peer while one is in flight is
 refused locally with `BacnetError`, as is any request on a non-B/IP client.
-A bad address raises `ValueError` before anything is sent.
+A bad address raises `ValueError` before anything is sent. A request made
+while the client's link is stopped raises `BacnetStateError`, with nothing
+sent; one the client's stop cuts off after it went out raises `BacnetError`
+whose message says the device may have carried it out, so after a cut-off
+`write_bdt` or `delete_fdt_entry` read the table again (#1833).
 
 ```python
 from rusty_bacnet import BacnetBvlcNakError, BacnetTimeoutError
@@ -3261,7 +3266,8 @@ number can appear twice.
 - A link that can't send the query for its own state or kind, such as a
   BACnet/SC link not connected to its hub, or a router-application client's
   link, which carries APDUs only, raises what that send's error raises
-  (`BacnetError` for both), not `ValueError` (#1833).
+  (`BacnetStateError` with `state` `"not_connected"` for the first,
+  `BacnetError` for the second), not `ValueError` (#1833).
 
 Each bound is 0 to 3600 seconds, and `wait` may not exceed `total`
 (`ValueError` otherwise). An acknowledgement from the router's own address
@@ -7594,6 +7600,7 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetReadBackError` | The device acknowledged a `relinquish`, which took effect, but the read after it failed; `written` is the relinquish and `__cause__` the read's error. Not a `BacnetTimeoutError` |
 | `BacnetNoPriorityArrayError` | A `BacnetProtocolError` (PROPERTY / UNKNOWN_PROPERTY): the device says the object has no Priority_Array. `object_id` is the object, and `written` the NULL a `relinquish` sent first (None from `priority_array`) |
 | `BacnetTransportError` | A socket or I/O failure: a bind or listen that fails (B/IP, B/IPv6, `ScHub.start`), a failed SC dial. Also an `OSError` |
+| `BacnetStateError` | A call refused for the state its component was in (#1833): a send on a transport that isn't started or has stopped, a router-application client's router closed, a second start, a channel closed under the call, a BACnet/SC node whose hub isn't connected. Nothing was done, and the link didn't fail. Also a `RuntimeError`. `state` is `"not_running"` (not started, or stopped and able to start again), `"closed"` (stopped for good), `"stopping"` (a stop under way, or an abort waiting for it), `"already_started"` or `"not_connected"`. A request that went out before the client or its link stopped under it raises `BacnetError` instead, whose message says the device may have carried it out (a `write_bdt` or `delete_fdt_entry` may have changed the table) |
 | `BacnetRouterCloseError` | A `BACnetRouter`'s cleanup failed; `failures` holds a tuple of `RouterCleanupFailure` records (see [B/IP router](#bip-router)) |
 
 ```python
@@ -7644,6 +7651,22 @@ except OSError as e:
 ```
 
 `errno` is the operating system's own code, so platforms differ: Windows can refuse a bind to a UDP port another socket holds with `errno.WSAEACCES` rather than `errno.EADDRINUSE`, so check both there. It is not narrowed to the `OSError` subclasses (`ConnectionRefusedError` and the like), so compare `errno` rather than the class. `list_serial_ports()` raises an `OSError` (or the subclass for the failure's kind) instead, not a `BacnetTransportError`.
+
+`BacnetStateError` derives from both `BacnetError` and `RuntimeError`, so `except RuntimeError` around a call catches it as it catches the bindings' own "not started" checks. Those checks (a call on a client, server, endpoint, router or hub not started yet, or already closing) still raise plain `RuntimeError` for now, without `state`; `except RuntimeError` catches both. A `BacnetStateError`'s `state` tells a call made too early or too late from a failure on the network, without reading the message:
+
+```python
+from rusty_bacnet import BacnetStateError, BacnetTimeoutError
+
+try:
+    value = await client.read_property(addr, oid, pid)
+except BacnetStateError as e:
+    if e.state == "not_running":
+        print("start the link first")
+    else:  # "closed", "stopping", ...
+        print(f"the link is {e.state}: nothing was sent")
+except BacnetTimeoutError:
+    print("Device not responding")
+```
 
 ---
 
@@ -8640,7 +8663,7 @@ on the endpoint's link. Its calls keep their names and result shapes:
 | `write_property(address, ..., *, commandability=...)` | `write_property(address, ...)` without `commandability=`; it takes a `RoutedTarget` too, and sends a raw value as given |
 | `service_scope()` | gone: the client initiates every service it has a call for |
 | a request no one answered: `BacnetTimeoutError` | `BacnetAbortError` for the transaction's timeout, as a typed call raises it |
-| a call after the endpoint closed: `BacnetError` | `RuntimeError` naming the endpoint; a request the close cut off raises `BacnetError` saying the client stopped while it waited |
+| a call after the endpoint closed: `BacnetError` | `RuntimeError` naming the endpoint; a request the close cut off raises `BacnetError` saying whether it went out and may have been carried out |
 | an endpoint with `source_audit_reporter`: audited reads and `write_property(..., commandability=...)` | the same reads, audited, plus the other reads and writes listed under [The endpoint's client](#the-endpoints-client); a write's `priority` makes it a command at that priority |
 
 Not yet routed on the full client: the COV subscriptions and the other

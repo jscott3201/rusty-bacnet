@@ -109,6 +109,33 @@ async fn find_leaves_a_device_silent_while_naming() {
     lab.stop().await;
 }
 
+/// The client's own link stopping while a device's names are read ends the
+/// device's search as a silent device does, reported incomplete, instead of
+/// taking each object for one with no name (#1833); no timeout is counted.
+#[tokio::test(start_paused = true)]
+async fn find_stops_naming_when_the_clients_link_stops() {
+    let mut lab = Lab::start_site(Policy::default(), Duration::ZERO).await;
+    lab.agent.initialize().await;
+    // The Object_List, then the first object's name.
+    lab.stop_link_after(2);
+    let result = lab
+        .agent
+        .call(
+            "bacnet_find_object",
+            json!({ "name": "zone", "range": "1201" }),
+        )
+        .await;
+    let body = ok(&result);
+    let incomplete = &body["incomplete"][0];
+    assert_eq!(incomplete["device"], json!(1201), "{body}");
+    assert_eq!(incomplete["read"], json!(1));
+    let why = incomplete["why"].as_str().unwrap();
+    assert!(why.contains("transport stopped"), "{why}");
+    assert_eq!(body["matches"], json!([]));
+    assert_eq!(result["structuredContent"]["cost"]["timeouts"], json!(0));
+    lab.stop().await;
+}
+
 /// A device that stops answering after the first object of a read: the
 /// read returns what it read, stopped at the timeout, and the cost counts
 /// it (#2131).
