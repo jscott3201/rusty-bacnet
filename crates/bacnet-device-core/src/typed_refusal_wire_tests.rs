@@ -1,5 +1,5 @@
 //! The refusals bacnet-objects and this crate report with the typed kinds
-//! of #1833, in place of `Error::Encoding` and `Error::OutOfRange` text, go
+//! of #1833, in place of the untyped text #1833 then removed, go
 //! out on the wire as that text did: an Error PDU with SERVICES / OTHER, the
 //! plain one and each Clause 21 production alike. Each refusal comes from a
 //! real site, so a site moved to a decoding error, which a request decode
@@ -17,7 +17,9 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::multistate::MultiStateValueObject;
 use bacnet_objects::network_port::{BipPortConfig, NetworkPortObject};
 use bacnet_types::MacAddr;
-use bacnet_types::enums::{ConfirmedServiceChoice, EngineeringUnits, ObjectType};
+use bacnet_types::enums::{
+    ConfirmedServiceChoice, EngineeringUnits, ErrorClass, ErrorCode, ObjectType,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
@@ -160,9 +162,12 @@ fn typed_refusals_go_out_as_the_text_they_replace() {
     for ((site, expected, refusal), (_, _, again)) in refusals().into_iter().zip(refusals()) {
         let as_request = again.into_request_reject();
         for service in services {
-            // What dev sent for the text both kinds replace.
-            let text = wire(service, &Error::Encoding(String::new()));
-            assert_eq!(text, wire(service, &Error::OutOfRange(String::new())));
+            // What the text both kinds replaced went out as (#1833
+            // removed it): SERVICES / OTHER in the service's production.
+            let text = wire(
+                service,
+                &Error::protocol(ErrorClass::SERVICES, ErrorCode::OTHER),
+            );
             if plain.contains(&service) {
                 // Error PDU, invoke ID 9, the service; SERVICES (5) and
                 // OTHER (0) as application-tagged ENUMERATED.

@@ -43,7 +43,9 @@ impl ClockLink {
             Apdu::UnconfirmedRequest(_) | Apdu::ConfirmedRequest(_)
                 if self.fail_notifications.load(Ordering::Acquire) =>
             {
-                return Err(Error::Encoding("injected notification send failure".into()));
+                return Err(Error::Transport(std::io::Error::other(
+                    "injected notification send failure",
+                )));
             }
             _ => {}
         }
@@ -58,7 +60,9 @@ impl ClockLink {
                 self.frames.lock().unwrap().push(apdu);
             }
             Some(PlanAction::Fail) => {
-                return Err(Error::Encoding("injected notification send failure".into()));
+                return Err(Error::Transport(std::io::Error::other(
+                    "injected notification send failure",
+                )));
             }
             Some(PlanAction::Disable(comm_state)) => {
                 self.frames.lock().unwrap().push(apdu);

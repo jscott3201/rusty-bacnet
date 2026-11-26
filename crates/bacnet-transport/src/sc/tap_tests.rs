@@ -263,7 +263,9 @@ async fn dialled_sockets_are_tapped_for_their_hub() {
     let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(socket)));
     let connector: WebSocketConnector<LoopbackWebSocket> = std::sync::Arc::new(move || {
         let socket = slot.lock().unwrap().take();
-        Box::pin(async move { socket.ok_or_else(|| Error::Encoding("dialled once".into())) })
+        Box::pin(async move {
+            socket.ok_or_else(|| Error::Transport(std::io::Error::other("dialled once")))
+        })
     });
     let dial = tapped_connector(&connector, &tap, ScActiveHub::Failover);
     let dialled = dial().await.unwrap();

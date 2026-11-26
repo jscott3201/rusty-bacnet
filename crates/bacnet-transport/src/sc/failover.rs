@@ -309,7 +309,7 @@ mod tests {
                 socket: if success {
                     Ok(Arc::new(candidate))
                 } else {
-                    Err(Error::Encoding("refused probe".into()))
+                    Err(Error::Transport(std::io::Error::other("refused probe")))
                 },
                 connection: probe,
                 fresh,

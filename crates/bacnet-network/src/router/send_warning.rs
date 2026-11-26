@@ -71,7 +71,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_burst_of_failed_sends_warns_once_per_interval() {
         let warnings = SendWarnings::new(1);
-        let error = Error::Encoding("refused".into());
+        let error = Error::Transport(std::io::Error::other("refused"));
         assert_eq!(warnings.unicast_failed(&error), Some(1));
         for _ in 0..5 {
             assert_eq!(warnings.unicast_failed(&error), None);

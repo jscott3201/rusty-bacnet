@@ -377,7 +377,7 @@ fn an_alert_enrollment_keeps_only_the_notify_types_it_takes() {
     }));
     let built = AlertEnrollmentObject::new(1, "AE", source())
         .and_then(|object| object.with_reporting_persistence(persistence(&holding)));
-    assert!(matches!(built, Err(Error::InvalidConfig(_))));
+    assert!(matches!(&built, Err(Error::Persistence(refused)) if refused.is_damage()));
     let built = EventEnrollmentObject::new(1, "EE", EventType::CHANGE_OF_STATE)
         .and_then(|object| object.with_reporting_persistence(persistence(&holding)));
     assert_eq!(

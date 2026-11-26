@@ -407,7 +407,7 @@ mod tests {
     fn faults_sort_from_connect_errors() {
         let timeout = Error::Timeout(Duration::from_secs(10));
         assert_eq!(Fault::from_error(&timeout), Fault::ConnectAcceptTimeout);
-        let other = Error::Encoding("TLS config error".into());
+        let other = Error::invalid_config("TLS config error");
         assert!(matches!(Fault::from_error(&other), Fault::Other(_)));
         let tls = ScDisconnectCause::Tls(ScTlsFailure::PeerCertificate(
             ScCertificateRejection::UnknownIssuer,

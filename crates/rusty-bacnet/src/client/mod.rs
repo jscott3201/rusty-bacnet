@@ -74,7 +74,6 @@ fn device_range(
     high_limit: Option<u32>,
 ) -> PyResult<Option<DeviceInstanceRange>> {
     DeviceInstanceRange::from_limits(low_limit, high_limit).map_err(|error| match error {
-        bacnet_types::error::Error::OutOfRange(message) => PyValueError::new_err(message),
         bacnet_types::error::Error::Range(refused) => {
             PyValueError::new_err(refused.message().to_string())
         }

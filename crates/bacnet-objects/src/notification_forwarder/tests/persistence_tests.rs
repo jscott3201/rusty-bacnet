@@ -394,7 +394,7 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
     for past_cap in [past_recipient_cap, past_subscription_cap] {
         assert!(matches!(
             storage.save(forwarder, &past_cap),
-            Err(Error::OutOfRange(_))
+            Err(Error::Persistence(refused)) if refused.kind() == bacnet_types::error::PersistenceErrorKind::RefusedOnEncode
         ));
         std::fs::write(&path, raw_file(forwarder, &past_cap)).unwrap();
         assert!(refusal(&storage).contains("more entries than the cap"));

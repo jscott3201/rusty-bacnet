@@ -41,7 +41,7 @@ use bacnet_types::constructed::BACnetShedLevel;
 use bacnet_types::enums::ShedState;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 
-use super::SnapshotError;
+use super::PersistenceError;
 use super::framing;
 use crate::clock::{UNSPECIFIED_DATETIME, local_moment};
 use crate::load_control::{LoadControlSnapshot, MAX_WRITTEN_SHED_LEVELS};
@@ -68,12 +68,12 @@ pub const MAX_LEN: usize = framing::HEADER_LEN
 
 /// The file octets for `snapshot`, saved for the Load Control `object`.
 ///
-/// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) what
+/// Refuses ([`OutOfRange`](super::PersistenceErrorKind::RefusedOnEncode)) what
 /// [`decode`] would refuse.
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &LoadControlSnapshot,
-) -> Result<Vec<u8>, SnapshotError> {
+) -> Result<Vec<u8>, PersistenceError> {
     encode_body(snapshot)
         .map(|body| {
             let magic = if snapshot.shed_levels.is_empty() {
@@ -86,9 +86,11 @@ pub fn encode(
         .map_err(|error| error.in_format("Load Control snapshot"))
 }
 
-fn encode_body(snapshot: &LoadControlSnapshot) -> Result<Vec<u8>, SnapshotError> {
+fn encode_body(snapshot: &LoadControlSnapshot) -> Result<Vec<u8>, PersistenceError> {
     if !sound(snapshot) {
-        return Err(SnapshotError::out_of_range("holds a value no write leaves"));
+        return Err(crate::snapshot::refused_on_encode(
+            "holds a value no write leaves",
+        ));
     }
     let mut body = Vec::with_capacity(FIXED_LEN);
     body.extend_from_slice(&snapshot.state.to_raw().to_be_bytes());
@@ -133,14 +135,14 @@ fn encode_body(snapshot: &LoadControlSnapshot) -> Result<Vec<u8>, SnapshotError>
 pub fn decode(
     object: ObjectIdentifier,
     octets: &[u8],
-) -> Result<LoadControlSnapshot, SnapshotError> {
+) -> Result<LoadControlSnapshot, PersistenceError> {
     decode_file(object, octets).map_err(|error| error.in_format("Load Control file"))
 }
 
 fn decode_file(
     object: ObjectIdentifier,
     octets: &[u8],
-) -> Result<LoadControlSnapshot, SnapshotError> {
+) -> Result<LoadControlSnapshot, PersistenceError> {
     let (version_1, body) = framing::open(
         octets,
         &MAGIC_WITH_SHED_LEVELS,
@@ -149,13 +151,13 @@ fn decode_file(
         object,
     )?;
     let Some((fixed, rest)) = body.split_first_chunk::<FIXED_LEN>() else {
-        return Err(SnapshotError::truncated("is cut short"));
+        return Err(crate::snapshot::truncated("is cut short"));
     };
     let word = |at: usize| u64::from_be_bytes(fixed[at..at + 8].try_into().expect("eight octets"));
     let flag = |at: usize| match fixed[at] {
         0 => Ok(false),
         1 => Ok(true),
-        _ => Err(SnapshotError::damaged("holds a flag other than 0 or 1")),
+        _ => Err(crate::snapshot::damaged("holds a flag other than 0 or 1")),
     };
     let state = u32::from_be_bytes(fixed[..4].try_into().expect("four octets"));
     let value = word(5);
@@ -163,7 +165,7 @@ fn decode_file(
         0 => BACnetShedLevel::Percent(value),
         1 => BACnetShedLevel::Level(value),
         2 if value <= u64::from(u32::MAX) => BACnetShedLevel::Amount(f32::from_bits(value as u32)),
-        _ => return Err(SnapshotError::damaged("holds no shed level")),
+        _ => return Err(crate::snapshot::damaged("holds no shed level")),
     };
     let start_time = (
         Date {
@@ -192,7 +194,7 @@ fn decode_file(
         take_levels(rest)?
     };
     if !rest.is_empty() {
-        return Err(SnapshotError::damaged("goes on past its body"));
+        return Err(crate::snapshot::damaged("goes on past its body"));
     }
     let snapshot = LoadControlSnapshot {
         state: ShedState::from_raw(state),
@@ -206,7 +208,7 @@ fn decode_file(
         shed_levels,
     };
     if !sound(&snapshot) {
-        return Err(SnapshotError::damaged("holds a value no write leaves"));
+        return Err(crate::snapshot::damaged("holds a value no write leaves"));
     }
     Ok(snapshot)
 }
@@ -216,18 +218,18 @@ type Levels = Vec<(u32, u64)>;
 
 /// The written levels version 2 holds at the start of `rest`, and what
 /// follows them. [`sound`] checks them.
-fn take_levels(rest: &[u8]) -> Result<(Levels, &[u8]), SnapshotError> {
+fn take_levels(rest: &[u8]) -> Result<(Levels, &[u8]), PersistenceError> {
     let Some((count, rest)) = rest.split_first_chunk::<4>() else {
-        return Err(SnapshotError::truncated("ends before its written levels"));
+        return Err(crate::snapshot::truncated("ends before its written levels"));
     };
     let count = usize::try_from(u32::from_be_bytes(*count))
         .ok()
         .filter(|count| (1..=MAX_WRITTEN_SHED_LEVELS).contains(count))
-        .ok_or(SnapshotError::damaged(
+        .ok_or(crate::snapshot::damaged(
             "holds no written levels or too many",
         ))?;
     let Some((levels, rest)) = rest.split_at_checked(count * LEVEL_LEN) else {
-        return Err(SnapshotError::truncated("ends inside its written levels"));
+        return Err(crate::snapshot::truncated("ends inside its written levels"));
     };
     let levels = levels
         .as_chunks::<LEVEL_LEN>()
@@ -263,7 +265,7 @@ fn sound(snapshot: &LoadControlSnapshot) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snapshot::SnapshotErrorKind;
+    use crate::snapshot::PersistenceErrorKind;
     use bacnet_types::enums::ObjectType;
 
     fn oid(instance: u32) -> ObjectIdentifier {
@@ -340,24 +342,27 @@ mod tests {
         let kind = |octets: &[u8]| decode(oid(1), octets).unwrap_err().kind();
         assert_eq!(
             decode(oid(2), &octets).unwrap_err().kind(),
-            SnapshotErrorKind::OtherObject
+            PersistenceErrorKind::OtherObject
         );
         // Cut short in the fixed fields, and inside the Description.
-        assert_eq!(kind(&octets[..HEADER + 10]), SnapshotErrorKind::Truncated);
+        assert_eq!(
+            kind(&octets[..HEADER + 10]),
+            PersistenceErrorKind::Truncated
+        );
         assert_eq!(
             kind(&octets[..octets.len() - 1]),
-            SnapshotErrorKind::Truncated
+            PersistenceErrorKind::Truncated
         );
         // An octet past the end, after a Description and after none.
         let mut longer = octets.clone();
         longer.push(0);
-        assert_eq!(kind(&longer), SnapshotErrorKind::Damaged);
+        assert_eq!(kind(&longer), PersistenceErrorKind::Damaged);
         let mut plain = encode(oid(1), &LoadControlSnapshot::default()).unwrap();
         plain.push(0);
-        assert_eq!(kind(&plain), SnapshotErrorKind::Damaged);
+        assert_eq!(kind(&plain), PersistenceErrorKind::Damaged);
         let mut huge = octets.clone();
         huge.resize(MAX_LEN + 1, 0);
-        assert_eq!(kind(&huge), SnapshotErrorKind::TooLarge);
+        assert_eq!(kind(&huge), PersistenceErrorKind::TooLarge);
         // A state past the four, a fourth choice, an hour unspecified
         // alone, an Enable of 2 and a presence octet of 2.
         for (at, octet) in [
@@ -369,17 +374,17 @@ mod tests {
         ] {
             let mut damaged = octets.clone();
             damaged[at] = octet;
-            assert_eq!(kind(&damaged), SnapshotErrorKind::Damaged, "octet {at}");
+            assert_eq!(kind(&damaged), PersistenceErrorKind::Damaged, "octet {at}");
         }
         // A Description that isn't UTF-8.
         let mut text = octets.clone();
         *text.last_mut().unwrap() = 0xFF;
-        assert_eq!(kind(&text), SnapshotErrorKind::Damaged);
+        assert_eq!(kind(&text), PersistenceErrorKind::Damaged);
         // A percent over 100, which a write refuses.
         let mut percent = encode(oid(1), &LoadControlSnapshot::default()).unwrap();
         percent[HEADER + 4] = 0;
         percent[HEADER + 12] = 101;
-        assert_eq!(kind(&percent), SnapshotErrorKind::Damaged);
+        assert_eq!(kind(&percent), PersistenceErrorKind::Damaged);
         for refused in [
             LoadControlSnapshot {
                 requested_shed_level: BACnetShedLevel::Percent(101),
@@ -400,7 +405,7 @@ mod tests {
         ] {
             assert_eq!(
                 encode(oid(1), &refused).unwrap_err().kind(),
-                SnapshotErrorKind::OutOfRange
+                PersistenceErrorKind::RefusedOnEncode
             );
         }
     }
@@ -439,7 +444,7 @@ mod tests {
         later[..8].copy_from_slice(b"RBNLCT03");
         assert_eq!(
             decode(oid(1), &later).unwrap_err().kind(),
-            SnapshotErrorKind::UnknownVersion(3)
+            PersistenceErrorKind::UnknownVersion(3)
         );
     }
 
@@ -450,17 +455,20 @@ mod tests {
         let levels_at = octets.len() - 4 - 2 * LEVEL_LEN;
         // Cut short in the count and in the last element; an octet past
         // the end; version 1's tag on a body with levels.
-        assert_eq!(kind(&octets[..levels_at + 2]), SnapshotErrorKind::Truncated);
+        assert_eq!(
+            kind(&octets[..levels_at + 2]),
+            PersistenceErrorKind::Truncated
+        );
         assert_eq!(
             kind(&octets[..octets.len() - 1]),
-            SnapshotErrorKind::Truncated
+            PersistenceErrorKind::Truncated
         );
         let mut longer = octets.clone();
         longer.push(0);
-        assert_eq!(kind(&longer), SnapshotErrorKind::Damaged);
+        assert_eq!(kind(&longer), PersistenceErrorKind::Damaged);
         let mut v1 = octets.clone();
         v1[..8].copy_from_slice(&MAGIC);
-        assert_eq!(kind(&v1), SnapshotErrorKind::Damaged);
+        assert_eq!(kind(&v1), PersistenceErrorKind::Damaged);
         // A count of 0 or past the cap, an index of 0, an index not past
         // the one before, and a level of 0.
         let first = levels_at + 4;
@@ -475,7 +483,7 @@ mod tests {
         ] {
             let mut damaged = octets.clone();
             damaged[at..at + written.len()].copy_from_slice(written);
-            assert_eq!(kind(&damaged), SnapshotErrorKind::Damaged, "octet {at}");
+            assert_eq!(kind(&damaged), PersistenceErrorKind::Damaged, "octet {at}");
         }
         for refused in [
             vec![(0, 1)],
@@ -492,7 +500,7 @@ mod tests {
             };
             assert_eq!(
                 encode(oid(1), &snapshot).unwrap_err().kind(),
-                SnapshotErrorKind::OutOfRange
+                PersistenceErrorKind::RefusedOnEncode
             );
         }
         // The cap itself saves, and the file fits.

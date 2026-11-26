@@ -172,7 +172,9 @@ async fn segmented_owner_releases_on_send_error_abort_cancel_and_task_abort() {
             event
                 .release
                 .send(if terminal == 0 {
-                    Err(Error::Encoding("segment send failure".into()))
+                    Err(Error::Transport(std::io::Error::other(
+                        "segment send failure",
+                    )))
                 } else {
                     Ok(())
                 })

@@ -88,7 +88,9 @@ impl AccessRightsPersistence for MemoryPersistence {
             let _ = hold.go.recv();
         }
         if self.fail.load(Ordering::SeqCst) {
-            return Err(Error::Encoding("storage unavailable".into()));
+            return Err(Error::from(crate::snapshot::backend_failed(
+                "storage unavailable",
+            )));
         }
         *self.saved.lock().unwrap() = Some((rights, snapshot.clone()));
         self.saves.fetch_add(1, Ordering::SeqCst);

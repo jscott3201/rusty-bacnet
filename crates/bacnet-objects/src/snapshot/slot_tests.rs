@@ -4,7 +4,7 @@
 use bacnet_types::constructed::BACnetLogRecord;
 
 use super::tests::{reseal, trend};
-use super::{SnapshotErrorKind, log};
+use super::{PersistenceErrorKind, log};
 
 fn slot(generation: u64) -> Vec<u8> {
     let mut snapshot = trend();
@@ -27,11 +27,11 @@ fn a_huge_declared_length_is_truncation_not_a_panic() {
     let object = trend().object_identifier;
     for length in [u32::MAX, 0xFFFF_FFE2, 0xFFFF_FFE1, u32::MAX / 2] {
         let error = log::decode::<BACnetLogRecord>(object, &declaring(length)).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::Truncated, "{length:#x}");
+        assert_eq!(error.kind(), PersistenceErrorKind::Truncated, "{length:#x}");
     }
     let erased = vec![0xFF; slot(3).len()];
     let error = log::decode::<BACnetLogRecord>(object, &erased).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::NotThisFormat);
+    assert_eq!(error.kind(), PersistenceErrorKind::NotThisFormat);
 }
 
 #[test]
@@ -40,13 +40,13 @@ fn a_slot_past_the_cap_is_too_large() {
     // Zeroed pages: nothing is touched before the length is refused.
     octets.resize(log::MAX_LEN + 1, 0);
     let error = log::decode::<BACnetLogRecord>(trend().object_identifier, &octets).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::TooLarge);
+    assert_eq!(error.kind(), PersistenceErrorKind::TooLarge);
     assert!(error.is_damage());
 }
 
 fn newest(
     slots: [Option<&[u8]>; 2],
-) -> Result<Option<log::NewestSlot<BACnetLogRecord>>, super::SnapshotError> {
+) -> Result<Option<log::NewestSlot<BACnetLogRecord>>, super::PersistenceError> {
     log::newest(trend().object_identifier, slots)
 }
 
@@ -63,8 +63,8 @@ fn the_newer_sound_slot_wins_and_damage_is_passed_over() {
     let chosen = newest([Some(&three), Some(cut)]).unwrap().unwrap();
     assert_eq!((chosen.slot, chosen.generation), (0, 3));
     assert_eq!(
-        chosen.passed_over[1].map(|error| error.kind()),
-        Some(SnapshotErrorKind::Truncated)
+        chosen.passed_over[1].as_ref().map(|error| error.kind()),
+        Some(PersistenceErrorKind::Truncated)
     );
 }
 
@@ -75,7 +75,7 @@ fn damage_with_nothing_sound_is_an_error() {
     let cut = &four[..four.len() - 1];
     for slots in [[Some(cut), None], [None, Some(cut)], [Some(cut), Some(cut)]] {
         let error = newest(slots).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::Truncated);
+        assert_eq!(error.kind(), PersistenceErrorKind::Truncated);
     }
 }
 
@@ -90,7 +90,7 @@ fn one_generation_twice_must_hold_one_snapshot() {
     other.notification_threshold += 1;
     let other = log::encode(&other).unwrap();
     let error = newest([Some(&three), Some(&other)]).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
+    assert_eq!(error.kind(), PersistenceErrorKind::Damaged);
     assert!(error.to_string().contains("one generation"), "{error}");
 }
 
@@ -103,5 +103,5 @@ fn a_refused_slot_stops_the_choice() {
     reseal(&mut newer);
     let three = slot(3);
     let error = newest([Some(&three), Some(&newer)]).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::UnknownVersion(9));
+    assert_eq!(error.kind(), PersistenceErrorKind::UnknownVersion(9));
 }

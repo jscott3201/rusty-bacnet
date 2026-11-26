@@ -98,7 +98,11 @@ fn controlled_builder(control: Arc<Control>) -> TestTransportBuilder {
                 control.stop_entered.notify_one();
                 control.release.acquire().await.unwrap().forget();
                 match control.stop_outcome.load(Ordering::SeqCst) {
-                    1 => return Err(Error::Encoding("injected registered stop failure".into())),
+                    1 => {
+                        return Err(Error::Transport(std::io::Error::other(
+                            "injected registered stop failure",
+                        )));
+                    }
                     2 => panic!("injected registered stop panic"),
                     _ => {}
                 }

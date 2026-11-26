@@ -189,7 +189,7 @@ async fn lifecycle_reaches_the_inner_transport_unless_replaced() {
     let seen = inner.handle();
     let outer = TestTransport::builder()
         .inner(inner)
-        .on_stop(|| async { Err(Error::Encoding("replaced".into())) })
+        .on_stop(|| async { Err(Error::Transport(std::io::Error::other("replaced"))) })
         .build();
     assert!(outer.stop().await.is_err());
     assert_eq!(seen.stops(), 0);
@@ -267,7 +267,7 @@ async fn a_mac_can_be_reported_only_until_the_start() {
     let mut transport = TestTransport::builder()
         .inner(mstp)
         .local_mac_until_started(&[7])
-        .start_gate(|| async { Err(Error::Encoding("no".into())) })
+        .start_gate(|| async { Err(Error::Transport(std::io::Error::other("no"))) })
         .build();
     assert!(transport.start().await.is_err());
     assert_eq!(transport.local_mac(), &[7]);
@@ -331,7 +331,7 @@ async fn fail_mode_records_the_frame_and_refuses_the_send() {
     handle.fail_next_send();
     let error = transport.send_unicast(&[1], &[2]).await.unwrap_err();
     assert!(
-        matches!(&error, Error::Encoding(m) if m == "no route"),
+        matches!(&error, Error::Transport(m) if m.to_string() == "no route"),
         "{error}"
     );
     assert_eq!(handle.sent().len(), 1, "the refused frame is recorded");

@@ -382,22 +382,25 @@ fn storage_holding_what_no_write_leaves_fails_the_build() {
         notify_type: Some(NotifyType::from_raw(5)),
         ..ReportingWriteConfig::default()
     }));
-    // Without `std` a refusal owns no text, so the codec's reason stands
-    // alone there.
-    #[cfg(feature = "std")]
-    let unknown_text = "saved reporting settings holds an unknown Notify_Type";
-    #[cfg(not(feature = "std"))]
-    let unknown_text = "holds an unknown Notify_Type";
-    for (storage, text) in [
-        (timer, "saved write configuration is not reporting settings"),
-        (unknown, unknown_text),
+    for (storage, kind, text) in [
+        (
+            timer,
+            bacnet_types::error::PersistenceErrorKind::OtherObject,
+            "saved write configuration is not reporting settings",
+        ),
+        (
+            unknown,
+            bacnet_types::error::PersistenceErrorKind::Damaged,
+            "saved reporting settings holds an unknown Notify_Type",
+        ),
     ] {
         let built = AnalogInputObject::new(1, "AI", EngineeringUnits::DEGREES_CELSIUS)
             .and_then(|object| object.with_reporting_persistence(persistence(&storage)));
-        // A configuration refusal (#1833) whose text is as before, with no
-        // category in front.
+        // Persisted state refused (#1833), its text as before with no
+        // category in front, in every build: the codec's static reason.
         assert!(
-            matches!(&built, Err(Error::InvalidConfig(why)) if why.to_string() == text),
+            matches!(&built, Err(Error::Persistence(why))
+                if why.kind() == kind && why.to_string() == text),
             "{:?}",
             built.err()
         );

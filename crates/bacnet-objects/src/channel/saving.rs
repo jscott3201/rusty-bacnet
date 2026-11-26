@@ -63,9 +63,11 @@ impl ChannelObject {
             None => {}
             Some(WriteConfigSnapshot::Channel(saved)) => channel.restore(saved)?,
             Some(_) => {
-                return Err(Error::invalid_config(
+                return Err(bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::OtherObject,
                     "saved write configuration is not a Channel's",
-                ));
+                )
+                .into());
             }
         }
         channel.config_storage = Some(StagedSaves::new(saving::writer(oid, persistence)));
@@ -83,9 +85,10 @@ impl ChannelObject {
         if let Some(members) = saved.members {
             check_members(&members.references)?;
             if members.execution_delay.len() != members.references.len() {
-                return Err(Error::invalid_config(
+                return Err(crate::snapshot::damaged(
                     "saved Channel members and delays differ in number",
-                ));
+                )
+                .into());
             }
             config.learned = vec![None; members.references.len()];
             config.members = members.references;

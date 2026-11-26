@@ -21,7 +21,7 @@ use crate::prelude::*;
 use bacnet_types::constructed::{BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord};
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::SnapshotError;
+use super::PersistenceError;
 use crate::log_persistence::LogSnapshot;
 use crate::log_persistence::codec;
 
@@ -47,25 +47,25 @@ mod sealed {
     use super::*;
 
     pub trait Sealed: Sized {
-        fn encode(snapshot: &LogSnapshot<Self>) -> Result<Vec<u8>, SnapshotError>;
+        fn encode(snapshot: &LogSnapshot<Self>) -> Result<Vec<u8>, PersistenceError>;
         fn decode(
             octets: &[u8],
             object: ObjectIdentifier,
-        ) -> Result<LogSnapshot<Self>, SnapshotError>;
+        ) -> Result<LogSnapshot<Self>, PersistenceError>;
     }
 }
 
 macro_rules! log_record {
     ($($record:ty),*) => {$(
         impl sealed::Sealed for $record {
-            fn encode(snapshot: &LogSnapshot<Self>) -> Result<Vec<u8>, SnapshotError> {
+            fn encode(snapshot: &LogSnapshot<Self>) -> Result<Vec<u8>, PersistenceError> {
                 codec::encode(snapshot)
             }
 
             fn decode(
                 octets: &[u8],
                 object: ObjectIdentifier,
-            ) -> Result<LogSnapshot<Self>, SnapshotError> {
+            ) -> Result<LogSnapshot<Self>, PersistenceError> {
                 codec::decode(octets, object)
             }
         }
@@ -82,12 +82,12 @@ log_record!(
 
 /// The slot octets for `snapshot`.
 ///
-/// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) a snapshot
+/// Refuses ([`OutOfRange`](super::PersistenceErrorKind::RefusedOnEncode)) a snapshot
 /// past [`MAX_LEN`] or holding an element of more than 1 MiB, and one that
 /// doesn't hold together, as [`decode`] would refuse it: a zero
 /// generation, more records than Buffer_Size, settings its object type
 /// lacks, and the like.
-pub fn encode<R: LogRecord>(snapshot: &LogSnapshot<R>) -> Result<Vec<u8>, SnapshotError> {
+pub fn encode<R: LogRecord>(snapshot: &LogSnapshot<R>) -> Result<Vec<u8>, PersistenceError> {
     R::encode(snapshot)
 }
 
@@ -101,7 +101,7 @@ pub fn encode<R: LogRecord>(snapshot: &LogSnapshot<R>) -> Result<Vec<u8>, Snapsh
 pub fn decode<R: LogRecord>(
     object: ObjectIdentifier,
     octets: &[u8],
-) -> Result<LogSnapshot<R>, SnapshotError> {
+) -> Result<LogSnapshot<R>, PersistenceError> {
     R::decode(octets, object)
 }
 
@@ -116,7 +116,7 @@ pub struct NewestSlot<R> {
     /// The snapshot.
     pub snapshot: LogSnapshot<R>,
     /// Each damaged slot passed over, by slot, for the backend to report.
-    pub passed_over: [Option<SnapshotError>; 2],
+    pub passed_over: [Option<PersistenceError>; 2],
 }
 
 /// Pick the snapshot to load for `object` from a two-slot store's slots,
@@ -131,11 +131,11 @@ pub struct NewestSlot<R> {
 ///   back to the other;
 /// - both slots damaged, or one damaged and the other empty: the damage;
 /// - two slots of one generation that hold different snapshots
-///   ([`Damaged`](super::SnapshotErrorKind::Damaged)).
+///   ([`Damaged`](super::PersistenceErrorKind::Damaged)).
 pub fn newest<R: LogRecord>(
     object: ObjectIdentifier,
     slots: [Option<&[u8]>; 2],
-) -> Result<Option<NewestSlot<R>>, SnapshotError> {
+) -> Result<Option<NewestSlot<R>>, PersistenceError> {
     let mut newest: Option<NewestSlot<R>> = None;
     let mut passed_over = [None, None];
     let mut damage = None;
@@ -146,14 +146,14 @@ pub fn newest<R: LogRecord>(
         match decode::<R>(object, octets) {
             Err(error) if !error.is_damage() => return Err(error),
             Err(error) => {
+                damage = Some(error.clone());
                 passed_over[slot] = Some(error);
-                damage = Some(error);
             }
             Ok(snapshot) => match &newest {
                 Some(current) if current.generation > snapshot.generation => {}
                 Some(current) if current.generation == snapshot.generation => {
                     if current.snapshot != snapshot {
-                        return Err(SnapshotError::damaged(
+                        return Err(crate::snapshot::damaged(
                             "slots hold different snapshots of one generation",
                         )
                         .in_format(codec::WHAT));

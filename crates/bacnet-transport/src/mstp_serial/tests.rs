@@ -45,14 +45,14 @@ impl DirectionControl for MockDirection {
         self.tx.store(true, Ordering::SeqCst);
         self.record(Event::Tx);
         if self.fail_tx.load(Ordering::SeqCst) {
-            return Err(Error::Encoding("set TX failed".into()));
+            return Err(Error::Transport(std::io::Error::other("set TX failed")));
         }
         Ok(())
     }
 
     fn set_rx_mode(&self) -> Result<(), Error> {
         if self.fail_rx.load(Ordering::SeqCst) {
-            return Err(Error::Encoding("set RX failed".into()));
+            return Err(Error::Transport(std::io::Error::other("set RX failed")));
         }
         self.tx.store(false, Ordering::SeqCst);
         self.record(Event::Rx);
@@ -83,7 +83,9 @@ impl SerialPort for MockSerial {
         assert!(self.direction.tx.load(Ordering::SeqCst));
         self.direction.record(Event::WriteAccepted);
         if self.fail_write {
-            Err(Error::Encoding("partial write failed".into()))
+            Err(Error::Transport(std::io::Error::other(
+                "partial write failed",
+            )))
         } else {
             Ok(())
         }
@@ -93,7 +95,7 @@ impl SerialPort for MockSerial {
         assert!(self.direction.tx.load(Ordering::SeqCst));
         self.direction.record(Event::DrainStarted);
         if self.fail_drain.load(Ordering::SeqCst) {
-            return Err(Error::Encoding("drain failed".into()));
+            return Err(Error::Transport(std::io::Error::other("drain failed")));
         }
         self.complete.acquire().await.unwrap().forget();
         self.direction.record(Event::TxComplete);
@@ -159,7 +161,7 @@ async fn gpio_partial_write_error_drains_before_restoring_rx() {
     assert!(serial.direction.tx.load(Ordering::SeqCst));
     serial.complete.add_permits(1);
     assert!(
-        matches!(poll_once(write.as_mut()), Poll::Ready(Err(Error::Encoding(e))) if e == "partial write failed")
+        matches!(poll_once(write.as_mut()), Poll::Ready(Err(Error::Transport(e))) if e.to_string() == "partial write failed")
     );
     serial.direction.assert_events(&[
         Event::Tx,
@@ -176,7 +178,7 @@ async fn gpio_failed_drain_retains_de_and_read_recovers_only_after_completion() 
     let direction = SoftwareDirection::new(0);
     serial.fail_drain.store(true, Ordering::SeqCst);
     assert!(
-        matches!(direction.write(&serial, &*serial.direction, &[1]).await, Err(Error::Encoding(e)) if e == "drain failed")
+        matches!(direction.write(&serial, &*serial.direction, &[1]).await, Err(Error::Transport(e)) if e.to_string() == "drain failed")
     );
     assert!(serial.direction.tx.load(Ordering::SeqCst));
     let mut buf = [0];
@@ -261,7 +263,7 @@ async fn gpio_direction_errors_are_reported_and_recoverable() {
     let direction = SoftwareDirection::new(0);
     serial.direction.fail_tx.store(true, Ordering::SeqCst);
     assert!(
-        matches!(direction.write(&serial, &*serial.direction, &[1]).await, Err(Error::Encoding(e)) if e == "set TX failed")
+        matches!(direction.write(&serial, &*serial.direction, &[1]).await, Err(Error::Transport(e)) if e.to_string() == "set TX failed")
     );
     serial.direction.assert_events(&[Event::Tx, Event::Rx]);
 
@@ -269,7 +271,7 @@ async fn gpio_direction_errors_are_reported_and_recoverable() {
     serial.direction.fail_rx.store(true, Ordering::SeqCst);
     serial.complete.add_permits(1);
     assert!(
-        matches!(direction.write(&serial, &*serial.direction, &[1]).await, Err(Error::Encoding(e)) if e == "set RX failed")
+        matches!(direction.write(&serial, &*serial.direction, &[1]).await, Err(Error::Transport(e)) if e.to_string() == "set RX failed")
     );
     assert!(serial.direction.tx.load(Ordering::SeqCst));
     serial.direction.fail_rx.store(false, Ordering::SeqCst);

@@ -42,9 +42,9 @@ pub(super) fn wire_port(
                     reject_origin: None,
                 }
             };
-            let queued = outgoing
-                .try_send(request)
-                .map_err(|_| Error::Encoding("test wire queue unavailable".into()));
+            let queued = outgoing.try_send(request).map_err(|_| {
+                Error::Transport(std::io::Error::other("test wire queue unavailable"))
+            });
             async move { queued }
         })
         .build()

@@ -19,7 +19,9 @@ impl CallGate {
         self.entered.notify_one();
         self.release.acquire().await.unwrap().forget();
         if self.fail {
-            Err(Error::Encoding("per-call send failure".into()))
+            Err(Error::Transport(std::io::Error::other(
+                "per-call send failure",
+            )))
         } else {
             Ok(())
         }

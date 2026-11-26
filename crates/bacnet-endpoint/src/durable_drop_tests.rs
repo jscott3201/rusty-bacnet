@@ -108,7 +108,10 @@ impl NotificationClassPersistence for Reporting {
         }
         let attempt = self.storage.attempts.fetch_add(1, Ordering::SeqCst) + 1;
         if self.storage.fail_on.load(Ordering::SeqCst) == attempt {
-            return Err(Error::Encoding("injected durable save failure".into()));
+            return Err(Error::from(bacnet_types::error::PersistenceError::new(
+                bacnet_types::error::PersistenceErrorKind::BackendFailed,
+                "injected durable save failure",
+            )));
         }
         *self.storage.saved.lock().unwrap() = Some(saved.clone());
         Ok(())

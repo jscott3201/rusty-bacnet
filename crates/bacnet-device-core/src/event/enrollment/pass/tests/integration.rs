@@ -262,10 +262,16 @@ impl BACnetObject for ReferenceValueObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, bacnet_types::error::Error> {
+        // A failed read here is the object's own, not a protocol refusal:
+        // any local error the pass doesn't read as an answer does, and this
+        // one alloc-only builds have (#1833).
         if property == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE {
-            self.reference
-                .clone()
-                .ok_or_else(|| bacnet_types::error::Error::Encoding("reference read failed".into()))
+            self.reference.clone().ok_or_else(|| {
+                bacnet_types::error::Error::state(
+                    bacnet_types::error::Lifecycle::NotRunning,
+                    "reference read failed",
+                )
+            })
         } else if property == PropertyIdentifier::FAULT_PARAMETERS
             && !self.fault_parameters_supported
         {
@@ -274,8 +280,9 @@ impl BACnetObject for ReferenceValueObject {
                 bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
             ))
         } else if property == PropertyIdentifier::EVENT_TIME_STAMPS && !self.timestamps_readable {
-            Err(bacnet_types::error::Error::Encoding(
-                "timestamps read failed".into(),
+            Err(bacnet_types::error::Error::state(
+                bacnet_types::error::Lifecycle::NotRunning,
+                "timestamps read failed",
             ))
         } else if property == PropertyIdentifier::EVENT_MESSAGE_TEXTS && !self.message_texts_served
         {
@@ -286,8 +293,9 @@ impl BACnetObject for ReferenceValueObject {
         } else if property == PropertyIdentifier::EVENT_PARAMETERS
             && !self.event_parameters_readable.load(Ordering::SeqCst)
         {
-            Err(bacnet_types::error::Error::Encoding(
-                "event parameters read failed".into(),
+            Err(bacnet_types::error::Error::state(
+                bacnet_types::error::Lifecycle::NotRunning,
+                "event parameters read failed",
             ))
         } else {
             self.inner.read_property(property, array_index)
@@ -346,8 +354,11 @@ impl EnrollmentEval for ReferenceValueObject {
     ) -> Result<(), bacnet_types::error::Error> {
         self.state_write_count.fetch_add(1, Ordering::SeqCst);
         if !self.state_writable.load(Ordering::SeqCst) {
-            return Err(bacnet_types::error::Error::Encoding(
-                "evaluation state write failed".into(),
+            return Err(bacnet_types::error::Error::from(
+                bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::BackendFailed,
+                    "evaluation state write failed",
+                ),
             ));
         }
         self.inner.set_eval_state(state)
@@ -365,8 +376,11 @@ impl EnrollmentEval for ReferenceValueObject {
         source: Option<bacnet_objects::event_enrollment::EventEnrollmentMonitoredSource>,
     ) -> Result<(), bacnet_types::error::Error> {
         if !self.source_writable.load(Ordering::SeqCst) {
-            return Err(bacnet_types::error::Error::Encoding(
-                "source write failed".into(),
+            return Err(bacnet_types::error::Error::from(
+                bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::BackendFailed,
+                    "source write failed",
+                ),
             ));
         }
         self.inner.set_eval_source(source)

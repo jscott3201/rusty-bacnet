@@ -321,7 +321,7 @@ fn a_stored_state_text_no_write_leaves_fails_the_build() {
         for texts in &refused {
             let built = new(STATES).with_reporting_persistence(persistence(&stored(texts.clone())));
             assert!(
-                matches!(built, Err(Error::InvalidConfig(_))),
+                matches!(&built, Err(Error::Persistence(refused)) if refused.is_damage()),
                 "{}",
                 texts.len()
             );
@@ -330,7 +330,7 @@ fn a_stored_state_text_no_write_leaves_fails_the_build() {
     let binary = crate::binary::BinaryValueObject::new(1, "BV")
         .unwrap()
         .with_reporting_persistence(persistence(&stored(written_texts())));
-    assert!(matches!(binary, Err(Error::InvalidConfig(_))));
+    assert!(matches!(&binary, Err(Error::Persistence(refused)) if refused.is_damage()));
 }
 
 /// A restore goes on a fresh object, whose Present_Value, Relinquish_Default

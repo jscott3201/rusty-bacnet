@@ -108,7 +108,12 @@ pub async fn resolve_bip6_server(
     let address = server
         .transport()
         .and_then(Bip6Transport::local_address)
-        .ok_or_else(|| Error::Encoding("the BIP6 server is not running".into()))?;
+        .ok_or_else(|| {
+            Error::state(
+                bacnet_types::error::Lifecycle::NotRunning,
+                "the BIP6 server is not running",
+            )
+        })?;
     let vmac = client.transport().resolve_virtual_address(address).await?;
     Ok(vmac.octets().to_vec())
 }

@@ -403,7 +403,7 @@ impl BACnetObject for ForeignReporter {
         {
             return Ok(PropertyValue::Boolean(source));
         }
-        Err(Error::Encoding("unsupported property".into()))
+        Err(Error::unsupported("unsupported property"))
     }
     fn write_property(
         &mut self,
@@ -412,7 +412,7 @@ impl BACnetObject for ForeignReporter {
         _: PropertyValue,
         _: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Encoding("not writable".into()))
+        Err(Error::unsupported("not writable"))
     }
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         crate::test_rows::read_only(&[])

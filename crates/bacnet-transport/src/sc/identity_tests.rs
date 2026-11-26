@@ -60,14 +60,22 @@ fn fixture(vmac: Vmac) -> (ScTransport<CountedSocket>, LoopbackWebSocket, Arc<Co
         let counts = counts.clone();
         move || {
             counts.primary_dials.fetch_add(1, Ordering::SeqCst);
-            async { Err(Error::Encoding("unexpected primary dial".into())) }
+            async {
+                Err(Error::Transport(std::io::Error::other(
+                    "unexpected primary dial",
+                )))
+            }
         }
     })
     .with_failover_connector({
         let counts = counts.clone();
         move || {
             counts.failover_dials.fetch_add(1, Ordering::SeqCst);
-            async { Err(Error::Encoding("unexpected failover dial".into())) }
+            async {
+                Err(Error::Transport(std::io::Error::other(
+                    "unexpected failover dial",
+                )))
+            }
         }
     });
     (transport, hub, counts)

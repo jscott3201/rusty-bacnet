@@ -46,7 +46,7 @@ impl BACnetObject for Probe {
         if p == PropertyIdentifier::STATUS_FLAGS {
             s.reads += 1;
             if s.flags_fail {
-                return Err(Error::Encoding("transient flags failure".into()));
+                return Err(Error::unsupported("transient flags failure"));
             }
             if s.changing {
                 s.selected = PropertyValue::Real(s.reads as f32);
@@ -55,7 +55,7 @@ impl BACnetObject for Probe {
             return Ok(s.flags.clone());
         }
         if s.selected_fail {
-            return Err(Error::Encoding("selected failure".into()));
+            return Err(Error::unsupported("selected failure"));
         }
         Ok(s.selected.clone())
     }
@@ -66,7 +66,7 @@ impl BACnetObject for Probe {
         _: PropertyValue,
         _: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Encoding("read only".into()))
+        Err(Error::unsupported("read only"))
     }
 }
 

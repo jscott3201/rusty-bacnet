@@ -59,7 +59,9 @@ impl<S: Clone> Memory<S> {
 
     fn store(&self, snapshot: &S) -> Result<(), Error> {
         if self.fail.load(Ordering::SeqCst) {
-            return Err(Error::Encoding("storage unavailable".into()));
+            return Err(Error::from(crate::snapshot::backend_failed(
+                "storage unavailable",
+            )));
         }
         *self.saved.lock().unwrap() = Some(snapshot.clone());
         self.saves.fetch_add(1, Ordering::SeqCst);
@@ -257,7 +259,7 @@ impl<S: Clone + 'static> Kept for Case<S> {
 }
 
 /// The eight octets a format's `encode` result opens with.
-fn tag_of(octets: Result<Vec<u8>, crate::snapshot::SnapshotError>) -> [u8; 8] {
+fn tag_of(octets: Result<Vec<u8>, crate::snapshot::PersistenceError>) -> [u8; 8] {
     octets.unwrap()[..8].try_into().unwrap()
 }
 

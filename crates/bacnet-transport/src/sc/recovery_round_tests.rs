@@ -98,7 +98,11 @@ fn down(dials: &Arc<AtomicUsize>) -> WebSocketConnector<LoopbackWebSocket> {
     let dials = dials.clone();
     Arc::new(move || -> Dial {
         dials.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async { Err(Error::Encoding("fixture hub is down".into())) })
+        Box::pin(async {
+            Err(Error::Transport(std::io::Error::other(
+                "fixture hub is down",
+            )))
+        })
     })
 }
 
@@ -347,7 +351,7 @@ async fn start_refuses_unlimited_recovery_under_one_second() {
             let dials = dials.clone();
             move || -> Dial {
                 dials.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async { Err(Error::Encoding("unexpected dial".into())) })
+                Box::pin(async { Err(Error::Transport(std::io::Error::other("unexpected dial"))) })
             }
         });
     let state = transport.connection_state_changes();
@@ -612,7 +616,9 @@ async fn a_live_reused_socket_reconnects() {
 #[tokio::test(start_paused = true)]
 async fn a_retry_forbidden_reseed_failure_ends_unlimited_recovery() {
     let _guard = crate::sc::set_test_random48_vmac_generator(|| {
-        Err(Error::Encoding("fixture entropy unavailable".into()))
+        Err(Error::Transport(std::io::Error::other(
+            "fixture entropy unavailable",
+        )))
     });
     let (tx, mut hubs) = mpsc::unbounded_channel();
     let (transport, _rx, hub, mut events) =

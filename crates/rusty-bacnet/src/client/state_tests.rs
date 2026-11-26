@@ -72,7 +72,9 @@ async fn failed_shutdown_keeps_client_closed_to_operations_until_retry() {
     let state = running_client().await;
     state.closing.store(true, Ordering::Release);
     *state.shutdown.lock().await = Some(tokio::spawn(async {
-        Err(Error::Encoding("injected shutdown failure".into()))
+        Err(Error::Transport(std::io::Error::other(
+            "injected shutdown failure",
+        )))
     }));
     let error = close(Arc::clone(&state)).await.unwrap_err();
     assert!(error.to_string().contains("injected shutdown failure"));

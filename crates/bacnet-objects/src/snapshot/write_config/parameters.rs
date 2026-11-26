@@ -15,7 +15,7 @@
 use bacnet_types::enums::{ObjectType, PropertyIdentifier as P};
 use bytes::BytesMut;
 
-use super::{KIND_REPORTING_PARAMETERS, Reader, SnapshotError, SnapshotErrorKind};
+use super::{KIND_REPORTING_PARAMETERS, PersistenceError, PersistenceErrorKind, Reader};
 use crate::write_config::AlgorithmWriteConfig;
 
 /// What is wrong with a parameter outside [`kept`] for the object's type:
@@ -93,18 +93,18 @@ mod stored {
     use bacnet_types::enums::ObjectType;
     use bytes::BytesMut;
 
-    use super::{Reader, SnapshotError};
+    use super::{PersistenceError, Reader};
 
     /// An Unsigned of 32 bits, as the objects hold a time delay: four
     /// octets.
     pub(super) mod unsigned {
-        use super::{BytesMut, ObjectType, Reader, SnapshotError};
+        use super::{BytesMut, ObjectType, PersistenceError, Reader};
 
         pub(in super::super) fn put(value: &u32, body: &mut BytesMut) {
             body.extend_from_slice(&value.to_be_bytes());
         }
 
-        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<u32, SnapshotError> {
+        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<u32, PersistenceError> {
             reader.u32()
         }
 
@@ -115,13 +115,13 @@ mod stored {
 
     /// A limit: the four octets of an IEEE 754 single, finite.
     pub(super) mod limit {
-        use super::{BytesMut, ObjectType, Reader, SnapshotError};
+        use super::{BytesMut, ObjectType, PersistenceError, Reader};
 
         pub(in super::super) fn put(value: &f32, body: &mut BytesMut) {
             body.extend_from_slice(&value.to_bits().to_be_bytes());
         }
 
-        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<f32, SnapshotError> {
+        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<f32, PersistenceError> {
             Ok(f32::from_bits(reader.u32()?))
         }
 
@@ -145,13 +145,15 @@ mod stored {
     pub(super) mod limit_enable {
         use bacnet_types::bitstring::LimitEnable;
 
-        use super::{BytesMut, ObjectType, Reader, SnapshotError};
+        use super::{BytesMut, ObjectType, PersistenceError, Reader};
 
         pub(in super::super) fn put(value: &LimitEnable, body: &mut BytesMut) {
             body.extend_from_slice(&[value.bits()]);
         }
 
-        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<LimitEnable, SnapshotError> {
+        pub(in super::super) fn get(
+            reader: &mut Reader<'_>,
+        ) -> Result<LimitEnable, PersistenceError> {
             Ok(LimitEnable::from_bits_retain(reader.u8()?))
         }
 
@@ -169,14 +171,14 @@ mod stored {
     pub(super) mod binary_pv {
         use bacnet_types::enums::BinaryPV;
 
-        use super::{BytesMut, ObjectType, Reader, SnapshotError};
+        use super::{BytesMut, ObjectType, PersistenceError, Reader};
 
         pub(in super::super) fn put(value: &BinaryPV, body: &mut BytesMut) {
             // `invalid` has refused a value past one octet.
             body.extend_from_slice(&[value.to_raw() as u8]);
         }
 
-        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<BinaryPV, SnapshotError> {
+        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<BinaryPV, PersistenceError> {
             Ok(BinaryPV::from_raw(u32::from(reader.u8()?)))
         }
 
@@ -211,7 +213,7 @@ mod stored {
     /// object identifier and refused for any other, so a list is never
     /// read under another type's rule.
     pub(super) mod states {
-        use super::{BytesMut, ObjectType, Reader, SnapshotError};
+        use super::{BytesMut, ObjectType, PersistenceError, Reader};
         use crate::multistate::MAX_ALARM_VALUES;
         use crate::prelude::Vec;
 
@@ -223,7 +225,7 @@ mod stored {
             }
         }
 
-        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<Vec<u32>, SnapshotError> {
+        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<Vec<u32>, PersistenceError> {
             // Nothing is allocated until the count is within the cap and
             // the body holds every state it promises.
             let count = reader.count(MAX_ALARM_VALUES)?;
@@ -281,7 +283,7 @@ mod stored {
     macro_rules! encoded {
         ($name:ident, $value:ty, $decode:path, $encode:path, $what:literal) => {
             pub(super) mod $name {
-                use super::{BytesMut, ObjectType, Reader, SnapshotError};
+                use super::{BytesMut, ObjectType, PersistenceError, Reader};
                 use crate::event_enrollment::parameters::{MAX_KEPT_OCTETS, NotKept, reloaded};
 
                 pub(in super::super) fn put(value: &$value, body: &mut BytesMut) {
@@ -294,13 +296,13 @@ mod stored {
 
                 pub(in super::super) fn get(
                     reader: &mut Reader<'_>,
-                ) -> Result<$value, SnapshotError> {
+                ) -> Result<$value, PersistenceError> {
                     let octets = reader.octets(MAX_KEPT_OCTETS)?;
                     reloaded(octets, $decode, $encode).map_err(|why| match why {
                         NotKept::Undecodable(_) => {
-                            SnapshotError::damaged(concat!("holds ", $what, " that don't decode"))
+                            crate::snapshot::damaged(concat!("holds ", $what, " that don't decode"))
                         }
-                        NotKept::Recoded => SnapshotError::damaged(concat!(
+                        NotKept::Recoded => crate::snapshot::damaged(concat!(
                             "holds ",
                             $what,
                             " in an encoding no save writes"
@@ -341,7 +343,7 @@ mod stored {
     /// ([`state_text_fits`](crate::multistate::state_text_fits)), for a
     /// write and for a load.
     pub(super) mod texts {
-        use super::{BytesMut, ObjectType, Reader, SnapshotError};
+        use super::{BytesMut, ObjectType, PersistenceError, Reader};
         use crate::multistate::{MAX_KEPT_STATE_TEXT_OCTETS, MAX_NUMBER_OF_STATES};
         use crate::prelude::{String, Vec};
 
@@ -354,11 +356,13 @@ mod stored {
             }
         }
 
-        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<Vec<String>, SnapshotError> {
+        pub(in super::super) fn get(
+            reader: &mut Reader<'_>,
+        ) -> Result<Vec<String>, PersistenceError> {
             let count = reader.count(MAX_NUMBER_OF_STATES as usize)?;
             // Each label takes at least its four-octet length.
             if count * 4 > reader.body.len() - reader.at {
-                return Err(SnapshotError::truncated(
+                return Err(crate::snapshot::truncated(
                     "holds fewer octets than its State_Text count needs",
                 ));
             }
@@ -366,7 +370,7 @@ mod stored {
             for _ in 0..count {
                 let octets = reader.octets(MAX_KEPT_STATE_TEXT_OCTETS)?;
                 let text = core::str::from_utf8(octets).map_err(|_| {
-                    SnapshotError::damaged("holds a State_Text label that isn't UTF-8")
+                    crate::snapshot::damaged("holds a State_Text label that isn't UTF-8")
                 })?;
                 texts.push(String::from(text));
             }
@@ -511,7 +515,7 @@ macro_rules! rows {
 
         impl Reader<'_> {
             /// The parameters `mask` names, in bit order.
-            fn rows(&mut self, mask: u32) -> Result<AlgorithmWriteConfig, SnapshotError> {
+            fn rows(&mut self, mask: u32) -> Result<AlgorithmWriteConfig, PersistenceError> {
                 Ok(AlgorithmWriteConfig {
                     $($field: if mask & bit::$name != 0 {
                         Some(stored::$stored::get(self)?)
@@ -631,9 +635,9 @@ pub(super) fn encode(
     body: &mut BytesMut,
     object_type: ObjectType,
     config: &AlgorithmWriteConfig,
-) -> Result<(), SnapshotError> {
+) -> Result<(), PersistenceError> {
     if let Some(reason) = invalid(object_type, config) {
-        return Err(SnapshotError::out_of_range(reason));
+        return Err(crate::snapshot::refused_on_encode(reason));
     }
     body.extend_from_slice(&mask(config).to_be_bytes());
     put(body, config);
@@ -644,29 +648,29 @@ impl Reader<'_> {
     /// The parameters after a reporting body, for an object of
     /// `object_type`. A bit outside [`kept`] for that type, whether this
     /// build knows it for another type or not at all, is a newer build's
-    /// sound file ([`UnknownKind`](SnapshotErrorKind::UnknownKind)), refused
+    /// sound file ([`UnknownKind`](PersistenceErrorKind::UnknownKind)), refused
     /// before a row is read, and never damage: a backend with two copies
     /// mustn't pass it over for an older one. No bit at all, or a kept
     /// parameter holding what [`invalid`] names, is damage.
     pub(super) fn parameters(
         &mut self,
         object_type: ObjectType,
-    ) -> Result<AlgorithmWriteConfig, SnapshotError> {
+    ) -> Result<AlgorithmWriteConfig, PersistenceError> {
         let mask = self.u32()?;
         if mask & !kept(object_type) != 0 {
-            return Err(SnapshotError::new(
-                SnapshotErrorKind::UnknownKind(KIND_REPORTING_PARAMETERS),
+            return Err(PersistenceError::new(
+                PersistenceErrorKind::UnknownKind(KIND_REPORTING_PARAMETERS),
                 UNKEPT,
             ));
         }
         if mask == 0 {
-            return Err(SnapshotError::damaged(
+            return Err(crate::snapshot::damaged(
                 "is of the kind with algorithm parameters and holds none",
             ));
         }
         let config = self.rows(mask)?;
         match invalid_value(&config, object_type) {
-            Some(reason) => Err(SnapshotError::damaged(reason)),
+            Some(reason) => Err(crate::snapshot::damaged(reason)),
             None => Ok(config),
         }
     }

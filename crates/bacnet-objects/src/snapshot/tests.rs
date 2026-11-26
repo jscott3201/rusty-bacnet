@@ -9,7 +9,7 @@ use bacnet_types::constructed::{
 use bacnet_types::enums::{LoggingType, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 
-use super::{SnapshotError, SnapshotErrorKind, log, write_config};
+use super::{PersistenceError, PersistenceErrorKind, log, write_config};
 use crate::clock::UNSPECIFIED_DATETIME;
 use crate::durable::crc32;
 use crate::log_persistence::{LogAcquisitionSettings, LogReportingSettings, LogSnapshot};
@@ -182,30 +182,36 @@ fn a_log_slot_refuses_with_the_kind_it_names() {
     };
     assert_eq!(
         kind(&slot[..slot.len() - 1], object),
-        (SnapshotErrorKind::Truncated, true)
+        (PersistenceErrorKind::Truncated, true)
     );
     assert_eq!(
         kind(&slot[..20], object),
-        (SnapshotErrorKind::Truncated, true)
+        (PersistenceErrorKind::Truncated, true)
     );
     let mut flipped = slot.clone();
     flipped[30] ^= 1;
-    assert_eq!(kind(&flipped, object), (SnapshotErrorKind::Damaged, true));
+    assert_eq!(
+        kind(&flipped, object),
+        (PersistenceErrorKind::Damaged, true)
+    );
     let mut retagged = slot.clone();
     retagged[0] = b'X';
     assert_eq!(
         kind(&retagged, object),
-        (SnapshotErrorKind::NotThisFormat, true)
+        (PersistenceErrorKind::NotThisFormat, true)
     );
     let mut newer = slot.clone();
     newer[8..10].copy_from_slice(&9u16.to_be_bytes());
     reseal(&mut newer);
     assert_eq!(
         kind(&newer, object),
-        (SnapshotErrorKind::UnknownVersion(9), false)
+        (PersistenceErrorKind::UnknownVersion(9), false)
     );
     let other = oid(ObjectType::TREND_LOG, 5);
-    assert_eq!(kind(&slot, other), (SnapshotErrorKind::OtherObject, false));
+    assert_eq!(
+        kind(&slot, other),
+        (PersistenceErrorKind::OtherObject, false)
+    );
 }
 
 #[test]
@@ -213,17 +219,17 @@ fn a_log_snapshot_that_does_not_hold_together_never_encodes() {
     let mut zero = trend();
     zero.generation = 0;
     let error = log::encode(&zero).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
     assert!(!error.is_damage());
     let mut cov = event();
     cov.reporting.cov_resubscription_interval = Some(60);
     let error = log::encode(&cov).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
     // A snapshot of one log type passed as another's never encodes either.
     let mut retyped = trend();
     retyped.object_identifier = oid(ObjectType::TREND_LOG_MULTIPLE, 4);
     let error = log::encode(&retyped).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
 }
 
 #[test]
@@ -247,48 +253,53 @@ fn a_write_config_file_refuses_with_the_kind_it_names() {
     for cut in 13..octets.len() {
         assert_eq!(
             kind(channel(), &octets[..cut]),
-            SnapshotErrorKind::Truncated,
+            PersistenceErrorKind::Truncated,
             "cut at {cut}"
         );
     }
     assert_eq!(
         kind(channel(), &octets[..5]),
-        SnapshotErrorKind::NotThisFormat
+        PersistenceErrorKind::NotThisFormat
     );
     assert_eq!(
         kind(oid(ObjectType::CHANNEL, 3), &octets),
-        SnapshotErrorKind::OtherObject
+        PersistenceErrorKind::OtherObject
     );
     let mut unknown = octets.clone();
     unknown[12] = 9;
-    assert_eq!(kind(channel(), &unknown), SnapshotErrorKind::UnknownKind(9));
+    assert_eq!(
+        kind(channel(), &unknown),
+        PersistenceErrorKind::UnknownKind(9)
+    );
     // A Timer's kind in a Channel's file: a kind this build knows, for the
     // wrong object type.
     let mut timer_kind = octets.clone();
     timer_kind[12] = write_config::KIND_TIMER;
-    assert_eq!(kind(channel(), &timer_kind), SnapshotErrorKind::OtherObject);
+    assert_eq!(
+        kind(channel(), &timer_kind),
+        PersistenceErrorKind::OtherObject
+    );
     let mut trailing = octets.clone();
     trailing.push(0);
-    assert_eq!(kind(channel(), &trailing), SnapshotErrorKind::Damaged);
+    assert_eq!(kind(channel(), &trailing), PersistenceErrorKind::Damaged);
     let mut huge = octets;
     huge.resize(write_config::MAX_LEN + 1, 0);
-    assert_eq!(kind(channel(), &huge), SnapshotErrorKind::TooLarge);
+    assert_eq!(kind(channel(), &huge), PersistenceErrorKind::TooLarge);
     // Saved for a Timer, a Channel's configuration is refused unwritten.
     let error = write_config::encode(timer(), &channel_config()).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
     assert!(!error.is_damage());
 }
 
-/// The error is plain data: it is copied and compared, and formats with
+/// The error is plain data: it is cloned and compared, and formats with
 /// its field and reason, without the codec allocating.
 #[test]
 fn an_error_names_its_field_and_reason() {
-    let error = SnapshotError::truncated("is truncated").in_field("Buffer_Size");
-    let copy = error;
+    let error = crate::snapshot::truncated("is truncated").in_field("Buffer_Size");
+    let copy = error.clone();
     assert_eq!(copy, error);
-    assert_eq!(error.field(), Some("Buffer_Size"));
     assert_eq!(error.to_string(), "Buffer_Size is truncated");
-    let version = SnapshotError::new(SnapshotErrorKind::UnknownVersion(4), "");
+    let version = PersistenceError::new(PersistenceErrorKind::UnknownVersion(4), "");
     assert_eq!(version.to_string(), "schema version 4 is unsupported");
 }
 

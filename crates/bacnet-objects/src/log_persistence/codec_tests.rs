@@ -126,8 +126,10 @@ fn a_record_longer_than_a_slot_element_is_never_written() {
         reporting: LogReportingSettings::default(),
     };
     match codec::encode(&snapshot).map_err(Error::from) {
-        Err(Error::OutOfRange(message)) => {
-            assert!(message.contains("element length"), "{message}")
+        Err(Error::Persistence(refused))
+            if refused.kind() == bacnet_types::error::PersistenceErrorKind::RefusedOnEncode =>
+        {
+            assert!(refused.to_string().contains("element length"), "{refused}")
         }
         other => panic!("expected the element cap, got {other:?}"),
     }

@@ -151,10 +151,14 @@ impl AuditLogPersistence for MemoryPersistence {
 
     fn commit(&self, snapshot: &AuditLogSnapshot) -> Result<(), Error> {
         if self.fail_write.load(Ordering::Acquire) {
-            return Err(Error::Encoding("injected write failure".into()));
+            return Err(Error::from(crate::snapshot::backend_failed(
+                "injected write failure",
+            )));
         }
         if self.fail_sync.load(Ordering::Acquire) {
-            return Err(Error::Encoding("injected sync failure".into()));
+            return Err(Error::from(crate::snapshot::backend_failed(
+                "injected sync failure",
+            )));
         }
         *self.snapshot.lock().unwrap() = Some(snapshot.clone());
         Ok(())

@@ -72,17 +72,27 @@ fn patched(mut data: Vec<u8>, offset: usize, octets: &[u8]) -> Vec<u8> {
     data
 }
 
+/// An encode refusal: persisted state of kind `OutOfRange` (#1833).
 fn assert_out_of_range(result: Result<impl core::fmt::Debug, Error>, needle: &str) {
     match result {
-        Err(Error::OutOfRange(message)) => assert!(message.contains(needle), "{message}"),
-        other => panic!("expected OutOfRange with {needle:?}, got {other:?}"),
+        Err(Error::Persistence(refused))
+            if refused.kind() == bacnet_types::error::PersistenceErrorKind::RefusedOnEncode =>
+        {
+            assert!(refused.to_string().contains(needle), "{refused}")
+        }
+        other => panic!("expected an OutOfRange refusal with {needle:?}, got {other:?}"),
     }
 }
 
-fn assert_encoding(result: Result<impl core::fmt::Debug, Error>, needle: &str) {
+/// Stored state refused: persisted state of any other kind (#1833).
+fn assert_stored_refusal(result: Result<impl core::fmt::Debug, Error>, needle: &str) {
     match result {
-        Err(Error::Encoding(message)) => assert!(message.contains(needle), "{message}"),
-        other => panic!("expected Encoding with {needle:?}, got {other:?}"),
+        Err(Error::Persistence(refused))
+            if refused.kind() != bacnet_types::error::PersistenceErrorKind::RefusedOnEncode =>
+        {
+            assert!(refused.to_string().contains(needle), "{refused}")
+        }
+        other => panic!("expected a stored-state refusal with {needle:?}, got {other:?}"),
     }
 }
 
@@ -100,7 +110,7 @@ fn a_sealed_snapshot_at_generation_zero_is_damage() {
         14,
         &0u64.to_be_bytes(),
     );
-    assert_encoding(decode(&data), "generation must be nonzero");
+    assert_stored_refusal(decode(&data), "generation must be nonzero");
 }
 
 #[test]
@@ -110,13 +120,13 @@ fn a_sealed_capacity_past_the_cap_is_refused() {
         HEADER_LEN,
         &(MAX_AUDIT_RECORDS + 1).to_be_bytes(),
     );
-    assert_encoding(decode(&data), "persisted capacity");
+    assert_stored_refusal(decode(&data), "persisted capacity");
 }
 
 #[test]
 fn a_sealed_log_enable_that_is_not_boolean_is_refused() {
     let data = patched(encode_snapshot(&snapshot()).unwrap(), HEADER_LEN + 4, &[2]);
-    assert_encoding(decode(&data), "not Boolean");
+    assert_stored_refusal(decode(&data), "not Boolean");
 }
 
 #[test]
@@ -125,7 +135,7 @@ fn a_snapshot_past_the_size_cap_is_refused_before_its_header_is_read() {
     let data = vec![0; MAX_SNAPSHOT_BYTES + 1];
     let refused = codec::verify_integrity(&data).unwrap_err();
     assert!(refused.is_damage());
-    assert_encoding(Err::<(), Error>(refused.into()), "exceeds");
+    assert_stored_refusal(Err::<(), Error>(refused.into()), "exceeds");
 }
 
 #[test]
@@ -252,7 +262,7 @@ fn a_saved_record_nested_too_deep_is_dropped_and_the_rest_restores() {
     let mut saved = snapshot();
     saved.records[1] = nested_record(2, 28);
     let data = deepened(encode_snapshot(&saved).unwrap(), 2, 3);
-    assert_encoding(decode(&data), "record does not decode");
+    assert_stored_refusal(decode(&data), "record does not decode");
 }
 
 /// Only the depth check drops a record: one that fails to encode for any

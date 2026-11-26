@@ -53,7 +53,9 @@ pub(super) fn harness(
                         npdu: frame.npdu,
                         destination: frame.mac,
                     })
-                    .map_err(|_| Error::Encoding("capture observer closed".into()));
+                    .map_err(|_| {
+                        Error::Transport(std::io::Error::other("capture observer closed"))
+                    });
                 async move { sent }
             })
             .build(),

@@ -84,9 +84,9 @@ impl Shared {
             self.release.acquire().await.unwrap().forget();
         }
         if fail_once {
-            return Err(Error::Encoding(
-                "injected test transport send failure".into(),
-            ));
+            return Err(Error::Transport(std::io::Error::other(
+                "injected test transport send failure",
+            )));
         }
         Ok(())
     }
@@ -169,7 +169,8 @@ impl TestTransportHandle {
         self.shared.settings().max_npdu = Some(limits);
     }
 
-    /// Fail the next recorded send only.
+    /// Fail the next recorded send only, as a link whose send failed does:
+    /// an `Error::Transport`.
     pub fn fail_next_send(&self) {
         self.shared.fail_next.store(true, Ordering::SeqCst);
     }

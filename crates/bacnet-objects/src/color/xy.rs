@@ -150,9 +150,9 @@ impl ColorObject {
         let xy = |value| match value {
             Some(ColorOutputValue::Xy(color)) if command::xy_in_range(color) => Ok(Some(color)),
             None => Ok(None),
-            Some(_) => Err(Error::invalid_config(
+            Some(_) => Err(Error::from(crate::snapshot::damaged(
                 "saved Color output is not a colour the object can hold",
-            )),
+            ))),
         };
         if let Some(color) = xy(saved.present_value)? {
             self.present_value = color;

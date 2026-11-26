@@ -78,7 +78,9 @@ impl WebSocketPort for GateSocket {
         self.observed.calls.lock().unwrap().push(data.to_vec());
         self.flush_buffer().await?;
         if data[0] == 0 && self.observed.fail_nak.load(Ordering::SeqCst) {
-            return Err(Error::Encoding("scripted immediate NAK send error".into()));
+            return Err(Error::Transport(std::io::Error::other(
+                "scripted immediate NAK send error",
+            )));
         }
         if data[0] == 0 && self.observed.hold_nak.load(Ordering::SeqCst) {
             self.observed.nak_started.fetch_add(1, Ordering::SeqCst);

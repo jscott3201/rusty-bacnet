@@ -98,7 +98,7 @@ fn build(
             move |frame| {
                 let limit = usize::from(limit.load(Ordering::SeqCst));
                 let refusal = if down.load(Ordering::SeqCst) {
-                    Some(Error::Encoding("the port is down".into()))
+                    Some(Error::Transport(std::io::Error::other("the port is down")))
                 } else if frame.npdu.len() > limit {
                     Some(Error::SendTooLong {
                         length: frame.npdu.len(),

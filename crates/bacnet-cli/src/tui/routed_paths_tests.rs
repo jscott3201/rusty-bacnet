@@ -114,7 +114,7 @@ async fn a_timeout_after_a_small_request_refused_hints_at_the_path_limit() {
         hint.contains(":path-limit 2:77 SIZE (or :path-limit 10.0.0.9:47808/2=SIZE)"),
         "{hint}"
     );
-    let other = Error::Encoding("no".into());
+    let other = Error::invalid_argument("no");
     assert_eq!(hint_of(&client, &station, &other).await, None);
     let local = DeviceAddress::local(&ROUTER).unwrap();
     assert_eq!(hint_of(&client, &local, &error).await, None);

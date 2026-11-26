@@ -117,7 +117,11 @@ async fn an_audit_installation_refused_after_the_link_started_hands_the_database
 /// installs. The failed stop is only logged.
 #[tokio::test(start_paused = true)]
 async fn a_refusal_whose_link_fails_to_stop_keeps_its_own_error() {
-    let stuck = || async { Err(Error::Encoding("the link would not stop".into())) };
+    let stuck = || async {
+        Err(Error::Transport(std::io::Error::other(
+            "the link would not stop",
+        )))
+    };
     let in_use_link = TestTransport::builder()
         .start_gate(|| async { Err(Error::Transport(std::io::ErrorKind::AddrInUse.into())) })
         .on_stop(stuck)

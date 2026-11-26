@@ -96,8 +96,10 @@ async fn transport_error_after_issuance_does_not_resurrect_pending() {
     let mut f = Fixture::new().await;
     f.inject(&write(1), false).await;
     assert!(matches!(
-        f.finish_next(Err(Error::Encoding("injected send failure".into())))
-            .await,
+        f.finish_next(Err(Error::Transport(std::io::Error::other(
+            "injected send failure"
+        ))))
+        .await,
         Apdu::SimpleAck(_)
     ));
     assert!(!f.pending(&write(1), false));

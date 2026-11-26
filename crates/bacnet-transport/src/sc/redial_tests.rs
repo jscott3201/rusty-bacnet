@@ -66,9 +66,9 @@ fn loopback_redial_connector(
         Box::pin(async move {
             dial_count.fetch_add(1, Ordering::SeqCst);
             let (client, hub) = LoopbackWebSocket::pair();
-            hub_tx
-                .send(hub)
-                .map_err(|_| Error::Encoding("test connector hub receiver dropped".into()))?;
+            hub_tx.send(hub).map_err(|_| {
+                Error::Transport(std::io::Error::other("test connector hub receiver dropped"))
+            })?;
             Ok(client)
         })
     }
@@ -121,14 +121,14 @@ fn loopback_first_success_then_error_connector(
         Box::pin(async move {
             let attempt = dial_count.fetch_add(1, Ordering::SeqCst) + 1;
             if attempt != 1 {
-                return Err(Error::Encoding(format!(
+                return Err(Error::Transport(std::io::Error::other(format!(
                     "test connector rejects dial attempt {attempt}"
-                )));
+                ))));
             }
             let (client, hub) = LoopbackWebSocket::pair();
-            hub_tx
-                .send(hub)
-                .map_err(|_| Error::Encoding("test connector hub receiver dropped".into()))?;
+            hub_tx.send(hub).map_err(|_| {
+                Error::Transport(std::io::Error::other("test connector hub receiver dropped"))
+            })?;
             Ok(client)
         })
     }
@@ -147,9 +147,9 @@ fn gate_send_redial_connector(
         Box::pin(async move {
             dial_count.fetch_add(1, Ordering::SeqCst);
             let (client, hub) = GateSendWebSocket::pair(Arc::new(AtomicBool::new(false)));
-            hub_tx
-                .send(hub)
-                .map_err(|_| Error::Encoding("test connector hub receiver dropped".into()))?;
+            hub_tx.send(hub).map_err(|_| {
+                Error::Transport(std::io::Error::other("test connector hub receiver dropped"))
+            })?;
             Ok(client)
         })
     }
@@ -162,9 +162,9 @@ fn failing_loopback_connector()
 + 'static {
     move || {
         Box::pin(async {
-            Err(Error::Encoding(
-                "test primary connector intentionally fails".into(),
-            ))
+            Err(Error::Transport(std::io::Error::other(
+                "test primary connector intentionally fails",
+            )))
         })
     }
 }

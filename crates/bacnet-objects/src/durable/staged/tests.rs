@@ -30,7 +30,9 @@ fn staged_saves(store: &Arc<Store>) -> StagedSaves<u32, u32> {
         "staged-test".into(),
         move |state: &u32| {
             if store.fail.load(Ordering::SeqCst) {
-                return Err(Error::Encoding("storage refused".into()));
+                return Err(Error::from(crate::snapshot::backend_failed(
+                    "storage refused",
+                )));
             }
             store.saved.lock().unwrap().push(*state);
             Ok(())
@@ -131,7 +133,7 @@ fn a_failed_save_refuses_the_write_and_puts_nothing_back() {
     let _wait = stage(&mut saves, &[unsigned(5)], 1);
     assert!(matches!(
         claim(&mut saves, 5, 0),
-        Some(Err(Error::Encoding(_)))
+        Some(Err(Error::Persistence(_)))
     ));
     assert!(!saves.is_staged());
     assert!(!saves.take_correction());

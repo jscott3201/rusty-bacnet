@@ -229,27 +229,27 @@ pub fn sc_client_builder(
     let cert_path = args
         .sc_cert
         .as_ref()
-        .ok_or_else(|| Error::Encoding("--sc-cert is required for BACnet/SC".into()))?;
+        .ok_or_else(|| Error::invalid_config("--sc-cert is required for BACnet/SC"))?;
     let key_path = args
         .sc_key
         .as_ref()
-        .ok_or_else(|| Error::Encoding("--sc-key is required for BACnet/SC".into()))?;
+        .ok_or_else(|| Error::invalid_config("--sc-key is required for BACnet/SC"))?;
     let hub_url = args
         .sc_url
         .as_deref()
-        .ok_or_else(|| Error::Encoding("--sc-url is required for BACnet/SC".into()))?;
+        .ok_or_else(|| Error::invalid_config("--sc-url is required for BACnet/SC"))?;
     let sc_vmac = args
         .sc_vmac
-        .ok_or_else(|| Error::Encoding("--sc-vmac is required for BACnet/SC".into()))?;
+        .ok_or_else(|| Error::invalid_config("--sc-vmac is required for BACnet/SC"))?;
     let sc_device_uuid = args
         .sc_device_uuid
-        .ok_or_else(|| Error::Encoding("--sc-device-uuid is required for BACnet/SC".into()))?;
+        .ok_or_else(|| Error::invalid_config("--sc-device-uuid is required for BACnet/SC"))?;
     let ca_path = args
         .sc_ca
         .as_ref()
         .filter(|path| !path.as_os_str().is_empty())
         .ok_or_else(|| {
-            Error::Encoding("--sc-ca <FILE> is required for BACnet/SC; supply a nonempty site CA PEM path (no system-root fallback)".into())
+            Error::invalid_config("--sc-ca <FILE> is required for BACnet/SC; supply a nonempty site CA PEM path (no system-root fallback)")
         })?;
 
     // The transport reads the CA file first and checks it whole before it
@@ -261,7 +261,9 @@ pub fn sc_client_builder(
     if let Err(error) = &tls
         && !waits_for_lint(error)
     {
-        return Err(Error::Encoding(sc_tls_message(error)));
+        return Err(Error::InvalidConfig(bacnet_types::error::Refusal::text(
+            sc_tls_message(error),
+        )));
     }
 
     // The pre-dial lint (#968), for one-shots and the TUI alike:
@@ -271,16 +273,21 @@ pub fn sc_client_builder(
     // logged (accepted by design). Inputs past the inspection limits are a
     // warning, not a refusal: the loader above already accepted them.
     let lint = crate::sc_check::lint::Lint::run(cert_path, Some(ca_path), Some(key_path), None)
-        .map_err(Error::Encoding)?;
+        .map_err(|why| Error::InvalidConfig(bacnet_types::error::Refusal::text(why)))?;
     if let Some(refusal) = lint.refusal() {
-        return Err(Error::Encoding(refusal));
+        return Err(Error::InvalidConfig(bacnet_types::error::Refusal::text(
+            refusal,
+        )));
     }
     for warning in lint.of(crate::sc_check::lint::Weight::Warning) {
         tracing::warn!("{}", warning.text);
     }
 
     let tls_config = tls.map_err(|error| {
-        Error::Encoding(format!("TLS config error: {}", sc_tls_message(&error)))
+        Error::InvalidConfig(bacnet_types::error::Refusal::text(format!(
+            "TLS config error: {}",
+            sc_tls_message(&error)
+        )))
     })?;
 
     let mut builder = BACnetClient::sc_builder()
@@ -535,7 +542,8 @@ mod tests {
         let result = build_sc_client(&args).await;
         assert!(matches!(
             result,
-            Err(Error::Encoding(message)) if message.contains("--sc-vmac is required")
+            Err(Error::InvalidConfig(refusal))
+                if refusal.to_string().contains("--sc-vmac is required")
         ));
     }
 
@@ -548,7 +556,8 @@ mod tests {
         let result = build_sc_client(&args).await;
         assert!(matches!(
             result,
-            Err(Error::Encoding(message)) if message.contains("--sc-device-uuid is required")
+            Err(Error::InvalidConfig(refusal))
+                if refusal.to_string().contains("--sc-device-uuid is required")
         ));
     }
 }

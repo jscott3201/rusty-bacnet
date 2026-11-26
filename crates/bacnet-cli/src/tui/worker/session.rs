@@ -135,7 +135,7 @@ async fn connect(
                 .await
             }
             None => {
-                failed(&sink, Error::Encoding("no MS/TP port to monitor".into())).await;
+                failed(&sink, Error::invalid_config("no MS/TP port to monitor")).await;
                 Ok(())
             }
         };
@@ -267,7 +267,7 @@ async fn connect(
         TransportKind::Sc => {
             failed(
                 &sink,
-                Error::Encoding("BACnet/SC requires the 'sc-tls' feature".into()),
+                Error::unsupported("BACnet/SC requires the 'sc-tls' feature"),
             )
             .await;
         }

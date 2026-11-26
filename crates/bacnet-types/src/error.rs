@@ -11,11 +11,14 @@
 //! The local refusals ([`Error::State`], [`Error::InvalidConfig`],
 //! [`Error::InvalidArgument`], [`Error::Unsupported`] and
 //! [`Error::LimitReached`], #1833) are there too, with a static
-//! [`Refusal`]; only their owned text needs `std`. The other variants
-//! holding a `String` or a `Box` need `alloc`.
+//! [`Refusal`] whose owned text needs `std`, and so is persisted state
+//! ([`Error::Persistence`]), whose [`PersistenceError`] owns context text
+//! only with `std`. A
+//! structured error's detail needs `alloc`; the variants for I/O and a
+//! client's lookups need `std`. There is no variant for text alone.
 
 #[cfg(all(feature = "alloc", not(feature = "std")))]
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
 use core::time::Duration;
 
@@ -32,12 +35,14 @@ mod decode;
 mod encode;
 #[cfg(feature = "std")]
 mod network_reject;
+mod persistence;
 mod refusal;
 mod remote;
 pub use decode::{DecodeError, DecodingKind, RangeError};
 pub use encode::{EncodeError, SegmentationError};
 #[cfg(feature = "std")]
 pub use network_reject::NetworkReject;
+pub use persistence::{PersistenceError, PersistenceErrorKind};
 pub use refusal::{Lifecycle, Refusal};
 #[cfg(feature = "alloc")]
 use remote::ProtocolText;
@@ -183,25 +188,64 @@ impl fmt::Display for Candidates<'_> {
 ///
 /// It is `#[non_exhaustive]`, so a `match` on it outside this crate needs a
 /// wildcard arm. Some variants exist only with a feature, and any crate in a
-/// build can turn that on: `Error::Transport`, `Error::AmbiguousDevice`
-/// and `Error::UnknownDevice` need `std`, and the variants that hold a
-/// `String` or a `Box` need `alloc`. Without the attribute a
-/// match written against a smaller build would stop compiling (#1604).
+/// build can turn that on: `Error::Transport`, `Error::NetworkRejected`,
+/// `Error::RouterBusyTimeout`, `Error::AmbiguousDevice` and
+/// `Error::UnknownDevice` need `std`, and `Error::Structured` needs
+/// `alloc`. Without the attribute a match written against a smaller build
+/// would stop compiling (#1604).
 ///
-/// A caller tells errors apart by variant, never by text (#1833). The text
-/// of a local refusal ([`Error::State`], [`Error::InvalidConfig`],
-/// [`Error::InvalidArgument`], [`Error::Unsupported`],
-/// [`Error::LimitReached`]) is for a person to read and may change; a
-/// number or fact a caller acts on has a typed variant or field of its own,
-/// as [`Error::SendTooLong`] carries its length and limit. What a component
-/// is built or started with (a value given to a builder's setter, an option,
-/// a table it is configured with, or a value made to configure it) that it
-/// refuses is [`Error::InvalidConfig`], wherever the check runs, even when the
-/// setter is the call that hands the value over. A value refused at the
-/// call that hands it to a component is [`Error::InvalidArgument`], even
-/// when the component would keep it (a device added to the client's table,
-/// a routed path's limit, a server's new clock zone), and so is text parsed
-/// once.
+/// # Matching
+///
+/// A caller tells errors apart by variant, never by text (#1833): every
+/// error's text is for a person to read and may change, and a number or
+/// fact a caller acts on has a typed variant or field of its own, as
+/// [`Error::SendTooLong`] carries its length and limit. The variants fall
+/// into these groups:
+///
+/// - A peer's answer: [`Error::Remote`] and `Error::Structured` (an Error,
+///   Reject or Abort PDU; [`Error::remote`] gives either as a
+///   [`RemoteError`]), a router's refusal on the way
+///   ([`Error::RoutedPathTooLong`], `Error::NetworkRejected`), and an
+///   acknowledgement of the wrong kind ([`Error::UnexpectedAck`]).
+/// - No answer: [`Error::Timeout`] and `Error::RouterBusyTimeout`; a
+///   request its client or link stopped under, [`Error::RequestCutOff`];
+///   one DeviceCommunicationControl held back, [`Error::InitiationDisabled`].
+///   The last two say whether the request may have gone out.
+/// - This side's refusal, with nothing sent: [`Error::State`] with its
+///   [`Lifecycle`], [`Error::InvalidConfig`], [`Error::InvalidArgument`],
+///   [`Error::Unsupported`] and [`Error::LimitReached`], each with a
+///   [`Refusal`]; and the ones that carry what a caller acts on:
+///   [`Error::SendTooLong`], [`Error::UnsupportedTransport`],
+///   [`Error::RoutedPathCapacityExceeded`], `Error::AmbiguousDevice` and
+///   `Error::UnknownDevice`.
+/// - A codec's refusal: [`Error::Encode`], [`Error::Decoding`] (with its
+///   offset and [`DecodingKind`]), [`Error::Range`],
+///   [`Error::Segmentation`] and [`Error::BufferTooShort`]; and a
+///   well-formed answer that breaks a rule the client checks:
+///   [`Error::ReadRangeViolation`], [`Error::LogNotAdvancing`].
+/// - I/O the operating system reported, with its error as the source:
+///   `Error::Transport`. That is any OS I/O: a socket's, a serial port's,
+///   and a storage file's, which the stack's own file backends return
+///   this way.
+/// - Persisted state: [`Error::Persistence`], for stored octets that are
+///   damaged, belong to another object or a version this build doesn't
+///   read, or were refused as they were encoded, and for a storage backend
+///   that failed with no OS error behind it. Its
+///   [`PersistenceError::kind`] and [`PersistenceError::is_damage`] say
+///   which.
+///
+/// What a component is built or started with (a value given to a
+/// builder's setter, an option, a table it is configured with, or a value
+/// made to configure it) that it refuses is [`Error::InvalidConfig`],
+/// wherever the check runs, even when the setter is the call that hands the
+/// value over. A value refused at the call that hands it to a component is
+/// [`Error::InvalidArgument`], even when the component would keep it (a
+/// device added to the client's table, a routed path's limit, a server's new
+/// clock zone), and so is text parsed once. There is no variant for text
+/// alone: an application's own code that returns this error (a storage
+/// backend, a hook, a transport) picks the variant for what failed, such as
+/// [`PersistenceError::new`] for its storage or a local refusal with
+/// `Refusal::text` (with `std`) where it names a run-time value.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 // Clippy fails if the attribute above goes.
@@ -354,11 +398,19 @@ pub enum Error {
     #[error("{0}")]
     LimitReached(Refusal),
 
-    /// Error encoding a PDU, with a formatted message. Only with `alloc`;
-    /// [`Error::Encode`] is the static form, which the codec crates return.
-    #[cfg(feature = "alloc")]
-    #[error("encoding error: {0}")]
-    Encoding(String),
+    /// Persisted state that couldn't be loaded or saved (#1833): stored
+    /// octets that are damaged or cut short, a sound snapshot saved for
+    /// another object or by a build this one can't read, a snapshot refused
+    /// as it was encoded, or a storage backend that failed with no
+    /// operating-system error behind it (an OS I/O failure, a storage
+    /// file's included, is `Error::Transport`). The [`PersistenceError`]
+    /// says which by its [`kind`](PersistenceError::kind), and
+    /// [`is_damage`](PersistenceError::is_damage) says whether a backend
+    /// that keeps two copies should pass over this one for the other. Its
+    /// own text is static, so it exists in every build; with `std`,
+    /// `Error::with_context` can put a path or other context in front.
+    #[error("{0}")]
+    Persistence(PersistenceError),
 
     /// A value an encoder or validator refused, with a static label
     /// (#1802). The encoders and validators of `bacnet-encoding` and
@@ -396,12 +448,6 @@ pub enum Error {
         /// Bytes actually available.
         have: usize,
     },
-
-    /// Value out of valid range, with a formatted message. Only with
-    /// `alloc`; [`Error::Range`] is the static form.
-    #[cfg(feature = "alloc")]
-    #[error("value out of range: {0}")]
-    OutOfRange(String),
 
     /// A value a checked constructor refused, with a static label (#1646),
     /// such as an object type or instance
@@ -533,6 +579,12 @@ impl From<SegmentationError> for Error {
 impl From<RangeError> for Error {
     fn from(error: RangeError) -> Self {
         Self::Range(error)
+    }
+}
+
+impl From<PersistenceError> for Error {
+    fn from(error: PersistenceError) -> Self {
+        Self::Persistence(error)
     }
 }
 
@@ -918,8 +970,9 @@ impl Error {
     }
 
     /// This error with `context` and `: ` in front of its text, keeping its
-    /// variant, for a caller that says where a local refusal came from. Any
-    /// other error is returned as it is. Only with `std`.
+    /// variant, for a caller that says where a local refusal or persisted
+    /// state came from, such as a file's path; a persisted-state error keeps
+    /// its kind. Any other error is returned as it is. Only with `std`.
     #[cfg(feature = "std")]
     #[must_use]
     pub fn with_context(self, context: &str) -> Self {
@@ -929,6 +982,7 @@ impl Error {
             Self::InvalidArgument(refusal) => Self::InvalidArgument(refusal.with_context(context)),
             Self::Unsupported(refusal) => Self::Unsupported(refusal.with_context(context)),
             Self::LimitReached(refusal) => Self::LimitReached(refusal.with_context(context)),
+            Self::Persistence(refused) => Self::Persistence(refused.with_context(context)),
             other => other,
         }
     }

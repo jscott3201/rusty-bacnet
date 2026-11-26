@@ -178,9 +178,11 @@ impl<R: SnapshotRecord> LogStore<R> {
         let loaded = persistence.load(oid)?;
         if let Some(snapshot) = &loaded {
             if snapshot.object_identifier != oid {
-                return Err(Error::invalid_config(
+                return Err(bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::OtherObject,
                     "log snapshot belongs to another object",
-                ));
+                )
+                .into());
             }
             codec::validate(snapshot).map_err(|error| Error::from(error.in_format(codec::WHAT)))?;
         }

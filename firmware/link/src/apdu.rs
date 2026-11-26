@@ -181,7 +181,7 @@ pub struct Summary {
     /// draws that kind: an NPDU of protocol version 2 on decode
     /// (`NpduDecodeError::Malformed`), and on encode an NPDU to DNET 0 and a
     /// Confirmed-Request offering APDUs of 100 octets, a size the header
-    /// can't express (both `Error::Encoding`).
+    /// can't express (both `Error::Range`).
     pub refusals: u8,
     /// How the library classifies each decoding fault: the Reject reason it
     /// maps the error to, `None` where the input was accepted or the error

@@ -458,9 +458,15 @@ async fn audit_reporter_atomic_write_file_backend_mapping_and_unknown_outcome_si
                 Error::protocol(ErrorClass::from_raw(128), ErrorCode::from_raw(512)),
                 true,
             ),
-            (Error::Encoding("backend".into()), true),
+            (
+                Error::from(bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::BackendFailed,
+                    "backend",
+                )),
+                true,
+            ),
             (Error::decoding(0, "backend, not service decoding"), true),
-            (Error::OutOfRange("backend".into()), true),
+            (Error::range("backend"), true),
             (Error::Timeout(Duration::from_secs(1)), false),
             (Error::reject(RejectReason::OTHER), false),
             (Error::abort(AbortReason::OUT_OF_RESOURCES), false),

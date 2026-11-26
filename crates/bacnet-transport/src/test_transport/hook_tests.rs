@@ -37,7 +37,7 @@ async fn before_stop_holds_the_stop_and_the_inner_stop_still_runs() {
     let seen = inner.handle();
     let outer = TestTransport::builder()
         .inner(inner)
-        .before_stop(|| async { Err(Error::Encoding("refused".into())) })
+        .before_stop(|| async { Err(Error::Transport(std::io::Error::other("refused"))) })
         .build();
     assert!(outer.stop().await.is_err());
     assert_eq!((outer.handle().stops(), seen.stops()), (1, 0));
@@ -50,7 +50,8 @@ async fn stop_releases_the_lease_the_transport_holds() {
         let lease = Arc::new(());
         let mut builder = TestTransport::builder().normal_bip(endpoint);
         if failing {
-            builder = builder.on_stop(|| async { Err(Error::Encoding("stop failed".into())) });
+            builder = builder
+                .on_stop(|| async { Err(Error::Transport(std::io::Error::other("stop failed"))) });
         }
         let mut transport = builder.build();
         transport
@@ -116,7 +117,7 @@ async fn after_stop_runs_after_a_successful_stop_only() {
     let ran = Arc::new(AtomicUsize::new(0));
     let count = Arc::clone(&ran);
     let failing = TestTransport::builder()
-        .on_stop(|| async { Err(Error::Encoding("stop failed".into())) })
+        .on_stop(|| async { Err(Error::Transport(std::io::Error::other("stop failed"))) })
         .after_stop(move || {
             count.fetch_add(1, Ordering::SeqCst);
             async { Ok(()) }
@@ -125,9 +126,11 @@ async fn after_stop_runs_after_a_successful_stop_only() {
     assert!(failing.stop().await.is_err());
     assert_eq!(ran.load(Ordering::SeqCst), 0);
     let refusing = TestTransport::builder()
-        .after_stop(|| async { Err(Error::Encoding("after failed".into())) })
+        .after_stop(|| async { Err(Error::Transport(std::io::Error::other("after failed"))) })
         .build();
-    assert!(matches!(refusing.stop().await, Err(Error::Encoding(m)) if m == "after failed"));
+    assert!(
+        matches!(refusing.stop().await, Err(Error::Transport(m)) if m.to_string() == "after failed")
+    );
 }
 
 #[tokio::test]
@@ -189,7 +192,7 @@ async fn bip_port_and_lease_hooks_and_a_start_held_after_the_link_is_up() {
         let _ = start.await.unwrap();
     }
     let mut failing = TestTransport::builder()
-        .after_start(|| async { Err(Error::Encoding("held start failed".into())) })
+        .after_start(|| async { Err(Error::Transport(std::io::Error::other("held start failed"))) })
         .build();
     assert!(failing.start().await.is_err());
 }

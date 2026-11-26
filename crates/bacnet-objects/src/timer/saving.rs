@@ -63,9 +63,11 @@ impl TimerObject {
             None => TimerWriteConfig::default(),
             Some(WriteConfigSnapshot::Timer(saved)) => saved,
             Some(_) => {
-                return Err(Error::invalid_config(
+                return Err(bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::OtherObject,
                     "saved write configuration is not a Timer's",
-                ));
+                )
+                .into());
             }
         };
         description::check_saved(saved.description.as_deref())?;

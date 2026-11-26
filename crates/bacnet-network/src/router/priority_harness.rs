@@ -51,12 +51,12 @@ fn port(
                     attributes: frame.attributes,
                     complete,
                 })
-                .map_err(|_| Error::Encoding("test wire closed".into()));
+                .map_err(|_| Error::Transport(std::io::Error::other("test wire closed")));
             async move {
                 queued?;
                 completion
                     .await
-                    .map_err(|_| Error::Encoding("test send refused".into()))?
+                    .map_err(|_| Error::Transport(std::io::Error::other("test send refused")))?
             }
         })
         .build()

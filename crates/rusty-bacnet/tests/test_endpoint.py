@@ -31,6 +31,7 @@ from rusty_bacnet import (
     BacnetAbortError,
     BacnetError,
     BacnetProtocolError,
+    BacnetStateError,
     BacnetTransportError,
     BACnetClient,
     BACnetServer,
@@ -317,6 +318,13 @@ class BipLifecycleTests(unittest.IsolatedAsyncioTestCase):
         results = await asyncio.gather(endpoint.start(), endpoint.start(), return_exceptions=True)
         self.assertEqual(sum(result is None for result in results), 1)
         self.assertEqual(sum(isinstance(result, BacnetError) for result in results), 1)
+        # The second start is a lifecycle refusal (#1833): BacnetStateError,
+        # still a BacnetError and a RuntimeError.
+        refused = next(result for result in results if result is not None)
+        self.assertIsInstance(refused, BacnetStateError)
+        self.assertIsInstance(refused, RuntimeError)
+        self.assertEqual(refused.state, "already_started")
+        self.assertEqual(str(refused), "endpoint already started")
         try:
             port = address_port(await endpoint.local_address())
             self.assertIs(await endpoint.__aenter__(), endpoint)
