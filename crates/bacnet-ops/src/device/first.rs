@@ -1,12 +1,14 @@
 //! A device named by its instance, placed for the first time (#2824): the
 //! discovery table is filled by I-Ams nobody asked for, so its claims are
-//! only cues. When no claim is confirmed already (its device's own answer
-//! remembered, or a row the application registered by hand), one Who-Is
-//! for the instance goes out first and its answers are given the settle
-//! time, so the device itself claims the instance too when it is on the
-//! network. Then every claim is asked which device answers there, and the
-//! answers decide ([`placed`]). One resolution of an instance runs at a
-//! time, and resolutions waiting on it share its Who-Is.
+//! only cues. Unless a row the application registered by hand claims the
+//! instance, one Who-Is for it goes out first and its answers are given
+//! the settle time, so the device itself claims the instance too when it
+//! is on the network. Then every claim is asked which device answers
+//! there, and the answers decide ([`placed`]). A device's earlier answer,
+//! remembered, saves asking its address again, and nothing more: the
+//! device it answered for may be elsewhere too. One resolution of an
+//! instance runs at a time, and resolutions waiting on it share its
+//! Who-Is.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
@@ -64,20 +66,37 @@ impl<T: TransportPort + 'static> Client<T> {
         gate.lock_owned().await
     }
 
-    /// What `claim` is known to say of being device `instance` without
-    /// asking it: a row registered by hand, never announced, is the
-    /// application's own word, as an address it names is; else the
-    /// device's earlier answer to the client, as remembered.
-    async fn known_answer(&self, claim: &DeviceAddress, instance: u32) -> Option<Answer> {
-        let registered = claim.row(self.low_level()).await.is_some_and(|row| {
+    /// Whether a row registered by hand, never announced, claims
+    /// `instance` at `claim`: the application's own word, as an address it
+    /// names is, which stands without a Who-Is.
+    async fn registered(&self, claim: &DeviceAddress, instance: u32) -> bool {
+        claim.row(self.low_level()).await.is_some_and(|row| {
             row.last_announced.is_none() && row.object_identifier.instance_number() == instance
-        });
-        if registered {
-            return Some(Answer::Is(instance));
+        })
+    }
+
+    /// Whether any of `claims` is [`registered`](Self::registered) for
+    /// `instance`.
+    async fn any_registered(&self, claims: &[DeviceAddress], instance: u32) -> bool {
+        for claim in claims {
+            if self.registered(claim, instance).await {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// What `claim` is known to say of being device `instance` without
+    /// asking it, and whether that is vouched for: a row registered by hand
+    /// is ([`registered`](Self::registered)); the device's earlier answer
+    /// to the client, as remembered, isn't, and only saves asking again.
+    async fn known_answer(&self, claim: &DeviceAddress, instance: u32) -> Option<(Answer, bool)> {
+        if self.registered(claim, instance).await {
+            return Some((Answer::Is(instance), true));
         }
         (self.confirmed_as(claim) == Some(instance)).then(|| match self.said(claim) {
-            Some(_) => Answer::Is(instance),
-            None => Answer::Has(instance),
+            Some(_) => (Answer::Is(instance), false),
+            None => (Answer::Has(instance), false),
         })
     }
 
@@ -99,16 +118,19 @@ impl<T: TransportPort + 'static> Client<T> {
     ) {
         let mut before = Vec::with_capacity(claims.len());
         for claim in claims {
-            let answer = match known {
-                Some((at, answer)) if at == claim => Some(*answer),
-                _ => self.known_answer(claim, instance).await,
+            let (answer, vouched) = match known {
+                Some((at, answer)) if at == claim => (Some(*answer), false),
+                _ => match self.known_answer(claim, instance).await {
+                    Some((answer, vouched)) => (Some(answer), vouched),
+                    None => (None, false),
+                },
             };
-            before.push((claim.clone(), answer));
+            before.push((claim.clone(), answer, vouched));
         }
         if let Some(decided) = over_cap(instance, &before) {
             return (decided, Vec::new());
         }
-        let asks = before.iter().map(|(claim, known)| async move {
+        let asks = before.iter().map(|(claim, known, _)| async move {
             match known {
                 Some(answer) => *answer,
                 None => self.asked(claim, instance).await,
@@ -136,7 +158,9 @@ impl<T: TransportPort + 'static> Client<T> {
     /// client's own question (#2824): for a front end that checks every
     /// address against its policy before anything goes there, so these
     /// claims alone are asked, and no Who-Is is sent. A claim whose device
-    /// confirmed it before, or a row registered by hand, isn't asked again.
+    /// confirmed it before, or a row registered by hand, isn't asked again;
+    /// over [`MAX_ASKED`](super::MAX_ASKED) claims, only a row registered by
+    /// hand places it.
     ///
     /// # Errors
     ///
@@ -168,12 +192,13 @@ impl<T: TransportPort + 'static> Client<T> {
     /// Where `key`'s instance (named on `named`) is placed when no place
     /// of the handles following it can be joined (`live`: that place's
     /// address, with what its device answered when asked already): its
-    /// claims in the discovery table and `live`'s address. When none of
-    /// them is confirmed already, one Who-Is for the instance goes out
-    /// first (unless one went out while this resolution waited its
+    /// claims in the discovery table and `live`'s address. Unless a row
+    /// registered by hand is among them, one Who-Is for the instance goes
+    /// out first (unless one went out while this resolution waited its
     /// `turn`, `since`), and its answers are given [`SETTLE`]; with no claim
     /// at all, the resolve wait for a first answer ([`Client::find_instance`]).
-    /// Then [`confirm`](Self::confirm). With what each claim answered.
+    /// An answer only remembered sends it all the same. Then
+    /// [`confirm`](Self::confirm). With what each claim answered.
     pub(super) async fn resolve_claims(
         &self,
         (key, named): (FollowKey, Option<u16>),
@@ -184,16 +209,7 @@ impl<T: TransportPort + 'static> Client<T> {
         let held = live.as_ref().map(|(here, _)| here.clone());
         let known = live.and_then(|(here, answer)| Some((here, answer?)));
         let mut claims = self.claims_and(instance, network, held.as_ref()).await;
-        let mut confirmed = known
-            .as_ref()
-            .is_some_and(|(_, answer)| answer.confirms(instance));
-        for claim in &claims {
-            confirmed |= self
-                .known_answer(claim, instance)
-                .await
-                .is_some_and(|answer| answer.confirms(instance));
-        }
-        if !confirmed {
+        if !self.any_registered(&claims, instance).await {
             // Shared: a resolution of the same instance sent one while this
             // one waited its turn.
             let shared = turn.is_some_and(|sent| sent >= since);
@@ -243,7 +259,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// Settle the place a watch hub's following point of `key`'s instance
     /// is watched at, `here`, before its first read (#2824), once a place:
     /// a place confirmed already, and still holding the instance, stands;
-    /// else, unless a claim is confirmed already, one Who-Is for the
+    /// else, unless a row registered by hand claims it, one Who-Is for the
     /// instance goes first, and its answers are given the settle time. The
     /// place's own address alone claiming it then is left to the hub's
     /// start, which asks it after its first read and takes nothing from
@@ -270,14 +286,9 @@ impl<T: TransportPort + 'static> Client<T> {
             return Settled::Open;
         }
         let (network, instance) = key;
-        let mut confirmed = false;
-        for claim in self.claims_and(instance, network, Some(here)).await {
-            confirmed |= self
-                .known_answer(&claim, instance)
-                .await
-                .is_some_and(|answer| answer.confirms(instance));
-        }
-        if !confirmed && !turn.is_some_and(|sent| sent >= since) && self.resolve_wait().is_some() {
+        let claims = self.claims_and(instance, network, Some(here)).await;
+        let registered = self.any_registered(&claims, instance).await;
+        if !registered && !turn.is_some_and(|sent| sent >= since) && self.resolve_wait().is_some() {
             *turn = Some(now());
             if self.who_is_for(instance, network).await.is_ok() {
                 tokio::time::sleep(SETTLE).await;

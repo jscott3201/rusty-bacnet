@@ -37,7 +37,8 @@ use crate::limits::RequestLimits;
 /// The most addresses a handle's first placement asks which device
 /// answers there (#2824): an instance claimed at more addresses needing a
 /// question is refused as ambiguous, with nothing sent, unless a single
-/// claim among them is confirmed already, which places the handle.
+/// claim among them is a row registered by hand, which places the handle.
+/// An answer the client only remembers decides nothing then.
 pub const MAX_ASKED: usize = 8;
 
 /// What the device at an address said of itself, asked which device it is
@@ -137,29 +138,36 @@ pub fn placed(instance: u32, asked: &[(DeviceAddress, Answer)]) -> Result<Device
 }
 
 /// When more of `claims` than [`MAX_ASKED`] would need a question (no
-/// answer known for them yet): the one claim confirmed already (its
-/// device's earlier answer remembered, or a row registered by hand) places
-/// the handle, as a place confirmed before is joined, and otherwise the
-/// instance is ambiguous, with nothing sent. `None` while the questions may
-/// be asked.
+/// answer known for them yet): a single claim known to confirm the
+/// instance places the handle only when it is vouched for (the third
+/// field: a row registered by hand, the application's own word); otherwise
+/// the instance is ambiguous, with nothing sent. An answer only remembered
+/// saves its own question but decides nothing here, as the device it
+/// answered for may be among the claims unasked too. `None` while the
+/// questions may be asked.
 pub(crate) fn over_cap(
     instance: u32,
-    claims: &[(DeviceAddress, Option<Answer>)],
+    claims: &[(DeviceAddress, Option<Answer>, bool)],
 ) -> Option<Result<DeviceAddress, OpsError>> {
-    let unasked = claims.iter().filter(|(_, known)| known.is_none()).count();
+    let unasked = claims
+        .iter()
+        .filter(|(_, known, _)| known.is_none())
+        .count();
     if unasked <= MAX_ASKED {
         return None;
     }
-    let confirmed: Vec<&DeviceAddress> = claims
+    let confirmed: Vec<(&DeviceAddress, bool)> = claims
         .iter()
-        .filter(|(_, known)| known.is_some_and(|answer| answer.confirms(instance)))
-        .map(|(address, _)| address)
+        .filter(|(_, known, _)| known.is_some_and(|answer| answer.confirms(instance)))
+        .map(|(address, _, vouched)| (address, *vouched))
         .collect();
     Some(match confirmed.as_slice() {
-        [address] => Ok((*address).clone()),
+        [(address, true)] => Ok((*address).clone()),
         _ => {
-            let mut candidates: Vec<DeviceAddress> =
-                claims.iter().map(|(address, _)| address.clone()).collect();
+            let mut candidates: Vec<DeviceAddress> = claims
+                .iter()
+                .map(|(address, _, _)| address.clone())
+                .collect();
             candidates.sort();
             candidates.dedup();
             Err(OpsError::Ambiguous {

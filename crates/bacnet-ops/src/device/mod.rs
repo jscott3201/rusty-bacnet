@@ -22,10 +22,9 @@
 //!   that follows the instance, placed only where a device confirmed it to
 //!   the client's own question (#2824). Where the handles already
 //!   following it are, confirmed and still holding it, it joins them,
-//!   sending nothing. Otherwise, unless a claim is confirmed already (its
-//!   device's earlier answer, remembered and forgotten as the instance
-//!   read for an address is, or a row registered by hand), one Who-Is for
-//!   the instance goes first, to the network the target names, or for a
+//!   sending nothing. Otherwise, unless a row registered by hand claims it
+//!   (the application's own word, trusted without a question), one Who-Is
+//!   for the instance goes first, to the network the target names, or for a
 //!   bare instance to the client's resolve scope, this network alone by
 //!   default ([`Client::with_resolve_scope`]), so the device itself, on
 //!   the network but quiet, claims it too: its answers are given half a
@@ -42,10 +41,14 @@
 //!   several that don't, or two or more left open, as
 //!   [`OpsError::Ambiguous`], listing them, with nothing but the Who-Is
 //!   and those questions sent. More claims needing a question than
-//!   [`MAX_ASKED`] are ambiguous unasked, but a single confirmed one among
-//!   them places the handle. A first contact so costs about half a second
-//!   and one read a claim, about the resolve wait when nothing answers;
-//!   none once confirmed. An I-Am, even one answering the client's own
+//!   [`MAX_ASKED`] are ambiguous unasked, but a single row registered by
+//!   hand among them places the handle. A placement so costs about half a
+//!   second and one read a claim, about the resolve wait when nothing
+//!   answers. A device's answer is remembered for its address (and
+//!   forgotten as the instance read for an address is), which spares its
+//!   read the next time and nothing more: once the last handle following
+//!   the instance is dropped, the next is placed again, Who-Is included,
+//!   as the device that answered may be elsewhere too. An I-Am, even one answering the client's own
 //!   Who-Is, confirms nothing: nothing in it ties it to a request. A new
 //!   handle never moves the handles already following the instance: one
 //!   placed elsewhere than they are fails as [`OpsError::NotConfirmed`]

@@ -334,7 +334,10 @@ impl<T: TransportPort + 'static> Client<T> {
             let place = lock(&followed);
             (self.localized(place.at.clone()), place.confirmed)
         };
-        if !confirmed && self.confirmed_as(&here) != Some(instance) {
+        // A place no question confirmed (a watch hub's, made from the
+        // table) isn't joined on an answer only remembered: the handle is
+        // placed by asking, the Who-Is first (#2824).
+        if !confirmed {
             return Joining::Ask(Some((here, None)));
         }
         if self.holds(&here, instance).await {

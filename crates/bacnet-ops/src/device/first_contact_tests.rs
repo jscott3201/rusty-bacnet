@@ -247,8 +247,9 @@ async fn a_turned_away_question_leaves_the_choice_open() {
 }
 
 /// The first handle costs one question; later ones, while it lives and
-/// after it is dropped, cost nothing more, and neither do its reads and
-/// writes.
+/// after it is dropped, ask nothing more (the one made after sends the
+/// Who-Is again, the device's answer remembered), and neither do its
+/// reads and writes.
 #[tokio::test(start_paused = true)]
 async fn a_confirmed_device_costs_nothing_more() {
     let (bus, client, sent, servers) = lab(false).await;
@@ -513,4 +514,71 @@ fn the_answers_decide_the_place() {
         Err(OpsError::Ambiguous { candidates, .. }) if candidates == [a.clone(), b.clone()]
     ));
     assert!(matches!(place(&[]), Err(OpsError::UnknownDevice { .. })));
+}
+
+/// Both stations answered as N, so N was ambiguous and both answers are
+/// remembered; then station 2's row ages out while station 3 keeps
+/// announcing. A remembered answer saves its question, but it never stands
+/// in for the Who-Is: the next handle sends one, the device at station 2
+/// claims N again, and the handle fails as ambiguous, station 3 not asked
+/// again.
+#[tokio::test(start_paused = true)]
+async fn a_remembered_answer_sends_the_who_is_all_the_same() {
+    let (bus, client, sent, servers) = lab(true).await;
+    bus.i_am(2, N);
+    bus.i_am(3, N);
+    settle().await;
+    let error = client.device(N).await.unwrap_err();
+    assert!(matches!(&error, OpsError::Ambiguous { .. }), "{error:?}");
+    for _ in 0..4 {
+        tokio::time::advance(std::time::Duration::from_secs(240)).await;
+        bus.i_am(3, N);
+        settle().await;
+    }
+    assert!(at(2).row(client.low_level()).await.is_none(), "aged out");
+    let (who_is, asked) = (super::test_bus::who_is(&sent), requests(&sent, READ, 3));
+    let error = client.device(N).await.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            OpsError::Ambiguous { candidates, .. } if *candidates == [at(2), at(3)]
+        ),
+        "{error:?}"
+    );
+    assert_eq!(super::test_bus::who_is(&sent), who_is + 1, "the Who-Is");
+    assert_eq!(
+        requests(&sent, READ, 3),
+        asked,
+        "remembered, not asked again"
+    );
+    assert_eq!(writes(&sent), 0);
+    stop(servers).await;
+}
+
+/// The responder at station 3 answered as N once, while the device was
+/// away, and is remembered so. Then the device at station 2 and more
+/// stations than the questions' cap claim N: the remembered answer decides
+/// nothing over the cap, as the device it answered for may be among the
+/// claims unasked, so the handle fails as ambiguous with nothing asked.
+#[tokio::test(start_paused = true)]
+async fn over_the_cap_a_remembered_answer_places_nothing() {
+    let (bus, client, sent, mut servers) = lab_with(false, true).await;
+    bus.i_am(3, N);
+    settle().await;
+    drop(client.device(N).await.unwrap());
+    servers.push(server(bus.port(2), N, "A").await);
+    bus.i_am(2, N);
+    let count = u8::try_from(MAX_ASKED).unwrap();
+    for station in 4..4 + count {
+        bus.i_am(station, N);
+    }
+    settle().await;
+    let unicasts = sent.unicasts().len();
+    let made = client.device(N).await;
+    assert!(
+        matches!(&made, Err(OpsError::Ambiguous { candidates, .. }) if candidates.len() == MAX_ASKED + 2),
+        "{made:?}"
+    );
+    assert_eq!(sent.unicasts().len(), unicasts, "nothing asked");
+    stop(servers).await;
 }

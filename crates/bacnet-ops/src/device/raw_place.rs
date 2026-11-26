@@ -187,9 +187,12 @@ pub async fn place_instance<T: TransportPort + 'static>(
             asked,
         }));
     }
-    let before: Vec<(DeviceAddress, Option<Answer>)> = claims
+    let before: Vec<(DeviceAddress, Option<Answer>, bool)> = claims
         .iter()
-        .map(|(at, registered)| (at.clone(), registered.then_some(Answer::Is(instance))))
+        .map(|(at, registered)| {
+            let known = registered.then_some(Answer::Is(instance));
+            (at.clone(), known, *registered)
+        })
         .collect();
     if let Some(decided) = over_cap(instance, &before) {
         return Ok(Placement {
@@ -197,15 +200,18 @@ pub async fn place_instance<T: TransportPort + 'static>(
             placed: decided,
         });
     }
-    let asks = before.iter().map(|(at, known)| async move {
+    let asks = before.iter().map(|(at, known, _)| async move {
         match known {
             Some(answer) => *answer,
             None => identify(client, limits, at, instance).await,
         }
     });
     let answers = every(asks).await;
-    let asked: Vec<(DeviceAddress, Answer)> =
-        before.into_iter().map(|(at, _)| at).zip(answers).collect();
+    let asked: Vec<(DeviceAddress, Answer)> = before
+        .into_iter()
+        .map(|(at, _, _)| at)
+        .zip(answers)
+        .collect();
     Ok(Placement {
         placed: placed(instance, &asked),
         asked,

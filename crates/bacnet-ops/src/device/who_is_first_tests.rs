@@ -22,8 +22,9 @@ const READ: ConfirmedServiceChoice = ConfirmedServiceChoice::READ_PROPERTY;
 /// The device announced itself, and nothing confirmed it yet: the first
 /// handle sends one Who-Is, waits the settle time, and asks once, so it
 /// costs about half a second. A second handle, made while the first
-/// lives, or after it is dropped, sends no Who-Is: the device's answer is
-/// remembered.
+/// lives, joins it, sending nothing. One made after the last is dropped
+/// is placed again: the Who-Is and its settle time once more, but no
+/// question, the device's answer being remembered.
 #[tokio::test(start_paused = true)]
 async fn a_first_contact_costs_about_half_a_second() {
     let (bus, client, sent, servers) = lab_with(true, false).await;
@@ -37,14 +38,22 @@ async fn a_first_contact_costs_about_half_a_second() {
         "{took:?}"
     );
     assert_eq!((who_is(&sent), requests(&sent, READ, 2)), (1, 1));
-    drop(first);
+    let from = Instant::now();
+    let joined = client.device(N).await.unwrap();
+    assert!(from.elapsed() < Duration::from_millis(50));
+    assert_eq!((who_is(&sent), requests(&sent, READ, 2)), (1, 1), "joined");
+    drop((first, joined));
     let from = Instant::now();
     client.device(N).await.unwrap();
-    assert!(from.elapsed() < Duration::from_millis(50));
+    let took = from.elapsed();
+    assert!(
+        (super::resolve::SETTLE..Duration::from_millis(600)).contains(&took),
+        "{took:?}"
+    );
     assert_eq!(
         (who_is(&sent), requests(&sent, READ, 2)),
-        (1, 1),
-        "remembered"
+        (2, 1),
+        "the Who-Is again, the answer remembered"
     );
     stop(servers).await;
 }
