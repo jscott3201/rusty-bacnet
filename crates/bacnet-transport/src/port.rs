@@ -23,7 +23,10 @@ use tokio::sync::{mpsc, oneshot, watch};
 /// [`Lifecycle::NotRunning`], the state a send before start finds too.
 /// Nothing was sent. [`stopped_for_good`] is the one for a transport that
 /// doesn't start again. See [`TransportPort::stop`].
-#[cold]
+///
+/// Out of line but not `#[cold]`: a cold call here changed how the B/IP
+/// send path that names it is inlined, about 8 instructions a request in
+/// the counting harness (#1833).
 #[inline(never)]
 pub fn stopped() -> Error {
     Error::state(Lifecycle::NotRunning, "transport stopped")

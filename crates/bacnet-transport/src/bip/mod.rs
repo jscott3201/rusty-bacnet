@@ -435,7 +435,7 @@ impl BipTransport {
 
 /// The error for a transport that isn't started (#1833): it can start, so
 /// [`Lifecycle::NotRunning`], as after a stop ([`crate::port::stopped`]).
-#[cold]
+/// Out of line but not `#[cold]`, as that one is: the send path names it.
 #[inline(never)]
 fn not_started() -> Error {
     Error::state(Lifecycle::NotRunning, "Transport not started")
