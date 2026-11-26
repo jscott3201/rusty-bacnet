@@ -1,5 +1,5 @@
 //! Following points (#2795): a point that follows its device's instance
-//! ([`Binding::Follows`](super::super::Binding::Follows)) goes to the address
+//! ([`Binding::Follows`]) goes to the address
 //! the hub's own reads found the device at ([`moves`](super::moves)),
 //! keeping its subscriber process identifier, its values and its
 //! listeners. Nothing else moves one: an I-Am, a handle moving, or the
