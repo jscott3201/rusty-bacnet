@@ -193,6 +193,18 @@ fn the_summary_shows_for_what_was_not_asked_for() {
     assert!(Summary::new(vec![row("default", None, true)], 0, 1, 0, false).shown(0));
     // An answer refused for the path it came by is shown unasked (#2831).
     assert!(Summary::new(Vec::new(), 0, 0, 1, false).shown(0));
+    // So is a network-number window that decided nothing (#2826).
+    let disagreed = Summary {
+        network_number_disagreements: 1,
+        ..Summary::new(Vec::new(), 0, 0, 0, false)
+    };
+    assert!(disagreed.shown(0));
+    let line = "Network-number answers that decided nothing: 1";
+    let table = disagreed.render(OutputFormat::Table);
+    assert!(table.contains(line), "{table}");
+    let json: serde_json::Value =
+        serde_json::from_str(&disagreed.render(OutputFormat::Json)).unwrap();
+    assert_eq!(json["network_number_disagreements"], serde_json::json!(1));
 }
 
 /// The hint comes with a timeout after a dropped below-minimum reject, and

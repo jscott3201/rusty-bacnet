@@ -11,7 +11,7 @@ use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRou
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::test_transport::{SendLog, TestTransport};
 
-use super::test_bus::{Bus, N, client_on, mac, name_of, server, settle, stop};
+use super::test_bus::{Bus, N, client_on, mac, name_of, server, settle, stop, until_learned};
 use super::*;
 use crate::client::{Discover, Find, ResolveScope, Scope};
 
@@ -225,12 +225,7 @@ async fn a_routed_copy_of_a_local_answer_is_one_answer() {
     let lab = Routed::new(|near| near.numbered_port(1)).await;
     let low = lab.client.low_level();
     low.what_is_network_number(None).await.unwrap();
-    for _ in 0..50 {
-        if low.network_number().is_some() {
-            break;
-        }
-        settle().await;
-    }
+    until_learned(low).await;
     assert_eq!(low.network_number(), Some(1), "the router said");
     let search = Find::name("near").wait(Duration::from_millis(500));
     let (found, ()) = tokio::join!(lab.client.find(search), async {
@@ -293,12 +288,7 @@ async fn an_address_on_the_own_network_is_local() {
         .push(server(lab.near.port(2), 2002, "near").await);
     let low = lab.client.low_level();
     low.what_is_network_number(None).await.unwrap();
-    for _ in 0..50 {
-        if low.network_number().is_some() {
-            break;
-        }
-        settle().await;
-    }
+    until_learned(low).await;
     assert_eq!(low.network_number(), Some(1), "the router said");
     lab.discover().await;
     let local = lab.client.device("10.0.0.2:47808").await.unwrap();
@@ -359,12 +349,7 @@ async fn handles_named_before_the_number_is_learned_are_local_after() {
     assert_eq!(pinned.address(), routed, "the number isn't known yet");
     assert_eq!(following.address(), routed);
     low.what_is_network_number(None).await.unwrap();
-    for _ in 0..50 {
-        if low.network_number().is_some() {
-            break;
-        }
-        settle().await;
-    }
+    until_learned(&low).await;
     assert_eq!(low.network_number(), Some(1), "the router said");
     let local = lab.client.device("10.0.0.2:47808").await.unwrap();
     assert_eq!(pinned.address(), local.address());
@@ -391,12 +376,7 @@ async fn a_directed_who_is_on_the_own_network_is_a_local_unicast() {
     let lab = Routed::new(|near| near.numbered_port(1)).await;
     let low = lab.client.low_level();
     low.what_is_network_number(None).await.unwrap();
-    for _ in 0..50 {
-        if low.network_number().is_some() {
-            break;
-        }
-        settle().await;
-    }
+    until_learned(low).await;
     assert_eq!(low.network_number(), Some(1), "the router said");
     lab.sent.clear();
     let station = DeviceAddress::new(1, &mac(9)).unwrap();
@@ -479,12 +459,7 @@ async fn a_miss_on_the_own_network_keeps_the_target_as_written() {
     let lab = Routed::new(|near| near.numbered_port(1)).await;
     let low = lab.client.low_level();
     low.what_is_network_number(None).await.unwrap();
-    for _ in 0..50 {
-        if low.network_number().is_some() {
-            break;
-        }
-        settle().await;
-    }
+    until_learned(low).await;
     assert_eq!(low.network_number(), Some(1), "the router said");
     lab.sent.clear();
     let named = lab.client.device("1:4242").await.unwrap_err();

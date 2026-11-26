@@ -1,6 +1,6 @@
 #![allow(clippy::print_stderr)] // the peer helpers trace wire frames to diagnose failing tests
 use super::tls;
-use bacnet_client::client::{BACnetClient, ClientConfig};
+use bacnet_client::client::{BACnetClient, ClientConfig, ClientOptions};
 use bacnet_transport::{
     sc::{ScConnection, ScConnectionState, ScTransport, WebSocketPort},
     sc_frame::{BROADCAST_VMAC, ScFunction, ScMessage, decode_sc_message, encode_sc_message},
@@ -13,6 +13,8 @@ pub const NODE: [u8; 6] = [0x20; 6];
 pub const PEER: [u8; 6] = [0x30; 6];
 pub const QUERY: &[u8] = &[1, 0x80, 0x12];
 pub type Client = BACnetClient<ScTransport<TlsWebSocket>>;
+/// The window the client's question opens here (#2826).
+const WINDOW_MS: u64 = 1_000;
 pub async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(3), future)
         .await
@@ -59,7 +61,12 @@ impl Peer {
         frame
     }
     pub async fn number(&self, expected: u16) {
-        let frame = self.receive().await;
+        let mut frame = self.receive().await;
+        // The router check a client makes before it takes a number
+        // (Who-Is-Router-To-Network, #2826) is no Number reply.
+        while frame.payload.starts_with(&[1, 0x80, 0x00]) {
+            frame = self.receive().await;
+        }
         assert_eq!(frame.destination_vmac, Some(BROADCAST_VMAC));
         assert_eq!(
             frame.payload.as_ref(),
@@ -96,7 +103,16 @@ impl Fixture {
             .await
             .unwrap();
         let states = transport.connection_state_changes();
-        let client = bounded(BACnetClient::start(ClientConfig::default(), transport))
+        // The client takes a number only from the answers to its own
+        // question, within a window after it (#2826): a short one, through
+        // the test hook, keeps this wall-clock test quick.
+        let options = ClientOptions::default().with_number_window(Duration::from_millis(WINDOW_MS));
+        // The router check after a window waits one APDU timeout.
+        let config = ClientConfig {
+            apdu_timeout_ms: WINDOW_MS,
+            ..ClientConfig::default()
+        };
+        let client = bounded(BACnetClient::start_with_options(config, transport, options))
             .await
             .unwrap();
         let peer = Peer::connect(
@@ -130,6 +146,24 @@ impl Fixture {
             direct,
         }
     }
+    /// Have the client ask the peer alone, take its question off the peer's
+    /// connection, send `npdu` from the peer to `destination` inside the
+    /// window the question opens, and wait for the window to close. The
+    /// client takes a number only from such answers (#2826): one it admits
+    /// here decides, one it refuses decides nothing.
+    pub async fn in_a_window(&mut self, destination: [u8; 6], npdu: &[u8]) {
+        let client = self.client.as_ref().unwrap();
+        bounded(client.what_is_network_number(Some(&PEER)))
+            .await
+            .unwrap();
+        let question = self.peer.receive().await;
+        assert_eq!(question.destination_vmac, None, "to the peer alone");
+        assert_eq!(question.payload.as_ref(), QUERY);
+        self.peer.send(destination, npdu).await;
+        // The window, and the router check after it when the number changes.
+        tokio::time::sleep(Duration::from_millis(2 * WINDOW_MS + 200)).await;
+    }
+
     /// Stops the client (or drops it bare), waits until the hub and direct
     /// listener see it gone, then stops both listeners and binds each address
     /// again to prove it was released. Both are stopped whatever the first

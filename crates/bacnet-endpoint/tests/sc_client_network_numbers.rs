@@ -21,8 +21,9 @@ async fn sc_client_number_hub_direct_wire_and_confirmed_progress() {
         f.peer.send(BROADCAST_VMAC, QUERY).await;
         // Keep this initial batch within the default four-per-origin SC intake
         // quota. Unicast NNI refusal has its own later positive reply fence.
-        f.peer
-            .send(BROADCAST_VMAC, &[1, 0x80, 0x13, 0, 77, 0])
+        // Every announcement below answers a question the client asked the
+        // peer alone: it takes a number only from those (#2826).
+        f.in_a_window(BROADCAST_VMAC, &[1, 0x80, 0x13, 0, 77, 0])
             .await;
         // Clause 6.4.19 allows a question to the node alone, and it is
         // answered at once. A broadcast one's answer waits up to ten seconds
@@ -31,8 +32,7 @@ async fn sc_client_number_hub_direct_wire_and_confirmed_progress() {
         f.peer.number(77).await;
         // Learned values update until configured evidence takes precedence.
         for (number, flag, expected) in [(78, 0, 78), (79, 1, 79), (80, 0, 79), (81, 1, 81)] {
-            f.peer
-                .send(BROADCAST_VMAC, &[1, 0x80, 0x13, 0, number, flag])
+            f.in_a_window(BROADCAST_VMAC, &[1, 0x80, 0x13, 0, number, flag])
                 .await;
             f.peer.send(NODE, &[1, 0x80, 0x12]).await;
             f.peer.number(expected).await;
@@ -50,7 +50,7 @@ async fn sc_client_number_hub_direct_wire_and_confirmed_progress() {
                 vec![1, 0xa0, 0xff, 0xff, 0, 255, 0x13, 0, 200, 1],
             ),
         ] {
-            f.peer.send(dest, &invalid).await;
+            f.in_a_window(dest, &invalid).await;
             f.peer.send(NODE, &[1, 0x80, 0x12]).await;
             f.peer.number(81).await;
         }
@@ -66,8 +66,7 @@ async fn sc_client_number_hub_direct_wire_and_confirmed_progress() {
         {
             f.peer.send(NODE, invalid).await;
             let number = 82 + i as u8;
-            f.peer
-                .send(BROADCAST_VMAC, &[1, 0x80, 0x13, 0, number, 1])
+            f.in_a_window(BROADCAST_VMAC, &[1, 0x80, 0x13, 0, number, 1])
                 .await;
             f.peer.send(NODE, &[1, 0x80, 0x12]).await;
             f.peer.number(number.into()).await;
@@ -120,8 +119,7 @@ async fn sc_client_number_real_connections_stop_and_drop_release() {
         // (#1070).
         rerun_on_lost_port(async || {
             let mut f = Fixture::start().await;
-            f.peer
-                .send(BROADCAST_VMAC, &[1, 0x80, 0x13, 0, 77, 1])
+            f.in_a_window(BROADCAST_VMAC, &[1, 0x80, 0x13, 0, 77, 1])
                 .await;
             // Establish learning on the same Hub reader before the direct query.
             f.peer.send(NODE, QUERY).await;

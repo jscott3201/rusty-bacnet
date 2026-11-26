@@ -93,13 +93,17 @@ fn entry_at(id: u64, address: &str, priority: u8, (before, written): (&str, &str
 }
 
 /// Teach the client its network's number, as a router's
-/// Network-Number-Is does.
+/// Network-Number-Is does in answer to the client's question: the client
+/// takes it when the question's window, its APDU timeout, closes (#2826).
 async fn learn(lab: &Lab, network: u16) {
+    lab.client.what_is_network_number(None).await.unwrap();
     let [hi, lo] = network.to_be_bytes();
     let says = Bytes::from(vec![1, 0x80, 0x13, hi, lo, 1]);
     let from = MacAddr::from_slice(&B);
     let frame = ReceivedNpdu::unverified(says, from, true, Vec::new(), None);
     lab.inbox.send(frame).await.unwrap();
+    // The window: the longest a node may hold its answer, and a margin.
+    tokio::time::sleep(Duration::from_secs(12)).await;
     for _ in 0..1_000 {
         if lab.client.network_number() == Some(network) {
             return;

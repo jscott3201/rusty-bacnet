@@ -12,11 +12,16 @@ use tokio::time::Duration;
 /// A step on the paused clock that gives the client's tasks a turn.
 const TURN: Duration = Duration::from_millis(1);
 
-/// A client that has learned network 7 from an announcement with `flag`.
+/// A client that has learned network 7 from the answer, with `flag`, to
+/// its own question, which is taken from the log.
 async fn taught(flag: u8) -> Site {
     let site = open_site(true).await;
-    site.announce(7, flag).await;
-    assert!(site.sent.is_empty(), "learning sends nothing");
+    site.taught(7, flag).await;
+    let frames = site.sent.take();
+    // Its question, and the router check before it took the number.
+    assert_eq!(frames.len(), 2, "{frames:?}");
+    assert_eq!(frames[0].npdu.as_ref(), QUERY);
+    assert_eq!(frames[1].npdu.as_ref(), [1, 0x80, 0x00, 0, 7]);
     site
 }
 
@@ -104,29 +109,24 @@ async fn an_answer_heard_in_the_wait_stands_for_the_clients() {
     }
 }
 
-/// A heard answer is applied first, by Clause 6.4.20's precedence, and
-/// compared after. One the client takes over (a configured number over
-/// its learned one) puts it in agreement, and it stays quiet. One it
-/// refuses (a learned number against one learned from a configured
-/// announcement) leaves the two apart, and the client still answers with
-/// its own, so the asker hears both.
+/// A heard announcement naming another number than the client holds,
+/// flagged configured or not, is no answer the client would give (#2826):
+/// it keeps its number and asks about the other one at once, and its own
+/// answer to the waiting question still goes, so the asker hears both.
 #[tokio::test(start_paused = true)]
-async fn a_differing_answer_counts_only_once_the_client_agrees() {
-    let mut adopts = taught(0).await;
-    ask(&adopts, true).await;
-    hear(&adopts, 8, 1).await;
-    assert_eq!(adopts.client.network_number(), Some(8));
-    tokio::time::sleep(ANSWER_DELAY_MAX * 2).await;
-    assert!(adopts.sent.is_empty(), "it agrees now, and stays quiet");
-    adopts.client.stop().await.unwrap();
-
-    let mut keeps = taught(1).await;
-    ask(&keeps, true).await;
-    hear(&keeps, 8, 0).await;
-    assert_eq!(keeps.client.network_number(), Some(7));
-    tokio::time::sleep(ANSWER_DELAY_MAX * 2).await;
-    assert_one_answer(&keeps.sent.frames());
-    keeps.client.stop().await.unwrap();
+async fn a_differing_announcement_leaves_the_clients_answer_waiting() {
+    for flag in [0, 1] {
+        let mut site = taught(0).await;
+        ask(&site, true).await;
+        hear(&site, 8, flag).await;
+        assert_eq!(site.client.network_number(), Some(7), "flag {flag}");
+        tokio::time::sleep(ANSWER_DELAY_MAX * 2).await;
+        let frames = site.sent.take();
+        assert_eq!(frames.len(), 2, "flag {flag}: {frames:?}");
+        assert_eq!(frames[0].npdu.as_ref(), QUERY, "its question first");
+        assert_one_answer(&frames[1..]);
+        site.client.stop().await.unwrap();
+    }
 }
 
 /// A client that doesn't know the number has no answer, at once or later,
@@ -136,9 +136,13 @@ async fn a_client_without_the_number_stays_quiet() {
     let mut site = open_site(true).await;
     ask(&site, true).await;
     ask(&site, false).await;
-    site.announce(7, 1).await;
+    site.taught(7, 1).await;
     tokio::time::sleep(ANSWER_DELAY_MAX * 2).await;
-    assert!(site.sent.is_empty());
+    let frames = site.sent.frames();
+    // Its own question and its router check, and no answer.
+    assert_eq!(frames.len(), 2, "{frames:?}");
+    assert_eq!(frames[0].npdu.as_ref(), QUERY);
+    assert_eq!(frames[1].npdu.as_ref(), [1, 0x80, 0x00, 0, 7]);
     site.client.stop().await.unwrap();
 }
 

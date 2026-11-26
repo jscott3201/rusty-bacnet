@@ -36,7 +36,7 @@ NEAR = 2667
 FORWARDED_NPCI = 9 + 1 + 6
 CALLS = ("configure_routed_path_max_npdu", "clear_routed_path_limit",
          "routed_path_limits", "too_long_reject_drops", "below_minimum_reject_drops",
-         "off_path_answer_drops")
+         "off_path_answer_drops", "network_number_disagreements")
 
 
 def too_long(network):
@@ -180,6 +180,8 @@ class RoutedPathLimitWireTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.client.too_long_reject_drops(), 0)
         # The answer came through the request's own router (#2831).
         self.assertEqual(await self.client.off_path_answer_drops(), 0)
+        # No question about this network's number was answered (#2826).
+        self.assertEqual(await self.client.network_number_disagreements(), 0)
         [path] = await self.client.routed_path_limits()
         self.assertEqual(
             (path.router, path.network, path.max_npdu, path.source, path.configured_max_npdu,

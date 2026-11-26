@@ -185,17 +185,20 @@ async fn an_i_am_from_outside_the_scope_is_no_answer() {
 /// out. A local answer now identifies the station named by that network.
 #[tokio::test(start_paused = true)]
 async fn a_directed_scope_localizes_answers_when_the_network_is_learned_during_the_wait() {
-    use super::test_bus::{client_on, settle};
+    use super::test_bus::{client_on, past_the_window};
     use bacnet_client::client::Station;
 
     let bus = Bus::new();
     let (client, sent) = client_on(bus.numbered_port(1)).await;
     let target = Station::remote(5, &mac(2));
-    let request = Discover::directed(target).wait(Duration::from_secs(2));
+    // Longer than the window for the answers to the client's question
+    // (#2826), so the number is learned during the wait.
+    let request = Discover::directed(target).wait(Duration::from_secs(15));
     let (found, ()) = tokio::join!(client.discover(request), async {
         sent.wait_for_len(2).await; // What-Is-Network-Number and the Who-Is.
+        // The answer to that question, taken when its window closes.
         bus.number_is(254, 5);
-        settle().await;
+        past_the_window().await;
         assert_eq!(client.low_level().network_number(), Some(5));
         bus.i_am(2, 1002);
         bus.i_am(3, 1002);
@@ -215,8 +218,7 @@ async fn discovery_projects_claims_by_canonical_station_and_instance() {
     let bus = Bus::new();
     let (client, _) = client_on(bus.numbered_port(1)).await;
     let low = client.low_level();
-    bus.number_is(254, 5);
-    settle().await;
+    bus.taught(low, 254, 5).await;
     bus.i_am(2, N);
     settle().await;
     // A superseded routed answer for another instance cannot satisfy this join.
