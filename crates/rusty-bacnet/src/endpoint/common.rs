@@ -226,6 +226,13 @@ pub(crate) enum PendingObject {
 
 mod pending_build;
 
+/// What a call that needs the running session raises before start and
+/// after close (#2819): `BacnetStateError`, `state` `"not_running"`, since
+/// an endpoint starts again after its close.
+pub(crate) fn not_running(message: &str) -> PyErr {
+    crate::errors::lifecycle_error(bacnet_types::error::Lifecycle::NotRunning, message)
+}
+
 /// Admit a registration under the same lock that seals registrations at
 /// startup, against the Device, its declared Network Ports and the pending
 /// set, then keep it. Every kind passes through [`admit`], so a point is
@@ -258,7 +265,10 @@ pub(super) fn register_pending<S>(
             Ok(())
         })
         .ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err(
+            // Registrations are sealed from the start until the close ends:
+            // a call only an unstarted endpoint takes (#2819).
+            crate::errors::lifecycle_error(
+                bacnet_types::error::Lifecycle::AlreadyStarted,
                 "cannot add objects while endpoint is starting, running, or stopping",
             )
         })?

@@ -8,13 +8,13 @@ use bacnet_endpoint::mstp::MstpEndpointBuilder;
 use bacnet_endpoint::session::SessionRole;
 use bacnet_transport::mstp::{Echo, MstpConfig, SerialPort};
 use bacnet_transport::mstp_serial::{SerialConfig, TokioSerialPort};
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::endpoint::common::{
     PendingObject, build_database, build_identity, build_pending_boxes, lifecycle_error,
-    parse_device_uuid, parse_segmentation, pending_group,
+    not_running, parse_device_uuid, parse_segmentation, pending_group,
 };
 use crate::endpoint::lifecycle::Lifecycle;
 use crate::endpoint::running::Running;
@@ -533,7 +533,7 @@ impl PyMstpEndpoint {
                 let guard = inner.read().await;
                 let session = guard
                     .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
+                    .ok_or_else(|| not_running("endpoint not started"))?;
                 let counters = session.policy_counters();
                 let leases = session.active_leases();
                 let running = session.is_running();
@@ -568,7 +568,7 @@ impl PyMstpEndpoint {
         let future = async move {
             let guard = inner.read().await;
             let session = guard.as_ref().ok_or_else(|| {
-                PyRuntimeError::new_err("endpoint not started — use 'async with' or await start()")
+                not_running("endpoint not started — use 'async with' or await start()")
             })?;
             session.broadcast_i_am().await.map_err(to_py_err)?;
             Ok(())

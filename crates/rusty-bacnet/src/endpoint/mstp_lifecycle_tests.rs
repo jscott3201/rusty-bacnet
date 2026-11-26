@@ -484,6 +484,7 @@ async def refused(call, kind):
         await call()
     except Exception as error:
         assert type(error).__name__ == kind, repr(error)
+        return error
     else:
         raise AssertionError(f"{call} was not refused")
 async def go():
@@ -498,7 +499,9 @@ async def go():
     fresh = await endpoint.client()
     assert fresh is not client
     await endpoint.close()
-    await refused(fresh.who_is, "RuntimeError")
+    # The endpoint's client never starts again (#2819): still a RuntimeError.
+    stopped = await refused(fresh.who_is, "BacnetStateError")
+    assert isinstance(stopped, RuntimeError) and stopped.state == "closed", repr(stopped)
 asyncio.run(go())
 "#
             ),

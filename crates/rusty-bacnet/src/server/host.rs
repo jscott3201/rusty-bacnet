@@ -13,6 +13,7 @@
 
 use std::sync::{Arc, Weak};
 
+use bacnet_types::error::Lifecycle;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use tokio::sync::{OwnedRwLockReadGuard, RwLock, RwLockReadGuard};
@@ -86,12 +87,14 @@ impl ServerHost {
 }
 
 impl HostGuard<'_> {
-    /// The running server, or the RuntimeError its call raises without one.
+    /// The running server, or the `BacnetStateError` its call raises
+    /// without one (#2819).
     pub(crate) fn server(&self) -> PyResult<&Server> {
         match self {
-            Self::Own(guard) => guard
-                .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("server not started")),
+            // A standalone server starts again after its stop.
+            Self::Own(guard) => guard.as_ref().ok_or_else(|| {
+                crate::errors::lifecycle_error(Lifecycle::NotRunning, "server not started")
+            }),
             Self::Endpoint(guard, run) => guard
                 .as_deref()
                 .and_then(Option::as_ref)
@@ -126,9 +129,11 @@ impl HostGuard<'_> {
     }
 }
 
-/// An endpoint's server after the endpoint's close (or its drop).
+/// An endpoint's server after the endpoint's close (or its drop): that
+/// run's server never starts again.
 fn endpoint_closed() -> PyErr {
-    PyRuntimeError::new_err(
+    crate::errors::lifecycle_error(
+        Lifecycle::Closed,
         "the endpoint this server came from is closed, and its server stopped with it; \
          after a restart, await endpoint.server() for the new one",
     )
