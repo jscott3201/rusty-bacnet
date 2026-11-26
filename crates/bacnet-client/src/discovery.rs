@@ -194,8 +194,13 @@ impl Key {
 /// station its I-Am came through; and since any station can answer a
 /// broadcast router query, one that answers alone in two windows a minute
 /// apart while the old router and its devices stay silent through both is
-/// taken. Confirming a device before a write is #2824. The network number
-/// a Network-Number-Is teaches folds rows too.
+/// taken. A router's answer the link or the transport dropped before the
+/// network layer's control queue is not seen as lost. Two kinds of frame
+/// can keep a path without coming from its router, though never move one:
+/// an answer the transaction matching accepted, and on B/IP a forwarded
+/// frame whose origin a BBMD gives as the router's (#2829). Confirming a
+/// device before a write is #2824. The network number a Network-Number-Is
+/// teaches folds rows too.
 ///
 /// An index maps each Device instance to the addresses whose rows claim it.
 /// Two or more addresses can claim one instance, and every one keeps its row:
@@ -292,6 +297,7 @@ impl DeviceTable {
     /// ([`DiscoveredDevice::address`]), or a new address once the table is
     /// full, is not stored.
     pub fn upsert(&mut self, device: DiscoveredDevice) {
+        self.registered_router(&device);
         let segmentation = PeerSegmentation::Authoritative(device.segmentation_supported);
         let _ = self.insert(device, segmentation, false);
     }

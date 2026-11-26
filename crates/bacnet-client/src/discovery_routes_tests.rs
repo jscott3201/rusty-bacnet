@@ -98,17 +98,17 @@ fn first_sight_and_the_rows_own_router_are_not_held() {
 }
 
 /// Marks coalesce per path, and the due paths come highest ranked first:
-/// more rows, then the longest known, up to the limit.
+/// the longest known, then the most rows, up to the limit.
 #[test]
 fn due_paths_come_highest_ranked_first() {
     let mut table = DeviceTable::new();
     for station in [5u8, 6, 7] {
         table.upsert(routed(u32::from(station), 3, &[station], &ROUTER));
     }
-    table.upsert(routed(1, 1, &[5], &ROUTER));
     for station in [5u8, 6] {
         table.upsert(routed(u32::from(station) + 10, 2, &[station], &ROUTER));
     }
+    table.upsert(routed(1, 1, &[5], &ROUTER));
     for (network, station) in [(1, 5u8), (2, 5), (2, 6), (3, 5)] {
         let claim = routed(1, network, &[station], &OTHER);
         assert_eq!(table.heard(claim).change, Change::Held);
@@ -154,6 +154,55 @@ fn a_full_store_keeps_the_paths_with_more_rows() {
     assert_eq!(due.len(), MAX_PATHS);
     assert_eq!(due[0], path(5000, &ROUTER));
     assert!(!due.contains(&path(4000, &ROUTER)));
+}
+
+/// A path a forger made in numbers ranks below a long-known one with fewer
+/// rows: age comes first.
+#[test]
+fn a_long_known_path_outranks_a_newer_one_with_more_rows() {
+    let mut table = DeviceTable::new();
+    table.upsert(routed(1, 1, &[5], &ROUTER));
+    for station in 1..=20u8 {
+        table.upsert(routed(u32::from(station) + 100, 2, &[station], &ROUTER));
+    }
+    assert_eq!(table.heard(routed(9, 2, &[1], &OTHER)).change, Change::Held);
+    assert_eq!(table.heard(routed(1, 1, &[5], &OTHER)).change, Change::Held);
+    assert_eq!(table.due_paths(now(), 1), [path(1, &ROUTER)]);
+}
+
+/// A strike is cleared by an explicit registration that gives a row on the
+/// path another router, and lost with the path when the store evicts it.
+#[test]
+fn a_strike_ends_with_a_registration_or_an_eviction() {
+    let strike = || Strike {
+        to: MacAddr::from_slice(&OTHER),
+        since: now(),
+    };
+    let mut table = DeviceTable::new();
+    table.upsert(routed(1, 2, &[5], &ROUTER));
+    table.upsert(routed(2, 2, &[6], &ROUTER));
+    assert_eq!(table.heard(routed(1, 2, &[5], &OTHER)).change, Change::Held);
+    table.path_checked(&path(2, &ROUTER), Checked::Struck(strike()), now());
+    assert!(table.path_strike(&path(2, &ROUTER)).is_some());
+    table.upsert(routed(1, 2, &[5], &[0x40]));
+    assert_eq!(table.path_strike(&path(2, &ROUTER)), None);
+
+    // 256 paths known longer than the struck one push it out of the store.
+    let mut crowded = DeviceTable::new();
+    for network in 100..100 + MAX_PATHS as u16 {
+        crowded.upsert(routed(u32::from(network), network, &[5], &ROUTER));
+    }
+    crowded.upsert(routed(1, 2, &[5], &ROUTER));
+    assert_eq!(
+        crowded.heard(routed(1, 2, &[5], &OTHER)).change,
+        Change::Held
+    );
+    crowded.path_checked(&path(2, &ROUTER), Checked::Struck(strike()), now());
+    for network in 100..100 + MAX_PATHS as u16 {
+        let claim = routed(u32::from(network), network, &[5], &OTHER);
+        assert_eq!(crowded.heard(claim).change, Change::Held);
+    }
+    assert_eq!(crowded.path_strike(&path(2, &ROUTER)), None, "evicted");
 }
 
 /// The station a check asks is the client's choice: the row through the

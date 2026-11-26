@@ -7,16 +7,22 @@
 //! with requests of its own:
 //!
 //! 1. A Who-Is through the path's router to the station on that network
-//!    the table heard from last through it, the client's choice, never the
-//!    one the I-Am named. Any frame that router carries back from the
-//!    network after the check began keeps the path. The other station
-//!    cannot send as the router, so it cannot fake that.
-//! 2. Only if nothing came, a broadcast Who-Is-Router-To-Network for the
-//!    network (Clause 6.6.3.2). The old router among the answers keeps the
-//!    path: the device is quiet, not the router gone. No answer, several,
-//!    or an answer that may have been lost (a lagging report receiver, or a
-//!    network control the layer's queue turned away during the wait) keep
-//!    it too. One other router alone is a strike.
+//!    whose I-Am the table took through it last (then the one heard from
+//!    last), the client's choice, never the one the claim named. Any frame
+//!    that router carries back from the network after the check began
+//!    keeps the path. The other station cannot send as the router, so it
+//!    cannot fake that, with two exceptions that can only keep a path or
+//!    pick the probe, never move one: an answer the client's transaction
+//!    matching accepted, and on B/IP a forwarded frame whose origin a BBMD
+//!    gives as the router's (#2829).
+//! 2. Only if nothing came, the client broadcasts its router query
+//!    (Who-Is-Router-To-Network) for that network (Clause 6.6.3.2). The old
+//!    router among the answers keeps the path: the device is quiet, not the
+//!    router gone. No answer, several, or an answer that may have been lost
+//!    (a lagging report receiver, or a network control the layer's queue
+//!    turned away during the wait) keep it too. A seated client can't see
+//!    its node's control queue, so for it every answer may have been lost
+//!    and this step never strikes. One other router alone is a strike.
 //!
 //! The first strike schedules a second check a minute later, however
 //! far the path's hold had grown. Only when that one strikes too, with the
@@ -25,9 +31,12 @@
 //! move to the new one (`DeviceTable::reroute`). Anything else clears the
 //! strike, and the hold paces the path again. At the default 6 s APDU
 //! timeout a real failover is taken 84 s after the first I-Am through the
-//! new router: two checks of 12 s, a minute apart. Meanwhile requests go
-//! through the old router and end as on any silent path, with
-//! `RemoteError::Abort` (`TSM_TIMEOUT`) after their retries.
+//! new router at best: two checks of 12 s, a minute apart. A path checked
+//! not long before waits out its hold first (up to ten minutes), other due
+//! checks may run first, and a path whose first check comes after its rows
+//! aged out is gone: the next I-Am through the new router is first sight.
+//! Meanwhile requests go through the old router and end as on any silent
+//! path, with `RemoteError::Abort` (`TSM_TIMEOUT`) after their retries.
 //!
 //! A router that never answers router-discovery queries, as some older
 //! ones don't, keeps its rows for as long as its devices answer through
@@ -79,7 +88,7 @@ pub(super) enum Found {
     Skipped,
 }
 
-/// The routers that answered a Who-Is-Router-To-Network for one network.
+/// The routers that answered one router query (Who-Is-Router-To-Network).
 #[derive(Debug, Default)]
 struct Routers {
     /// The router the rows name answered.
@@ -93,9 +102,10 @@ pub(super) struct RouteChecks<T: TransportPort> {
     network: Arc<NetworkLayer<T>>,
     reports: broadcast::Sender<ReceivedNetworkReport>,
     /// The network controls the layer's queue turned away: one during a
-    /// router query's wait may have been an answer. A seated client's
-    /// controls come through its node, which keeps no such count here.
-    control_drops: QueueAdmissionCounters,
+    /// router query's wait may have been an answer. `None` for a seated
+    /// client, whose controls come through its node's queues: it can't
+    /// know, so it takes every router query's answers as possibly lost.
+    control_drops: Option<QueueAdmissionCounters>,
     /// How long each step waits for its answer: the client's APDU timeout.
     wait: Duration,
     /// A claim the check did not take: a second router to the network, a
@@ -107,7 +117,7 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
     pub(super) fn new(
         network: Arc<NetworkLayer<T>>,
         reports: broadcast::Sender<ReceivedNetworkReport>,
-        control_drops: QueueAdmissionCounters,
+        control_drops: Option<QueueAdmissionCounters>,
         wait: Duration,
     ) -> Self {
         Self {
@@ -279,16 +289,20 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
             .await
     }
 
-    /// The controls the layer's queue has turned away so far.
-    fn controls_dropped(&self) -> u64 {
-        let counts = self.control_drops.snapshot();
-        counts.full_drops.saturating_add(counts.closed_drops)
+    /// The controls the layer's queue has turned away so far: `None` when
+    /// this client can't know.
+    fn controls_dropped(&self) -> Option<u64> {
+        self.control_drops.as_ref().map(|drops| {
+            let counts = drops.snapshot();
+            counts.full_drops.saturating_add(counts.closed_drops)
+        })
     }
 
-    /// Broadcast a Who-Is-Router-To-Network for `network` and collect, for
-    /// the wait, the routers on this link that answer for it: `None` when an
-    /// answer may have been lost, to a lagging report receiver or to the
-    /// layer's control queue, which leaves the question open.
+    /// Broadcast the router query (Who-Is-Router-To-Network) for `network`
+    /// and collect, for the wait, the routers on this link that answer for
+    /// it: `None` when an answer may have been lost, to a lagging report
+    /// receiver or to the layer's control queue, or when this client can't
+    /// know (a seat), which leaves the question open.
     async fn routers_to(&self, network: u16, old: &MacAddr) -> Result<Option<Routers>, Error> {
         let mut rx = self.reports.subscribe();
         let dropped = self.controls_dropped();
@@ -316,7 +330,8 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
             }
         })
         .await;
-        let whole = lost == 0 && self.controls_dropped() == dropped;
+        let whole = lost == 0
+            && matches!((dropped, self.controls_dropped()), (Some(before), Some(after)) if before == after);
         Ok(whole.then_some(routers))
     }
 

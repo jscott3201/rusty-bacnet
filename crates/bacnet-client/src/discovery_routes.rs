@@ -13,9 +13,9 @@
 //!
 //! The paths waiting for a check, and each one's pacing, live here, under
 //! the table's lock, in one store of at most [`MAX_PATHS`]. A path is ranked
-//! by the rows that go through it and then by how long the oldest of them
-//! has been known, so a path many established rows depend on is checked
-//! first and is never pushed out for one with fewer rows.
+//! by how long the oldest row through it has been known and then by how
+//! many rows go through it, so a long-known path is checked first and is
+//! never pushed out for a newer one.
 
 use std::cmp::Ordering;
 
@@ -44,9 +44,10 @@ pub(crate) const STRIKE_GAP: Duration = Duration::from_secs(60);
 /// A network and the router its rows name: one path the client checks.
 pub(crate) type PathKey = (u16, MacAddr);
 
-/// How much a path matters: the rows that go through it, then how long the
-/// oldest of them has been known. A greater rank is checked first and kept
-/// longer.
+/// How much a path matters: how long the oldest row through it has been
+/// known, then how many rows go through it. Rows a first sight made are
+/// cheap to make in numbers, so age comes first: a long-known path is
+/// checked before new ones and kept longer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Rank {
     rows: usize,
@@ -55,9 +56,10 @@ struct Rank {
 
 impl Ord for Rank {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.rows
-            .cmp(&other.rows)
-            .then_with(|| other.oldest.cmp(&self.oldest))
+        other
+            .oldest
+            .cmp(&self.oldest)
+            .then_with(|| self.rows.cmp(&other.rows))
     }
 }
 
@@ -236,13 +238,16 @@ impl DeviceTable {
     }
 
     /// The station a check asks through `router`: of the rows on `network`
-    /// that go through it, the one heard from last, by this table's own
-    /// record. Never a station a cue named, and never an address that is a
-    /// broadcast or group form on some link ([`RemoteBroadcast`]).
+    /// that go through it, the one whose own I-Am through it came last, then
+    /// the one heard from last, by this table's own record. An answer the
+    /// transaction matching accepted moves only the second, so it can't
+    /// make a quiet row the one asked. Never a station a cue named, and
+    /// never an address that is a broadcast or group form on some link
+    /// ([`RemoteBroadcast`]).
     pub(crate) fn probe_target(&self, network: u16, router: &[u8]) -> Option<MacAddr> {
         through(&self.rows, network, router)
             .filter(|(key, _)| RemoteBroadcast::of(&key.mac, false).is_none())
-            .max_by_key(|(_, entry)| entry.device.last_seen)
+            .max_by_key(|(_, entry)| (entry.device.last_announced, entry.device.last_seen))
             .map(|(key, _)| key.mac.clone())
     }
 
@@ -253,10 +258,11 @@ impl DeviceTable {
 
     /// Whether a row on `network` that goes through `router` was heard from
     /// at `since` or later: any frame that router carried from the device,
-    /// or an answer to a request sent through it. A station other than the
-    /// router can move neither: its I-Ams are held, a frame counts only from
-    /// the row's own router, and the answers that count complete this
-    /// client's own requests.
+    /// or an answer to a request sent through it. Another station's I-Ams
+    /// are held and its frames refresh nothing, with two exceptions that can
+    /// only keep a path, never move one: an answer the client's transaction
+    /// matching accepted, and on B/IP a forwarded frame whose origin a BBMD
+    /// gives as the router's (#2829).
     pub(crate) fn heard_through_since(&self, network: u16, router: &[u8], since: Instant) -> bool {
         through(&self.rows, network, router).any(|(_, entry)| entry.device.last_seen >= since)
     }
@@ -297,6 +303,26 @@ impl DeviceTable {
                 device.clone()
             })
             .collect()
+    }
+}
+
+impl DeviceTable {
+    /// An explicit registration gave the row at `device`'s address a router:
+    /// when it differs from the row's, the strike the old path held is
+    /// cleared, so the rows left on it start their checks again.
+    pub(super) fn registered_router(&mut self, device: &DiscoveredDevice) {
+        let Some(key) = Key::of(device) else {
+            return;
+        };
+        if let Some(row) = self.rows.get(&key)
+            && row.device.mac_address != device.mac_address
+            && let Some(paced) = self
+                .route_paths
+                .paths
+                .get_mut(&(key.network, row.device.mac_address.clone()))
+        {
+            paced.strike = None;
+        }
     }
 }
 

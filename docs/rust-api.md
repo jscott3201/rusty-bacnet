@@ -11000,28 +11000,35 @@ address through another station changes nothing on the row and sends no
 device notice. It marks the path, the network and the row's router, for
 the client's own check, which runs beside the device purge: at once, then
 at most once a minute, the gap doubling up to ten minutes while such
-I-Ams keep coming; a full store of 256 paths keeps the ones with the most
-and the longest known rows, and those are checked first. The check sends a
-Who-Is through the row's router to the station on that network the client
-heard from last through it (never the one the I-Am named), and any frame
-that router carries back from the network (an I-Am, a notification, an
-answer to a request) keeps the path. Only when nothing comes does it
-broadcast a Who-Is-Router-To-Network for the network: the old router
+I-Ams keep coming. A full store of 256 paths keeps the longest known ones,
+then those with the most rows, and checks them first. The check sends a
+Who-Is through the row's router to the station on that network whose own
+I-Am the client took through that router last (then the one heard from
+last; never the one the claim named), and any frame that router carries
+back from the network (an I-Am, a notification, an answer to a request)
+keeps the path. Only when nothing comes does the client broadcast its
+router query (Who-Is-Router-To-Network) for that network: the old router
 among the answers keeps the path, and so do no answer, several, or an
 answer the client may have lost (its report receiver fell behind, or its
-network layer's control queue turned a message away). One other router
+network layer's control queue turned a message away). A client seated on
+an endpoint can't see its node's control queues, so it takes every
+answer as possibly lost and its checks never strike. One other router
 answering alone is a strike, and a second check runs a minute later,
 however long the path's hold had grown. Only if that one strikes too, with
 the same router and nothing carried back through the old one since the
 first began, does that router take over every row on the network that
-went through the old one, each reported `Updated`; anything else clears
-the strike. Each step waits the APDU timeout, so at the defaults a real
-router replacement is taken 84 seconds after the first I-Am through the
-new router. Until then requests to those devices go through the old
-router and end as on any silent path: after their retries, with
-`Error::Remote(RemoteError::Abort { reason: TSM_TIMEOUT })`, 24 seconds
-at the defaults. A node that may not initiate (DeviceCommunicationControl)
-checks nothing.
+went through the old one, each reported `Updated`; anything else, or an
+explicit registration giving one of those rows another router, clears the
+strike. Each step waits the APDU timeout, so at the defaults a real router
+replacement is taken 84 seconds after the first I-Am through the new
+router at best: a path checked not long before waits out its hold first
+(up to ten minutes), other due checks may run first, and a path whose
+first check comes after its rows aged out is gone, the next I-Am through
+the new router being first sight. Until then requests to those devices go
+through the old router and end as on any silent path: after their
+retries, with `Error::Remote(RemoteError::Abort { reason: TSM_TIMEOUT })`,
+24 seconds at the defaults. A node that may not initiate
+(DeviceCommunicationControl) checks nothing.
 
 The standard lets a node learn a router from any frame a network sends it
 (Clause 6.5.3) and authenticates none of them; the client learns a change
@@ -11033,11 +11040,16 @@ Network-Number-Is, which folds routed rows on that network into local
 ones; and the router query itself, which any station can answer, so a
 station that answers it alone in two checks a minute apart, while the old
 router and its devices stay silent through both, is taken (#2824 covers
-confirming a device before a write). On a site whose
-routers never answer router queries, the path stays while the devices
-answer through it; when such a router is really replaced, its rows age out
-and the devices' next I-Ams through the new router make them again, or
-`add_routed_device` names the new router at once.
+confirming a device before a write). A router's answer that the link or
+the transport's own queue dropped before the network layer saw it is not
+seen as lost. Two kinds of frame can keep a path, or pick the station a
+check asks, without coming from its router, though neither moves a path:
+an answer the client's transaction matching accepted, and on B/IP a
+forwarded frame whose origin a BBMD gives as the router's (#2829). On a
+site whose routers never answer router queries, the path stays while the
+devices answer through it; when such a router is really replaced, its
+rows age out and the devices' next I-Ams through the new router make them
+again, or `add_routed_device` names the new router at once.
 
 A known number that changes (a learned one replaced by a router's
 configured one, or two configured routers that disagree) is logged as a

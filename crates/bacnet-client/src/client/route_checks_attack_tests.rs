@@ -166,7 +166,7 @@ async fn lost_router_answers_keep_the_path() {
     let checks = RouteChecks::new(
         Arc::clone(&site.client.network),
         site.client.network_report_tx.clone(),
-        drops,
+        Some(drops),
         WAIT,
     );
     let old = MacAddr::from_slice(&ROUTER);
@@ -189,6 +189,53 @@ async fn lost_router_answers_keep_the_path() {
     };
     let (open, ()) = tokio::join!(checks.routers_to(NETWORK, &old), overfill);
     assert!(open.unwrap().is_none());
+    site.stop().await;
+}
+
+/// A seated client can't read its node's control queues, so it takes a
+/// router query's answers as possibly lost: even a lone answer decides
+/// nothing, and its checks never strike.
+#[tokio::test(start_paused = true)]
+async fn a_seated_client_takes_router_answers_as_possibly_lost() {
+    let site = Site::new(Script {
+        routers: vec![OTHER.to_vec()],
+        ..Script::default()
+    })
+    .await;
+    let seated = RouteChecks::new(
+        Arc::clone(&site.client.network),
+        site.client.network_report_tx.clone(),
+        None,
+        WAIT,
+    );
+    let routers = seated
+        .routers_to(NETWORK, &MacAddr::from_slice(&ROUTER))
+        .await;
+    assert!(routers.unwrap().is_none());
+    site.stop().await;
+}
+
+/// A decoy: the row the forger names is quiet, but answers the transaction
+/// matching accepted (or, on B/IP, a forwarded frame, #2829) have kept its
+/// age newest. The probe goes by the last I-Am through the router first,
+/// so it asks the device that announced itself last, which answers.
+#[tokio::test(start_paused = true)]
+async fn a_decoy_kept_young_by_answers_is_not_the_probe() {
+    const DECOY: [u8; 1] = [4];
+    let site = Site::empty(Script {
+        device_answers: true,
+        quiet: vec![DECOY.to_vec()],
+        routers: vec![OTHER.to_vec()],
+        ..Script::default()
+    })
+    .await;
+    site.hear(&ROUTER, i_am(&DECOY, 8)).await;
+    site.hear(&ROUTER, i_am(&STATION, INSTANCE)).await;
+    sleep(Duration::from_secs(1)).await;
+    site.client.device_table.lock().answered(NETWORK, &DECOY);
+    site.hear(&OTHER, i_am(&DECOY, 8)).await;
+    sleep(3 * WAIT).await;
+    assert_eq!(site.sent(), [probe(&ROUTER, NETWORK, &STATION)]);
     site.stop().await;
 }
 

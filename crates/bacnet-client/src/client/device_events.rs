@@ -126,9 +126,11 @@ pub(super) fn heard_i_am(
 /// `source_mac`: when that is the router the device's row names, the row's
 /// age starts again, as an answer to a request starts it (#2823), so a
 /// device heard only through COV or event notifications is not aged out
-/// and opened to first sight again. Only the row's own router can send from
-/// its link address, so another station cannot keep a row young this way.
-/// Kept out of line: the dispatch loop's hot path is the replies.
+/// and opened to first sight again. Another station can't send from the
+/// router's link address, so it can't keep a row young this way, except on
+/// B/IP with a forwarded frame whose origin a BBMD gives as the router's
+/// (#2829); that can only keep a path, never move one. Kept out of line:
+/// the dispatch loop's hot path is the replies.
 #[inline(never)]
 pub(super) fn heard_routed(
     table: &SyncMutex<DeviceTable>,

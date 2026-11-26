@@ -43,7 +43,7 @@ pub(super) struct Script {
     /// The station at [`OTHER`] answers a Who-Is sent through it, naming
     /// the station asked as one it routes to.
     pub(super) forger_answers: bool,
-    /// The routers that answer a Who-Is-Router-To-Network.
+    /// The routers that answer the client's router query.
     pub(super) routers: Vec<Vec<u8>>,
 }
 
@@ -84,7 +84,7 @@ pub(super) enum Sent {
         network: u16,
         station: Vec<u8>,
     },
-    /// A broadcast Who-Is-Router-To-Network for a network.
+    /// The client's broadcast router query, for a network.
     RouterQuery(u16),
     /// A confirmed request through `via`.
     Request {
@@ -182,7 +182,7 @@ pub(super) fn proprietary_message() -> Bytes {
     buf.freeze()
 }
 
-/// An I-Am-Router-To-Network listing `networks`, sent on this link.
+/// A router's announcement (I-Am-Router-To-Network) listing `networks`, sent on this link.
 pub(super) fn router_announcement(networks: &[u16]) -> Bytes {
     let payload: Vec<u8> = networks.iter().flat_map(|n| n.to_be_bytes()).collect();
     let mut buf = BytesMut::new();

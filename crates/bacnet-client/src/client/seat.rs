@@ -501,14 +501,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             dcc: (dcc, options.node_dcc_override),
             _follows: None,
         };
-        // The node's layer counts its own control drops; a seat has none
-        // to read here (#2823).
-        Ok(Self::assemble(
-            config,
-            options,
-            inbound,
-            coordinator,
-            bacnet_network::layer::QueueAdmissionCounters::default(),
-        ))
+        // The node's queues count their own control drops, which a seat
+        // can't read: its path checks take every router query's answers as
+        // possibly lost, so they never strike (#2823).
+        Ok(Self::assemble(config, options, inbound, coordinator, None))
     }
 }

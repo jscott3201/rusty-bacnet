@@ -277,7 +277,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             options,
             inbound,
             coordinator,
-            control_drops,
+            Some(control_drops),
         ))
     }
 
@@ -285,14 +285,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// task and its Number work. `inbound` is where its APDUs and controls
     /// come from: its own layer's receivers, or a seat's queues (#2617).
     /// `control_drops` counts the controls its own layer's queue turned
-    /// away; a seat's has no such count here. Nothing here waits, and the
-    /// caller has checked `config` and `options`.
+    /// away; `None` for a seat, which can't read its node's. Nothing here
+    /// waits, and the caller has checked `config` and `options`.
     pub(super) fn assemble<S: Inbound<T>>(
         mut config: ClientConfig,
         options: ClientOptions,
         mut inbound: S,
         coordinator: Arc<OutboundTransactionCoordinator>,
-        control_drops: bacnet_network::layer::QueueAdmissionCounters,
+        control_drops: Option<bacnet_network::layer::QueueAdmissionCounters>,
     ) -> Self {
         // A client that takes no segments states no segment count either:
         // settled here once, so no request's header asks.
