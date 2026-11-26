@@ -66,6 +66,29 @@ pub enum Lifecycle {
     Closed,
 }
 
+impl Lifecycle {
+    /// The state's name in lowercase snake case, which stays the same from
+    /// release to release (#1833): `already_started`, `not_running`,
+    /// `stopping`, `not_connected` or `closed`. The Python bindings give it
+    /// as `BacnetStateError.state`.
+    ///
+    /// ```
+    /// use bacnet_types::error::Lifecycle;
+    ///
+    /// assert_eq!(Lifecycle::NotRunning.name(), "not_running");
+    /// ```
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::AlreadyStarted => "already_started",
+            Self::NotRunning => "not_running",
+            Self::Stopping => "stopping",
+            Self::NotConnected => "not_connected",
+            Self::Closed => "closed",
+        }
+    }
+}
+
 /// The text of a local refusal (#1833), for a person to read: a static
 /// label whose placeholders take up to two numbers, built when displayed,
 /// or, with `std`, owned text. The text is not API: match the
@@ -201,6 +224,21 @@ mod tests {
             (Error::LimitReached(label), "3 of 4 slots"),
         ] {
             assert_eq!(error.to_string(), text);
+        }
+    }
+
+    /// Each state's name is the one the Python bindings expose, which a
+    /// script may compare: pinned (#1833).
+    #[test]
+    fn each_state_keeps_its_name() {
+        for (state, name) in [
+            (Lifecycle::AlreadyStarted, "already_started"),
+            (Lifecycle::NotRunning, "not_running"),
+            (Lifecycle::Stopping, "stopping"),
+            (Lifecycle::NotConnected, "not_connected"),
+            (Lifecycle::Closed, "closed"),
+        ] {
+            assert_eq!(state.name(), name);
         }
     }
 

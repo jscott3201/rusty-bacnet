@@ -173,8 +173,8 @@ each device by its network: discover it, then use the
 `_from_device` / `_to_device` methods. The local scope is each
 of the router's networks (#2601). A send to an `ip:port` names no
 one of them and raises BacnetError. Once the router closes,
-each request fails at once with BacnetTransportError (errno
-ENOTCONN); stop the client as usual. With
+each request fails at once with BacnetStateError (state
+`"closed"`), with nothing sent; stop the client as usual. With
 `application="client_and_server"` the APDU timeout must be under
 60000 ms. `router` without `transport="router"`, or the reverse,
 raises ValueError.
@@ -734,7 +734,8 @@ otherwise). A client stopped mid-call raises RuntimeError. A link
 that can't send the query for its own state or kind, such as a
 BACnet/SC link not connected to its hub, or a router-application
 client's link, which carries APDUs only, raises what that send's
-error raises (BacnetError for both), not ValueError. A
+error raises (BacnetStateError with state `"not_connected"` for
+the first, BacnetError for the second), not ValueError. A
 RoutedTarget selects the remote router, using its explicit or cached
 next hop. Without either, one router-discovery window of up to
 `wait` seconds must identify a single local next hop for its network.

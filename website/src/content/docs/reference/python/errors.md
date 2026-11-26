@@ -382,6 +382,33 @@ Attributes:
 - `strerror: str | None`
 - `sc_untrusted_peer: ScUntrustedPeerInfo | None`: Untrusted certificate evidence from the actual failed outbound TLS attempt. None when unavailable at the verification observation point. This is not an authenticated peer or a history of background reconnect failures.
 
+## BacnetStateError
+
+`class BacnetStateError(BacnetError, RuntimeError)`
+
+Raised when a call is refused for the state its component is in
+(#1833): a send on a transport that isn't started or has stopped (a
+router-application client's router closed, say), a second start, a
+channel closed under the call, or a BACnet/SC node whose hub connection
+isn't up. Nothing was done, and the link did not fail: `except BacnetTransportError` does not catch it. Also a `RuntimeError`, which
+the bindings' own "not started" checks raise, so `except RuntimeError`
+catches both.
+
+A request the client's stop cut off while it waited is not one: it
+raises `BacnetError`, since it may already have gone out.
+
+Attributes:
+state: Which state refused the call: `"not_running"` (not started
+yet, or stopped and able to start again), `"closed"` (stopped
+for good, or the channel closed), `"stopping"` (a stop is under
+way), `"already_started"` (a second start) or
+`"not_connected"` (running, but its hub or BBMD isn't
+connected). None on the class.
+
+Attributes:
+
+- `state: Literal["already_started", "not_running", "stopping", "not_connected", "closed"] | None`
+
 ## BacnetRouterCloseError
 
 `class BacnetRouterCloseError(BacnetError)`

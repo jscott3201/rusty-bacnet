@@ -335,13 +335,16 @@ class RouterApplicationTests(unittest.IsolatedAsyncioTestCase):
         await self.find(client, BASE + 1)
         await client.read_property_from_device(BASE + 1, AI0, PV)
         await asyncio.wait_for(router.close(), 10)
-        # A request after close fails at once, not by timing out.
-        with self.assertRaises(rb.BacnetTransportError) as caught:
+        # A request after close fails at once, not by timing out, as this
+        # side's closed state, not a link's failure (#1833).
+        with self.assertRaises(rb.BacnetStateError) as caught:
             await asyncio.wait_for(client.read_property_from_device(BASE + 1, AI0, PV), 1)
-        self.assertEqual(caught.exception.errno, errno.ENOTCONN)
+        self.assertEqual(caught.exception.state, "closed")
+        self.assertIsInstance(caught.exception, RuntimeError)
+        self.assertNotIsInstance(caught.exception, OSError)
         # A Who-Is to the router's networks, or to every one, fails at once.
         for scope in ("local", "global"):
-            with self.assertRaises(rb.BacnetTransportError):
+            with self.assertRaises(rb.BacnetStateError):
                 await asyncio.wait_for(client.who_is(scope=scope), 1)
         await asyncio.wait_for(client.stop(), 10)
 
@@ -353,8 +356,8 @@ class RouterApplicationTests(unittest.IsolatedAsyncioTestCase):
         async def stopped():
             try:
                 await asyncio.wait_for(client.who_is(scope="global"), 1)
-            except rb.BacnetTransportError as error:
-                return error.errno == errno.ENOTCONN
+            except rb.BacnetStateError as error:
+                return error.state == "closed"
             return False
         self.assertTrue(await eventually(stopped, seconds=10))
 

@@ -2491,8 +2491,9 @@ None while a host name hasn't resolved yet, when `waiting_for_bbmd` is
 true. `bbmd_name` is the host name the BBMD is known by,
 `"host:port"` (configured, or written to FD\_BBMD\_Address), or None for
 a BBMD known by address; a waiting device waits for it. While waiting,
-nothing is registered, broadcasts are refused (counted in
-`broadcasts_refused`), and the name is tried again 30 seconds after
+nothing is registered, broadcasts are refused with BacnetStateError
+(`state` `"not_connected"`) and counted in `broadcasts_refused`,
+and the name is tried again 30 seconds after
 each failure. `bbmd_lookups`, `bbmd_lookup_failures` and
 `last_bbmd_lookup_failure` are as in `ForeignRegistrationStatus`,
 with `"no_ipv6_address"` for a name with no IPv6 address. The

@@ -298,10 +298,13 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
                               ("unusable_address", "no_ipv6_address"))
                 # With no BBMD, a broadcast is refused, and counted: the
                 # What-Is-Network-Number the client asks before its first
-                # Who-Is (#2572), then the Who-Is.
+                # Who-Is (#2572), then the Who-Is. The refusal is the
+                # device's own state, as on B/IP, not a link failure (#1833).
                 self.assertEqual(status["broadcasts_refused"], 0)
-                with self.assertRaises(OSError):
+                with self.assertRaises(rusty_bacnet.BacnetStateError) as caught:
                     await client.who_is(low=INSTANCE, high=INSTANCE)
+                self.assertEqual(caught.exception.state, "not_connected")
+                self.assertNotIsInstance(caught.exception, OSError)
                 status = await client.foreign_registration()
                 self.assertEqual(status["broadcasts_refused"], 2)
         await rerun_on_lost_port(run)

@@ -27,9 +27,12 @@ create_exception!(rusty_bacnet, BacnetNetworkRejectError, BacnetError);
 mod lookup;
 #[cfg(test)]
 mod refusal_tests;
+mod state;
 pub(crate) use lookup::{Lookup, lookup_error};
 #[cfg(test)]
 pub(crate) use lookup::{ambiguous_error_type, lookup_error_type};
+#[cfg(test)]
+pub(crate) use state::state_error_type;
 
 /// `BacnetTransportError`, built at first use: pyo3's `create_exception!`
 /// takes one base, and this class derives from both `BacnetError` and
@@ -221,6 +224,10 @@ pub fn to_py_err(err: Error) -> PyErr {
         Error::UnknownDevice { ref device } => {
             lookup_error(err.to_string(), Lookup::unknown(device.clone()))
         }
+        // A call refused for its component's state (#1833): a transport not
+        // started or stopped, a second start, a closed channel. Nothing was
+        // done; `state` names which.
+        Error::State(state, _) => state::state_error(err.to_string(), state),
         // The request's transaction was ended under it: the client stopped
         // while it waited, by its own stop() or, on an endpoint's link, by
         // the endpoint's close (#2617), whether or not it had gone out
@@ -520,7 +527,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         timeout.setattr("busy_network", m.py().None())?;
     }
     m.add("BacnetNetworkRejectError", network_reject)?;
-    lookup::register(m)
+    lookup::register(m)?;
+    state::register(m)
 }
 
 #[cfg(test)]

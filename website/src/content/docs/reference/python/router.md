@@ -25,7 +25,7 @@ entity to one `BACnetClient`; `"client_and_server"` splits it
 between a `BACnetClient` and a `BACnetServer`. Build each with
 `transport="router", router=router`; each takes its share when it
 starts, once per router start. Closing the router ends both shares:
-their requests then fail with BacnetTransportError, and a restarted
+their requests then fail with BacnetStateError, and a restarted
 router makes new shares for newly started stacks. The network-control
 receiver stays internal.
 
