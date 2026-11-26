@@ -481,11 +481,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let (first_attempt, handed_off) = oneshot::channel::<()>();
             let mut first_attempt = Some(first_attempt);
             notification_transactions.spawn(async move {
-                // An address recipient's network's learned router, which the
-                // first attempt goes through; a retry means it stayed silent,
-                // so the first retry forgets it (#2831).
+                // An address recipient's network's known router, which the
+                // first attempt goes through (#2831).
                 let learned = match &remote {
-                    Some((dnet, _, None)) => learned_routers.lock().await.cached_router(*dnet),
+                    Some((dnet, _, None)) => learned_routers.router(*dnet),
                     _ => None,
                 };
                 let path = operation.path();
@@ -525,22 +524,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             (None, Some((dnet, dadr, configured_router))) => {
                                 // A Device binding keeps its fixed next hop for
                                 // each permitted attempt. An address recipient's
-                                // first attempt goes through the learned router,
-                                // its retries by local broadcast.
-                                let router = match configured_router {
-                                    Some(router) => Some(router),
-                                    None if attempt == 0 => learned,
-                                    None => {
-                                        if attempt == 1
-                                            && let Some(silent) = &learned
-                                        {
-                                            learned_routers
-                                                .lock()
-                                                .await
-                                                .forget_router(dnet, silent);
-                                        }
+                                // first attempt goes through the network's known
+                                // router, its retries by local broadcast. With
+                                // none known, the learner asks which router
+                                // reaches the network; a first retry says the
+                                // known one stayed silent, which starts a check
+                                // of it and forgets nothing (#2831).
+                                let router = match (configured_router, &learned, attempt) {
+                                    (Some(router), _, _) => Some(router),
+                                    (None, Some(router), 0) => Some(router.clone()),
+                                    (None, Some(silent), 1) => {
+                                        learned_routers.silent(dnet, silent, &dadr);
                                         None
                                     }
+                                    (None, None, 0) => {
+                                        learned_routers.unrouted(dnet);
+                                        None
+                                    }
+                                    (None, _, _) => None,
                                 };
                                 // Before the send: only an answer through this
                                 // router completes the attempt (#2831).
@@ -598,10 +599,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         warn!(invoke_id = id, "EventNotification rejected by recipient");
                     }
                     Ok(NotificationWorkerResult::Exhausted) => {
-                        // With no retry to forget it, a learned router that
-                        // stayed silent is forgotten here (#2831).
-                        if let (Some(silent), Some((dnet, _, None))) = (&learned, &remote) {
-                            learned_routers.lock().await.forget_router(*dnet, silent);
+                        // With no retry to say so, the one attempt through a
+                        // known router that stayed silent starts its check
+                        // here (#2831).
+                        if apdu_retries == 0
+                            && let (Some(silent), Some((dnet, dadr, None))) = (&learned, &remote)
+                        {
+                            learned_routers.silent(*dnet, silent, dadr);
                         }
                         suppressions.record(EventSuppression::ConfirmedUnanswered);
                         warn!(

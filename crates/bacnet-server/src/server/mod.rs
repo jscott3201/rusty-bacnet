@@ -70,12 +70,12 @@ use bacnet_device_core::cov::CovNotificationKind;
 use bacnet_device_core::cov::{CovCounters, CovPolicy};
 use bacnet_device_core::cov::{CovSubscription, CovSubscriptionSnapshot};
 use bacnet_device_core::event::GetEventInformationBudget;
+use bacnet_network::router_learning::{RouterLearning, RouterReports};
 use confirmed_request_tracker::{
     ConfirmedRequestAdmission, ConfirmedRequestTracker, PendingConfirmedRequest,
 };
 pub use device_bindings::DeviceBinding;
 use device_bindings::{DeviceBindingTable, register_configured_binding};
-use learned_router_cache::LearnedRouterCache;
 use lso_replay::{LsoAdmission, PendingLsoReplay};
 use notification_transactions::{
     InitiationRestricted, NotificationTransactions, NotificationWorkerResult,
@@ -268,6 +268,8 @@ pub struct BACnetServer<T: TransportPort = AnyTransport> {
     transport_cleanup: Option<TransportCleanup<T>>,
     transport_cleanup_error: Option<String>,
     network_number_task: Option<JoinHandle<()>>,
+    /// The checks of [`Self::learned_routers`] (#2831).
+    router_task: Option<JoinHandle<()>>,
     /// Shared object database.
     db: Arc<RwLock<ObjectDatabase>>,
     /// The node that stopped this server took its handle on the database
@@ -287,8 +289,9 @@ pub struct BACnetServer<T: TransportPort = AnyTransport> {
     /// Operational cap of 255 concurrent confirmed COV notification workers.
     /// Invoke-ID ownership is handled by `notification_transactions`.
     cov_in_flight: Arc<Semaphore>,
-    /// Bounded DNET-to-router cache learned from admitted notification terminals.
-    learned_routers: Arc<Mutex<LearnedRouterCache>>,
+    /// The routers this server's own requests to other networks go through,
+    /// learned and replaced only through its own router query (#2831).
+    learned_routers: Arc<RouterLearning>,
     /// Invoke-ID ownership and terminal admission for confirmed notifications.
     notification_transactions: Arc<NotificationTransactions>,
     /// Server-lifetime exact inbound ConfirmedRequest duplicate state.
@@ -411,9 +414,10 @@ mod confirmed_answer;
 #[cfg(test)]
 mod event_timestamp_tests;
 mod handles;
-mod learned_router_cache;
 mod lifecycle;
 mod local_authorization;
+#[cfg(test)]
+mod router_replacement_tests;
 pub use local_authorization::LocalAuthorizationResult;
 mod local_writes;
 mod network_port;

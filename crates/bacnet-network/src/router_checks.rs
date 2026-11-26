@@ -26,8 +26,8 @@
 //!   ranked, so a cue for a new key never pushes out one that ranks higher.
 //!
 //! The client drives it for its discovery table's routed paths; the server
-//! and the endpoint, through `router_learning`, for the routers their own
-//! requests go through.
+//! and the endpoint, through [`crate::router_learning`], for the routers
+//! their own requests go through.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};

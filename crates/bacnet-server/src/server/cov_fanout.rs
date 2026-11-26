@@ -17,7 +17,7 @@ pub(super) struct CovFanout<T: TransportPort + 'static> {
     pub(super) notification_transactions: Arc<NotificationTransactions>,
     comm_state: Arc<CommState>,
     event_suppressions: Arc<super::event_suppression::EventSuppressions>,
-    learned_routers: Arc<Mutex<LearnedRouterCache>>,
+    learned_routers: Arc<RouterLearning>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     config: Arc<ServerConfig>,
 }
@@ -46,7 +46,7 @@ impl<T: TransportPort + 'static> CovFanout<T> {
     pub(super) fn new(
         ctx: &CovNotifyContext<'_, T>,
         event_suppressions: &Arc<super::event_suppression::EventSuppressions>,
-        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
+        learned_routers: &Arc<RouterLearning>,
         device_bindings: &Arc<RwLock<DeviceBindingTable>>,
     ) -> Self {
         Self {

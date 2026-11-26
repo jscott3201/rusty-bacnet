@@ -4372,6 +4372,23 @@ router judges, is not affected. A routed request's SADR names a node on
 another network, which the ingress rule above can't judge, so a reply to a
 group SADR is dropped only where the final router is a `BACnetRouter`.
 
+### The router rule
+
+`router_checks` holds, without I/O, the one rule the stack changes a
+network's router by (#2823, #2831): what one router query
+(Who-Is-Router-To-Network, Clause 6.4.1) found (`Routers`, `Answer`), the
+two strikes a known router is replaced on (`Strike`, `Step`), and the
+pacing of the checks (`Pacing`: at once on the first cue, then at most once
+per hold of one to ten minutes, a second strike's check a minute after the
+first, in a bounded store the owner ranks). The client drives it for its
+discovery table's routed paths. `router_learning::RouterLearning` drives it
+for the routers a server's or an endpoint session's own requests to other
+networks go through, and `RouterReports` hands the learners the router
+announcements (I-Am-Router-To-Network) a link receives, with the count of
+controls its queue turned away. Each learns and replaces a router only from
+answers to its own queries; see [Handled Services](#handled-services) for
+the server's use.
+
 ### A client on the router itself
 
 `StartedRouter::into_application_port()` turns the router's application
@@ -12259,10 +12276,43 @@ The server automatically dispatches:
 - Audit notifications (confirmed and unconfirmed, from Audit Reporters and Audit Log forwarding; one attempt each, and they keep going out under DISABLE_INITIATION, see [Confirmed notifications under DeviceCommunicationControl](#confirmed-notifications-under-devicecommunicationcontrol))
 
 Confirmed notification invoke IDs, terminal admission and retries belong to
-`NotificationTransactions`. A separate private learned-router cache stores up to
-64 DNET next hops from admitted, nonempty routed terminal responses. Routed Address
-recipients use a learned router on the first attempt and local broadcast on
-later retries; a configured Device binding keeps its fixed next hop. The former
+`NotificationTransactions`. A configured Device binding keeps its fixed next
+hop. The router an Address recipient on another network is sent through is
+learned and replaced only through the server's own router query
+(Who-Is-Router-To-Network, Clause 6.4.1), by the rule in
+`bacnet_network::router_learning` (#2831):
+
+- While no router is known for the recipient's network, every attempt goes
+  with DNET/DADR and the link's broadcast address (Clause 6.5.3), and the
+  server asks the query for that network: at once, then at most once per
+  hold, which starts at a minute and doubles to ten. Exactly one router
+  answering, with no answer possibly lost, is learned; several, none or a
+  possible loss teach nothing.
+- A known router carries each notification's first attempt, and its retries
+  go by local broadcast. A first attempt it leaves unanswered forgets
+  nothing: it starts a check, a Who-Is to the recipient through the router
+  and, only if nothing comes back through it, the query. The router changes
+  only after two checks a minute apart each find it silent and the same one
+  other router alone answering, with nothing carried back through it in
+  between: about 75 seconds after the first unanswered attempt at the
+  default 3 s timeout, the broadcast retries delivering meanwhile.
+- No answer to a notification, no request's source and no
+  I-Am-Router-To-Network the server did not ask for teaches a router; an
+  answer or an unconfirmed request (an I-Am among them) that the known
+  router carries from its network only keeps it.
+- The query is a network message, so it goes out under DISABLE_INITIATION;
+  a check's Who-Is does not, so no known router is replaced meanwhile. The
+  server tracks up to 64 networks, and one past them stays on local
+  broadcast. On a link that doesn't take the local Number controls the
+  server hears no router answers and learns no router.
+
+A routed answer completes a request the server sent through a router only
+when it arrives from that router; any other counts in
+`BACnetServer::off_path_answer_drops()`. An answer to an attempt sent by
+local broadcast may come through any station. Not covered: a station that
+is the only one to answer the query twice, a minute apart, while the real
+router carries nothing back; forwarded B/IP frames and B/IPv6 virtual
+addresses, whose link source is the sender's claim (#2837). The former
 public `ServerTsm` type and its unused transaction methods have been removed
 without a compatibility alias. `CovAckResult` remains available at its existing
 `bacnet_server::server` path. A refused confirmed request ends as
@@ -15239,9 +15289,11 @@ session.stop().await?; // stops the server, then the link
   an Address naming this network by its number or a group address only the
   bound link reveals. That refusal ends the session, and the start's
   `StartError` hands the database back (#2766).
-- Routed source Audit bindings learn their networks' routers at the
-  session's ingress, from every request and every answer a lease of the
-  session's holds that comes from such a network, whichever role takes it.
+- Routed source Audit bindings' routers are learned only through the
+  session's own router query, by the server's rule (#2831). What arrives
+  from such a network, a request or an answer a lease of the session's
+  holds from the station its attempt went through, only keeps a known
+  router.
 - Where this is going (maintainer decisions on #2617): the Python endpoints
   run this server too, and `await endpoint.server()` returns it as a
   `BACnetServer`. Next the full client follows the node's segmentation. The
@@ -15434,12 +15486,13 @@ network) and the MAC 1 to 18 octets; its length isn't checked against this
 link, since the remote network's link may differ. `start` and the builders
 refuse anything else with SERVICES / SERVICE_REQUEST_DENIED, and a Device bound
 twice, directly or routed. Records go with DNET/DADR through the router to that
-network. The session learns the router from traffic that comes back from the
-network (an answer it admits, or a request from a station there) and from an
-I-Am-Router-To-Network that lists it (Clause 6.5.3 leaves the method to the
-node). Until then, and after a delivery through the learned router is lost
-(no answer in time, or a failed send), a record goes with the link's broadcast
-MAC instead; a peer's Error, Reject or Abort keeps the router. A confirmed
+network. The session learns the router only from its own router query, as the
+server does (see [Handled Services](#handled-services); #2831): while
+none is known a record goes with the link's broadcast MAC and the session asks
+which router reaches the network, taking it when exactly one answers. A
+delivery through the router that is lost starts a check of it and forgets
+nothing, so records keep going to it, and failing, until two checks a minute
+apart move them to the one other router answering. A confirmed
 record's answer comes back naming the network and MAC, and a failure counts
 toward AUDITING_FAILURE and sets COMMUNICATION_FAILURE as a direct one does.
 Once the session's number is the binding's network, the binding is a direct

@@ -254,7 +254,7 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
             db: &db,
             network: &network,
             comm_state: &Arc::new(CommState::default()),
-            learned_routers: &Arc::new(Mutex::new(LearnedRouterCache::new())),
+            learned_routers: &Arc::new(RouterLearning::new()),
             notification_transactions: &NotificationTransactions::new(),
             device_bindings: &Arc::new(RwLock::new(
                 crate::server::device_bindings::DeviceBindingTable::new(),

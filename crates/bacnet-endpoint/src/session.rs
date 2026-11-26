@@ -409,6 +409,8 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     server_gate: Option<oneshot::Sender<()>>,
     dispatch_task: Option<JoinHandle<SessionExit>>,
     network_number_task: Option<JoinHandle<()>>,
+    /// The checks of the routed source Audit bindings' routers (#2831).
+    router_task: Option<JoinHandle<()>>,
     cancel_tx: Option<oneshot::Sender<()>>,
     lifecycle: AtomicU8,
     role: SessionRole,
@@ -518,6 +520,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             server_gate: None,
             dispatch_task: None,
             network_number_task: None,
+            router_task: None,
             cancel_tx: None,
             lifecycle: AtomicU8::new(Lifecycle::Ready as u8),
             role,
@@ -824,11 +827,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         }
         self.lifecycle
             .store(Lifecycle::Stopping as u8, Ordering::Release);
-        if let Some(task) = self.network_number_task.as_mut() {
-            task.abort();
-            let _ = task.await;
+        for slot in [&mut self.network_number_task, &mut self.router_task] {
+            if let Some(task) = slot.as_mut() {
+                task.abort();
+                let _ = task.await;
+            }
+            *slot = None;
         }
-        self.network_number_task = None;
         if let Some(source) = &self.source_audit {
             source.close();
         }
@@ -1124,7 +1129,10 @@ impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
         // `stop()` remains the graceful path; Drop only seals + aborts. The
         // ingress, dropped after this, aborts the link through the layer the
         // client may still share (#2617), so no live client keeps it up.
-        if let Some(task) = &self.network_number_task {
+        for task in [&self.network_number_task, &self.router_task]
+            .into_iter()
+            .flatten()
+        {
             task.abort();
         }
         if let Some(source) = self.source_audit.take() {

@@ -194,8 +194,7 @@ impl Write {
             }
         }
         assert_eq!(self.h.server.notification_transactions.active_count(), 0);
-        let learned = self.h.server.learned_routers.lock().await;
-        learned.cached_router(network)
+        self.h.server.learned_routers.router(network)
     }
 }
 

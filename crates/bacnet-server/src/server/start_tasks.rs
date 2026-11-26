@@ -27,6 +27,7 @@ pub(super) fn spawn_network_number<T: TransportPort + 'static>(
     db: &Arc<RwLock<ObjectDatabase>>,
     config: &ServerConfig,
     target_audit: &Option<Arc<super::super::audit_recipient::TargetAudit<T>>>,
+    router_reports: &RouterReports,
 ) -> Option<JoinHandle<()>> {
     match (network_controls, seat_number) {
         (Some(controls), _) => Some(super::network_port::spawn_number_worker(
@@ -35,6 +36,7 @@ pub(super) fn spawn_network_number<T: TransportPort + 'static>(
             config.registered_network_port,
             controls,
             target_audit.as_ref().map(Arc::downgrade),
+            router_reports.clone(),
         )),
         // On a seat the node's Number owner publishes; target Audit
         // follows its notice (#2617).
@@ -43,6 +45,32 @@ pub(super) fn spawn_network_number<T: TransportPort + 'static>(
             .map(|audit| super::server_seat::follow_number(number, Arc::downgrade(audit))),
         (None, None) => None,
     }
+}
+
+/// The checks that learn and replace the routers the server's own requests
+/// to other networks go through (#2831), each step waiting the server's
+/// notification APDU timeout. A router query goes out under
+/// DeviceCommunicationControl; a check's Who-Is does not.
+pub(super) fn spawn_router_learning<T: TransportPort + 'static>(
+    learning: &Arc<RouterLearning>,
+    network: &Arc<NetworkLayer<T>>,
+    router_reports: RouterReports,
+    comm_state: &Arc<CommState>,
+    config: &ServerConfig,
+) -> JoinHandle<()> {
+    let (learning, network) = (Arc::clone(learning), Arc::clone(network));
+    let comm_state = Arc::clone(comm_state);
+    let wait = Duration::from_millis(config.cov_retry_timeout_ms);
+    super::super::heap_futures::spawn_boxed(move || async move {
+        learning
+            .run(
+                &network,
+                &router_reports,
+                || !comm_state.initiation_restricted(),
+                wait,
+            )
+            .await;
+    })
 }
 
 /// What the dispatch loop owns: the Device's segment timeout, the

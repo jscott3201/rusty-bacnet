@@ -46,7 +46,7 @@ async fn dcc_suppresses_periodic_event_send() {
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(CommState::default());
     comm_state.set_for_test(DccState::DisableInitiation);
-    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
+    let learned_routers = Arc::new(RouterLearning::new());
 
     let mut db = clocked_test_database();
     db.add(Box::new(
@@ -184,14 +184,14 @@ async fn fixture_with_commanded_nc(
     Arc<RwLock<ObjectDatabase>>,
     Arc<NetworkLayer<TestTransport>>,
     Arc<CommState>,
-    Arc<Mutex<LearnedRouterCache>>,
+    Arc<RouterLearning>,
     SendLog,
     ObjectIdentifier,
 ) {
     let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(CommState::default()); // DCC enabled
-    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
+    let learned_routers = Arc::new(RouterLearning::new());
 
     let mut db = clocked_test_database();
     // NotificationClass with the configured per-transition arrays and a single
@@ -255,7 +255,7 @@ async fn event_notification_missing_class_distributes_nothing() {
     let (transport, sent) = recording_transport();
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(CommState::default());
-    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
+    let learned_routers = Arc::new(RouterLearning::new());
 
     let mut db = clocked_test_database();
     db.add(Box::new(
@@ -442,7 +442,7 @@ pub(super) async fn broadcasts_from_per_write_path(
     let network = Arc::new(NetworkLayer::new(transport));
     let comm_state = Arc::new(CommState::default());
     comm_state.set_for_test(state);
-    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
+    let learned_routers = Arc::new(RouterLearning::new());
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let transactions = NotificationTransactions::new();
     let bindings = Arc::new(RwLock::new(

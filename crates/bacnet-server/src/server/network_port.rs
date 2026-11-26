@@ -176,7 +176,10 @@ pub(super) async fn start<T: TransportPort + 'static>(
         NetworkLayer<T>,
         bacnet_network::layer::ApduReceiver,
         Arc<super::audit_recipient_routes::AuditRoutes>,
-        Option<mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>>,
+        Option<(
+            mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>,
+            bacnet_network::layer::QueueAdmissionCounters,
+        )>,
     ),
     Error,
 > {
@@ -193,7 +196,13 @@ pub(super) async fn start<T: TransportPort + 'static>(
             .transport()
             .supports_local_nonrouter_number_controls()
         {
-            Some(starting.network().enable_network_control_receiver()?)
+            // Counting what its queue turns away, so a router query's
+            // answers that may have been lost decide nothing (#2831).
+            Some(
+                starting
+                    .network()
+                    .enable_network_control_receiver_counting_drops()?,
+            )
         } else {
             None
         };
@@ -228,13 +237,15 @@ pub(super) async fn start<T: TransportPort + 'static>(
 }
 
 /// Own the Number controls. When one changes the published number, target
-/// Audit re-evaluates its recipient's route (#1460).
+/// Audit re-evaluates its recipient's route (#1460). Each control is offered
+/// to `router_reports` as well, for the server's router learning (#2831).
 pub(super) fn spawn_number_worker<T: TransportPort + 'static>(
     network: &Arc<NetworkLayer<T>>,
     db: &Arc<RwLock<ObjectDatabase>>,
     selected: Option<ObjectIdentifier>,
     mut controls: mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>,
     audit: Option<std::sync::Weak<super::audit_recipient::TargetAudit<T>>>,
+    router_reports: bacnet_network::router_learning::RouterReports,
 ) -> JoinHandle<()> {
     let network = Arc::clone(network);
     let mut owner =
@@ -248,6 +259,9 @@ pub(super) fn spawn_number_worker<T: TransportPort + 'static>(
             let reply = match owner.next(&mut controls).await {
                 NumberTurn::Closed => break,
                 NumberTurn::Control(control) => {
+                    // The router announcements go to the router learning
+                    // too (#2831).
+                    router_reports.offer(&control);
                     let before = network.local_network_number().get();
                     let reply = owner.handle(control).await;
                     if network.local_network_number().get() != before

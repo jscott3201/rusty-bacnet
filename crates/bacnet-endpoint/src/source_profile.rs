@@ -151,12 +151,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Bind a Device behind a router, on `network` at `mac` there, for
     /// source Audit delivery to that Device (#2371), on any link, IPv4 B/IP
     /// included. Its records go with DNET/DADR through the router that
-    /// reaches `network`, which the session learns from traffic back from
-    /// that network (an answer it admits, or a request from a station
-    /// there) or from an I-Am-Router-To-Network listing it; until then, and
-    /// after a delivery through the learned router is lost (no answer in
-    /// time, or a failed send), they go with the link's broadcast MAC
-    /// (Clause 6.5.3). A confirmed record's answer comes back through the
+    /// reaches `network`, which the session learns only from its own router
+    /// query (Who-Is-Router-To-Network), when exactly one router answers it
+    /// (#2831); until then they go with the link's broadcast MAC (Clause
+    /// 6.5.3). A delivery through that router that is lost forgets nothing:
+    /// it starts the session's check of the router, and two checks a minute
+    /// apart replace it. A confirmed record's answer comes back through the
     /// router, naming `network` and `mac` as its source. A failed delivery
     /// counts and sets the Reporter's Reliability as a direct one does. Once the session's
     /// own network number is `network`, the binding is a direct one to

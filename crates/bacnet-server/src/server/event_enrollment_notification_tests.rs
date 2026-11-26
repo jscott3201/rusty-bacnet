@@ -325,7 +325,7 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
             db: &db,
             network: &Arc::new(NetworkLayer::new(capture.transport())),
             comm_state: &Arc::new(CommState::default()),
-            learned_routers: &Arc::new(Mutex::new(LearnedRouterCache::new())),
+            learned_routers: &Arc::new(RouterLearning::new()),
             notification_transactions: &NotificationTransactions::new(),
             device_bindings: &Arc::new(RwLock::new(
                 crate::server::device_bindings::DeviceBindingTable::new(),

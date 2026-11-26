@@ -744,7 +744,7 @@ async fn an_i_am_queued_behind_the_start_of_the_wait_still_ends_it() {
         db: Arc::new(RwLock::new(ObjectDatabase::new())),
         network: Arc::new(NetworkLayer::new(TestTransport::new())),
         comm_state: Arc::default(),
-        learned_routers: Arc::new(Mutex::new(LearnedRouterCache::new())),
+        learned_routers: Arc::new(RouterLearning::new()),
         notification_transactions: NotificationTransactions::new(),
         device_bindings: Arc::new(RwLock::new(DeviceBindingTable::new())),
         suppressions: Arc::default(),

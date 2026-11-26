@@ -123,18 +123,27 @@ impl OutboundTransactionCoordinator {
         Ok(claim(active, invoke_id, apdu))
     }
 
-    /// Whether `token`'s current attempt was recorded as sent with the
-    /// link's broadcast address ([`Self::route_through`] with `None`): the
-    /// one kind of attempt whose answer may come through any router. Asked
-    /// before the lease is completed; false for one that recorded nothing,
-    /// went through a station, or is gone.
-    pub fn went_by_broadcast(&self, token: LeaseToken) -> bool {
+    /// Whether a routed answer arriving from link station `from` with
+    /// `invoke_id` keeps to the path the lease of that invoke ID recorded
+    /// for its current attempt ([`Self::route_through`]): false only for a
+    /// lease whose attempt went through another station, which
+    /// [`Self::admit_from_source`] would refuse. Claims and counts nothing:
+    /// for an observer that must see only what admission could take
+    /// (#2831).
+    #[doc(hidden)]
+    pub fn on_path(&self, invoke_id: u8, from: &[u8]) -> bool {
         // lock-poison: fail-closed (a half-done lease could repeat an invoke ID)
         self.state.lock().is_ok_and(|state| {
-            state
-                .next_hops
-                .get(&token.invoke_id)
-                .is_some_and(|hop| hop.generation == token.generation && hop.station.is_none())
+            let Some(active) = state.slots[usize::from(invoke_id)].as_ref() else {
+                return true;
+            };
+            state.next_hops.get(&invoke_id).is_none_or(|hop| {
+                hop.generation != active.generation
+                    || hop
+                        .station
+                        .as_ref()
+                        .is_none_or(|station| station.as_slice() == from)
+            })
         })
     }
 

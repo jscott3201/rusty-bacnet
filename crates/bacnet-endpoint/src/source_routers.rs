@@ -1,26 +1,25 @@
 //! Routed source Audit routes (#2371): a recipient Device behind a router,
 //! named by its network number and its MAC there, and the routers the
-//! session learns for those networks.
+//! session's records to those networks go through.
 //!
-//! The session finds a network's router the way Clause 6.5.3 leaves to the
-//! node: the first records to a network go with DNET/DADR and the link's
-//! broadcast MAC, and the immediate MAC of any traffic that comes back from
-//! that network (an answer the session admits, or a request from a station
-//! there) is that network's router from then on, as is the sender of an
-//! I-Am-Router-To-Network that lists it. A delivery through a learned
-//! router that is lost (no answer in time, or a failed send) forgets it, so
-//! the next record goes by broadcast again and the router is learned anew;
-//! a peer's Error, Reject or Abort came back through the router, so it
-//! stays.
-use std::collections::HashMap;
+//! Those routers are a [`RouterLearning`]'s, by the rule the server's own
+//! requests follow (#2831): the first records to a network go with DNET/DADR
+//! and the link's broadcast MAC (Clause 6.5.3), and the session learns the
+//! network's router only from its own router query (Who-Is-Router-To-Network,
+//! Clause 6.4.1), when exactly one router answers it. No answer to a record,
+//! no request from the network and no I-Am-Router-To-Network it did not ask
+//! for teaches one. A delivery through the router that is lost forgets
+//! nothing: it starts a check of the router, which moves the records to
+//! another router only after two checks a minute apart find it silent and
+//! the same other router alone answering.
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination;
-use bacnet_network::layer::{
-    NetworkReport, ReceivedApdu, ReceivedNetworkControl, ReceivedNetworkReport,
-};
+use bacnet_network::layer::ReceivedApdu;
 use bacnet_network::network_number::LocalNetworkNumber;
+use bacnet_network::router_learning::RouterLearning;
 use bacnet_types::MacAddr;
 use bacnet_types::sync::MutexExt;
 
@@ -91,35 +90,34 @@ pub(crate) fn routed_unicast(network: u16, mac: &[u8]) -> bool {
     (1..=0xFFFE).contains(&network) && (1..=bacnet_npdu::MAX_MAC_LEN).contains(&mac.len())
 }
 
-/// A send's next hop through a learned router, which a lost delivery
-/// forgets.
-pub(crate) struct Hop(Option<(Arc<SourceRouters>, u16, MacAddr)>);
+/// A send's next hop through a known router, whose lost delivery starts a
+/// check of that router.
+pub(crate) struct Hop(Option<(Arc<SourceRouters>, u16, MacAddr, MacAddr)>);
 
 impl Hop {
-    /// A send with no learned router: direct, by broadcast or global.
+    /// A send with no known router: direct, by broadcast or global.
     pub(crate) fn none() -> Self {
         Self(None)
     }
 
-    /// The delivery through this hop was lost: forget its router, unless
-    /// another has been learned since.
+    /// The delivery through this hop was lost: check its router, while it
+    /// is still the network's (#2831). Nothing is forgotten.
     pub(crate) fn lost(self) {
-        if let Some((routers, network, router)) = self.0 {
-            let mut known = routers.routers.locked();
-            if let Some(slot) = known.get_mut(&network)
-                && slot.as_ref() == Some(&router)
-            {
-                *slot = None;
-            }
+        if let Some((routers, network, router, station)) = self.0 {
+            routers.learning.silent(network, &router, &station);
         }
     }
 }
 
-/// The router learned for each network a routed binding names. It holds
-/// only those networks, so it is bounded by the bindings.
+/// The networks routed bindings name, and the routers the session's
+/// records to them go through. It tracks only those networks, so it is
+/// bounded by the bindings.
 #[derive(Debug, Default)]
 pub(crate) struct SourceRouters {
-    routers: Mutex<HashMap<u16, Option<MacAddr>>>,
+    networks: Mutex<BTreeSet<u16>>,
+    /// The routers, learned and replaced only through the session's own
+    /// router query; the session runs its checks ([`Self::learning`]).
+    learning: Arc<RouterLearning>,
     /// The session's own network number, once the started link's slot is
     /// handed over: a record queued for a network that has since become
     /// this one goes direct.
@@ -130,9 +128,9 @@ pub(crate) struct SourceRouters {
 }
 
 impl SourceRouters {
-    /// Track `network`, with no router learned yet.
+    /// Track `network`, with no router known yet.
     pub(crate) fn track(&self, network: u16) {
-        self.routers.locked().entry(network).or_default();
+        self.networks.locked().insert(network);
     }
 
     /// Take the started link's unicast rule, and read the session's own
@@ -148,51 +146,30 @@ impl SourceRouters {
 
     /// Whether any network is tracked: the session has routed bindings.
     pub(crate) fn is_empty(&self) -> bool {
-        self.routers.locked().is_empty()
+        self.networks.locked().is_empty()
     }
 
-    /// `router` reaches `network`, if a binding names that network and it
-    /// isn't this one.
-    fn learn(&self, network: u16, router: &MacAddr) {
-        if router.is_empty() || Some(network) == self.local_network() {
-            return;
-        }
-        if let Some(slot) = self.routers.locked().get_mut(&network) {
-            *slot = Some(router.clone());
-        }
+    /// The learner the session runs the checks of.
+    pub(crate) fn learning(&self) -> &Arc<RouterLearning> {
+        &self.learning
     }
 
-    /// Learn from traffic that came from another network: its immediate MAC
-    /// is the router to that network. Traffic from this network, from a
-    /// network no binding names, or naming no station teaches nothing.
+    /// Traffic from another network arrived from link station
+    /// `received.source_mac`: when that is the known router of a network a
+    /// binding names, it still carries the network's traffic. It teaches
+    /// nothing (#2831).
     pub(crate) fn observe(&self, received: &ReceivedApdu) {
-        if let Some(source) = received
-            .source_network
-            .as_ref()
-            .filter(|source| !source.mac_address.is_empty())
+        if let Some(source) = received.source_network.as_ref()
+            && self.networks.locked().contains(&source.network)
         {
-            self.learn(source.network, &received.source_mac);
-        }
-    }
-
-    /// Learn from an I-Am-Router-To-Network: its sender reaches each
-    /// network it lists (Clause 6.4.2).
-    pub(crate) fn observe_control(&self, control: &ReceivedNetworkControl) {
-        if let Some(ReceivedNetworkReport {
-            source_mac,
-            report: NetworkReport::IAmRouterToNetwork(networks),
-            ..
-        }) = ReceivedNetworkReport::parse(control)
-        {
-            for network in networks {
-                self.learn(network, &source_mac);
-            }
+            self.learning.heard(source.network, &received.source_mac);
         }
     }
 
     /// Where a record for `route` goes: a direct one to its MAC; a routed
-    /// one through the router learned for its network, or with the link's
-    /// broadcast MAC while none is (Clause 6.5.3). A routed one for a
+    /// one through the router known for its network, or with the link's
+    /// broadcast MAC while none is (Clause 6.5.3), which has the session
+    /// ask which router reaches it. A routed one for a
     /// network that has become this one, queued or in flight when the
     /// number changed, goes to its MAC with no DNET, since a non-routing
     /// node drops an NPDU whose DNET names a network (Clause 6.5.2.1); it
@@ -205,23 +182,25 @@ impl SourceRouters {
     ) -> Option<(EndpointApduDestination, Hop)> {
         Some(match route {
             SourceRoute::Routed { network, mac, .. } if Some(*network) != self.local_network() => {
-                let router = self.routers.locked().get(network).cloned().flatten();
-                match router {
+                match self.learning.router(*network) {
                     Some(router) => (
                         EndpointApduDestination::Routed {
                             destination_network: *network,
                             destination_mac: mac.clone(),
                             router_mac: router.clone(),
                         },
-                        Hop(Some((Arc::clone(self), *network, router))),
+                        Hop(Some((Arc::clone(self), *network, router, mac.clone()))),
                     ),
-                    None => (
-                        EndpointApduDestination::RoutedViaLocalBroadcast {
-                            destination_network: *network,
-                            destination_mac: mac.clone(),
-                        },
-                        Hop::none(),
-                    ),
+                    None => {
+                        self.learning.unrouted(*network);
+                        (
+                            EndpointApduDestination::RoutedViaLocalBroadcast {
+                                destination_network: *network,
+                                destination_mac: mac.clone(),
+                            },
+                            Hop::none(),
+                        )
+                    }
                 }
             }
             SourceRoute::Direct(mac) => (
@@ -244,20 +223,16 @@ impl SourceRouters {
         })
     }
 
-    /// The router learned for `network`, if any.
+    /// The router known for `network`, if any.
     #[cfg(test)]
     pub(crate) fn router(&self, network: u16) -> Option<MacAddr> {
-        self.routers
-            .lock()
-            .unwrap()
-            .get(&network)
-            .cloned()
-            .flatten()
+        self.learning.router(network)
     }
 
-    /// Teach `router` for `network`, as traffic from there would.
+    /// Know `router` for `network` at once, as the session's router query
+    /// would have it.
     #[cfg(test)]
     pub(crate) fn learn_for_test(&self, network: u16, router: &[u8]) {
-        self.learn(network, &MacAddr::from_slice(router));
+        self.learning.learn_for_test(network, router);
     }
 }
