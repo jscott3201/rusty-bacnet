@@ -13,21 +13,36 @@ pub use crate::principal::ScPrincipal;
 use bacnet_npdu::NpduLimits;
 use bacnet_types::MacAddr;
 use bacnet_types::data_link::DataLink;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle};
 use bytes::Bytes;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch};
 
-/// The error a send returns once its transport has stopped (#2617): an
-/// [`Error::Transport`] of kind
-/// [`NotConnected`](std::io::ErrorKind::NotConnected), the kind a send
-/// before start gets, saying that the transport stopped. See
-/// [`TransportPort::stop`].
+/// The error a send returns once its transport has stopped (#2617), for a
+/// transport that can start again (#1833): an [`Error::State`] with
+/// [`Lifecycle::NotRunning`], the state a send before start finds too.
+/// Nothing was sent. [`stopped_for_good`] is the one for a transport that
+/// doesn't start again. See [`TransportPort::stop`].
+///
+/// Out of line but not `#[cold]`: a cold call here changed how the B/IP
+/// send path that names it is inlined, about 8 instructions a request in
+/// the counting harness (#1833).
+#[inline(never)]
 pub fn stopped() -> Error {
-    Error::Transport(std::io::Error::new(
-        std::io::ErrorKind::NotConnected,
-        "transport stopped",
-    ))
+    Error::state(Lifecycle::NotRunning, "transport stopped")
+}
+
+/// The error a send returns once its transport has stopped, for a
+/// transport that doesn't start again (#1833), such as a loopback, a
+/// BACnet/SC or an MS/TP transport: an [`Error::State`] with
+/// [`Lifecycle::Closed`]. Nothing was sent.
+#[cold]
+#[inline(never)]
+pub fn stopped_for_good() -> Error {
+    Error::state(
+        Lifecycle::Closed,
+        "transport stopped; it does not start again",
+    )
 }
 
 /// An owned copy of a link's group-destination rule
@@ -662,7 +677,9 @@ pub trait TransportPort: Send + Sync {
     /// Start the transport. Returns a receiver for incoming NPDUs.
     ///
     /// The transport spawns a background receive task that decodes incoming
-    /// frames and sends `ReceivedNpdu` through the returned channel.
+    /// frames and sends `ReceivedNpdu` through the returned channel. A
+    /// second start, while it runs, is refused with an [`Error::State`] of
+    /// [`Lifecycle::AlreadyStarted`] (#1833).
     fn start(
         &mut self,
     ) -> impl std::future::Future<Output = Result<mpsc::Receiver<ReceivedNpdu>, Error>> + Send;
@@ -671,9 +688,11 @@ pub trait TransportPort: Send + Sync {
     /// reference, so an owner can stop a link that others still hold
     /// (#2617).
     ///
-    /// Once it returns, every send fails with an [`Error::Transport`] of
-    /// kind [`NotConnected`](std::io::ErrorKind::NotConnected), the kind a
-    /// send before start gets ([`stopped`] makes one); the receiver `start`
+    /// Once it returns, every send fails with an [`Error::State`] (#1833):
+    /// [`Lifecycle::NotRunning`], the state a send before start finds, for
+    /// a transport that can start again ([`stopped`] makes one), or
+    /// [`Lifecycle::Closed`] for one that doesn't ([`stopped_for_good`]).
+    /// Nothing of such a send is attempted. The receiver `start`
     /// returned yields what was queued and then ends, unless something
     /// outside the transport holds its sender (a loopback's peer); the
     /// background tasks are ended; and the link's sockets, ports and leases
@@ -694,8 +713,7 @@ pub trait TransportPort: Send + Sync {
     /// once the runtime drops them, in the background, or with the runtime;
     /// the transport lets go of the sockets, ports and leases it holds
     /// itself, at once or as the runtime frees them; and every later send
-    /// fails, as after [`Self::stop`], with an [`Error::Transport`] of kind
-    /// [`NotConnected`](std::io::ErrorKind::NotConnected). A send already
+    /// fails, as after [`Self::stop`], with an [`Error::State`]. A send already
     /// under way may still finish. Nothing graceful happens here: no
     /// disconnect or unregistration goes out, which remains
     /// [`Self::stop`]'s. It needs no runtime and is idempotent.

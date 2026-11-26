@@ -174,8 +174,8 @@ impl<W: WebSocketPort> ScTransport<W> {
     /// direct peer. The direct listener is sealed, the receive and restore
     /// tasks are aborted in place, for a later stop to join, the direct
     /// links end, and the sockets given before start are let go of. Every
-    /// later send fails with [`crate::port::stopped`]'s error. The hub
-    /// socket comes out of the send slot now, and again as the aborted
+    /// later send fails with [`crate::port::stopped_for_good`]'s error. The
+    /// hub socket comes out of the send slot now, and again as the aborted
     /// receive task drops ([`ReleaseOnAbort`]), which also takes out one it
     /// published as it was aborted. A slot a send holds is emptied on the
     /// runtime: the current one, or, from a thread with none, the one the

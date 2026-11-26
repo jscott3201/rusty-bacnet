@@ -186,7 +186,7 @@ impl ForwardBatch {
                     // timeout_at polls its inner future first. Do not initiate
                     // I/O if scheduling consumed the entire delivery budget.
                     if tokio::time::Instant::now() >= deadline {
-                        return Err(Error::Encoding("audit forwarding deadline expired".into()));
+                        return Err(forwarding_deadline_expired());
                     }
                     match (&route.local_target, &route.remote) {
                         (Some(mac), None) => {
@@ -215,6 +215,19 @@ impl ForwardBatch {
             completion.finish(delivered);
         });
     }
+}
+
+/// A forwarded record whose delivery budget ran out before its send began
+/// (#1833): nothing was sent. The link took too long to reach it, an I/O
+/// timeout of this side, not [`Error::Timeout`], which says a peer gave no
+/// answer. Only the delivery's own bookkeeping reads it.
+#[cold]
+#[inline(never)]
+pub(super) fn forwarding_deadline_expired() -> Error {
+    Error::Transport(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "audit forwarding deadline expired",
+    ))
 }
 
 struct Completion {

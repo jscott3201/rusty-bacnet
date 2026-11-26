@@ -254,17 +254,25 @@ fn the_loopback_link_resolves_by_index() {
 }
 
 /// #1883: starting on a missing interface fails before any socket opens,
-/// so it needs no raw-socket permission, and leaves the transport unstarted.
+/// so it needs no raw-socket permission, and leaves the transport unstarted:
+/// a send is refused as one to a transport not running (#1833), and a stop
+/// doesn't change that, since the transport starts again.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn starting_on_a_missing_interface_fails_cleanly() {
+    use bacnet_types::error::Lifecycle;
     let mut transport = EthernetTransport::new("bacnet-none0");
     let error = transport.start().await.unwrap_err();
     assert!(error.to_string().contains("bacnet-none0"), "{error}");
     assert_eq!(transport.local_mac(), &[0; 6]);
     assert!(matches!(
         transport.send_broadcast(&[1, 0]).await,
-        Err(Error::Transport(e)) if e.kind() == std::io::ErrorKind::NotConnected
+        Err(Error::State(Lifecycle::NotRunning, _))
+    ));
+    transport.stop().await.unwrap();
+    assert!(matches!(
+        transport.send_unicast(&[1, 0], &[2; 6]).await,
+        Err(Error::State(Lifecycle::NotRunning, _))
     ));
 }
 

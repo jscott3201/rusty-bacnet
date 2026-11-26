@@ -427,13 +427,12 @@ mod tests {
             got: BvlcFunction::BVLC_RESULT,
         };
         assert!(matches!(probe_error(&success), Probe::Unreachable(_)));
-        // What a request returns once its transport has stopped (#2612).
-        let local = BvlcExchangeError::Transport(bacnet_types::error::Error::Transport(
-            std::io::Error::new(std::io::ErrorKind::NotConnected, "Transport not started"),
-        ));
+        // What a request returns once its transport has stopped (#2612),
+        // its state since #1833: no table, with the reason as text.
+        let local = BvlcExchangeError::Transport(bacnet_transport::port::stopped());
         assert_eq!(
             probe_error(&local),
-            Probe::Unreachable("transport error: Transport not started".into())
+            Probe::Unreachable("transport stopped".into())
         );
         let mac = mac("10.0.0.1:47809".parse().unwrap());
         assert_eq!(address_of(&mac), Some("10.0.0.1:47809".parse().unwrap()));

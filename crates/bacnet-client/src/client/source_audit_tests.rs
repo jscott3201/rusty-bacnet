@@ -128,7 +128,8 @@ fn a_failed_requests_result() {
         communication(ErrorCode::MESSAGE_TOO_LONG)
     );
     // The client's own refusals record OTHER, as their untyped text did
-    // (#1833).
+    // (#1833); a request cut off after it may have gone out is recorded
+    // with OTHER too, its outcome unknown.
     for local in [
         Error::Encoding("local".into()),
         Error::RequestCutOff { sent: false },
@@ -165,8 +166,9 @@ fn a_failed_requests_result() {
 }
 
 /// A request reached its target when the device answered, the wait ran
-/// out, or the transport failed while sending; not when it was refused
-/// before sending, or its transaction was ended by a stop.
+/// out, the transport failed while sending, or a stop cut it off after it
+/// may have gone out; not when it was refused before sending, its
+/// transport not started or stopped, or a stop cut it off before it went.
 #[test]
 fn which_requests_reached_their_target() {
     assert!(attempted(&Ok(Bytes::new())));
@@ -175,17 +177,20 @@ fn which_requests_reached_their_target() {
         Error::Timeout(Duration::from_secs(1)),
         Error::Transport(std::io::Error::other("send failed")),
         Error::RoutedPathTooLong { dnet: 5 },
+        // As a request whose retry DeviceCommunicationControl withheld
+        // (#1833).
+        Error::RequestCutOff { sent: true },
     ] {
         assert!(attempted(&Err(reached)));
     }
     // The client's own refusals, typed (#1833), count as the untyped text
-    // they replace did: not attempted. A request its client's stop cut off
-    // is not recorded as attempted today even with `sent: true`, when it may
-    // have reached its target; that is tracked on #1833.
+    // they replace did: not attempted. So does a send its transport refused
+    // as not started or stopped, which went nowhere (#1833).
     for refused in [
         Error::Encoding("TSM response channel closed".into()),
         Error::RequestCutOff { sent: false },
-        Error::RequestCutOff { sent: true },
+        bacnet_transport::port::stopped(),
+        bacnet_transport::port::stopped_for_good(),
         super::seat::seat_closed(),
         Error::state(Lifecycle::Stopping, "the seat's node is stopping"),
         Error::invalid_config("transport not set on ClientBuilder"),

@@ -161,9 +161,10 @@ async fn peer_probe_collision_fails_startup_without_publishing_socket() {
     );
     assert!(!transport.socket.is_some());
     let send_error = transport.send_broadcast(&[0x01, 0x00]).await.unwrap_err();
-    assert!(
-        matches!(send_error, Error::Transport(error) if error.kind() == std::io::ErrorKind::NotConnected)
-    );
+    assert!(matches!(
+        send_error,
+        Error::State(bacnet_types::error::Lifecycle::NotRunning, _)
+    ));
 }
 
 #[test]

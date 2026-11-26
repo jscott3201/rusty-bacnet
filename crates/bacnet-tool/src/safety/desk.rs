@@ -41,7 +41,7 @@ use super::{Gate, Level, Outcome, Planned, Preview, Stored, WriteSpec, run_id};
 use bacnet_ops::DeviceAddress;
 use bacnet_ops::client::Wanted;
 use bacnet_ops::limits::RequestLimits;
-use bacnet_ops::raw::{Halt, Reader, unreachable};
+use bacnet_ops::raw::{Halt, Reader, failed_locally, unreachable};
 
 /// Why a passive session refuses anything that transmits.
 pub const PASSIVE: &str = "passive session: nothing is transmitted";
@@ -636,7 +636,7 @@ pub async fn prepare<T: TransportPort + 'static>(
                 };
                 Some(match read {
                     Ok(bytes) => Ok(bytes),
-                    Err(Halt::Device(error)) if unreachable(&error) => {
+                    Err(Halt::Device(error)) if unreachable(&error) || failed_locally(&error) => {
                         return Err(format!("reading {}: {error}", spec.object));
                     }
                     Err(Halt::Device(error)) => Err(error.to_string()),

@@ -2,7 +2,8 @@
 //! Audit (#2617). These hold the node's state through a server seat taken
 //! from the session's ingress, as a seated server does, so each case sets
 //! it by hand; `source_server_tests.rs` drives it through the full server
-//! the session builds.
+//! the session builds. Beside them, a request whose retry its stopped link
+//! refused, recorded by the same rule (#1833).
 use super::*;
 use bacnet_client::client::ClientOptions;
 use bacnet_endpoint_core::seat::ServerSeat;
@@ -284,6 +285,74 @@ async fn an_audited_request_whose_retry_is_withheld_is_recorded_as_failed() {
     .await;
     drop(client);
     drop(seat);
+    session.stop().await.unwrap();
+    peer.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}
+
+/// A request that went out, whose link then refused its retry for its
+/// state, as a link that stopped does (#1833): the request ends cut off as
+/// one that went out, and the source Audit records it once, with
+/// COMMUNICATION, OTHER, as it records one whose retry
+/// DeviceCommunicationControl withheld. The link here refuses only frames
+/// to the peer, so the record reaches its recipient. A request whose first
+/// send the link refuses afterwards went nowhere, and records nothing.
+#[tokio::test(start_paused = true)]
+async fn a_request_its_link_stranded_is_recorded_as_cut_off() {
+    use bacnet_transport::test_transport::{SendMode, SentFrame};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (peer, mut requests) = network().await;
+    let (sink, mut records) = network().await;
+    let refusing = Arc::new(AtomicBool::new(false));
+    let to_peer = peer.local_mac().to_vec();
+    let link = TestTransport::builder()
+        .inner(crate::session::bus_port::bus_port())
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .on_send({
+            let refusing = Arc::clone(&refusing);
+            move |frame: SentFrame| {
+                let refused =
+                    refusing.load(Ordering::SeqCst) && frame.mac.as_slice() == to_peer.as_slice();
+                async move {
+                    match refused {
+                        true => Err(bacnet_transport::port::stopped()),
+                        false => Ok(()),
+                    }
+                }
+            }
+        })
+        .build();
+    let mut session = session_on(link, database(false), SessionRole::ClientOnly, &sink);
+    session.client_config.apdu_timeout_ms = 1_000;
+    session.client_config.apdu_retries = 1;
+    session.start().await.unwrap();
+    let client = client_of(&session);
+    let present = PropertyIdentifier::PRESENT_VALUE;
+    let read = start_read(&client, peer.local_mac(), present, None);
+    let (invoke, _) = read_request(&receive(&mut requests).await);
+    refusing.store(true, Ordering::SeqCst);
+    let ended = timeout(WAIT, read).await.unwrap().unwrap();
+    assert!(
+        matches!(ended, Err(Error::RequestCutOff { sent: true })),
+        "{ended:?}"
+    );
+    let (record, _) = notification(&receive(&mut records).await, false);
+    assert_eq!(record.invoke_id, Some(invoke));
+    assert_eq!(
+        record.result,
+        Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER))
+    );
+    let quiet = timeout(Duration::from_millis(100), records.recv()).await;
+    assert!(quiet.is_err(), "one record");
+    // The link refuses the next request's first send: nothing went out.
+    let refused = start_read(&client, peer.local_mac(), present, None);
+    let refused = timeout(WAIT, refused).await.unwrap().unwrap();
+    assert!(matches!(refused, Err(Error::State(..))), "{refused:?}");
+    let quiet = timeout(Duration::from_millis(100), records.recv()).await;
+    assert!(quiet.is_err(), "no record for a request that went nowhere");
+    assert!(requests.try_recv().is_err(), "no retry went");
+    drop(client);
     session.stop().await.unwrap();
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();

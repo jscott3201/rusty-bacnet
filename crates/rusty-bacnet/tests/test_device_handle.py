@@ -955,6 +955,8 @@ class StubParityTests(unittest.TestCase):
             ("BacnetLookupError", ["BacnetError", "LookupError"]),
             ("BacnetAmbiguousDeviceError", ["BacnetLookupError"]),
             ("BacnetPagingError", ["BacnetError"]),
+            # A call refused for its component's state (#1833).
+            ("BacnetStateError", ["BacnetError", "RuntimeError"]),
         ):
             with self.subTest(exception=name):
                 node = stub_class(name)
@@ -964,6 +966,7 @@ class StubParityTests(unittest.TestCase):
         for attribute in ("target", "instance", "candidates"):
             self.assertIsNone(getattr(BacnetLookupError, attribute))
         self.assertIsNone(rusty_bacnet.BacnetPagingError.service)
+        self.assertIsNone(rusty_bacnet.BacnetStateError.state)
 
 
 if __name__ == "__main__":

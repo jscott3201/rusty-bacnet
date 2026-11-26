@@ -418,6 +418,10 @@ impl Outcome {
             Err(error @ Error::RequestCutOff { sent: true }) => {
                 return Self::Failed(error.to_string());
             }
+            // The client's or its link's own state refused it before
+            // anything of it went out: a link that stopped under a request
+            // already sent is a cut-off above, never this (#1833).
+            Err(error @ Error::State(..)) => return Self::NotSent(error.to_string()),
             // A request too long for one APDU that the client may not send in
             // segments, or that the device can't take in segments or in so
             // many: the client refuses each before anything goes out (#2617).
@@ -536,6 +540,21 @@ mod tests {
         let sent = Outcome::of(&Err(Error::RequestCutOff { sent: true }));
         assert!(matches!(sent, Outcome::Failed(_)), "{sent:?}");
         assert_eq!(sent.applied(), None);
+    }
+
+    /// A write its link refused for its state (stopped, say) never went
+    /// out, so it was not applied: one already sent when the link stopped
+    /// is a cut-off instead (#1833).
+    #[test]
+    fn a_write_its_link_refused_for_its_state_was_not_sent() {
+        for refused in [
+            bacnet_transport::port::stopped(),
+            bacnet_transport::port::stopped_for_good(),
+        ] {
+            let outcome = Outcome::of(&Err(refused));
+            assert!(matches!(outcome, Outcome::NotSent(_)), "{outcome:?}");
+            assert_eq!(outcome.applied(), Some(false));
+        }
     }
 
     /// A write too long for one APDU that the client refused to segment,

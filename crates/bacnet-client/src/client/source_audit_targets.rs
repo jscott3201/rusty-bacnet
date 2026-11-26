@@ -91,9 +91,11 @@ pub struct AuditedOutcome {
     pub result: Result<Bytes, Error>,
     /// The invoke ID it went with, once a transaction was registered.
     pub invoke_id: Option<u8>,
-    /// Whether the request reached its target: it was sent, or the device
-    /// answered. A request refused before anything went, or cut off by a
-    /// stop of the client or its node, reports nothing.
+    /// Whether the request may have reached its target: it was sent, or
+    /// the device answered, or a stop of the client or its node cut it off
+    /// after it may have gone out (#1833). A request refused before
+    /// anything went, its transport not started or stopped among them, or
+    /// cut off before it went, reports nothing.
     pub attempted: bool,
     /// One entry per target to report, in the request's order, with its
     /// Result: `None` for a success. A ReadPropertyMultiple answer that
@@ -238,16 +240,17 @@ pub(super) fn decode(
     }))
 }
 
-/// Whether a request that ended with `result` reached its target, given
-/// that it registered a transaction. A peer's answer (an acknowledgement
-/// of the wrong kind included, #2721), a timeout, a transport failure while
-/// sending, a router's refusal of a request that went out (#2724), and a
-/// request sent before the node's
-/// DeviceCommunicationControl withheld its retry did; a refusal before
-/// anything was sent did not. A request whose transaction its client's or
-/// node's stop ended ([`Error::RequestCutOff`]) is not counted either, even
-/// with `sent: true`, when it may have reached its target; that is tracked
-/// on #1833.
+/// Whether a request that ended with `result` may have reached its target,
+/// given that it registered a transaction. A peer's answer (an
+/// acknowledgement of the wrong kind included, #2721), a timeout, a
+/// transport failure while sending, a router's refusal of a request that
+/// went out (#2724), a request sent before the node's
+/// DeviceCommunicationControl withheld its retry, and one whose transaction
+/// its client, node or link stopping ended after it may have gone out
+/// ([`Error::RequestCutOff`] with `sent: true`, #1833) did. A refusal
+/// before anything was sent did not: a transport that isn't started or has
+/// stopped ([`Error::State`], #1833) and every other local refusal, and a
+/// request cut off before it went out.
 pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
     match result {
         Ok(_) => true,
@@ -263,6 +266,7 @@ pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
                 | Error::Transport(_)
                 | Error::Segmentation(_)
                 | Error::InitiationDisabled { sent: true }
+                | Error::RequestCutOff { sent: true }
         ),
     }
 }
@@ -277,7 +281,8 @@ pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
 /// COMMUNICATION code Clause 18 gives its reason
 /// ([`NetworkReject::error_code`](bacnet_types::error::NetworkReject::error_code)).
 /// An acknowledgement of the wrong kind for the service (#2721), whose
-/// outcome is unknown, is OTHER. A request whose retry the node's
+/// outcome is unknown, is OTHER, and so is a request that went out before
+/// the client or its link stopped under it (#1833). A request whose retry the node's
 /// DeviceCommunicationControl withheld is SERVICES, COMMUNICATION_DISABLED,
 /// the pair the standard uses for a device whose communication that
 /// control turned off.

@@ -280,7 +280,9 @@ pub(super) async fn run<T: TransportPort + 'static>(
         .await
     {
         Ok(name) => device_info.name = name.as_str().map(str::to_string),
-        Err(error) if error.unreachable() => return Err(ToolError::device(instance, &error)),
+        Err(error) if error.unreachable() || error.failed_locally() => {
+            return Err(ToolError::device(instance, &error));
+        }
         Err(_) => {}
     }
     let name = device_info.name.as_deref().map_or(Value::Null, |name| {

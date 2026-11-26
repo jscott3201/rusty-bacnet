@@ -655,9 +655,14 @@ async fn a_dropped_client_frees_the_seat_before_its_tasks_have_ended() {
     drop((seat, next));
 }
 
-/// The error a send through a stopped layer gets (#2617).
+/// The error a send through a stopped layer gets (#2617): its transport's
+/// stopped state (#1833), not running, since the test transport starts
+/// again.
 fn is_stopped(error: &Error) -> bool {
-    matches!(error, Error::Transport(io) if io.kind() == std::io::ErrorKind::NotConnected)
+    matches!(
+        error,
+        Error::State(bacnet_types::error::Lifecycle::NotRunning, _)
+    )
 }
 
 #[tokio::test]

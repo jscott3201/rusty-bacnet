@@ -267,7 +267,7 @@ pub(super) async fn listing<T: TransportPort + 'static>(
                 store(ctx, &device.address, whole.clone());
                 return Ok(Listing::from_cache(&whole, false, None));
             }
-            Err(e) if e.unreachable() => return Err(failed(&e)),
+            Err(e) if e.unreachable() || e.failed_locally() => return Err(failed(&e)),
             Err(whole) => (fresh_partial(read_count(Some(&whole)).await?), false),
         },
     };
@@ -281,7 +281,7 @@ pub(super) async fn listing<T: TransportPort + 'static>(
         }
         match device.handle.read((list_object, list, next)).await {
             Ok(value) => objects.extend(identifiers(&value.raw)),
-            Err(e) if e.unreachable() => {
+            Err(e) if e.unreachable() || e.failed_locally() => {
                 if read_here == 0 && objects.is_empty() {
                     return Err(failed(&e));
                 }

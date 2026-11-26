@@ -94,6 +94,32 @@ async fn an_io_failure_is_not_reclassified_by_a_smaller_current_limit() {
     router.stop().await.unwrap();
 }
 
+/// A frame longer than the outgoing port's current limit, which the port
+/// refuses because it stopped (#1833), draws no reject: the port's state
+/// is no length refusal, whichever way it stopped, so the router counts
+/// nothing and only warns, as for any other failed send.
+#[tokio::test]
+async fn a_stopped_port_draws_no_reject() {
+    for stopped in [
+        bacnet_transport::port::stopped(),
+        bacnet_transport::port::stopped_for_good(),
+    ] {
+        let (mut router, _apdus, mut peers) = start(2).await;
+        let mut request = packet(2000, None, 0, 0x20);
+        request.resize(601, 0);
+        receive(&peers[0], request, 0x20).await;
+        let send = sending(&mut peers[1]).await;
+        peers[1].limit.store(480, Ordering::SeqCst);
+        send.complete.send(Err(stopped)).unwrap();
+        receive(&peers[0], packet(2000, None, 0, 0x21), 0x21).await;
+        let following = sending(&mut peers[1]).await;
+        following.complete.send(Ok(())).unwrap();
+        counts(&router, (0, 0, 0)).await;
+        assert!(peers[0].sent.try_recv().is_err(), "no reject went back");
+        router.stop().await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn forwarded_rejects_and_global_or_control_fanouts_are_silent_when_refused() {
     for request in [

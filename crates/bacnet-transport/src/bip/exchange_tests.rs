@@ -148,9 +148,7 @@ async fn a_table_reader_reads_through_the_running_transport() {
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     let reader = transport.bvlc_table_reader();
     let not_started = |error: BvlcExchangeError| match error {
-        BvlcExchangeError::Transport(Error::Transport(io)) => {
-            assert_eq!(io.kind(), std::io::ErrorKind::NotConnected);
-        }
+        BvlcExchangeError::Transport(Error::State(Lifecycle::NotRunning, _)) => {}
         other => panic!("not the not-started error: {other}"),
     };
     not_started(reader.read_bdt(&mac).await.unwrap_err());

@@ -62,7 +62,8 @@ async fn endpoint_egress_discards_expired_and_canceled_commands_before_transport
     assert!(first.complete().await.result.is_ok());
     let outcome = expired.complete().await;
     assert!(!outcome.attempted);
-    assert!(outcome.result.is_err());
+    // The link's own deadline, not a peer's silence (#1833).
+    assert!(timed_out(&outcome.result), "{:?}", outcome.result);
     assert!(final_send.complete().await.result.is_ok());
     assert_eq!(emissions.recv().await.unwrap(), vec![5]);
     assert!(emissions.try_recv().is_err());
@@ -73,8 +74,15 @@ async fn endpoint_egress_discards_expired_and_canceled_commands_before_transport
         .await
         .unwrap();
     assert!(outcome.attempted);
-    assert!(outcome.result.is_err());
+    assert!(timed_out(&outcome.result), "{:?}", outcome.result);
     ingress.stop().await.unwrap();
+}
+
+/// Whether `result` is a send deadline that passed on this side: an I/O
+/// timeout of the link, not [`Error::Timeout`], which says a peer gave no
+/// answer (#1833).
+fn timed_out(result: &Result<(), Error>) -> bool {
+    matches!(result, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::TimedOut)
 }
 
 #[tokio::test]

@@ -22,7 +22,7 @@ use super::{Device, DeviceAddress, path_to};
 use crate::client::batch::{self, BatchRow, Batched, Missing};
 use crate::client::{
     DEVICE_PROPERTIES, DeviceSummary, Halt, ListRead, Naming, PagedLog, ReadVia, RpmFailure,
-    Wanted, device_error, rpm_failure, unreachable,
+    Wanted, device_error, failed_locally, rpm_failure, unreachable,
 };
 use crate::error::OpsError;
 use crate::format::{Floats, LogColumns, PropertyError, RawRow, StateTexts, Value, ValueFormat};
@@ -197,10 +197,13 @@ impl<T: TransportPort + 'static> Device<T> {
         match read {
             // An RPM the device failed as a whole, not by refusing the
             // service or for its size: read this object by ReadProperty
-            // this time, as a bulk read reads such a batch.
+            // this time, as a bulk read reads such a batch. Not when the
+            // client's own link failed it (#1833): ReadProperty would fail
+            // the same way.
             Err(Halt::Device(error))
                 if reader.rpm
                     && !unreachable(&error)
+                    && !failed_locally(&error)
                     && rpm_failure(&error) == RpmFailure::Other =>
             {
                 tracing::debug!(
@@ -384,8 +387,9 @@ impl<T: TransportPort + 'static> Device<T> {
     /// none naming one while the instance isn't known), at most
     /// [`MAX_STATE_TEXT_OBJECTS`](crate::format::MAX_STATE_TEXT_OBJECTS).
     /// Best effort: a refused read leaves its columns named as before, and
-    /// a device that stops answering, or `out_of_time` turning true, ends
-    /// the reading before the next object. The [`Naming`] says whether the
+    /// a device that stops answering, the client's own link failing (a
+    /// stopped transport, #1833), or `out_of_time` turning true, ends the
+    /// reading before the next object. The [`Naming`] says whether the
     /// read that ended it timed out.
     pub async fn log_state_texts(
         &self,
@@ -404,7 +408,10 @@ impl<T: TransportPort + 'static> Device<T> {
                 let wanted = Wanted::List(StateTexts::properties(object.object_type()));
                 match self.rows(object, wanted).await {
                     Ok((rows, _)) => ControlFlow::Continue(StateTexts::from_rows(&rows)),
-                    Err(error) if error.unreachable() => {
+                    // The device stopped answering, or the client's own
+                    // link failed (#1833): every later read would fail the
+                    // same way, so the reading ends here.
+                    Err(error) if error.unreachable() || error.failed_locally() => {
                         lost.store(error.timed_out(), Ordering::Relaxed);
                         ControlFlow::Break(())
                     }

@@ -62,7 +62,7 @@ async fn abort_releases_the_serial_port_and_leaves_the_task_to_a_stop() {
     assert!(lock(&transport.running).task.is_some());
     let refused = transport.send_broadcast(&[1, 0]).await;
     assert!(
-        matches!(&refused, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected),
+        matches!(&refused, Err(Error::State(Lifecycle::Closed, _))),
         "{refused:?}"
     );
     drop(reopen(&in_use).await);
@@ -71,6 +71,13 @@ async fn abort_releases_the_serial_port_and_leaves_the_task_to_a_stop() {
     assert!(
         lock(&transport.running).task.is_none(),
         "the stop joined it"
+    );
+    // Its serial port gone, the transport doesn't start again: closed, as
+    // its sends say, not a second start (#1833).
+    let again = transport.start().await;
+    assert!(
+        matches!(&again, Err(Error::State(Lifecycle::Closed, _))),
+        "{again:?}"
     );
 }
 

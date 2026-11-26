@@ -6,7 +6,10 @@ use std::sync::{
 
 use bacnet_router_core::router::ReplyPlan;
 use bacnet_transport::port::{DirectResponseScope, ResponseScopeGuard};
-use bacnet_types::{MacAddr, error::Error};
+use bacnet_types::{
+    MacAddr,
+    error::{Error, Lifecycle},
+};
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
@@ -134,10 +137,30 @@ impl RouterResponse {
                         }),
                     },
                 )
-                .map_err(|_| unavailable())?;
+                .map_err(|error| match error {
+                    tokio::sync::mpsc::error::TrySendError::Full(()) => queue_full(),
+                    tokio::sync::mpsc::error::TrySendError::Closed(()) => unavailable(),
+                })?;
         }
-        completed.await.map_err(|_| unavailable())?
+        // The completion went without an answer: dropped from the queue
+        // before its send, or after `start` handed it to a send that a stop
+        // then cut short, which may have reached the link. Which can't be
+        // told here, so not the closed state, which says nothing was done
+        // (#1833), and not a request's cut-off: this is a reply. It keeps
+        // the link's not-connected error it had.
+        completed.await.map_err(|_| reply_lost())?
     }
+}
+
+/// A queued reply whose completion went unanswered, whether or not its
+/// send began (see [`RouterResponse::send`]).
+#[cold]
+#[inline(never)]
+fn reply_lost() -> Error {
+    Error::Transport(std::io::Error::new(
+        std::io::ErrorKind::NotConnected,
+        "original router response route unavailable",
+    ))
 }
 
 pub(super) struct ReplyCompletion {
@@ -171,9 +194,25 @@ impl ReplyCompletion {
     }
 }
 
+/// A reply whose saved route closed under it (#1833): the router stopped
+/// or went, or the reply's owner retired. Nothing was sent, and the route
+/// never opens again, so [`Lifecycle::Closed`].
+#[cold]
+#[inline(never)]
 fn unavailable() -> Error {
-    Error::Transport(std::io::Error::new(
-        std::io::ErrorKind::NotConnected,
+    Error::state(
+        Lifecycle::Closed,
         "original router response route unavailable",
+    )
+}
+
+/// A reply the return port's send queue had no room for: nothing was
+/// sent, as a full MS/TP queue refuses a frame.
+#[cold]
+#[inline(never)]
+fn queue_full() -> Error {
+    Error::Transport(std::io::Error::new(
+        std::io::ErrorKind::WouldBlock,
+        "the router port's send queue is full",
     ))
 }

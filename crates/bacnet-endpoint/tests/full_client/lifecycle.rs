@@ -47,11 +47,16 @@ async fn assert_no_task_left() {
     .await;
 }
 
-/// Whether `result` failed as a send on a stopped transport does (#2617).
+/// Whether `result` failed as a send on a stopped transport does (#2617):
+/// the transport's state, not running, since the test transport starts
+/// again (#1833).
 fn stopped<T: std::fmt::Debug>(result: Result<T, bacnet_types::error::Error>) -> bool {
     matches!(
         result,
-        Err(bacnet_types::error::Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected
+        Err(bacnet_types::error::Error::State(
+            bacnet_types::error::Lifecycle::NotRunning,
+            _
+        ))
     )
 }
 

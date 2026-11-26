@@ -7,7 +7,7 @@ use std::io;
 use bacnet_npdu::{Address, Mac, NpduLimits};
 use bacnet_router_core::PortId;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle};
 
 use super::super::application_replies::{CAPACITY, LIFETIME, Replies};
 use super::super::priority_harness::*;
@@ -208,15 +208,18 @@ async fn refusals_keep_their_reason() {
         None
     );
 
+    // Once the router stopped, a send is refused as this side's closed
+    // state, not a link's failure (#1833).
     router.stop().await.unwrap();
     let error = port
         .send_unicast(&routed_request(), &[1])
         .await
         .unwrap_err();
-    assert_eq!(
-        OriginateFailure::from_error(&error),
-        Some(OriginateFailure::Stopped)
+    assert!(
+        matches!(error, Error::State(Lifecycle::Closed, _)),
+        "{error:?}"
     );
+    assert_eq!(OriginateFailure::from_error(&error), None);
 }
 
 #[tokio::test]
@@ -275,7 +278,7 @@ async fn a_stopped_port_sends_nothing() {
         other.send_broadcast(&routed_request()).await,
     ] {
         assert!(
-            matches!(&sent, Err(Error::Transport(io)) if io.kind() == io::ErrorKind::NotConnected),
+            matches!(&sent, Err(Error::State(Lifecycle::Closed, _))),
             "{sent:?}"
         );
     }

@@ -75,6 +75,15 @@ fn address(network: &NetworkLayer<TestTransport>) -> SocketAddrV4 {
     SocketAddrV4::new(ip.into(), port)
 }
 fn session(
+    db: ObjectDatabase,
+    role: SessionRole,
+    sink: &NetworkLayer<TestTransport>,
+) -> EndpointSession<TestTransport> {
+    session_on(bus_port(), db, role, sink)
+}
+/// [`session`] on `link`, such as a [`bus_port`] behind a test hook.
+fn session_on(
+    link: TestTransport,
     mut db: ObjectDatabase,
     role: SessionRole,
     sink: &NetworkLayer<TestTransport>,
@@ -85,16 +94,15 @@ fn session(
         .unwrap()
         .provision_audit_recipient(BACnetRecipient::Device(oid(ObjectType::DEVICE, 999)))
         .unwrap();
-    let mut session = bare_session(
-        role,
-        SessionConfig {
-            apdu_timeout_ms: 100,
-            apdu_retries: 0,
-            ..SessionConfig::default()
-        },
-    )
-    .with_database(db)
-    .with_source_audit_reporter(selected());
+    let config = SessionConfig {
+        apdu_timeout_ms: 100,
+        apdu_retries: 0,
+        ..SessionConfig::default()
+    };
+    let mut session = EndpointSession::new(link, role, config)
+        .unwrap()
+        .with_database(db)
+        .with_source_audit_reporter(selected());
     session
         .source_audit_bindings
         .push((oid(ObjectType::DEVICE, 999), address(sink)));

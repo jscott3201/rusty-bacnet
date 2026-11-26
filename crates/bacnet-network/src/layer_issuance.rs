@@ -25,10 +25,7 @@ impl<T: TransportPort> NetworkLayer<T> {
         route: &crate::response_route::ResponseRoute,
     ) -> Result<BytesMut, Error> {
         if !self.response_scope.guard().is_open() {
-            return Err(Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "response network owner unavailable",
-            )));
+            return Err(responses_sealed());
         }
         route.encode_reply_npdu(
             issued.apdu,
@@ -170,4 +167,15 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
                 .await
         }
     }
+}
+
+/// A response after this layer sealed its responses, which its stop or
+/// drop does for good (#1833): nothing was encoded or sent.
+#[cold]
+#[inline(never)]
+fn responses_sealed() -> Error {
+    Error::state(
+        bacnet_types::error::Lifecycle::Closed,
+        "response network owner unavailable",
+    )
 }

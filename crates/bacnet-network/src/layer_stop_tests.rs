@@ -10,8 +10,13 @@ use tokio::time::{Duration, timeout};
 
 const WHO_IS: &[u8] = &[0x10, 0x08];
 
+/// A send through the stopped layer gets its transport's stopped state
+/// (#1833): the test transport starts again, so not running.
 fn stopped(sent: &Result<(), Error>) -> bool {
-    matches!(sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected)
+    matches!(
+        sent,
+        Err(Error::State(bacnet_types::error::Lifecycle::NotRunning, _))
+    )
 }
 
 #[tokio::test(start_paused = true)]

@@ -433,12 +433,12 @@ impl BipTransport {
     }
 }
 
-/// The error for a transport that isn't started.
+/// The error for a transport that isn't started (#1833): it can start, so
+/// [`Lifecycle::NotRunning`], as after a stop ([`crate::port::stopped`]).
+/// Out of line but not `#[cold]`, as that one is: the send path names it.
+#[inline(never)]
 fn not_started() -> Error {
-    Error::Transport(std::io::Error::new(
-        std::io::ErrorKind::NotConnected,
-        "Transport not started",
-    ))
+    Error::state(Lifecycle::NotRunning, "Transport not started")
 }
 
 impl TransportPort for BipTransport {
@@ -525,10 +525,11 @@ impl TransportPort for BipTransport {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.registration_closed = true;
         if self.tasks.is_running() {
-            return Err(Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
+            return Err(crate::stopping::start_refused(
+                &self.stop_gate,
                 "BIP transport already started",
-            )));
+                "BIP transport aborted: stop it before starting again",
+            ));
         }
 
         // Validate what the configuration alone decides before probing

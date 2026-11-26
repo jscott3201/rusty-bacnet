@@ -1,25 +1,64 @@
-//! The local refusals (#1833) raise the base exception with their own text,
-//! as the untyped error they replace did, whose text led with its prefix.
+//! The local refusals (#1833) raise their own text: a lifecycle state as
+//! `BacnetStateError`, every other kind as the base exception, as the
+//! untyped error they replace did, whose text led with its prefix.
 
 use super::*;
 use bacnet_types::error::{Lifecycle, Refusal};
 
-/// Every kind of local refusal, and every lifecycle state, is a plain
-/// `BacnetError` (not a timeout, a transport error or a lookup error) whose
-/// message is the refusal's text alone.
+/// Every lifecycle state raises `BacnetStateError` (also a `BacnetError`
+/// and a `RuntimeError`) with its text and the state's name in `state`;
+/// every other kind of local refusal is a plain `BacnetError` (not a
+/// timeout, a transport error or a lookup error) whose message is the
+/// refusal's text alone.
 #[test]
-fn local_refusals_raise_the_base_exception_with_their_text() {
+fn local_refusals_raise_their_class_with_their_text() {
     Python::initialize();
     Python::attach(|py| {
-        let refusals = [
-            Error::state(
-                Lifecycle::AlreadyStarted,
-                "router application port already started",
+        let states = [
+            (
+                Error::state(
+                    Lifecycle::AlreadyStarted,
+                    "router application port already started",
+                ),
+                "already_started",
             ),
-            Error::state(Lifecycle::NotRunning, "endpoint session is not running"),
-            Error::state(Lifecycle::Stopping, "endpoint ingress is not running"),
-            Error::state(Lifecycle::NotConnected, "not connected"),
-            Error::state(Lifecycle::Closed, "endpoint shutdown"),
+            (
+                Error::state(Lifecycle::NotRunning, "endpoint session is not running"),
+                "not_running",
+            ),
+            (
+                Error::state(Lifecycle::Stopping, "endpoint ingress is not running"),
+                "stopping",
+            ),
+            (
+                Error::state(Lifecycle::NotConnected, "not connected"),
+                "not_connected",
+            ),
+            (
+                Error::state(Lifecycle::Closed, "endpoint shutdown"),
+                "closed",
+            ),
+            // What a send on a stopped transport gets.
+            (bacnet_transport::port::stopped(), "not_running"),
+            (bacnet_transport::port::stopped_for_good(), "closed"),
+        ];
+        let class = state_error_type(py).unwrap().bind(py);
+        for (error, state) in states {
+            let text = error.to_string();
+            let raised = to_py_err(error);
+            let value = raised.value(py);
+            assert!(value.get_type().is(class), "{text}");
+            assert!(value.is_instance_of::<BacnetError>(), "{text}");
+            assert!(
+                value.is_instance_of::<pyo3::exceptions::PyRuntimeError>(),
+                "{text}"
+            );
+            assert_eq!(value.str().unwrap().to_str().unwrap(), text);
+            let named: String = value.getattr("state").unwrap().extract().unwrap();
+            assert_eq!(named, state, "{text}");
+        }
+        assert!(class.getattr("state").unwrap().is_none());
+        let refusals = [
             Error::invalid_config("endpoint session queue capacity must be greater than zero"),
             Error::invalid_argument("invalid local Network-Number-Is NPDU"),
             Error::unsupported("source Audit requires the session's link"),
@@ -36,7 +75,7 @@ fn local_refusals_raise_the_base_exception_with_their_text() {
             );
             assert_eq!(raised.value(py).str().unwrap().to_str().unwrap(), text);
         }
-        // The untyped error they replace took the same arm.
+        // The untyped error they replace took the base class's arm.
         let untyped = to_py_err(Error::Encoding("endpoint shutdown".into()));
         assert!(
             untyped
@@ -51,30 +90,53 @@ fn local_refusals_raise_the_base_exception_with_their_text() {
     });
 }
 
-/// A request the client's stop cut off (#2617), now its own variant
-/// (#1833), raises the base exception with the message it raised before,
-/// whether or not it had gone out, though the error's own text says which;
-/// the closed refusals that look like it (a closed seat, an endpoint's
-/// shutdown before anything was sent) each raise their own text.
+/// A request the client or its link cut off (#2617, #1833) raises the base
+/// exception with the error's own text, which says whether it had gone out
+/// and so whether the device may have carried it out, as a cut-off
+/// `write_bdt` or `delete_fdt_entry` may have changed the table: it is one
+/// request's outcome, not a state. The closed refusals that look like it
+/// (a closed seat, an endpoint's shutdown before anything was sent) are
+/// states, and each raises its own text.
 #[test]
-fn a_cut_off_request_keeps_its_message() {
+fn a_cut_off_request_says_whether_it_went_out() {
     Python::initialize();
     Python::attach(|py| {
-        let message = |error: Error| {
-            let raised = to_py_err(error);
-            assert!(raised.value(py).get_type().is(py.get_type::<BacnetError>()));
-            raised.value(py).str().unwrap().to_str().unwrap().to_owned()
-        };
-        for sent in [false, true] {
+        let message = |sent| {
             let cut_off = Error::RequestCutOff { sent };
-            assert_ne!(cut_off.to_string(), REQUEST_CUT_OFF);
-            assert_eq!(message(cut_off), REQUEST_CUT_OFF);
-        }
+            let text = cut_off.to_string();
+            let raised = to_py_err(cut_off);
+            assert!(raised.value(py).get_type().is(py.get_type::<BacnetError>()));
+            let shown = raised.value(py).str().unwrap().to_str().unwrap().to_owned();
+            assert_eq!(shown, text);
+            shown
+        };
+        assert!(message(true).contains("may have carried it out"));
+        assert!(message(false).contains("did not get it"));
+        let class = state_error_type(py).unwrap().bind(py);
         for text in [
             "the client's seat has closed: its node or the client stopped",
             "endpoint shutdown",
         ] {
-            assert_eq!(message(Error::state(Lifecycle::Closed, text)), text);
+            let raised = to_py_err(Error::state(Lifecycle::Closed, text));
+            assert!(raised.value(py).get_type().is(class));
+            assert_eq!(raised.value(py).str().unwrap().to_str().unwrap(), text);
         }
+    });
+}
+
+/// A device the table can't place for a call by instance (#1833) raises the
+/// lookup error, naming the instance, as a routed address with no known
+/// router does.
+#[test]
+fn an_unknown_device_raises_the_lookup_error() {
+    Python::initialize();
+    Python::attach(|py| {
+        let raised = to_py_err(Error::UnknownDevice {
+            device: "1234".into(),
+        });
+        let value = raised.value(py);
+        assert!(value.get_type().is(lookup_error_type(py).unwrap().bind(py)));
+        let instance: Option<u32> = value.getattr("instance").unwrap().extract().unwrap();
+        assert_eq!(instance, Some(1234));
     });
 }

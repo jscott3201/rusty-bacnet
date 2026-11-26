@@ -77,6 +77,12 @@ impl SharedQueues {
         self.lock().open = false;
     }
 
+    /// Whether [`close`](Self::close) ran: the node stopped, was aborted or
+    /// ended.
+    pub(super) fn is_closed(&self) -> bool {
+        !self.lock().open
+    }
+
     /// Queue an NPDU from a send call, at `now` on the core's clock and
     /// expiring `max_age` later, as the core's own enqueue does.
     pub(super) fn enqueue(
