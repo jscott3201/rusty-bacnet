@@ -11,8 +11,10 @@
 //! The local refusals ([`Error::State`], [`Error::InvalidConfig`],
 //! [`Error::InvalidArgument`], [`Error::Unsupported`] and
 //! [`Error::LimitReached`], #1833) are there too, with a static
-//! [`Refusal`]; only their owned text needs `std`. The other variants
-//! holding a `String` or a `Box` need `alloc`.
+//! [`Refusal`] whose owned text needs `std`, and so is persisted state
+//! ([`Error::Persistence`]), whose [`SnapshotError`] is static. A
+//! structured error's detail needs `alloc`; the variants for I/O and a
+//! client's lookups need `std`. There is no variant for text alone.
 
 #[cfg(all(feature = "alloc", not(feature = "std")))]
 use alloc::{boxed::Box, vec::Vec};
@@ -185,25 +187,58 @@ impl fmt::Display for Candidates<'_> {
 ///
 /// It is `#[non_exhaustive]`, so a `match` on it outside this crate needs a
 /// wildcard arm. Some variants exist only with a feature, and any crate in a
-/// build can turn that on: `Error::Transport`, `Error::AmbiguousDevice`
-/// and `Error::UnknownDevice` need `std`, and the variants that hold a
-/// `String` or a `Box` need `alloc`. Without the attribute a
-/// match written against a smaller build would stop compiling (#1604).
+/// build can turn that on: `Error::Transport`, `Error::NetworkRejected`,
+/// `Error::RouterBusyTimeout`, `Error::AmbiguousDevice` and
+/// `Error::UnknownDevice` need `std`, and `Error::Structured` needs
+/// `alloc`. Without the attribute a match written against a smaller build
+/// would stop compiling (#1604).
 ///
-/// A caller tells errors apart by variant, never by text (#1833). The text
-/// of a local refusal ([`Error::State`], [`Error::InvalidConfig`],
-/// [`Error::InvalidArgument`], [`Error::Unsupported`],
-/// [`Error::LimitReached`]) is for a person to read and may change; a
-/// number or fact a caller acts on has a typed variant or field of its own,
-/// as [`Error::SendTooLong`] carries its length and limit. What a component
-/// is built or started with (a value given to a builder's setter, an option,
-/// a table it is configured with, or a value made to configure it) that it
-/// refuses is [`Error::InvalidConfig`], wherever the check runs, even when the
-/// setter is the call that hands the value over. A value refused at the
-/// call that hands it to a component is [`Error::InvalidArgument`], even
-/// when the component would keep it (a device added to the client's table,
-/// a routed path's limit, a server's new clock zone), and so is text parsed
-/// once.
+/// # Matching
+///
+/// A caller tells errors apart by variant, never by text (#1833): every
+/// error's text is for a person to read and may change, and a number or
+/// fact a caller acts on has a typed variant or field of its own, as
+/// [`Error::SendTooLong`] carries its length and limit. The variants fall
+/// into these groups:
+///
+/// - A peer's answer: [`Error::Remote`] and `Error::Structured` (an Error,
+///   Reject or Abort PDU; [`Error::remote`] gives either as a
+///   [`RemoteError`]), a router's refusal on the way
+///   ([`Error::RoutedPathTooLong`], `Error::NetworkRejected`), and an
+///   acknowledgement of the wrong kind ([`Error::UnexpectedAck`]).
+/// - No answer: [`Error::Timeout`] and `Error::RouterBusyTimeout`; a
+///   request its client or link stopped under, [`Error::RequestCutOff`];
+///   one DeviceCommunicationControl held back, [`Error::InitiationDisabled`].
+///   The last two say whether the request may have gone out.
+/// - This side's refusal, with nothing sent: [`Error::State`] with its
+///   [`Lifecycle`], [`Error::InvalidConfig`], [`Error::InvalidArgument`],
+///   [`Error::Unsupported`] and [`Error::LimitReached`], each with a
+///   [`Refusal`]; and the ones that carry what a caller acts on:
+///   [`Error::SendTooLong`], [`Error::UnsupportedTransport`],
+///   [`Error::RoutedPathCapacityExceeded`], `Error::AmbiguousDevice` and
+///   `Error::UnknownDevice`.
+/// - A codec's refusal: [`Error::Encode`], [`Error::Decoding`] (with its
+///   offset and [`DecodingKind`]), [`Error::Range`],
+///   [`Error::Segmentation`] and [`Error::BufferTooShort`]; and a
+///   well-formed answer that breaks a rule the client checks:
+///   [`Error::ReadRangeViolation`], [`Error::LogNotAdvancing`].
+/// - The link's I/O, with the OS error as its source: `Error::Transport`.
+/// - Persisted state that couldn't be loaded or saved:
+///   [`Error::Persistence`], whose [`SnapshotError::kind`] and
+///   [`SnapshotError::is_damage`] say why.
+///
+/// What a component is built or started with (a value given to a
+/// builder's setter, an option, a table it is configured with, or a value
+/// made to configure it) that it refuses is [`Error::InvalidConfig`],
+/// wherever the check runs, even when the setter is the call that hands the
+/// value over. A value refused at the call that hands it to a component is
+/// [`Error::InvalidArgument`], even when the component would keep it (a
+/// device added to the client's table, a routed path's limit, a server's new
+/// clock zone), and so is text parsed once. There is no variant for text
+/// alone: an application's own code that returns this error (a storage
+/// backend, a hook, a transport) picks the variant for what failed, such as
+/// [`SnapshotError::backend_failed`] for its storage or a local refusal
+/// with `Refusal::text` (with `std`) where it names a run-time value.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 // Clippy fails if the attribute above goes.

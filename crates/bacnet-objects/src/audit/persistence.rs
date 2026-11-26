@@ -296,8 +296,8 @@ fn read_slot_file(path: &Path) -> Result<Option<Vec<u8>>, SlotReadFailure> {
 
 /// Check `snapshot` as the codec does before writing it: the stack's
 /// [`Error::Persistence`], of kind
-/// [`OutOfRange`](SnapshotErrorKind::OutOfRange) for a cap or size and
-/// [`Damaged`](SnapshotErrorKind::Damaged) for state that doesn't hold
+/// [`OutOfRange`](bacnet_types::error::SnapshotErrorKind::OutOfRange) for a cap or size and
+/// [`Damaged`](bacnet_types::error::SnapshotErrorKind::Damaged) for state that doesn't hold
 /// together.
 pub(super) fn validate_snapshot(snapshot: &AuditLogSnapshot) -> Result<(), Error> {
     codec::check(snapshot).map_err(|error| error.in_format(codec::WHAT).into())

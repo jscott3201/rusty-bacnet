@@ -7583,7 +7583,7 @@ All BACnet errors are raised as Python exceptions:
 
 | Exception | Meaning |
 |-----------|---------|
-| `BacnetError` | Base exception for all BACnet errors. Raised as itself for, among others, an acknowledgement of the other kind than the service takes (a Complex-ACK to a write, a Simple-ACK to a read, #2721): the request failed at once, no retry went, and whether the device carried it out is unknown |
+| `BacnetError` | Base exception for all BACnet errors. Raised as itself for, among others, an acknowledgement of the other kind than the service takes (a Complex-ACK to a write, a Simple-ACK to a read, #2721): the request failed at once, no retry went, and whether the device carried it out is unknown. Also for the stack's own configuration, argument, platform and limit refusals (#1833) and for persisted state that can't be loaded or saved, whose message is the refusal's own text |
 | `BacnetProtocolError` | A remote or local BACnet protocol check returned an error (class + code) |
 | `BacnetTimeoutError` | Request timed out (APDU retries exhausted) |
 | `BacnetRejectError` | Remote device rejected the request |
