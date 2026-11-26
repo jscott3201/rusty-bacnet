@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import errno
 import inspect
 import re
 import sys
@@ -16,6 +17,7 @@ import rusty_bacnet
 from rusty_bacnet import (
     BACnetClient,
     BACnetServer,
+    BacnetTransportError,
     ObjectIdentifier,
     ObjectType,
     PropertyIdentifier,
@@ -106,6 +108,19 @@ def nonexistent_serial_path() -> str:
         Path(tempfile.gettempdir())
         / f"rusty-bacnet-missing-{uuid.uuid4()}"
         / "serial"
+    )
+
+
+def assert_serial_open_failed(
+    test: unittest.TestCase, error: BaseException, path: str
+) -> None:
+    """A serial port that fails to open is a transport error (#1833): an
+    OSError whose errno is the failure's kind and whose message names the
+    port, then the operating system's reason."""
+    test.assertIsInstance(error, OSError)
+    test.assertEqual(error.errno, errno.ENOENT)
+    test.assertTrue(
+        error.strerror.startswith(f"Serial open failed for {path}: "), error.strerror
     )
 
 
@@ -264,17 +279,17 @@ class MstpRuntimeTests(unittest.IsolatedAsyncioTestCase):
         for baud in SUPPORTED_BAUD_RATES:
             client = make_client(path, mstp_baud=baud)
             with self.subTest(kind="client", baud=baud), self.assertRaises(
-                RuntimeError
+                BacnetTransportError
             ) as caught:
                 await client.__aenter__()
-            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+            assert_serial_open_failed(self, caught.exception, path)
 
             server = make_server(path, mstp_baud=baud)
             with self.subTest(kind="server", baud=baud), self.assertRaises(
-                RuntimeError
+                BacnetTransportError
             ) as caught:
                 await server.start()
-            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+            assert_serial_open_failed(self, caught.exception, path)
 
     async def test_extended_frames_reach_serial_open_for_client_and_server(
         self,
@@ -285,17 +300,17 @@ class MstpRuntimeTests(unittest.IsolatedAsyncioTestCase):
         for baud in (9_600, 115_200):
             client = make_client(path, mstp_baud=baud, mstp_extended_frames=True)
             with self.subTest(kind="client", baud=baud), self.assertRaises(
-                RuntimeError
+                BacnetTransportError
             ) as caught:
                 await client.__aenter__()
-            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+            assert_serial_open_failed(self, caught.exception, path)
 
             server = make_server(path, mstp_baud=baud, mstp_extended_frames=True)
             with self.subTest(kind="server", baud=baud), self.assertRaises(
-                RuntimeError
+                BacnetTransportError
             ) as caught:
                 await server.start()
-            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+            assert_serial_open_failed(self, caught.exception, path)
 
     async def test_echo_options_reach_serial_open_for_client_and_server(
         self,
@@ -307,17 +322,17 @@ class MstpRuntimeTests(unittest.IsolatedAsyncioTestCase):
             options = {"mstp_echo": True, "mstp_echo_grace_ms": grace}
             client = make_client(path, **options)
             with self.subTest(kind="client", grace=grace), self.assertRaises(
-                RuntimeError
+                BacnetTransportError
             ) as caught:
                 await client.__aenter__()
-            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+            assert_serial_open_failed(self, caught.exception, path)
 
             server = make_server(path, **options)
             with self.subTest(kind="server", grace=grace), self.assertRaises(
-                RuntimeError
+                BacnetTransportError
             ) as caught:
                 await server.start()
-            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+            assert_serial_open_failed(self, caught.exception, path)
 
     async def test_invalid_echo_grace_fails_before_open_for_client_and_server(
         self,
@@ -365,17 +380,17 @@ class MstpRuntimeTests(unittest.IsolatedAsyncioTestCase):
         ):
             client = make_client(path, **options)
             with self.subTest(kind="client", **options), self.assertRaises(
-                RuntimeError
+                BacnetTransportError
             ) as caught:
                 await client.__aenter__()
-            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+            assert_serial_open_failed(self, caught.exception, path)
 
             server = make_server(path, **options)
             with self.subTest(kind="server", **options), self.assertRaises(
-                RuntimeError
+                BacnetTransportError
             ) as caught:
                 await server.start()
-            self.assertTrue(str(caught.exception).startswith("Serial open failed"))
+            assert_serial_open_failed(self, caught.exception, path)
 
     async def test_out_of_range_timing_fails_before_open_for_client_and_server(
         self,
@@ -522,17 +537,19 @@ class MstpRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 await client.__aenter__()
 
     async def test_serial_open_failure_keeps_server_retryable(self) -> None:
-        server = make_server(nonexistent_serial_path())
+        path = nonexistent_serial_path()
+        server = make_server(path)
         pending_count = getattr(server, "_pending_registration_count")
         server.add_binary_value(77, "Pending registration")
         self.assertEqual(pending_count(), 1)
 
         for attempt in range(2):
-            with self.subTest(attempt=attempt), self.assertRaises(RuntimeError) as caught:
+            with self.subTest(attempt=attempt), self.assertRaises(
+                BacnetTransportError
+            ) as caught:
                 await server.start()
-            message = str(caught.exception)
-            self.assertTrue(message.startswith("Serial open failed"), message)
-            self.assertEqual(message.count("Serial open failed"), 1)
+            assert_serial_open_failed(self, caught.exception, path)
+            self.assertEqual(caught.exception.strerror.count("Serial open failed"), 1)
             self.assertEqual(pending_count(), 1)
 
         # A failed open must also leave the registration phase usable.

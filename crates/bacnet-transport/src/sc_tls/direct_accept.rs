@@ -45,6 +45,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
+use crate::io_context::context;
 use crate::port::ReceivedNpdu;
 use crate::sc::npdu_admission::{
     SC_NPDU_QUEUE_CAPACITY, ScNpduAdmission, ScNpduAdmissionPolicy, ScNpduDropCounts,
@@ -302,9 +303,9 @@ impl DirectListener {
         let npdu_admission = Arc::new(ScNpduAdmission::new(config.npdu_admission_policy));
         let listener = TcpListener::bind(config.bind_addr)
             .await
-            .map_err(|e| Error::Encoding(format!("direct accept bind failed: {e}")))?;
+            .map_err(|e| Error::Transport(context(e, "direct accept bind failed")))?;
         let local_addr = listener.local_addr().map_err(|e| {
-            Error::Encoding(format!("direct accept could not read local address: {e}"))
+            Error::Transport(context(e, "direct accept could not read local address"))
         })?;
         let (npdu_tx, npdu_rx) = mpsc::channel(DIRECT_ACCEPT_NPDU_CHANNEL_CAPACITY);
         let (shutdown, shutdown_rx) = watch::channel(false);

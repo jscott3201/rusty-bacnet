@@ -105,22 +105,3 @@ impl std::error::Error for CloseFailures {
         Some(&self.first)
     }
 }
-
-pub(crate) fn context(error: io::Error, context: String) -> io::Error {
-    io::Error::new(error.kind(), ContextError { context, error })
-}
-#[derive(Debug)]
-struct ContextError {
-    context: String,
-    error: io::Error,
-}
-impl std::fmt::Display for ContextError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.context, self.error)
-    }
-}
-impl std::error::Error for ContextError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.error)
-    }
-}

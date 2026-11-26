@@ -15,7 +15,7 @@ use tokio::time::{Duration, timeout};
 
 use super::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use crate::router_table::PortId;
-use bacnet_npdu::Mac;
+use bacnet_npdu::{Mac, NpduLimits};
 
 /// A station of masters 0 and 1 at 38400 baud, without extended frames.
 fn standard(station: u8) -> MstpConfig {
@@ -163,18 +163,33 @@ async fn a_routers_mstp_port_sends_extended_frames() {
     source.stop().await.unwrap();
 }
 
-/// An MS/TP port that a router may prepare, or not: one it doesn't keeps
-/// standard frames, so it carries NPDUs of at most 501 octets, as an MS/TP
-/// port behind a wrapper that skips `prepare_for_routing` would.
-fn routed(inner: MstpTransport<LoopbackSerial>, prepare: bool) -> TestTransport {
+/// How a router's MS/TP port is set up.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Port {
+    /// Prepared for routing: extended frames, 1,497 octets.
+    Prepared,
+    /// Not prepared: standard frames, so it carries NPDUs of at most 501
+    /// octets, as an MS/TP port behind a wrapper that skips
+    /// `prepare_for_routing` would.
+    Standard,
+    /// Standard frames behind a wrapper that tells the router it carries
+    /// 1,497 octets: the router's own length check passes what the link
+    /// itself then refuses.
+    Overstated,
+}
+
+fn routed(inner: MstpTransport<LoopbackSerial>, port: Port) -> TestTransport {
     let builder = TestTransport::builder()
         .inner(inner)
         .unicast(SendMode::Forward)
         .broadcast(SendMode::Forward);
-    if prepare {
-        builder.build()
-    } else {
-        builder.skip_prepare_for_routing().build()
+    match port {
+        Port::Prepared => builder.build(),
+        Port::Standard => builder.skip_prepare_for_routing().build(),
+        Port::Overstated => builder
+            .skip_prepare_for_routing()
+            .max_npdu(NpduLimits::both(1497))
+            .build(),
     }
 }
 
@@ -182,16 +197,17 @@ fn routed(inner: MstpTransport<LoopbackSerial>, prepare: bool) -> TestTransport 
 type Peer = (MstpTransport<LoopbackSerial>, mpsc::Receiver<ReceivedNpdu>);
 
 /// A router on two MS/TP links, network 1 and network 2, at station 0 on
-/// each, preparing the ports `prepare` says; and a started peer at station
+/// each, its ports set up as `ports` says; and a started peer at station
 /// 1 on each link, with extended frames where its link has them.
-async fn two_links(prepare: [bool; 2]) -> (BACnetRouter, [Peer; 2]) {
+async fn two_links(ports: [Port; 2]) -> (BACnetRouter, [Peer; 2]) {
     let (router_1, peer_1) = LoopbackSerial::pair();
     let (router_2, peer_2) = LoopbackSerial::pair();
-    let ports = [(router_1, 1, prepare[0]), (router_2, 2, prepare[1])]
+    let prepare = ports.map(|port| port == Port::Prepared);
+    let ports = [(router_1, 1, ports[0]), (router_2, 2, ports[1])]
         .into_iter()
-        .map(|(serial, network_number, prepare)| {
+        .map(|(serial, network_number, port)| {
             RouterPort::new(
-                routed(MstpTransport::new(serial, standard(0)), prepare),
+                routed(MstpTransport::new(serial, standard(0)), port),
                 network_number,
             )
         })
@@ -256,7 +272,7 @@ fn reject_of(npdu: &[u8]) -> (u8, u16) {
 #[tokio::test(start_paused = true)]
 async fn an_npdu_too_long_for_an_mstp_port_draws_reason_4() {
     let (mut router, [(next_router, mut at_next), (source, mut at_source)]) =
-        two_links([true, true]).await;
+        two_links([Port::Prepared, Port::Prepared]).await;
     {
         let now = router.now();
         let mut table = router.table();
@@ -286,7 +302,7 @@ async fn an_npdu_too_long_for_an_mstp_port_draws_reason_4() {
 #[tokio::test(start_paused = true)]
 async fn a_standard_frame_mstp_port_refuses_502_octets() {
     let (mut router, [(destination, mut at_destination), (source, mut at_source)]) =
-        two_links([false, true]).await;
+        two_links([Port::Standard, Port::Prepared]).await;
 
     let too_long = npdu_of(503, 1, 1);
     source.send_unicast(&too_long, &[0]).await.unwrap();
@@ -298,6 +314,36 @@ async fn a_standard_frame_mstp_port_refuses_502_octets() {
     let delivered = next_npdu(&mut at_destination).await;
     assert_eq!(delivered.len(), 501, "the 502-octet rewrite never went");
     assert_eq!(delivered[..6], [0x01, 0x08, 0x00, 0x02, 0x01, 0x01]);
+    router.stop().await.unwrap();
+    destination.stop().await.unwrap();
+    source.stop().await.unwrap();
+}
+
+/// The link's own length refusal draws reason 4 too (#1833). An MS/TP port
+/// with standard frames tells the router it carries 1,497 octets, so the
+/// router's length check passes a 600-octet NPDU for station 1 on network
+/// 1, and the MS/TP transport refuses it as too long for its frames
+/// ([`Error::SendTooLong`](bacnet_types::error::Error::SendTooLong)). The
+/// router answers the source with reject reason 4 for network 1, as for a
+/// refusal of its own, and counts it; nothing reaches the station.
+#[tokio::test(start_paused = true)]
+async fn the_mstp_links_own_length_refusal_draws_reason_4() {
+    let (mut router, [(destination, mut at_destination), (source, mut at_source)]) =
+        two_links([Port::Overstated, Port::Prepared]).await;
+
+    let too_long = npdu_of(600, 1, 1);
+    source.send_unicast(&too_long, &[0]).await.unwrap();
+    assert_eq!(reject_of(&next_npdu(&mut at_source).await), (4, 1));
+    let counters = router.counters();
+    assert_eq!(
+        (counters.egress_too_long, counters.refused, counters.rejects),
+        (1, 1, 1)
+    );
+
+    // One that fits goes, and is the first the station gets.
+    let fits = npdu_of(400, 1, 1);
+    source.send_unicast(&fits, &[0]).await.unwrap();
+    assert_eq!(next_npdu(&mut at_destination).await.len(), 399);
     router.stop().await.unwrap();
     destination.stop().await.unwrap();
     source.stop().await.unwrap();

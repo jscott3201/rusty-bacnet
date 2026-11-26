@@ -713,10 +713,10 @@ pub trait TransportPort: Send + Sync {
     ///
     /// When [`Error::SendTooLong`] is returned, the NPDU or its encoded link
     /// frame exceeded a bound before any bytes were sent or queued for
-    /// writing. BACnet/SC uses it for NPDU and frame-length checks; other
-    /// transports may return their existing error variants. Wrappers must
-    /// preserve `SendTooLong`. Other variants do not identify a definite
-    /// length refusal for the router.
+    /// writing. B/IP, MS/TP and Ethernet refuse an NPDU too long for their
+    /// link this way (#1833), and BACnet/SC its NPDU and frame-length checks.
+    /// Wrappers must preserve `SendTooLong`. Other variants do not identify
+    /// a definite length refusal for the router.
     ///
     /// B/IP refuses a MAC that is one of its group addresses
     /// ([`Self::is_group_destination`]) with an error, sending nothing

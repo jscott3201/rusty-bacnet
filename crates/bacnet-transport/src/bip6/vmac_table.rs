@@ -109,9 +109,8 @@ pub fn format_vmac_text(vmac: Bip6Vmac) -> String {
 /// Generate a Random Device Instance VMAC for collision resolution (Clause H.7.2).
 pub fn generate_random_vmac() -> Result<Bip6Vmac, Error> {
     let mut vmac = [0u8; 3];
-    getrandom::fill(&mut vmac).map_err(|error| {
-        Error::Encoding(format!("failed to generate Random Instance VMAC: {error}"))
-    })?;
+    getrandom::fill(&mut vmac)
+        .map_err(|e| crate::io_context::entropy(e, "failed to generate Random Instance VMAC"))?;
     vmac[0] = (vmac[0] & 0x3F) | 0x40;
     Ok(Bip6Vmac::new(vmac))
 }

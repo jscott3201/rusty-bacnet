@@ -306,6 +306,19 @@ mod transport {
         "an Ethernet frame carries the longest NPDU any data link carries"
     );
 
+    /// Refuse an NPDU longer than an Ethernet frame carries as
+    /// [`Error::SendTooLong`], as MS/TP and B/IP do (#1833): a router answers
+    /// it with reject reason 4, and a client can try a smaller request.
+    pub(super) fn fits(npdu: &[u8]) -> Result<(), Error> {
+        if npdu.len() > MAX_ETHERNET_NPDU {
+            return Err(Error::SendTooLong {
+                length: npdu.len(),
+                limit: MAX_ETHERNET_NPDU,
+            });
+        }
+        Ok(())
+    }
+
     /// `ETH_P_ALL` in network byte order: the socket's protocol, so it sees
     /// every frame on the interface, whatever its length or EtherType field.
     const ETH_P_ALL_BE: u16 = (libc::ETH_P_ALL as u16).to_be();
@@ -719,13 +732,7 @@ mod transport {
                 ));
             }
 
-            if npdu.len() > MAX_ETHERNET_NPDU {
-                return Err(Error::Encoding(format!(
-                    "NPDU too large for Ethernet: {} bytes (max {})",
-                    npdu.len(),
-                    MAX_ETHERNET_NPDU
-                )));
-            }
+            fits(npdu)?;
 
             let mut dst = [0u8; 6];
             dst.copy_from_slice(mac);

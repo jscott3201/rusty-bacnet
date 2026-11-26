@@ -204,9 +204,7 @@ impl TlsWebSocket {
 
         let verified_leaf =
             direct_accept::verified_leaf_sha256(tls_stream.get_ref().1.peer_certificates())
-                .ok_or_else(|| {
-                    Error::Encoding("verified TLS peer has no leaf certificate".into())
-                })?;
+                .ok_or_else(|| tls_failure::no_peer_certificate(&addr))?;
         let peer_info = std::sync::Arc::new(ScTlsPeerInfo::capture(
             tls_stream.get_ref().1,
             peer_address,

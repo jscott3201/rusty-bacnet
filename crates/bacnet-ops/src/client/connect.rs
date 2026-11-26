@@ -484,12 +484,8 @@ mod mstp {
                 port_name: self.port.clone(),
                 baud_rate: self.config.baud_rate,
             })
-            .map_err(|error| match error {
-                bacnet_types::error::Error::Encoding(message) => OpsError::Client(
-                    bacnet_types::error::Error::Encoding(format!("{}: {message}", self.port)),
-                ),
-                other => OpsError::Client(other),
-            })?;
+            // The transport's error names the port (#1833).
+            .map_err(OpsError::Client)?;
             let max_apdu = self.config.max_apdu_length();
             let transport = MstpTransport::new(serial, self.config);
             let low = Box::pin(

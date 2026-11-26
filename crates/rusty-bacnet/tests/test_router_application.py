@@ -311,6 +311,20 @@ class RouterApplicationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "already taken"):
             await late.start()
 
+    async def test_a_routing_table_query_is_refused_by_the_link_not_its_argument(self):
+        # The router's application carries APDUs only; network messages are
+        # the router's own. Its link refuses a routing-table query whatever
+        # the router named, so the call raises BacnetError, not ValueError
+        # (#1833).
+        router = rb.BACnetRouter([bbmd_port(1)], application="client")
+        await router.start()
+        self.addAsyncCleanup(cleanup, router.close)
+        [port] = await router.ports()
+        client = await self.router_client(router)
+        with self.assertRaisesRegex(rb.BacnetError, "APDUs only") as caught:
+            await asyncio.wait_for(client.routing_table(port.address), 10)
+        self.assertNotIsInstance(caught.exception, ValueError)
+
     async def test_closing_the_router_fails_the_client_cleanly(self):
         router = rb.BACnetRouter([bbmd_port(1)], application="client")
         await router.start()

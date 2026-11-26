@@ -67,8 +67,9 @@ use tokio::io::AsyncReadExt;
 mod admission;
 pub use admission::MonitorAdmissionError;
 mod reader;
+pub(crate) use crate::io_context::context;
 pub use reader::{DropOnClose, MonitorRead};
-pub(crate) use reader::{Failure, combine, context};
+pub(crate) use reader::{Failure, combine};
 use tokio::sync::{broadcast, oneshot, watch};
 use tokio::task::JoinHandle;
 
