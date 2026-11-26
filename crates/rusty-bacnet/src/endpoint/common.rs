@@ -226,6 +226,13 @@ pub(crate) enum PendingObject {
 
 mod pending_build;
 
+/// What a call that needs the running session raises before start and
+/// after close (#2819): `BacnetStateError`, `state` `"not_running"`, since
+/// an endpoint starts again after its close.
+pub(crate) fn not_running(message: &str) -> PyErr {
+    crate::errors::lifecycle_error(bacnet_types::error::Lifecycle::NotRunning, message)
+}
+
 /// Admit a registration under the same lock that seals registrations at
 /// startup, against the Device, its declared Network Ports and the pending
 /// set, then keep it. Every kind passes through [`admit`], so a point is
@@ -258,7 +265,10 @@ pub(super) fn register_pending<S>(
             Ok(())
         })
         .ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err(
+            // Registrations are sealed from the start until the close ends:
+            // a call only an unstarted endpoint takes (#2819).
+            crate::errors::lifecycle_error(
+                bacnet_types::error::Lifecycle::AlreadyStarted,
                 "cannot add objects while endpoint is starting, running, or stopping",
             )
         })?
@@ -271,7 +281,10 @@ pub(crate) fn build_pending_boxes(
     params.iter().map(PendingObject::build).collect()
 }
 
-pub(crate) fn lifecycle_error(error: super::lifecycle::LifecycleError<PyErr>) -> PyErr {
+/// What the endpoint owner's start or close failed with: a second start
+/// (`BacnetStateError`), a start that a close cancelled, the start's or
+/// stop's own error, or a worker that ended (`RuntimeError`).
+pub(crate) fn owner_error(error: super::lifecycle::LifecycleError<PyErr>) -> PyErr {
     match error {
         // A lifecycle refusal: BacnetStateError, `state` already_started
         // (#1833).
@@ -348,8 +361,7 @@ mod build_database_tests {
     #[test]
     fn a_second_start_raises_the_state_error() {
         Python::initialize();
-        let error =
-            lifecycle_error(super::super::lifecycle::LifecycleError::<PyErr>::AlreadyStarted);
+        let error = owner_error(super::super::lifecycle::LifecycleError::<PyErr>::AlreadyStarted);
         Python::attach(|py| {
             let class = crate::errors::state_error_type(py).unwrap().bind(py);
             let value = error.value(py);

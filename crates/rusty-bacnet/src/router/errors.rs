@@ -15,7 +15,10 @@ pyo3::create_exception!(
 
 pub(super) fn start_error(error: StartError<Error, RouterStopError>, networks: &[u16]) -> PyErr {
     match error {
-        StartError::AlreadyStarted => PyRuntimeError::new_err("router already started"),
+        StartError::AlreadyStarted => crate::errors::lifecycle_error(
+            bacnet_types::error::Lifecycle::AlreadyStarted,
+            "router already started",
+        ),
         StartError::Cancelled => {
             PyRuntimeError::new_err("router startup cancelled by close or disposal")
         }

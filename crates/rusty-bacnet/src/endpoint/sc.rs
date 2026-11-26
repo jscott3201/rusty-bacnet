@@ -16,7 +16,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::endpoint::common::{
-    PendingObject, build_database, build_identity, build_pending_boxes, lifecycle_error,
+    PendingObject, build_database, build_identity, build_pending_boxes, not_running, owner_error,
     parse_device_uuid, parse_segmentation, pending_group, with_sc_port,
 };
 use crate::endpoint::lifecycle::Lifecycle;
@@ -131,9 +131,7 @@ async fn sc_link(session: &tokio::sync::RwLock<Option<Running>>) -> PyResult<ScL
         .await
         .as_ref()
         .and_then(|session| session.sc_link())
-        .ok_or_else(|| {
-            PyRuntimeError::new_err("endpoint not started — use 'async with' or await start()")
-        })
+        .ok_or_else(|| not_running("endpoint not started — use 'async with' or await start()"))
 }
 
 impl PyScEndpoint {
@@ -412,7 +410,7 @@ impl PyScEndpoint {
             lifecycle
                 .start(false, |objects| config.prepare(objects, first_events))
                 .await
-                .map_err(lifecycle_error)?;
+                .map_err(owner_error)?;
             crate::py_async::attach(|py| Ok(py.None()))
         })
     }
@@ -421,7 +419,7 @@ impl PyScEndpoint {
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let lifecycle = self.lifecycle.clone();
         crate::py_async::future_into_py(py, async move {
-            lifecycle.close().await.map_err(lifecycle_error)?;
+            lifecycle.close().await.map_err(owner_error)?;
             crate::py_async::attach(|py| Ok(py.None()))
         })
     }
@@ -443,7 +441,7 @@ impl PyScEndpoint {
             lifecycle
                 .start(true, |objects| config.prepare(objects, first_events))
                 .await
-                .map_err(lifecycle_error)?;
+                .map_err(owner_error)?;
             Ok(self_ref)
         })
     }
@@ -499,7 +497,7 @@ impl PyScEndpoint {
                 let guard = inner.read().await;
                 let session = guard
                     .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
+                    .ok_or_else(|| not_running("endpoint not started"))?;
                 let counters = session.policy_counters();
                 let leases = session.active_leases();
                 let running = session.is_running();
@@ -566,7 +564,7 @@ impl PyScEndpoint {
         let future = async move {
             let guard = inner.read().await;
             let session = guard.as_ref().ok_or_else(|| {
-                PyRuntimeError::new_err("endpoint not started — use 'async with' or await start()")
+                not_running("endpoint not started — use 'async with' or await start()")
             })?;
             session.broadcast_i_am().await.map_err(to_py_err)?;
             Ok(())
