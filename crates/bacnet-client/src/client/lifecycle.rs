@@ -577,6 +577,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                         device_collision_tx: &task.device_collision_tx,
                                         i_have_tx: &task.i_have_tx,
                                         seg_ack_senders: &task.seg_ack_senders,
+                                        routed_path_limits: &task.routed_path_limits,
                                         decode_warning: &task.decode_warning,
                                         response_warning: &task.response_warning,
                                     },
@@ -636,6 +637,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// for the drop that may need action.
     pub fn too_long_reject_drops(&self) -> u64 {
         self.routed_path_limits.dropped_rejects()
+    }
+
+    /// Answers dropped since start because they named a routed device and
+    /// one of its open requests but came through another station on this
+    /// link than the router that request went to (#2831). A routed frame's
+    /// SNET and SADR are written by whoever sends it, so any station on the
+    /// link can name any device in them; the link station a frame comes
+    /// from is the part it can't choose. Such an answer is neither kept nor
+    /// answered, and the request waits for the device's own. A request sent
+    /// by local broadcast ([`Station::routed_via_local_broadcast`]) names no
+    /// router, so any router's relay of its answer still completes it, as
+    /// for a client on a router's application port, whose requests the
+    /// router's own table routes. A rise means a station is answering for
+    /// routed devices: one guessing invoke IDs, or a second path to a
+    /// network, which Clause 4.2 rules out.
+    pub fn off_path_answer_drops(&self) -> u64 {
+        self.routed_path_limits.off_path_answers()
     }
 
     /// Reason-4 rejects dropped since start because the request they landed

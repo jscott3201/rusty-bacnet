@@ -177,6 +177,9 @@ struct RoutedPathState {
     /// Reason-4 rejects dropped because the active request's largest frame
     /// is within the conservative limit.
     below_minimum_drops: u64,
+    /// Answers dropped for coming through another station than the router
+    /// their request went to ([`RoutedPathLimits::answer_through`]).
+    off_path_answers: u64,
 }
 
 pub(super) struct RoutedPathLimits {
@@ -198,6 +201,7 @@ impl RoutedPathLimits {
                 capacity,
                 dropped_rejects: 0,
                 below_minimum_drops: 0,
+                off_path_answers: 0,
             }),
             quarantine_horizon,
         }
@@ -215,6 +219,48 @@ impl RoutedPathLimits {
     /// See [`BACnetClient::below_minimum_reject_drops`].
     pub(super) fn below_minimum_drops(&self) -> u64 {
         self.state().below_minimum_drops
+    }
+
+    /// See [`BACnetClient::off_path_answer_drops`].
+    pub(super) fn off_path_answers(&self) -> u64 {
+        self.state().off_path_answers
+    }
+
+    /// Whether an answer from link station `from` to transaction
+    /// (`tsm_mac`, `invoke_id`), whose SNET names `network`, may complete
+    /// it (#2831). Every request through a router is the one active request
+    /// on its path (router, DNET) while it is open, so the path it came
+    /// through has it active. One open through another router is answered
+    /// by someone else: the answer is counted and refused. Any other answer
+    /// goes on as before: one for a request sent by local broadcast, which
+    /// any router may relay and which takes no path, and one for no open
+    /// request, which the TSM drops.
+    pub(super) fn answer_through(
+        &self,
+        from: &[u8],
+        network: u16,
+        tsm_mac: &MacAddr,
+        invoke_id: u8,
+    ) -> bool {
+        let answers = |entry: &RoutedPathEntry| {
+            entry
+                .active
+                .as_ref()
+                .is_some_and(|active| active.invoke_id == invoke_id && active.tsm_mac == *tsm_mac)
+        };
+        let mut state = self.state();
+        if state
+            .entries
+            .get(&RoutedPathKey::new(from, network))
+            .is_some_and(answers)
+        {
+            return true;
+        }
+        let open_elsewhere = state.entries.values().any(answers);
+        if open_elsewhere {
+            state.off_path_answers = state.off_path_answers.saturating_add(1);
+        }
+        !open_elsewhere
     }
 
     /// What [`BACnetClient::routed_path_limits`] lists: each path with a

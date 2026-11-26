@@ -10171,6 +10171,23 @@ the wrong request (#2651):
 - Network controls observed at ingress before a request becomes active are
   discarded using a monotonic ingress sequence.
 
+An answer for a routed device counts only when it comes through the router its
+request went to (#2831): the acknowledgments, Error, Reject, and the server's
+Abort and Segment-ACK. A routed frame's SNET and SADR are written by its
+sender, so any station on the link could name the device in them and guess the
+invoke ID; the link station it comes from is the part it can't choose. One
+from another station is dropped unanswered (no Segment-ACK, no Abort), counted
+in `BACnetClient::off_path_answer_drops()`, and the request waits for the
+device's own answer. The standard allows one path between two nodes (Clause
+4.2), so a device's answers return through the router its requests went to; a
+retry goes through the same router as the first frame. A request by local
+broadcast (`Station::routed_via_local_broadcast`) names no router, so any
+router's relay of its answer still completes it. Nor is the path checked for a
+client on a router's application port, whose requests the router's own table
+routes. A request sent straight to a station on this link once its network
+number is known is not covered: an answer relayed back with this network as
+its SNET still completes it from any station (#1465).
+
 A reject is addressed to the station that sent the refused message, so one
 that came as a broadcast (a global one, DNET 65535, or a broadcast on this
 link) is dropped before its reason is read, reason 4 included: anyone could

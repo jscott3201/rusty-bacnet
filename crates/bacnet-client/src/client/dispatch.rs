@@ -68,6 +68,23 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             &apdu,
         )
         .await;
+        // A routed device's answer counts only through the router its
+        // request went to: its SNET and SADR are its sender's word (#2831).
+        // A router's own application names no router (the router's table
+        // routes it), so there the router's ports are the path.
+        if let CanonicalPeer::Routed { network: snet, .. } = &canonical_peer
+            && let Some(invoke_id) = answers_own_request(&apdu)
+            && network.transport().attached_networks().is_empty()
+            && !context
+                .routed_path_limits
+                .answer_through(source_mac, *snet, &tsm_mac, invoke_id)
+        {
+            debug!(
+                invoke_id,
+                "Dropping a routed device's answer from another station than its router"
+            );
+            return;
+        }
         match apdu {
             Apdu::SimpleAck(ack) => {
                 // Mid-reassembly, a SimpleACK is in Clause 5.4.4.4
@@ -497,6 +514,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     .await
             }
         }
+    }
+}
+
+/// The invoke ID of an answer to one of this client's own requests: an
+/// acknowledgment, an Error, a Reject, or a server's Abort or Segment-ACK.
+/// A client's Abort or Segment-ACK belongs to a request this client is
+/// answering, and is `None`, as is every request.
+fn answers_own_request(apdu: &Apdu) -> Option<u8> {
+    match apdu {
+        Apdu::SimpleAck(ack) => Some(ack.invoke_id),
+        Apdu::ComplexAck(ack) => Some(ack.invoke_id),
+        Apdu::Error(error) => Some(error.invoke_id),
+        Apdu::Reject(reject) => Some(reject.invoke_id),
+        Apdu::Abort(abort) if abort.sent_by_server => Some(abort.invoke_id),
+        Apdu::SegmentAck(ack) if ack.sent_by_server => Some(ack.invoke_id),
+        _ => None,
     }
 }
 
