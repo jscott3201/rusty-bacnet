@@ -44,7 +44,7 @@ async fn wait_for_frames(harness: &Harness, expected: usize) {
 }
 
 #[tokio::test]
-async fn admitted_routes_stop_at_64_but_existing_network_updates_at_capacity() {
+async fn admitted_routes_stop_at_64_and_a_known_router_is_kept() {
     // One destination per DNET, one more than the cache holds.
     const DNETS: std::ops::Range<u16> = 1000..1065;
     let harness = Harness::new(Vec::new(), 60_000).await;
@@ -80,15 +80,23 @@ async fn admitted_routes_stop_at_64_but_existing_network_updates_at_capacity() {
         assert_eq!(router.as_slice(), ROUTER_A);
         let (npdu, request) = decode_confirmed(frame);
         let network = npdu.destination.unwrap().network;
-        // A valid terminal from another router replaces an existing DNET,
-        // even though the preceding 64 admitted routes filled the cache.
-        let responding_router = if network == 1000 { ROUTER_B } else { ROUTER_A };
+        // Another router's answer to a request sent through ROUTER_A
+        // completes nothing (#2831); ROUTER_A's own does.
+        if network == 1000 {
+            assert!(
+                !harness
+                    .ack_routed(ROUTER_B, network, RECIPIENT, request.invoke_id)
+                    .await
+            );
+        }
         assert!(
             harness
-                .ack_routed(responding_router, network, RECIPIENT, request.invoke_id)
+                .ack_routed(ROUTER_A, network, RECIPIENT, request.invoke_id)
                 .await
         );
     }
+    // The 65th network's request went by broadcast, so any router's answer
+    // completes it, but the full cache learns nothing from it.
     assert!(
         harness
             .ack_routed(ROUTER_B, 1064, RECIPIENT, request.invoke_id)
@@ -103,19 +111,10 @@ async fn admitted_routes_stop_at_64_but_existing_network_updates_at_capacity() {
         let (npdu, request) = decode_confirmed(frame);
         let destination = npdu.destination.unwrap();
         assert_eq!(destination.mac_address.as_slice(), RECIPIENT);
-        let expected = if destination.network == 1000 {
-            ROUTER_B
-        } else {
-            ROUTER_A
-        };
-        assert_eq!(
-            router.as_slice(),
-            expected,
-            "cached next hop after capacity update"
-        );
+        assert_eq!(router.as_slice(), ROUTER_A, "the known router is kept");
         assert!(
             harness
-                .ack_routed(expected, destination.network, RECIPIENT, request.invoke_id)
+                .ack_routed(ROUTER_A, destination.network, RECIPIENT, request.invoke_id)
                 .await
         );
     }

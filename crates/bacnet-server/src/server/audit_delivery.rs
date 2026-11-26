@@ -119,6 +119,7 @@ pub(in crate::server) async fn deliver_observed<T: TransportPort + 'static>(
     };
     tokio::time::timeout_at(deadline, async {
         if let Some((operation, receiver)) = reserved {
+            route.record_next_hop(&operation);
             run_notification_worker(operation, receiver, DELIVERY_TIMEOUT, 0, |_| send()).await
                 == NotificationWorkerResult::Ack
         } else {

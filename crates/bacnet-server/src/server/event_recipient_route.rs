@@ -137,6 +137,19 @@ pub(super) struct ConfirmedRecipientRoute {
 }
 
 impl ConfirmedRecipientRoute {
+    /// Record, on `operation`, the router every attempt on this route goes
+    /// through, so only an answer arriving from it completes the request
+    /// (#2831). A route to a station on this link, or one with no router
+    /// known, records nothing.
+    pub(super) fn record_next_hop(
+        &self,
+        operation: &super::notification_transactions::NotificationOperation,
+    ) {
+        if let Some((_, _, Some(router))) = &self.remote {
+            operation.route_through(Some(router));
+        }
+    }
+
     /// What a send on this route fails with when it names no next hop: a
     /// station on another network with no router known for it, a device
     /// that can't be placed (#1833), as the client reports one. The audit

@@ -6,7 +6,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// relayed with `local_network`, this network's known number, as SNET
     /// completes only a request still keyed to that routed form, never one
     /// sent straight to its SADR (#2831), and teaches no next hop: sends to
-    /// this network go out locally.
+    /// this network go out locally. A routed answer completes a request sent
+    /// through a router only when it arrives from that router, and teaches
+    /// its network's router only while none is known (#2831).
     async fn admit_notification_terminal(
         learned_routers: &Arc<Mutex<LearnedRouterCache>>,
         notification_transactions: &Arc<NotificationTransactions>,

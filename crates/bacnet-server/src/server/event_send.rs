@@ -481,6 +481,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let (first_attempt, handed_off) = oneshot::channel::<()>();
             let mut first_attempt = Some(first_attempt);
             notification_transactions.spawn(async move {
+                // An address recipient's network's learned router, which the
+                // first attempt goes through; a retry means it stayed silent,
+                // so the first retry forgets it (#2831).
+                let learned = match &remote {
+                    Some((dnet, _, None)) => learned_routers.lock().await.cached_router(*dnet),
+                    _ => None,
+                };
+                let path = operation.path();
                 let result = run_attempts(operation, result_rx, timeout, apdu_retries, |attempt| {
                     let first_attempt = first_attempt.take();
                     // DCC and the binding's lifetime are checked
@@ -501,6 +509,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let buf = buf.clone();
                     let local_target = local_target.clone();
                     let remote = remote.clone();
+                    let learned = learned.clone();
+                    let path = &path;
                     async move {
                         let _first_attempt = first_attempt;
                         if let Some(withdrawal) = withdrawn {
@@ -514,15 +524,27 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             }
                             (None, Some((dnet, dadr, configured_router))) => {
                                 // A Device binding keeps its fixed next hop for
-                                // each permitted attempt. Address recipients retain
-                                // the learned-router/broadcast behavior.
+                                // each permitted attempt. An address recipient's
+                                // first attempt goes through the learned router,
+                                // its retries by local broadcast.
                                 let router = match configured_router {
                                     Some(router) => Some(router),
-                                    None if attempt == 0 => {
-                                        learned_routers.lock().await.cached_router(dnet)
+                                    None if attempt == 0 => learned,
+                                    None => {
+                                        if attempt == 1
+                                            && let Some(silent) = &learned
+                                        {
+                                            learned_routers
+                                                .lock()
+                                                .await
+                                                .forget_router(dnet, silent);
+                                        }
+                                        None
                                     }
-                                    None => None,
                                 };
+                                // Before the send: only an answer through this
+                                // router completes the attempt (#2831).
+                                path.through(router.as_deref());
                                 match router {
                                     Some(router_mac) => {
                                         network
@@ -576,6 +598,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         warn!(invoke_id = id, "EventNotification rejected by recipient");
                     }
                     Ok(NotificationWorkerResult::Exhausted) => {
+                        // With no retry to forget it, a learned router that
+                        // stayed silent is forgotten here (#2831).
+                        if let (Some(silent), Some((dnet, _, None))) = (&learned, &remote) {
+                            learned_routers.lock().await.forget_router(*dnet, silent);
+                        }
                         suppressions.record(EventSuppression::ConfirmedUnanswered);
                         warn!(
                             invoke_id = id,

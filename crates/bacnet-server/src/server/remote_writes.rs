@@ -289,6 +289,7 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
             }),
         )
         .expect("valid APDU encoding");
+        route.record_next_hop(&operation);
         let (apdu, route, network) = (&apdu, &route, self.network);
         let outcome = run_attempts(operation, answer, self.timeout, self.retries, |attempt| {
             // A retry is a send too: DCC and the binding's lifetime are

@@ -115,7 +115,15 @@ pub(super) fn admit(
     let source = Arc::downgrade(source);
     owner.spawn(async move {
         let _permit = permit;
-        let (sent, hop) = admit_encoded(&egress, &routers, &route, encoded, confirmed, deadline);
+        let (sent, hop) = admit_encoded(
+            &egress,
+            &routers,
+            &route,
+            encoded,
+            confirmed,
+            deadline,
+            reserved.as_ref(),
+        );
         if matches!(sent, Err(EndpointEgressAdmissionError::QueueFull))
             && let (Some(source), Some(owner)) = (source.upgrade(), weak_owner.upgrade())
         {
@@ -178,6 +186,7 @@ pub(super) fn admit_encoded(
     encoded: Vec<u8>,
     confirmed: bool,
     deadline: Instant,
+    reserved: Option<&Reservation>,
 ) -> (
     Result<bacnet_endpoint_core::endpoint_ingress::EndpointSend, EndpointEgressAdmissionError>,
     Hop,
@@ -193,6 +202,9 @@ pub(super) fn admit_encoded(
     let Some((destination, hop)) = routers.destination(route) else {
         return (Err(EndpointEgressAdmissionError::Closed), Hop::none());
     };
+    if let Some((operation, _)) = reserved {
+        record_next_hop(operation, &destination);
+    }
     let sent = egress.admit_apdu(
         encoded,
         destination,
@@ -202,6 +214,23 @@ pub(super) fn admit_encoded(
         Some(deadline),
     );
     (sent, hop)
+}
+
+/// Record where a confirmed record goes before it is queued (#2831): only
+/// an answer arriving from the router it goes through completes it, and any
+/// router may carry the answer to one sent with the link's broadcast
+/// address. A record to a station on this link records nothing.
+fn record_next_hop(
+    operation: &bacnet_server::server::__endpoint_NotificationOperation,
+    destination: &EndpointApduDestination,
+) {
+    match destination {
+        EndpointApduDestination::Routed { router_mac, .. } => {
+            operation.route_through(Some(router_mac));
+        }
+        EndpointApduDestination::RoutedViaLocalBroadcast { .. } => operation.route_through(None),
+        _ => {}
+    }
 }
 
 /// Queue one encoded UnconfirmedAuditNotification for global broadcast
@@ -222,7 +251,7 @@ pub(super) fn admit_global_broadcast(
     )
 }
 
-type Reservation = (
+pub(super) type Reservation = (
     bacnet_server::server::__endpoint_NotificationOperation,
     oneshot::Receiver<bacnet_server::server::CovAckResult>,
 );
@@ -345,6 +374,57 @@ mod tests {
         for refused in [&[1][..], &[0xFF], &[5, 5]] {
             assert_eq!(to(refused), None, "{refused:?}");
         }
+    }
+
+    /// A confirmed record sent through a learned router takes its answer only
+    /// from that router; one sent by local broadcast takes it from any
+    /// (#2831).
+    #[tokio::test]
+    async fn a_routed_records_answer_counts_only_through_its_router() {
+        use bacnet_encoding::apdu::SimpleAck;
+        use bacnet_endpoint_core::coordinator::{
+            AdmissionOutcome, CanonicalPeer, OutboundTransactionCoordinator,
+        };
+        let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+        let pool = bacnet_server::server::__endpoint_NotificationTransactions::with_coordinator(
+            Arc::clone(&coordinator),
+        );
+        let station = bacnet_encoding::npdu::NpduAddress {
+            network: 2,
+            mac_address: MacAddr::from_slice(&[5]),
+        };
+        let service = ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION;
+        let answer_from = |router: &[u8], invoke_id| {
+            let ack = Apdu::SimpleAck(SimpleAck {
+                invoke_id,
+                service_choice: service,
+            });
+            coordinator
+                .admit_from_source(router, Some(&station), None, &ack)
+                .unwrap()
+        };
+        let through = EndpointApduDestination::Routed {
+            destination_network: 2,
+            destination_mac: MacAddr::from_slice(&[5]),
+            router_mac: MacAddr::from_slice(&[0xFE]),
+        };
+        let broadcast = EndpointApduDestination::RoutedViaLocalBroadcast {
+            destination_network: 2,
+            destination_mac: MacAddr::from_slice(&[5]),
+        };
+        for (destination, other_admitted) in [(through, false), (broadcast, true)] {
+            let (operation, _answer) = pool
+                .reserve(CanonicalPeer::routed(2, &[5]), service)
+                .unwrap();
+            record_next_hop(&operation, &destination);
+            let other = answer_from(&[0xFD], operation.invoke_id());
+            assert_eq!(
+                matches!(other, AdmissionOutcome::Admitted(_)),
+                other_admitted,
+                "{destination:?}"
+            );
+        }
+        assert_eq!(coordinator.off_path_answers().unwrap(), 1);
     }
 
     /// A lost delivery forgets its router only while it is still the one

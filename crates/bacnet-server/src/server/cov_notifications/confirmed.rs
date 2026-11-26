@@ -348,6 +348,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // attempt and every retry, before it may report again. That bounds a
         // dead or refusing subscriber to half the in-flight time at most.
         let hold_off = apdu_timeout * (u32::from(apdu_retries) + 1);
+        // Every attempt to a routed subscriber goes through the router its
+        // subscription came through, and only an answer from it counts
+        // (#2831).
+        if route.subscriber_network.is_some() {
+            operation.route_through(Some(&route.subscriber_mac));
+        }
         ctx.notification_transactions.spawn(async move {
             // Whether an attempt got past the DCC check, so went to the link.
             let attempted = std::sync::atomic::AtomicBool::new(false);
