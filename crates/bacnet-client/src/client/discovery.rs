@@ -201,6 +201,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// a MAC that holds another instance replaces that row, so
     /// [`Self::get_device`] no longer finds the instance it held there.
     ///
+    /// A row registered so is the application's own word on the address,
+    /// never announced: `bacnet-ops` places a handle made from its instance
+    /// there without a Who-Is or a question to the device (#2824). Register
+    /// only an address known to be the device's.
+    ///
     /// # Errors
     ///
     /// [`Error::InvalidArgument`], leaving the table unchanged, when `mac` is
@@ -268,6 +273,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// when it was (#2572). Like the other manual registrations, this sends
     /// no device or collision notices. A routed device registered while the
     /// number is unknown has the client ask for it first, once (#2572).
+    ///
+    /// As with [`Self::add_device`], the row is the application's own word:
+    /// `bacnet-ops` places a handle made from its instance there without a
+    /// Who-Is or a question to the device (#2824).
     pub async fn add_routed_device(&self, config: RoutedDeviceConfig) -> Result<(), Error> {
         if config.router_mac.is_empty() {
             return Err(Error::invalid_argument(

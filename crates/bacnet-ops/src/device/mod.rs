@@ -52,8 +52,13 @@
 //!   [`MAX_ASKED`] are ambiguous unasked, but a single row registered by
 //!   hand among them places the handle. A placement so costs about half a
 //!   second on this network (about 3 s for a routed target) and one read a
-//!   claim, about the resolve wait when nothing answers. A device's answer
-//!   is remembered for its address (and
+//!   claim, about the resolve wait when nothing claims the instance; a
+//!   claim that doesn't answer holds it for the client's timeout and
+//!   retries, about 24 s at the default timers. With the discovery table
+//!   full once the Who-Is settles (4,096 addresses), it fails as
+//!   [`OpsError::TableFull`], asking nothing, as the device's own answer
+//!   may have been dropped. A device's answer is remembered for its
+//!   address (and
 //!   forgotten as the instance read for an address is), which spares its
 //!   read the next time and nothing more: once the last handle following
 //!   the instance is dropped, the next is placed again, Who-Is included,
@@ -113,18 +118,29 @@
 //! the instance, and later writes go to the new place. A routed device's
 //! path through its router is #2823. Nothing in BACnet/IP is
 //! authenticated, so a station answering the client's question as the
-//! instance at its own address while the device itself is absent or
-//! silent can't be told from the device having moved there, and is
-//! placed. That class takes in: a device unheard long enough for its row
-//! to age out (ten minutes); a frame a BBMD forwards that removes a
+//! instance at its own address, while the device itself hasn't claimed it
+//! by the time the claims are asked, can't be told from the device having
+//! moved there, and is placed. That class takes in: a device absent, or
+//! silent to the Who-Is; one slower to answer it than the settle time,
+//! and than the resolve wait after a lone claim's placement; one beyond
+//! the Who-Is's reach (a bare instance asks the client's resolve scope,
+//! this network alone by default, so a device on another network isn't
+//! heard: name its network, or widen the scope); a clone that sends no
+//! Who-Is ([`Client::with_resolve_wait`]`(None)`), whose placements ask
+//! the claims as they stand; a frame a BBMD forwards that removes a
 //! device's claim, and with it the answer remembered for its address
-//! (#2837); a B/IPv6 virtual address, which is a claim like any other;
-//! and a routed station at first sight, reached through whichever station
+//! (#2837); a B/IPv6 virtual address, which is a claim like any other; and
+//! a routed station at first sight, reached through whichever station
 //! announced it, whose answer the real router's later I-Am only cues a
-//! check of (#2830). With the device on the network and answering the
-//! first contact's Who-Is and question, the caller gets
-//! [`OpsError::Ambiguous`]; a place confirmed before is joined, as its
-//! handles' own reads judge it.
+//! check of (#2830). A row registered by hand
+//! ([`BACnetClient::add_device`], [`BACnetClient::add_routed_device`]) is
+//! taken as the application's word, without a Who-Is or a question. With
+//! the device claiming the instance too and answering its question, the
+//! caller gets [`OpsError::Ambiguous`]; a place confirmed before is joined,
+//! as its handles' own reads judge it.
+//!
+//! [`BACnetClient::add_device`]: bacnet_client::client::BACnetClient::add_device
+//! [`BACnetClient::add_routed_device`]: bacnet_client::client::BACnetClient::add_routed_device
 
 /// Evaluate `$body` with `$at` where the device is reached now
 /// ([`Device::target`]), and for a following handle whose request timed

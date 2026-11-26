@@ -265,9 +265,11 @@ impl<T: TransportPort + 'static> Client<T> {
     /// claims in the discovery table and `live`'s address. Unless a row
     /// registered by hand is among them, one Who-Is for the instance goes
     /// out first (unless one went out while this resolution waited its
-    /// `turn`, `since`), and its answers are given [`SETTLE`]; with no claim
-    /// at all, the resolve wait for a first answer ([`Client::find_instance`]).
-    /// An answer only remembered sends it all the same. Then
+    /// `turn`, `since`), and its answers are given their settle time
+    /// ([`settle_time`](Self::settle_time)); with no claim at all, the
+    /// resolve wait for a first answer ([`Client::find_instance`]). An
+    /// answer only remembered sends it all the same. Settled with the
+    /// discovery table full, it fails as [`OpsError::TableFull`]. Then
     /// [`confirm`](Self::confirm). With what each claim answered.
     pub(super) async fn resolve_claims(
         &self,

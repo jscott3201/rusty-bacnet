@@ -182,8 +182,9 @@ impl<T: TransportPort + 'static> Client<T> {
     /// confirmed the instance to the client's own question (#2824): where
     /// the handles already following it are, once confirmed there and
     /// still the instance's ([`Client::joining`]); otherwise where its
-    /// claims, asked after one Who-Is for it when none is confirmed already,
-    /// say it is ([`Client::resolve_claims`]). One resolution of an
+    /// claims, asked after one Who-Is for it unless a row registered by
+    /// hand claims it, say it is ([`Client::resolve_claims`]), for a lone
+    /// claim provisionally ([`Client::provisional`]). One resolution of an
     /// instance runs at a time. A new handle never moves the handles
     /// already following it: placed elsewhere than they are, it fails as
     /// [`OpsError::NotConfirmed`] naming where they are, and a read through

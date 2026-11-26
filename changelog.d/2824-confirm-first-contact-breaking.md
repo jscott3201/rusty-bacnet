@@ -1,7 +1,7 @@
 ---
 section: Changed
 ---
-- **Breaking (Rust API, Python API):** a first contact by instance costs
-  about half a second and a read a claim (about 3 s when nothing answers);
-  `OpsError::NotConfirmed` gains `answer` and `placing`, and a new handle
-  never moves the handles already following the device (#2824).
+- **Breaking (Rust API, Python API):** placing a device by instance sends a
+  Who-Is and asks each claim (about half a second, 3 s routed; a silent
+  claim about 24 s), may fail as `NotConfirmed` or `TableFull`, and never
+  moves the handles already following the device (#2824).

@@ -32,9 +32,10 @@ impl BACnetClient {
     /// - an instance, `1234` (an int or text) or `"2:1234"` on network 2,
     ///   gives a handle that follows the instance, placed only where a
     ///   device confirmed it to the client's own question (#2824): unless
-    ///   a claim is confirmed already, one Who-Is for it first (to this
-    ///   network alone for a bare instance and to the network named
-    ///   otherwise), its answers given half a second, or up to 3 seconds
+    ///   a row added with `add_device` claims it, one Who-Is for it first
+    ///   (to this network alone for a bare instance and to the network
+    ///   named otherwise), its answers given half a second on this network
+    ///   and 3 seconds beyond it or with a routed claim, or up to 3 seconds
     ///   when nothing claims it; then each address claiming it asked which
     ///   device answers there, by one read of its Device object;
     /// - a `discover()` row or a `DiscoveredDevice` pins the handle to its
@@ -45,7 +46,9 @@ impl BACnetClient {
     /// client's link can't reach raises ValueError; an instance no address
     /// claims and none answered for, or a routed address with no router
     /// known, BacnetLookupError, and so does an instance whose one claim's
-    /// device didn't answer as it, asked; an instance two or more
+    /// device didn't answer as it, asked, one placed while handles follow
+    /// it elsewhere, and one settled with the discovery table full; an
+    /// instance two or more
     /// addresses claim, when none confirms it or two or more might be it,
     /// BacnetAmbiguousDeviceError, whose `candidates` are each a target.
     #[pyo3(signature = (target))]

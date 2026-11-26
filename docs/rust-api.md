@@ -13095,33 +13095,53 @@ forwards its answer here, as a peer or by foreign-device registration.
 address on the client's own network, once `BACnetClient::network_number`
 knows it, is the local station), from an instance (`1234`, or `2:1234` on
 one network) it follows the instance from where a device confirmed it to the
-client's own question (#2824). Unless a claim is confirmed already (its
-device's earlier answer, remembered per address and forgotten with the
-instance read for it, or a row registered by hand), one Who-Is for the
+client's own question (#2824). Unless a row registered by hand claims it
+(`add_device`, `add_routed_device`: the application's own word, trusted
+without a question), one Who-Is for the
 instance goes first, to the network the target names or, for a bare
 instance, to the client's `ResolveScope`, this network alone unless
 `with_resolve_scope` or the builders' `.resolve_scope(..)` widen it, so the
 device itself, on the network but quiet, claims it too: its answers are
-given half a second, or with no claim at all `with_resolve_wait`'s time for
-a first one (a miss fails as `OpsError::UnknownDevice` that says where it
-asked). Resolutions of one instance run one at a time and share the Who-Is.
+given half a second on this network and `with_resolve_wait`'s time (3 s by
+default) where the Who-Is goes beyond it or a claim is routed, as a device
+behind a router answers later, or with no claim at all that time for a
+first one (a miss fails as `OpsError::UnknownDevice` that says where it
+asked). Resolutions of one instance run one at a time and share the Who-Is
+once its settle time is over; one cancelled before that leaves the next its
+own, and a Who-Is the link can't send asks no claim.
 Each claim is then asked which device answers there, all at once, by one
 read of its Device object by the wildcard instance (of the instance's own
 Device object for a device that refuses that). The handle goes to the one
 address that confirms it while no other is left open by an unclear answer;
 one claim that doesn't fails as `OpsError::NotConfirmed { instance, at,
 candidate, answer, placing }`, `answer` what it did, and several, or two
-left open, as `OpsError::Ambiguous`. A first contact costs about half a
-second and a read a claim (about the resolve wait when nothing answers),
-none once confirmed. An I-Am, even one answering the client's own Who-Is,
-confirms nothing. While handles follow the instance already, a new one
-joins them as their next read would, sending nothing while their address
-holds it; placed elsewhere, it fails as `OpsError::NotConfirmed` naming
-their place, as a new handle never moves them. From a discovery result it
-is pinned and knows the instance. A front end that holds a low-level client
-places an instance the same way with `bacnet_ops::device::place_instance`
-(the CLI, the TUI's command bar and the desk's revert of an old ledger
-entry do). The handle's async reads are
+left open, as `OpsError::Ambiguous`. A handle placed on a lone claim is so
+only provisionally for the resolve wait: another address claiming the
+instance in that time clears its confirmation, so the next handle made for
+it, or write through it, is placed again (both answering: ambiguous). More
+claims needing a question than `MAX_ASKED` are ambiguous unasked, unless a
+single row registered by hand is among them. With the discovery table full
+once the Who-Is settles (4,096 addresses; `BACnetClient::device_table_full`)
+it fails as `OpsError::TableFull`, asking nothing, as the device's own
+answer may have been dropped. A placement costs about half a second on this
+network (about 3 s for a routed target) and a read a claim, about the
+resolve wait when nothing claims the instance, and the client's timeout and
+retries (about 24 s at the default timers) for a claim that doesn't answer.
+A device's answer is remembered for its address and spares its read the
+next time, nothing more: once the last handle following the instance is
+dropped, the next is placed again, Who-Is included. An I-Am, even one
+answering the client's own Who-Is, confirms nothing. While handles follow
+the instance already, a new one joins them as their next read would,
+sending nothing while their address holds it; placed elsewhere, it fails as
+`OpsError::NotConfirmed` naming their place, with the address that
+confirmed it as `candidate`, as a new handle never moves them: read through
+them (a read moves them, asking first) or drop them. From a discovery
+result it is pinned and knows the instance. A front end that holds a
+low-level client places an instance the same way with
+`bacnet_ops::device::place_instance` (the CLI, the TUI's command bar and
+the desk's revert of an old ledger entry do), each claim passing the
+caller's `Gate` before any is asked (MCP's policy), the first refused
+returned as `Withheld` with nothing asked. The handle's async reads are
 `read` (one property, as a `Value`), `read_many` (a bulk read, as
 `Readings`), `read_object` (an object's properties, all or a list),
 `list_objects`, `describe_device`, `read_trend` (trend, event and audit log
@@ -13176,14 +13196,20 @@ moves a following handle once its old address misses one identity question
 no row) while another address names the instance, and later writes go to
 the new place. A routed device's path through its router is #2823. Nothing
 in BACnet/IP is authenticated, so a station answering the client's question
-as the instance at its own address, while the device itself is absent or
-silent, can't be told from the device having moved there, and is placed
-(#2824). That class takes in a device unheard long enough for its row to
-age out (ten minutes), a forwarded frame that removes a device's claim and
-the answer remembered for it (#2837), a B/IPv6 virtual address (a claim
-like any other), and a routed station at first sight, reached through
-whichever station announced it (#2830). With the device on the network and
-answering the first contact's Who-Is and question, the caller gets
+as the instance at its own address, while the device itself hasn't claimed
+it by the time the claims are asked, can't be told from the device having
+moved there, and is placed (#2824). That class takes in a device absent or
+silent to the Who-Is; one slower to answer it than the settle time, and
+than the resolve wait after a lone claim's placement; one beyond the
+Who-Is's reach (a bare instance asks the resolve scope, this network alone
+by default: name its network, or widen the scope); a clone that sends no
+Who-Is (`with_resolve_wait(None)`), whose placements ask the claims as they
+stand; a forwarded frame that removes a device's claim and the answer
+remembered for it (#2837); a B/IPv6 virtual address (a claim like any
+other); and a routed station at first sight, reached through whichever
+station announced it (#2830). A row registered by hand is taken as the
+application's word, without a Who-Is or a question. With the device
+claiming the instance too and answering its question, the caller gets
 `OpsError::Ambiguous`. A
 clone that sends no Who-Is
 (`with_resolve_wait(None)`) goes by the I-Am times instead: its own address

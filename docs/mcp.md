@@ -61,7 +61,12 @@ forged claim with a responder behind it is the residual here. A
 point subscribed by its instance (a listen stream or a legacy
 subscription) goes only to an address whose device confirmed the instance
 already, as a tool's call on the device asks it; otherwise it isn't
-honoured (`unconfirmed-device`).
+honoured (`unconfirmed-device`). A revert of a ledger entry kept by its
+instance alone (written before #2560) is placed the same way: every claim
+passes the policy before any is asked, and one outside it stops the revert
+with nothing sent anywhere; a device not placed is refused attached as
+`ambiguous-device` or `unconfirmed-device`, and reported not reverted
+detached, asking the operator, naming no address.
 
 | Tool | Notes |
 |---|---|
