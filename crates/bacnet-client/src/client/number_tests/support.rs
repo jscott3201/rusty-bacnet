@@ -160,8 +160,9 @@ pub async fn reply(outbound: &mut mpsc::Receiver<Sent>, value: u16) {
 pub const ROUTER_MAC: [u8; 1] = [9];
 
 /// Past the window the harness client gives the answers to its question:
-/// its APDU timeout, 5 s, and a little more (#2826).
-pub const PAST_THE_WINDOW: std::time::Duration = std::time::Duration::from_millis(5_100);
+/// the longest a node may hold its answer, 10 s, which outlasts its APDU
+/// timeout, the 2 s margin, and a little more (#2826).
+pub const PAST_THE_WINDOW: std::time::Duration = std::time::Duration::from_millis(12_100);
 
 /// Teach the harness client `value`, flagged `flag`, the way a router
 /// does (#2826): the client asks, the router's answer comes in the window

@@ -22,6 +22,7 @@ mod folding;
 mod lifecycle;
 mod local_routes;
 mod progress;
+mod windows;
 
 /// Controls are taken in order; an unknown number answers nothing; each
 /// window of answers is applied by Clause 6.4.20's precedence; and nothing

@@ -317,7 +317,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let tsm = Arc::new(SyncMutex::new(new_coordinated_tsm(&config, coordinator)));
         let tsm_dispatch = Arc::clone(&tsm);
-        let device_table = Arc::new(network_number::Discovery::new(numbers, S::SEATED));
+        let device_table = Arc::new(network_number::Discovery::new(
+            numbers,
+            S::SEATED,
+            control_drops.clone(),
+        ));
         let device_table_dispatch = Arc::clone(&device_table);
         inbound.bind(&tsm, &device_table);
         let seat = inbound.seat();
@@ -338,7 +342,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 device_tx: device_tx.clone(),
                 collision_tx: device_collision_tx.clone(),
                 link_returns,
-                window: Duration::from_millis(config.apdu_timeout_ms),
+                window: options.number_window(&config),
             };
             let (tx, task) = inbound.spawn_number_owner(owner);
             (Some(tx), Some(task))
@@ -504,6 +508,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         );
                         if let Some((tx, parsed)) = task.number_tx.as_ref().zip(number) {
                             if tx.try_send(parsed).is_err() {
+                                // A window open now may have lost an answer
+                                // (#2826).
+                                task.device_table.asking.turned_away();
                                 debug!(
                                     "client Number control queue full or closed; dropping control"
                                 );

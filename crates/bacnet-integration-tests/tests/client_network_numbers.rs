@@ -1,6 +1,6 @@
 //! Actual NORMAL-B/IP client wire proof on isolated Linux loopback.
 #![cfg(target_os = "linux")]
-use bacnet_client::client::{BACnetClient, ClientConfig};
+use bacnet_client::client::{BACnetClient, ClientConfig, ClientOptions};
 use bacnet_transport::bip::BipTransport;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use tokio::{
@@ -13,7 +13,7 @@ use tokio::{
 mod port_retry;
 
 const BROADCAST: Ipv4Addr = Ipv4Addr::new(127, 255, 255, 255);
-/// The client's APDU timeout here, the window its question opens (#2826).
+/// The window the client's question opens here (#2826).
 const WINDOW_MS: u64 = 500;
 const PAST_THE_WINDOW: Duration = Duration::from_millis(WINDOW_MS + 200);
 /// The B/IP MAC of `socket`, its address and port.
@@ -69,13 +69,13 @@ async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
         let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
         transport.set_share_wildcard_port(true);
         // The client takes a number only from the answers to its own
-        // question, for one APDU timeout after it (#2826): a short timeout
-        // keeps this wall-clock test quick.
-        let config = ClientConfig {
-            apdu_timeout_ms: WINDOW_MS,
-            ..ClientConfig::default()
-        };
-        let mut client = BACnetClient::start(config, transport).await.unwrap();
+        // question, within a window after it (#2826): a short one, through
+        // the test hook, keeps this wall-clock test quick.
+        let options = ClientOptions::default().with_number_window(Duration::from_millis(WINDOW_MS));
+        let mut client =
+            BACnetClient::start_with_options(ClientConfig::default(), transport, options)
+                .await
+                .unwrap();
         let mac = client.local_mac();
         assert_eq!(&mac[..4], &[127, 0, 0, 1]);
         assert_eq!(u16::from_be_bytes([mac[4], mac[5]]), port);

@@ -9,7 +9,7 @@ mod support;
 // The closing rebinds can lose the freed port to another process (#1419).
 #[path = "../../bacnet-endpoint/tests/support/port_retry.rs"]
 mod port_retry;
-use bacnet_client::client::{BACnetClient, ClientConfig};
+use bacnet_client::client::{BACnetClient, ClientConfig, ClientOptions};
 use bacnet_transport::{
     bbmd::{BdtEntry, ForeignDevicePolicy},
     bip::{BipTransport, ForeignDeviceConfig},
@@ -33,15 +33,17 @@ async fn client(transport: BipTransport) -> std::io::Result<(Client, SocketAddrV
         bacnet_types::enums::IPMode::NORMAL
     );
     // The client takes a number only from the answers to its own question,
-    // for one APDU timeout after it (#2826): a short timeout keeps these
-    // wall-clock tests quick.
-    let config = ClientConfig {
-        apdu_timeout_ms: WINDOW_MS,
-        ..ClientConfig::default()
-    };
-    let client = bounded(BACnetClient::start(config, transport))
-        .await
-        .map_err(port_retry::bind_error)?;
+    // within a window after it (#2826): a short one, through the test hook,
+    // keeps these wall-clock tests quick.
+    let options =
+        ClientOptions::default().with_number_window(std::time::Duration::from_millis(WINDOW_MS));
+    let client = bounded(BACnetClient::start_with_options(
+        ClientConfig::default(),
+        transport,
+        options,
+    ))
+    .await
+    .map_err(port_retry::bind_error)?;
     let mac = client.local_mac();
     assert_eq!(&mac[..4], &[127, 0, 0, 1]);
     let local = SocketAddrV4::new(Ipv4Addr::LOCALHOST, u16::from_be_bytes([mac[4], mac[5]]));
@@ -75,7 +77,7 @@ async fn ask(socket: &UdpSocket, target: SocketAddrV4) {
     send(socket, target, &frame(10, QUERY)).await;
 }
 
-/// The client's APDU timeout here, the window its question opens (#2826).
+/// The window the client's question opens here (#2826).
 const WINDOW_MS: u64 = 500;
 
 /// Have `client` ask its own question of `sink` alone, so no broadcast of

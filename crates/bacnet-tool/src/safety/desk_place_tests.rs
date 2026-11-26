@@ -102,6 +102,8 @@ async fn learn(lab: &Lab, network: u16) {
     let from = MacAddr::from_slice(&B);
     let frame = ReceivedNpdu::unverified(says, from, true, Vec::new(), None);
     lab.inbox.send(frame).await.unwrap();
+    // The window: the longest a node may hold its answer, and a margin.
+    tokio::time::sleep(Duration::from_secs(12)).await;
     for _ in 0..1_000 {
         if lab.client.network_number() == Some(network) {
             return;

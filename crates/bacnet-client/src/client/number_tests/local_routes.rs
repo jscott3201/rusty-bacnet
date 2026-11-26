@@ -507,7 +507,7 @@ async fn with_the_number_unknown_a_relayed_answer_leaves_a_local_request_open() 
 /// routed answer is (#2831): the same answer from another station on this
 /// link is dropped and counted first. The router answered the client's
 /// question before the request went; the number is taken when that
-/// question's window closes, a second after the request went.
+/// question's window closes, two seconds after the request went.
 #[tokio::test(start_paused = true)]
 async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed_answer() {
     const STRANGER: [u8; 1] = [4];
@@ -515,7 +515,7 @@ async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed
     client.what_is_network_number(None).await.unwrap();
     asked(&mut outbound).await;
     broadcast_from(&inbound, &number(THIS_NETWORK, 0), &ROUTER).await;
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    tokio::time::sleep(PAST_THE_WINDOW - Duration::from_millis(2_100)).await;
     assert_eq!(client.network_number(), None, "the window is still open");
     let peer = async {
         let sent = outbound.recv().await.unwrap();

@@ -23,9 +23,9 @@ use tokio::time::Duration;
 /// Device 10's address on the remote network, behind `ROUTER`.
 const FAR: [u8; 1] = [4];
 
-/// Past the window the client gives answers to its question: the default
-/// APDU timeout, with room to spare.
-const PAST_THE_WINDOW: Duration = Duration::from_secs(10);
+/// Past the window the client gives answers to its question: the longest
+/// a node may hold its answer and the margin, with room to spare.
+const PAST_THE_WINDOW: Duration = Duration::from_secs(13);
 
 /// A client that holds Device 10 as routed through `ROUTER` at `FAR` on
 /// `REMOTE_NETWORK`, its question about the number gone unanswered.

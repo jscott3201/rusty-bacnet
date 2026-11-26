@@ -21,16 +21,23 @@
 //! answered at once.
 use super::device_events::{self, TableNotices};
 use super::*;
+use bacnet_network::layer::QueueAdmissionCounters;
 use bacnet_network::network_number::{DelayedAnswer, NumberControl, number_is_reply};
 use bacnet_npdu::NetworkMessageType;
 use bacnet_types::network_number::NetworkNumber;
-use number_rounds::{Decision, Heard, Learning};
+use number_rounds::{Decision, Heard, Learning, Question};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
 #[path = "number_rounds.rs"]
 mod number_rounds;
+
+/// How long the answers to a question count, for a client whose APDU
+/// timeout is `apdu_timeout` (#2826): [`number_rounds::window_for`].
+pub(super) fn window_for(apdu_timeout: Duration) -> Duration {
+    number_rounds::window_for(apdu_timeout)
+}
 
 use crate::poll_gate::PollGate;
 
@@ -82,15 +89,20 @@ pub(super) struct Asking {
     /// Wakes the owner to ask for the dispatch task, which never waits on
     /// Number egress.
     wanted: Notify,
-    /// When the client's latest question went, or was about to: the answers
+    /// The client's latest question, which went or is going: the answers
     /// heard within a window after it count (#2826).
-    asked_at: SyncMutex<Option<Instant>>,
+    asked_at: SyncMutex<Option<Question>>,
     /// Windows whose answers named more than one number (#2826).
     disagreements: AtomicU64,
+    /// Controls the Number owner's queue turned away, full (#2826).
+    turned_away: AtomicU64,
+    /// The network layer's control queue's counts, where this client can
+    /// read them: `None` on a seat.
+    control_drops: Option<QueueAdmissionCounters>,
 }
 
 impl Asking {
-    pub(super) fn new(numbers: bool) -> Self {
+    pub(super) fn new(numbers: bool, control_drops: Option<QueueAdmissionCounters>) -> Self {
         Self {
             numbers,
             seated: false,
@@ -100,31 +112,54 @@ impl Asking {
             wanted: Notify::new(),
             asked_at: SyncMutex::new(None),
             disagreements: AtomicU64::new(0),
+            turned_away: AtomicU64::new(0),
+            control_drops,
         }
     }
 
-    /// Send a question, noting first when it goes, so the answers that
-    /// come in the window after it count (#2826), and give the send's own
-    /// result. A send that fails puts the note back as it was.
+    /// Send a question, noting first when it goes and how many controls
+    /// were lost by then, so the answers that come in the window after it
+    /// count (#2826), and give the send's own result. A send that fails, or
+    /// is cut off before it finishes, puts the note back as it was.
     pub(super) async fn noting<R>(
         &self,
         send: impl Future<Output = Result<R, Error>>,
     ) -> Result<R, Error> {
-        let at = Instant::now();
-        let before = self.asked_at.lock().replace(at);
+        let question = Question {
+            at: Instant::now(),
+            losses: self.losses(),
+        };
+        let before = self.asked_at.lock().replace(question);
+        let mut note = Note {
+            asking: self,
+            question,
+            before,
+            went: false,
+        };
         let sent = send.await;
-        if sent.is_err() {
-            let mut asked = self.asked_at.lock();
-            if *asked == Some(at) {
-                *asked = before;
-            }
-        }
+        note.went = sent.is_ok();
         sent
     }
 
-    /// When the client's latest question went.
-    fn asked_at(&self) -> Option<Instant> {
+    /// The client's latest question.
+    fn asked_at(&self) -> Option<Question> {
         *self.asked_at.lock()
+    }
+
+    /// Controls lost so far, to the network layer's control queue or the
+    /// Number owner's own (#2826). What is lost before them, in the
+    /// socket's buffer or on the link, isn't counted.
+    fn losses(&self) -> u64 {
+        let layer = self.control_drops.as_ref().map_or(0, |drops| {
+            let counts = drops.snapshot();
+            counts.full_drops.saturating_add(counts.closed_drops)
+        });
+        layer.saturating_add(self.turned_away.load(Ordering::Relaxed))
+    }
+
+    /// The Number owner's queue turned a control away, full.
+    pub(super) fn turned_away(&self) {
+        self.turned_away.fetch_add(1, Ordering::Relaxed);
     }
 
     /// [`BACnetClient::network_number_disagreements`].
@@ -242,16 +277,19 @@ impl Asking {
     /// An announcement the client did not ask for named another number than
     /// it holds (#2826): ask, whether the number is known or not, unless a
     /// question is going out already. Never waits on the send lock.
-    async fn cue<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) {
+    /// Whether a question went.
+    async fn cue<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) -> bool {
         if self.is_sealed() {
-            return;
+            return false;
         }
         let Some(_one) = self.sending.try_lock() else {
-            return;
+            return false;
         };
-        if self.ask(network).await {
+        let went = self.ask(network).await;
+        if went {
             self.asked.store(true, Ordering::Release);
         }
+        went
     }
 
     /// Ask this network's number with a local broadcast
@@ -267,6 +305,27 @@ impl Asking {
                 debug!(%error, "What-Is-Network-Number broadcast failed");
                 false
             }
+        }
+    }
+}
+
+/// A question's note while its send runs: put back as it was unless the
+/// send finished and went.
+struct Note<'a> {
+    asking: &'a Asking,
+    question: Question,
+    before: Option<Question>,
+    went: bool,
+}
+
+impl Drop for Note<'_> {
+    fn drop(&mut self) {
+        if self.went {
+            return;
+        }
+        let mut asked = self.asking.asked_at.lock();
+        if *asked == Some(self.question) {
+            *asked = self.before;
         }
     }
 }
@@ -292,12 +351,18 @@ pub(super) struct Discovery {
 }
 
 impl Discovery {
-    pub(super) fn new(numbers: bool, seated: bool) -> Self {
+    /// `control_drops`: the network layer's control queue's counts, which a
+    /// seated client can't read.
+    pub(super) fn new(
+        numbers: bool,
+        seated: bool,
+        control_drops: Option<QueueAdmissionCounters>,
+    ) -> Self {
         Self {
             table: SyncMutex::new(DeviceTable::new()),
             asking: Asking {
                 seated,
-                ..Asking::new(numbers)
+                ..Asking::new(numbers, control_drops)
             },
             whole_first_window: SyncMutex::new(None),
             route_cue: Notify::new(),
@@ -373,6 +438,11 @@ impl Held<'_> {
     ) {
         match decision {
             Decision::Unanswered => {}
+            Decision::Lost => {
+                debug!(
+                    "a What-Is-Network-Number window may have lost an answer; it decides nothing"
+                );
+            }
             Decision::Agreed { number, flag } => self.apply(number, flag, network),
             Decision::Split => {
                 asking.disagreements.fetch_add(1, Ordering::Relaxed);
@@ -465,7 +535,7 @@ pub(super) fn spawn<T: TransportPort + 'static>(
                     continue;
                 }
                 () = learning.closes() => {
-                    held.decided(learning.close(), &network, asking);
+                    held.decided(learning.close(asking.losses()), &network, asking);
                     continue;
                 }
             };
@@ -475,7 +545,7 @@ pub(super) fn spawn<T: TransportPort + 'static>(
                     // A window that closed while this waited is decided
                     // first, so its answers and later ones never mix.
                     if learning.due(now) {
-                        held.decided(learning.close(), &network, asking);
+                        held.decided(learning.close(asking.losses()), &network, asking);
                     }
                     let ours = held.state.snapshot().0;
                     match learning.heard((ours, number, flag), asking.asked_at(), now) {
@@ -486,8 +556,9 @@ pub(super) fn spawn<T: TransportPort + 'static>(
                         }
                         Heard::Cue { ask } => {
                             debug!(number, ask, "an unasked Network-Number-Is is a cue");
-                            if ask {
-                                asking.cue(&network).await;
+                            // Only a question that went takes the hold.
+                            if ask && asking.cue(&network).await {
+                                learning.cue_asked(now);
                             }
                         }
                     }

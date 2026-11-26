@@ -34,11 +34,16 @@ pub(super) struct Site {
     pub(super) client: BACnetClient<TestTransport>,
     pub(super) inbound: mpsc::Sender<ReceivedNpdu>,
     pub(super) sent: SendLog,
-    handle: TestTransportHandle,
+    pub(super) handle: TestTransportHandle,
     back: watch::Sender<u64>,
 }
 
 pub(super) async fn open_site(numbers: bool) -> Site {
+    open_site_with(numbers, ClientConfig::default()).await
+}
+
+/// [`open_site`] with the client's `config`.
+pub(super) async fn open_site_with(numbers: bool, config: ClientConfig) -> Site {
     let (inbound, receiver) = mpsc::channel(64);
     let (back, returns) = watch::channel(0);
     let mut transport = TestTransport::builder()
@@ -51,9 +56,7 @@ pub(super) async fn open_site(numbers: bool) -> Site {
     let handle = transport.handle();
     let transport = transport.build();
     let sent = transport.sent();
-    let client = BACnetClient::start(ClientConfig::default(), transport)
-        .await
-        .unwrap();
+    let client = BACnetClient::start(config, transport).await.unwrap();
     Site {
         client,
         inbound,
@@ -64,8 +67,9 @@ pub(super) async fn open_site(numbers: bool) -> Site {
 }
 
 /// Past the window the client gives the answers to its question: the
-/// default APDU timeout, 6 s, and a little more (#2826).
-pub(super) const PAST_THE_WINDOW: Duration = Duration::from_millis(6_100);
+/// longest a node may hold its answer, 10 s, which outlasts the default
+/// APDU timeout, the 2 s margin, and a little more (#2826).
+pub(super) const PAST_THE_WINDOW: Duration = Duration::from_millis(12_100);
 
 impl Site {
     /// Have `ROUTER` answer the client's latest question, which went less
@@ -370,15 +374,15 @@ async fn a_relayed_device_is_one_device_once_the_answer_comes() {
 /// A started client whose questions wait in the send until the test lets
 /// them go: `entered` gains a permit as each reaches it, and each takes one
 /// of `gate`'s.
-struct Gated {
-    client: BACnetClient<TestTransport>,
-    inbound: mpsc::Sender<ReceivedNpdu>,
-    sent: SendLog,
-    entered: Arc<Semaphore>,
-    gate: Arc<Semaphore>,
+pub(super) struct Gated {
+    pub(super) client: BACnetClient<TestTransport>,
+    pub(super) inbound: mpsc::Sender<ReceivedNpdu>,
+    pub(super) sent: SendLog,
+    pub(super) entered: Arc<Semaphore>,
+    pub(super) gate: Arc<Semaphore>,
 }
 
-async fn gated() -> Gated {
+pub(super) async fn gated() -> Gated {
     let (inbound, receiver) = mpsc::channel(64);
     let entered = Arc::new(Semaphore::new(0));
     let gate = Arc::new(Semaphore::new(0));
@@ -413,7 +417,7 @@ async fn gated() -> Gated {
 
 impl Gated {
     /// How many questions the client has sent, held ones included.
-    fn asks(&self) -> usize {
+    pub(super) fn asks(&self) -> usize {
         let frames = self.sent.frames();
         frames.iter().filter(|frame| frame.npdu == QUERY).count()
     }

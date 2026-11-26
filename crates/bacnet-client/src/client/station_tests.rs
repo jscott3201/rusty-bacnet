@@ -153,6 +153,8 @@ impl Site {
         let received =
             ReceivedNpdu::unverified(npdu, MacAddr::from_slice(ROUTER), true, Vec::new(), None);
         self.inbox.send(received).await.unwrap();
+        // The window: the longest a node may hold its answer, and a margin.
+        tokio::time::sleep(Duration::from_secs(12)).await;
         for _ in 0..1_000 {
             if self.client.network_number() == Some(network) {
                 return;
