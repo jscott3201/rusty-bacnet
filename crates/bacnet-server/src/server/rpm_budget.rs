@@ -84,7 +84,9 @@ mod tests {
             for error in
                 [direct.err(), generic.err(), bip.err()].map(|error| error.map(Error::from))
             {
-                assert!(matches!(error, Some(Error::Encoding(m)) if m.contains("rpm_max_")));
+                assert!(
+                    matches!(error, Some(Error::InvalidConfig(m)) if m.to_string().contains("rpm_max_"))
+                );
             }
             assert!(
                 bacnet_objects::DeviceIdentity::default()

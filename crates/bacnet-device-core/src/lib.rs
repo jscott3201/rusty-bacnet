@@ -33,6 +33,8 @@ pub mod write;
 mod read_only_rows_tests;
 #[cfg(test)]
 mod served_datatypes_tests;
+#[cfg(test)]
+mod typed_refusal_wire_tests;
 // The server's rows for test objects, as bacnet-endpoint shares them. The
 // core's tests state no value types, so `typed` goes unused here.
 #[cfg(test)]

@@ -70,8 +70,8 @@ pub fn validate_flags(value: &PropertyValue) -> Result<u8, Error> {
             unused_bits: 4,
             data,
         } if data.len() == 1 && data[0] & 0x0f == 0 => Ok(data[0] >> 4),
-        _ => Err(Error::Encoding(
-            "COV Status_Flags must be a canonical four-bit BitString".into(),
+        _ => Err(Error::invalid_argument(
+            "COV Status_Flags must be a canonical four-bit BitString",
         )),
     }
 }

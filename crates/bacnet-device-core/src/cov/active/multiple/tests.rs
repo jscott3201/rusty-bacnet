@@ -84,7 +84,7 @@ fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single(
     bypass.expires_at = Some(now + Duration::from_secs(60));
     assert!(matches!(
         table.subscribe(bypass, now),
-        Err(Error::Encoding(_))
+        Err(Error::InvalidArgument(_))
     ));
     assert_eq!(table.len(), 1);
 

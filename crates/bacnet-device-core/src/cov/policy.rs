@@ -81,55 +81,57 @@ impl CovPolicy {
     /// other source, direct or routed (#1141, #1198), so such an entry could
     /// never match a subscriber (#1199).
     pub fn validate(&self) -> Result<(), Error> {
-        for (name, value) in [
-            ("max_subscriptions_global", self.max_subscriptions_global),
+        // Whole static messages: the core formats nothing (#2187).
+        for (message, value) in [
             (
-                "max_subscriptions_per_peer",
+                "COV policy max_subscriptions_global must be positive",
+                self.max_subscriptions_global,
+            ),
+            (
+                "COV policy max_subscriptions_per_peer must be positive",
                 self.max_subscriptions_per_peer,
             ),
             (
-                "max_notifications_per_event",
+                "COV policy max_notifications_per_event must be positive",
                 self.max_notifications_per_event,
             ),
             (
-                "max_notification_bytes_per_event",
+                "COV policy max_notification_bytes_per_event must be positive",
                 self.max_notification_bytes_per_event,
             ),
             (
-                "max_confirmed_in_flight_per_peer",
+                "COV policy max_confirmed_in_flight_per_peer must be positive",
                 self.max_confirmed_in_flight_per_peer,
             ),
         ] {
             if value == 0 {
-                // Spelled without core::fmt, as the crate is (#2187).
-                return Err(Error::Encoding(
-                    ["COV policy ", name, " must be positive"].concat(),
-                ));
+                return Err(Error::invalid_config(message));
             }
         }
         const _: () = assert!(BACnetAddress::MAX_MAC_LEN == 18);
-        let mac_length = |field: &str, mac: &MacAddr| {
+        const PEER_MAC: &str = "COV policy reserved_peers entries need a MAC of 1..=18 octets";
+        const RECIPIENT_MAC: &str =
+            "COV policy reserved_recipients entries need a MAC of 1..=18 octets";
+        let mac_length = |refusal: &'static str, mac: &MacAddr| {
             if (1..=BACnetAddress::MAX_MAC_LEN).contains(&mac.len()) {
                 Ok(())
             } else {
-                Err(Error::Encoding(
-                    ["COV policy ", field, " entries need a MAC of 1..=18 octets"].concat(),
-                ))
+                Err(Error::invalid_config(refusal))
             }
         };
         for mac in &self.reserved_peers {
-            mac_length("reserved_peers", mac)?;
+            mac_length(PEER_MAC, mac)?;
         }
         for recipient in &self.reserved_recipients {
             match recipient {
-                CovRecipient::Direct(mac) => mac_length("reserved_recipients", mac)?,
+                CovRecipient::Direct(mac) => mac_length(RECIPIENT_MAC, mac)?,
                 CovRecipient::Routed(source) => {
                     if !(1..=65534).contains(&source.network) {
-                        return Err(Error::Encoding(
-                            "COV policy reserved_recipients networks must be 1..=65534".into(),
+                        return Err(Error::invalid_config(
+                            "COV policy reserved_recipients networks must be 1..=65534",
                         ));
                     }
-                    mac_length("reserved_recipients", &source.mac_address)?;
+                    mac_length(RECIPIENT_MAC, &source.mac_address)?;
                 }
             }
         }

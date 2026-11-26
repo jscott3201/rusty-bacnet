@@ -59,8 +59,8 @@ impl CovTable {
     ) -> Result<CovSubscriptionSnapshot, Error> {
         let key = sub.key()?;
         if key.multiple_context().is_some() {
-            return Err(Error::Encoding(
-                "Multiple references must be admitted through subscribe_multiple".into(),
+            return Err(Error::invalid_argument(
+                "Multiple references must be admitted through subscribe_multiple",
             ));
         }
         self.expire(now);
@@ -117,7 +117,7 @@ impl CovTable {
         recipient.validate()?;
         if recipient != context.recipient {
             return Err(
-                Error::Encoding("Multiple route does not match its recipient".into()).into(),
+                Error::invalid_argument("Multiple route does not match its recipient").into(),
             );
         }
         for sub in &subscriptions {
@@ -125,8 +125,8 @@ impl CovTable {
                 || sub.expires_at != Some(expires_at)
                 || sub.endpoint() != *route
             {
-                return Err(Error::Encoding(
-                    "Multiple subscription does not match its context/route/expiry".into(),
+                return Err(Error::invalid_argument(
+                    "Multiple subscription does not match its context/route/expiry",
                 )
                 .into());
             }

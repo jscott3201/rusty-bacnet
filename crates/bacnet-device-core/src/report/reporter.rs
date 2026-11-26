@@ -124,15 +124,15 @@ impl Reporter {
         if config.fault_detection.is_some() && config.sweep.is_none() {
             // The pass would report its changes to COV, and the FAULT
             // transitions would wait for a sweep that never runs.
-            return Err(Error::Encoding(
-                "a fault pass needs the event path: set a sweep too".into(),
+            return Err(Error::invalid_config(
+                "a fault pass needs the event path: set a sweep too",
             ));
         }
         // Its notifications go out through the event path.
         #[cfg(feature = "event-enrollment")]
         if config.event_enrollment.is_some() && config.sweep.is_none() {
-            return Err(Error::Encoding(
-                "an Event Enrollment pass needs the event path: set a sweep too".into(),
+            return Err(Error::invalid_config(
+                "an Event Enrollment pass needs the event path: set a sweep too",
             ));
         }
         #[cfg(feature = "cov-multiple")]
@@ -445,8 +445,8 @@ impl Reporter {
     ) -> Result<(), Error> {
         #[cfg(feature = "event-reporting")]
         if self.events.is_some() {
-            return Err(Error::Encoding(
-                "the event path's deadlines need on_deadline".into(),
+            return Err(Error::unsupported(
+                "the event path's deadlines need on_deadline",
             ));
         }
         self.expire_and_time_out(ids, now);

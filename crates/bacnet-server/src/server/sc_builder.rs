@@ -385,7 +385,7 @@ mod tests {
                 .read_property_multiple_budget(budget);
             assert_eq!(builder.config.read_property_multiple_budget, budget);
             let error = builder.build().await.map_err(Error::from).err().unwrap();
-            assert!(matches!(error, Error::Encoding(m) if m.contains("rpm_max_")));
+            assert!(matches!(error, Error::InvalidConfig(m) if m.to_string().contains("rpm_max_")));
             let error = BACnetServer::sc_builder()
                 .device_uuid(TEST_DEVICE_UUID)
                 .read_property_multiple_budget(budget)
@@ -486,7 +486,9 @@ mod tests {
             .map_err(Error::from)
             .err()
             .unwrap();
-        assert!(matches!(error, Error::Encoding(m) if m.contains("max_subscriptions_global")));
+        assert!(
+            matches!(error, Error::InvalidConfig(m) if m.to_string().contains("max_subscriptions_global"))
+        );
     }
 
     #[tokio::test]

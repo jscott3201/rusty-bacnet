@@ -383,8 +383,10 @@ alone; `Error::with_context` puts context in front and keeps the variant.
 `Error::state`, `Error::invalid_config`, `Error::invalid_argument`,
 `Error::unsupported` and `Error::limit_reached` build one from a static
 label. `bacnet-transport`, `bacnet-network`, `bacnet-endpoint-core`,
-`bacnet-endpoint`, `bacnet-server` and `bacnet-client` report their refusals
-this way, and `bacnet-transport` its I/O failures as `Error::Transport` with
+`bacnet-endpoint`, `bacnet-server`, `bacnet-client`, `bacnet-objects` and
+`bacnet-device-core` report their refusals this way (a few of the objects'
+storage refusals aside), and `bacnet-transport` its I/O failures as
+`Error::Transport` with
 the OS error kept as the source and an NPDU too long for the link as
 `Error::SendTooLong`; the other hosted crates still report theirs as
 `Error::Encoding` or `Error::OutOfRange` text until #1833 reaches them. An
@@ -5030,7 +5032,7 @@ Number_Of_States (1 to `multistate::MAX_NUMBER_OF_STATES`, 1024),
 which resizes State_Text. A count is refused with `PROPERTY/VALUE_OUT_OF_RANGE`
 if a value the object holds would name a state past it. The application's
 own count meets the same cap: the multi-state constructors and
-`set_number_of_states` refuse one past it with `Error::OutOfRange` (#2711).
+`set_number_of_states` refuse one past it with `Error::Range` (#2711).
 Of the configuration
 objects (#2208), Calendar, Schedule, Notification Class, Trend Log and
 Structured View take Object_Name; Notification Class takes Priority (three
@@ -6862,7 +6864,7 @@ number of records is a count that has wrapped (Clause 12.25.16). With no
 records it seeds the count, which lets a test start a log just short of the
 wrap. The restore records no status and keeps the records whatever Enable
 and the window say; BUFFER_READY counts from the restored count, as when
-detection starts. It fails with `Error::OutOfRange`, or a record's encoding
+detection starts. It fails with `Error::Range`, or a record's encoding
 error, and changes nothing when there are more records than Buffer_Size,
 records with a count of zero, a full buffer while Stop_When_Full and Enable
 are both TRUE, or a record that would not encode. It is for start-up, before
@@ -6882,7 +6884,7 @@ It goes in whatever Enable and the window say, carrying LOG_DISABLED while
 collection is off (and turning Enable FALSE when it fills a Stop_When_Full
 buffer). No clock is bound before the log joins a database, so the caller
 gives the time; one that isn't an actual moment fails with
-`Error::OutOfRange`.
+`Error::Range`.
 
 ##### Durable logs (#1541)
 
@@ -6925,7 +6927,7 @@ persistence)`.
   stops the log as usual) and logs a warning naming both sizes. Sequence
   numbers, Total_Record_Count and the BUFFER_READY counts don't change.
 - **Size limit.** A slot holds at most 256 MiB, so `with_persistence` refuses
-  with `Error::OutOfRange` a `buffer_size` whose full buffer of the family's
+  with `Error::Range` a `buffer_size` whose full buffer of the family's
   largest records couldn't fit: 828,251 records for a Trend Log, 178,426 for
   an Event Log and 15,848 for a Trend Log Multiple (sized for 64 references
   of 256-octet values, beside the written reporting settings and a written

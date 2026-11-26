@@ -152,7 +152,7 @@ fn position(properties: &[P], property: P) -> usize {
         .expect("every Table 13-1a-2 field list carries this property")
 }
 fn invalid() -> Error {
-    Error::Encoding("Invalid Value_Source COV companion".into())
+    Error::invalid_argument("Invalid Value_Source COV companion")
 }
 fn validate(object: O, property: P, value: &V) -> Result<(), Error> {
     let valid = match property {
