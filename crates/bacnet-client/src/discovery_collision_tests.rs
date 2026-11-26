@@ -115,14 +115,22 @@ fn a_second_local_claimant_keeps_both_rows() {
     );
 }
 
+/// The same routed address through its row's router refreshes the row's
+/// metadata; through another station it changes nothing (#2823).
 #[test]
-fn same_routed_endpoint_refreshes_router_and_metadata() {
+fn same_routed_endpoint_refreshes_metadata_through_its_router() {
     let now = Instant::now();
     let mut table = DeviceTable::new();
     let original = routed_device(1001, &[0x10], 100, &[0x03], now);
-    table.heard(original);
+    table.heard(original.clone());
 
-    let mut refreshed = routed_device(1001, &[0x20], 100, &[0x03], now + Duration::from_secs(10));
+    let later = now + Duration::from_secs(10);
+    let mut elsewhere = routed_device(1001, &[0x20], 100, &[0x03], later);
+    elsewhere.max_apdu_length = 480;
+    assert_eq!(table.heard(elsewhere).change, Change::Held);
+    assert_same_device(table.find(1001).unwrap().unwrap(), &original);
+
+    let mut refreshed = routed_device(1001, &[0x10], 100, &[0x03], later);
     refreshed.max_apdu_length = 480;
     refreshed.segmentation_supported = Segmentation::SEGMENTED_BOTH;
     refreshed.vendor_id = 84;

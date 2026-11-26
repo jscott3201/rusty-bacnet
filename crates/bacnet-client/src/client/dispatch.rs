@@ -293,6 +293,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         req: ConfirmedRequestPdu,
         limits: ResponseLimits,
     ) {
+        // Any frame a routed row's own router carries from the device keeps
+        // the row young (#2823).
+        if source_network.is_some() {
+            device_events::heard_routed(&context.device_table.table, source_mac, source_network);
+        }
         let DispatchContext {
             tsm,
             network,
@@ -401,6 +406,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             decode_warning,
             ..
         } = *context;
+        // Any frame a routed row's own router carries from the device keeps
+        // the row young (#2823); an I-Am is taken into the table below.
+        if source_network.is_some() && req.service_choice != UnconfirmedServiceChoice::I_AM {
+            device_events::heard_routed(&device_table.table, source_mac, source_network);
+        }
         if req.service_choice == UnconfirmedServiceChoice::I_AM {
             match bacnet_services::who_is::IAmRequest::decode(&req.service_request) {
                 Ok(i_am) => {
@@ -409,7 +419,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         vendor = i_am.vendor_id,
                         "Received IAm"
                     );
-                    let routed_while_unknown = device_events::heard_i_am(
+                    let wants = device_events::heard_i_am(
                         &device_table.table,
                         device_events::IAmSource {
                             mac: source_mac,
@@ -422,8 +432,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     // A routed row stored while the number is
                     // unknown may be a local device's twin: ask
                     // (#2572), through the Number owner.
-                    if routed_while_unknown {
+                    if wants.number {
                         device_table.asking.want();
+                    }
+                    // A routed row named through another station:
+                    // the purge task checks the path (#2823).
+                    if wants.route_check {
+                        device_table.route_cue.notify_one();
                     }
                 }
                 Err(e) => {

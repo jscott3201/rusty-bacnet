@@ -116,6 +116,10 @@ struct TableEntry {
     /// evidence, an I-Am heard with no SNET, clears it; a change of number
     /// drops the rows that still carry it.
     by_number: bool,
+    /// When the table first held a row at this address. A refresh, a new
+    /// instance there or a new router keeps it; it ranks the paths the
+    /// client checks (#2823).
+    since: Instant,
 }
 
 /// A row's address: the network (0 for the local one) and the MAC there.
@@ -171,7 +175,32 @@ impl Key {
 /// refreshes its row in place, whatever instance, capabilities or vendor it
 /// now announces. A routed device's router MAC is how to reach its network,
 /// kept on the row, and not part of the key, so the same MAC on two networks
-/// is two devices, and one device heard through a new router keeps its row.
+/// is two devices.
+///
+/// # Routers
+///
+/// A routed row's router is the station its first I-Am came through, or the
+/// one a registration names. Once a row is known, no later frame moves its
+/// router (#2823): an I-Am naming the address through another station
+/// changes nothing on the row and marks its path for the client's own
+/// check. The row moves only when two checks about a minute apart each find
+/// its Who-Is through the old router unanswered, nothing else carried back
+/// through that router in between, and the same one other router alone
+/// answering its router-discovery query. [`upsert`](Self::upsert) and
+/// `add_routed_device` set the router they are given, at once.
+///
+/// What stays open to any station on the link: a row's first sight, also
+/// after a row ages out ([`purge_stale`](Self::purge_stale)), takes the
+/// station its I-Am came through; and since any station can answer a
+/// broadcast router query, one that answers alone in two windows a minute
+/// apart while the old router and its devices stay silent through both is
+/// taken. A router's answer the link or the transport dropped before the
+/// network layer's control queue is not seen as lost. Two kinds of frame
+/// can keep a path without coming from its router, though never move one:
+/// an answer the transaction matching accepted, and on B/IP a forwarded
+/// frame whose origin a BBMD gives as the router's (#2829). Confirming a
+/// device before a write is #2824. The network number a Network-Number-Is
+/// teaches folds rows too.
 ///
 /// An index maps each Device instance to the addresses whose rows claim it.
 /// Two or more addresses can claim one instance, and every one keeps its row:
@@ -208,6 +237,10 @@ pub struct DeviceTable {
     /// Every row's instance and address, so the rows that claim one
     /// instance are found without a scan.
     claims: BTreeSet<(u32, Key)>,
+    /// The paths a routed I-Am through another station than their rows'
+    /// router marked, waiting for the client's check, with their pacing
+    /// (#2823).
+    route_paths: routes::RoutePaths,
 }
 
 /// What an I-Am did to the table.
@@ -222,6 +255,10 @@ pub(crate) enum Change {
     Replaced,
     /// Not stored: the table is full, or the device names no address.
     Dropped,
+    /// Not stored: a routed I-Am naming a known address through another
+    /// station than the router its row names. The row stays as it was, and
+    /// the I-Am waits as a cue for the client's check of the path (#2823).
+    Held,
 }
 
 /// [`DeviceTable::heard`]'s outcome.
@@ -260,6 +297,7 @@ impl DeviceTable {
     /// ([`DiscoveredDevice::address`]), or a new address once the table is
     /// full, is not stored.
     pub fn upsert(&mut self, device: DiscoveredDevice) {
+        self.registered_router(&device);
         let segmentation = PeerSegmentation::Authoritative(device.segmentation_supported);
         let _ = self.insert(device, segmentation, false);
     }
@@ -273,8 +311,16 @@ impl DeviceTable {
     }
 
     /// Ingest a device heard in an I-Am: [`upsert`](Self::upsert), saying
-    /// what changed.
+    /// what changed, unless it names a routed row through another router,
+    /// which it leaves as it was ([`Change::Held`]).
     pub(crate) fn heard(&mut self, device: DiscoveredDevice) -> Heard {
+        if self.held_route(&device) {
+            return Heard {
+                change: Change::Held,
+                replaced: None,
+                contested: Vec::new(),
+            };
+        }
         let segmentation = PeerSegmentation::Authoritative(device.segmentation_supported);
         self.insert(device, segmentation, false)
     }
@@ -316,12 +362,14 @@ impl DeviceTable {
             device,
             segmentation,
             by_number,
+            since: now(),
         };
         let full = self.rows.len() >= MAX_DEVICE_TABLE_ENTRIES;
         let previous = match self.rows.get_mut(&key) {
             Some(row) => {
                 let same = row.device.object_identifier.instance_number() == instance;
                 entry.by_number = by_number && (row.by_number || !same);
+                entry.since = row.since;
                 let old = std::mem::replace(row, entry).device;
                 let previous = old.object_identifier.instance_number();
                 if same {
@@ -448,6 +496,7 @@ impl DeviceTable {
     pub fn clear(&mut self) {
         self.rows.clear();
         self.claims.clear();
+        self.route_paths = routes::RoutePaths::default();
     }
 
     /// Number of rows, one per address.
@@ -498,6 +547,12 @@ impl DeviceTable {
 #[path = "discovery_localize.rs"]
 mod localize;
 pub(crate) use localize::Folded;
+
+#[path = "discovery_routes.rs"]
+mod routes;
+pub(crate) use routes::{Checked, PathKey, Strike};
+#[cfg(test)]
+pub(crate) use routes::{FIRST_HOLD, STRIKE_GAP};
 
 #[cfg(test)]
 #[path = "discovery_collision_tests.rs"]
