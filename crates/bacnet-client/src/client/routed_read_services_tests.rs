@@ -424,14 +424,12 @@ async fn read_service_device_methods_keep_local_devices_direct() {
 #[tokio::test(start_paused = true)]
 async fn missing_read_service_device_and_invalid_page_fail_without_traffic() {
     let (mut client, mut peer) = site(true).await;
-    // An instance the table doesn't hold has no station, so nothing is sent.
+    // An instance the table doesn't hold has no station, so nothing is sent:
+    // the device can't be placed, named as the call named it (#1833).
+    let missing = client.resolve_device(INSTANCE + 1).await.unwrap_err();
     assert!(
-        client
-            .resolve_device(INSTANCE + 1)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("not in device table")
+        matches!(&missing, Error::UnknownDevice { device } if *device == (INSTANCE + 1).to_string()),
+        "{missing:?}"
     );
     let to = client.resolve_device(INSTANCE).await.unwrap();
     assert!(

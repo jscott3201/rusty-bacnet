@@ -68,6 +68,24 @@ class BatchResultTests(unittest.IsolatedAsyncioTestCase):
                             task.cancel()
                             await asyncio.gather(task, return_exceptions=True)
 
+    async def test_an_instance_the_table_lacks_is_a_lookup_error(self):
+        # No row claims it: nothing is sent, and the batch row and the typed
+        # call both carry the lookup error naming the instance (#1833).
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+            peer.bind(("127.0.0.1", 0))
+            peer.setblocking(False)
+            async with rb.BACnetClient(interface="127.0.0.1", port=0) as client:
+                [row] = await asyncio.wait_for(
+                    client.read_property_from_devices(requests(METHODS[0], [9124])), 2)
+                self.assertIsInstance(row["error"], rb.BacnetLookupError)
+                self.assertEqual(row["error"].instance, 9124)
+                with self.assertRaises(rb.BacnetLookupError) as caught:
+                    await asyncio.wait_for(client.read_property_from_device(9124, OID, PID), 2)
+                self.assertIsInstance(caught.exception, LookupError)
+                self.assertEqual(caught.exception.target, "9124")
+                with self.assertRaises(BlockingIOError):
+                    peer.recv(2048)
+
     async def test_reject_reason_is_a_typed_item_error(self):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
             peer.bind(("127.0.0.1", 0))

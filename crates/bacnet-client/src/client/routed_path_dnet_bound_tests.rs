@@ -96,11 +96,11 @@ async fn routed_confirmed_request_to_no_single_device_fails_before_any_state() {
         ];
         for result in results {
             // The request's refusal, or the lookup's: `resolve_device` finds
-            // no row it can name, still as text (#1833 types it later).
+            // no row it can name, a device it can't place (#1833).
             assert!(
                 matches!(&result, Err(Error::InvalidArgument(_)))
-                    || matches!(&result, Err(Error::Encoding(text))
-                        if text == &format!("device {ROUTED_DEVICE} not in device table")),
+                    || matches!(&result, Err(Error::UnknownDevice { device })
+                        if *device == ROUTED_DEVICE.to_string()),
                 "DNET {dnet}, DADR {dadr:?}: {result:?}"
             );
         }

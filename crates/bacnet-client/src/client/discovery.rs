@@ -28,8 +28,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// # Errors
     ///
     /// [`Error::AmbiguousDevice`] when two or more addresses claim the
-    /// instance (the device's address names it then), and an error naming
-    /// the instance when the table holds none.
+    /// instance (the device's address names it then), and
+    /// [`Error::UnknownDevice`] naming the instance when the table holds
+    /// none (#1833): discover it first. Nothing is sent either way.
     ///
     /// # Snapshot
     ///
@@ -41,9 +42,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// serialize every request.
     pub async fn resolve_device(&self, device_instance: u32) -> Result<Station, Error> {
         let table = self.device_table.lock();
-        let device = table.find(device_instance)?.ok_or_else(|| {
-            Error::Encoding(format!("device {device_instance} not in device table"))
-        })?;
+        let device = table
+            .find(device_instance)?
+            .ok_or_else(|| not_in_table(device_instance))?;
         Ok(Station::from(device))
     }
 
@@ -315,5 +316,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             self.device_table.asking.first_need(&self.network).await;
         }
         Ok(())
+    }
+}
+
+/// No row claims `instance` (#1833): the device can't be placed, so nothing
+/// is sent, as for a routed address with no known router.
+#[cold]
+#[inline(never)]
+fn not_in_table(instance: u32) -> Error {
+    Error::UnknownDevice {
+        device: instance.to_string(),
     }
 }
