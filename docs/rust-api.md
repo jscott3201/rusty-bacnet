@@ -13014,23 +13014,40 @@ memory of the largest ReadPropertyMultiple of point records it could answer
 instance read for the address when the discovery table loses the row there
 or another device announces itself at it) key on its `DeviceAddress`
 (network and MAC), so two devices sharing an instance stay apart and one
-device named two ways waits at one gate. A following handle moves to the one other address on its
-network claiming the instance, and tells `Client::events`
-(`ClientEvent::Moved`), only once the device there names the instance to
-the handle's own read by the wildcard instance (or, for a device that
-refuses that, has that instance's Device object): the discovery table is
-filled by I-Ams nobody asked for, so two forged ones never take a write
-elsewhere (#2795). It does so before a request when another device has
-announced itself at its address and the device there, asked first, doesn't
-answer as the instance (still the instance, the handle stays, and the
-answer is remembered); after a request times out, or finds no route to a
-routed address, when its row is gone; and after a timeout while its address
-still claims the instance, when only the other address answered the one
-Who-Is an earlier timeout sent for it, on the network where it was last
+device named two ways waits at one gate. The discovery table is filled
+by I-Ams nobody asked for, which anyone can send, so a following handle
+believes it only after asking (#2795). **Writes never move a handle:**
+`write` and `relinquish` go only to the place the handle holds, while the
+device there is still taken for the instance (the table names it there, or
+the device, asked when the table says another announced itself there,
+answers as it, or says nothing of which it is); otherwise nothing is sent
+and the call fails with `OpsError::NotConfirmed { instance, at, candidate
+}`, `candidate` the one other address the table has the instance at, as a
+hint, and so does a write that finds no route. **A read may move it:** to
+the one other address on its network claiming the instance, telling
+`Client::events` (`ClientEvent::Moved`), only once the device at the
+handle's own address was asked which it is and didn't answer as the
+instance (silent, by a timeout alone, or another device), and the device at
+the new address names the instance (by the wildcard instance, or, as the
+handle's own address was asked first, by having that instance's Device
+object). A read checks so before it is sent when another device has
+announced itself at the handle's address (still the instance, or no word
+of which it is, the handle stays, and an answer by the wildcard is
+remembered); after it times out, or a router refuses it, when the row at
+its address is gone or only the other address answered the one Who-Is an
+earlier timeout sent for the instance, on the network where it was last
 reached and never on every network (at most one every `QUIET` for the
-handles following it), the old address not asked again after its own
-request failed. A handle made later for the instance joins the place the
-others reach it at, whatever the table says. A clone that sends no Who-Is
+handles following it); and after it finds no route to a routed address,
+once a Who-Is addressed to the station, then one to its network, drew no
+answer (an answer sends the read there again). A later write goes where a
+read confirmed the device. A handle made later for the instance joins the
+place the others reach it at, whatever the table says, and a watch hub
+moves the handles only when its own move asked their address (#2795).
+Not covered yet: an I-Am nobody asked for, relayed by a router, still
+changes which router station a routed device is reached through (#2823),
+and a handle's first placement of an instance, the write it may make
+before any read, takes the discovery table's row as it stands (#2824). A
+clone that sends no Who-Is
 (`with_resolve_wait(None)`) goes by the I-Am times instead: its own address
 announced `QUIET` before the other's. A duplicate claim is no move. A pinned
 handle stays, and `Device::moved_to` says where its instance is heard now,
@@ -13410,7 +13427,10 @@ then it is read and subscribed there and its values come from there. The
 hub follows each instance from one place, shared with the client's
 following handles, which it keeps alive and moves with its points (telling
 `Client::events`), so a point added while a move is checked starts where
-the hub follows the device then and goes with the others. Its renewals at
+the hub follows the device then and goes with the others, one that
+arrived as the move was taken included; the handles move with them only
+when the hub asked their address (not after its own request there went
+unanswered). Its renewals at
 the old address stop and nothing is cancelled there: the device there is
 another or silent by the move's own answers, so that subscription lapses
 with its lifetime (a device that kept its table through the move takes the
@@ -13422,7 +13442,11 @@ A following point's start asks the device at its address which it is
 (one read by the wildcard instance an address, unless the device named
 itself to the client already), and one naming another instance makes the
 point unreachable there (`Why::Replaced`) before anything of the start is
-taken: nothing is subscribed at another device. A following point is
+taken: nothing is subscribed at another device. A device there that refuses
+that read can't be confirmed (a read of the instance's own Device object
+names nothing on its own, and no address it left was asked): the point is
+`Unreachable { why: Why::Unconfirmed }`, its first read dropped and nothing subscribed; watch
+such a device by its address. A following point is
 placed when watched where the hub follows its device
 already, else where the client's handles following it reach it, else at
 the one address claiming it in the discovery table: `WatchError::UnknownDevice`
@@ -13430,7 +13454,8 @@ or `WatchError::Ambiguous` refuse one that can't be placed, taking
 nothing. A pinned point and a following point of one object are two points
 (two subscriptions) on a shared hub. A device that refuses the wildcard
 read is never followed by the hub, as a read by one instance names
-nothing; a following handle takes that read for its own requests.
+nothing; a following handle takes that read for a read only after asking
+its own address.
 
 A watched device is its address and an instance (#2603). One rule
 decides it: only an answer to a request the hub sent may set the instance
@@ -13572,7 +13597,7 @@ row constants.
 | `watch::Point { device: u32, .. }`, `Copy` | `watch::Point { device: DeviceAddress, .. }`, `Clone`, from `Device::point`; entries, schedulers and subscription targets key on the address, never an instance lookup |
 | `watch::Point { device: DeviceAddress, .. }` | `watch::Point { device: Target, .. }`: `Binding::At(address)`, or `Binding::Follows { instance, network }`, which the hub follows; `Device::point` picks by the handle (#2795) |
 | a following handle's points pinned at its address, given up with `Why::Moved` | following its instance: `Update::{at, instance, moved}`, `Snapshot::moved`, `Lease::at` |
-| a following handle moving on the discovery table's rows, and with the hub's look | only once the device at the new address names the instance to its read (#2795) |
+| a following handle moving on the discovery table's rows, and with the hub's look | a read moves it only once its own address, asked, isn't the device and the new address names it; a write never moves it (`OpsError::NotConfirmed`) (#2795) |
 | `watch::{Hub, Lease, Changes, Snapshot, Samples, Sample, WatchOptions, Reads, Backoff, Fallback, MissingDevice, Lifetime, HubStats, renewal_margin, first, POINT_PROPERTIES, MISSING, MIN_POLL, POLL_FLOOR, MAX_ROWS, MAX_SAMPLES}` | the same names under `watch::hub` |
 | `watch::{State, Source}` (the snapshot's) | `watch::hub::{Phase, Source}`; `watch::State` is the update's one state with its reason |
 | a point whose instance two addresses claim failing its start as ambiguous | two points, one an address |

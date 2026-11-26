@@ -1,10 +1,10 @@
 ---
 section: Migration notes
 ---
-- **Watch points (Rust API, #2795):** write `Point { device:
-  Binding::At(address), .. }` (or `address.into()`) where you wrote the
-  address; `Device::point` already picks `Binding::Follows` for a following
-  handle. Read the address a point is watched at from `Update::at` (or
-  `Lease::at`), not `point.device`. A following point no longer ends as
-  `Why::Moved`: watch `Update::moved`. Match the new `WatchError` variants
-  `UnknownDevice` and `Ambiguous`.
+- **Watch points and following writes (Rust API, #2795):** write
+  `Point { device: Binding::At(address), .. }` (or `address.into()`);
+  `Device::point` picks `Binding::Follows` for a following handle. Read where
+  a point is watched from `Update::at` or `Lease::at`; a following point
+  reports moves in `Update::moved`, not `Why::Moved`. Match
+  `WatchError::{UnknownDevice, Ambiguous}`, `Why::Unconfirmed` and
+  `OpsError::NotConfirmed`: read through the handle, then write again.

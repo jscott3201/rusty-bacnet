@@ -1,7 +1,7 @@
 ---
 section: Security
 ---
-- A following device handle no longer moves on the discovery table alone,
-  which I-Ams anyone can send fill: it asks the device at the new address
-  (and before a request, its own) which it is, so forged announcements can't
-  take its writes to another address (#2795).
+- A following device handle no longer trusts the discovery table alone: a
+  write goes only where the device is confirmed, else nowhere, and a read
+  moves it only after its old address, asked, is not the device and the new
+  one names it (#2795; open: #2823, #2824).
