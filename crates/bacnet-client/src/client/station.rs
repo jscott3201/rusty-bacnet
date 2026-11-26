@@ -909,12 +909,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
 /// The checks every address takes before any request state: a MAC that
 /// names one station, and for a remote network one a router can carry.
+/// [`check_station`]'s refusal, out of line from the request path (#1833).
+#[cold]
+#[inline(never)]
+fn empty_mac(network: u16) -> Error {
+    let label = "network {} with an empty MAC is a broadcast, not one station";
+    Error::InvalidArgument(Refusal::new(label).with_value(u64::from(network)))
+}
+
 fn check_station(network: u16, mac: &[u8]) -> Result<(), Error> {
     if mac.is_empty() {
-        return Err(Error::InvalidArgument(
-            Refusal::new("network {} with an empty MAC is a broadcast, not one station")
-                .with_value(u64::from(network)),
-        ));
+        return Err(empty_mac(network));
     }
     if network != 0 {
         check_routed_unicast(network, mac.len())?;

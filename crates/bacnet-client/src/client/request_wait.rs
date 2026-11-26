@@ -56,7 +56,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
             tokio::select! {
                 response = &mut response_rx => {
-                    return response.map_err(|_| Error::RequestCutOff { sent: true });
+                    return response.map_err(|_| super::requests::cut_off(true));
                 }
                 // Progress is never published after the transaction leaves
                 // the TSM; the response arm above resolves then instead.
@@ -145,7 +145,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         return Expired::End(
                             (&mut *response_rx)
                                 .await
-                                .map_err(|_| Error::RequestCutOff { sent: true }),
+                                .map_err(|_| super::requests::cut_off(true)),
                         );
                     }
                     let send_result = self
@@ -166,7 +166,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 return Expired::End(
                                     (&mut *response_rx)
                                         .await
-                                        .map_err(|_| Error::RequestCutOff { sent: true }),
+                                        .map_err(|_| super::requests::cut_off(true)),
                                 );
                             }
                             RequestTimerExpiration::TimedOut => {
@@ -208,7 +208,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 RequestTimerExpiration::NoTransaction => Expired::End(
                     (&mut *response_rx)
                         .await
-                        .map_err(|_| Error::RequestCutOff { sent: true }),
+                        .map_err(|_| super::requests::cut_off(true)),
                 ),
             }
         }
@@ -256,7 +256,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 SegmentTimerExpiration::NoTransaction => Expired::End(
                     (&mut *response_rx)
                         .await
-                        .map_err(|_| Error::RequestCutOff { sent: true }),
+                        .map_err(|_| super::requests::cut_off(true)),
                 ),
             }
         }

@@ -55,7 +55,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             return response_rx
                 .await
                 .map(OutgoingSegmentSend::Terminal)
-                .map_err(|_| Error::RequestCutOff { sent: true });
+                .map_err(|_| super::requests::cut_off(true));
         }
         let send = self.send_confirmed_target_apdu(context.target, &buf, context.owner);
         tokio::pin!(send);
@@ -69,7 +69,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 return response_rx
                     .await
                     .map(OutgoingSegmentSend::Terminal)
-                    .map_err(|_| Error::RequestCutOff { sent: true });
+                    .map_err(|_| super::requests::cut_off(true));
             };
 
             // Poll without a TSM lock. Dispatch defers terminal admission while
@@ -92,7 +92,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 return response_rx
                     .await
                     .map(OutgoingSegmentSend::Terminal)
-                    .map_err(|_| Error::RequestCutOff { sent: true });
+                    .map_err(|_| super::requests::cut_off(true));
             }
             if send_completed {
                 return Ok(OutgoingSegmentSend::Sent);
@@ -105,7 +105,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 response = &mut *response_rx => {
                     return response
                         .map(OutgoingSegmentSend::Terminal)
-                        .map_err(|_| Error::RequestCutOff { sent: true });
+                        .map_err(|_| super::requests::cut_off(true));
                 }
                 // A transaction that left the TSM resolves the response arm
                 // above; progress stays silent.

@@ -95,13 +95,47 @@ fn check_transmittable_length(peer_or_local: LengthBoundedBy, transport: u16) ->
     } else {
         peer_or_local
     };
-    // The limits are values the client keeps: its own setting, the link's,
-    // or the peer's row in its device table (#1833).
-    Err(Error::InvalidConfig(Refusal::text(format!(
+    Err(below_minimum(combined, binding))
+}
+
+/// [`check_transmittable_length`]'s refusal, out of line from the request
+/// path. The limits are values the client keeps: its own setting, the
+/// link's, or the peer's row in its device table (#1833).
+#[cold]
+#[inline(never)]
+fn below_minimum(combined: u16, binding: LengthBoundedBy) -> Error {
+    Error::InvalidConfig(Refusal::text(format!(
         "maximum transmittable length {combined} is below the {MINIMUM_MESSAGE_SIZE}-octet \
          MinimumMessageSize every BACnet device accepts (Clause 5.2.1.2); the binding limit is \
          {binding}"
-    ))))
+    )))
+}
+
+/// A routed request whose path authorization went to another request,
+/// refused out of line from the request path (#1833).
+#[cold]
+#[inline(never)]
+fn lost_path_authorization() -> Error {
+    Error::limit_reached("routed send lost its active path authorization")
+}
+
+/// [`Error::RequestCutOff`], built out of line: the request paths that
+/// end with it are hot, and the branch to it is the unlikely one (#1833).
+#[cold]
+#[inline(never)]
+pub(super) fn cut_off(sent: bool) -> Error {
+    Error::RequestCutOff { sent }
+}
+
+/// A confirmed request to a group address on this link, refused out of
+/// line from the hot request path (#1833).
+#[cold]
+#[inline(never)]
+fn group_destination() -> Error {
+    Error::invalid_argument(
+        "a confirmed request goes to one device, not to a broadcast or group address (a local \
+         broadcast carries only an UNCONFIRMED_REQUEST APDU, Clause 6.3)",
+    )
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -218,7 +252,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             match self.pacer.wait(key, &self.routing_query.ended).await {
                 Some(pace) => pace,
                 // Still waiting for its turn: nothing has gone out.
-                None => return Err(Error::RequestCutOff { sent: false }),
+                None => return Err(cut_off(false)),
             }
         } else {
             pacing::PaceGuard::unpaced()
@@ -342,9 +376,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             guard.mark_completed();
             self.abandon_unsent(&tsm_mac, invoke_id, &owner);
             // The path's one active request is no longer this one.
-            return Err(Error::limit_reached(
-                "routed send lost its active path authorization",
-            ));
+            return Err(lost_path_authorization());
         }
 
         if let Err(e) = self.send_confirmed_target_apdu(target, &buf, &owner).await {
@@ -408,11 +440,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // With no DNET, a group destination is a local broadcast,
                 // which carries no confirmed request (Clause 6.3, #1479).
                 if self.network.transport().is_group_destination(mac) {
-                    return Err(Error::invalid_argument(
-                        "a confirmed request goes to one device, not to a broadcast or group \
-                         address (a local broadcast carries only an UNCONFIRMED_REQUEST APDU, \
-                         Clause 6.3)",
-                    ));
+                    return Err(group_destination());
                 }
             }
             // Still routed, so on another network: its MAC there must not

@@ -144,7 +144,7 @@ impl AuditedRequest {
     /// end first: its stop, or its node's stop or drop (#2720).
     pub async fn turn_due(&mut self) -> Result<(), Error> {
         match &self.turn {
-            Some(turn) if !turn.due().await => Err(Error::RequestCutOff { sent: false }),
+            Some(turn) if !turn.due().await => Err(super::requests::cut_off(false)),
             _ => Ok(()),
         }
     }
@@ -175,7 +175,7 @@ impl AuditedRequest {
         if let Some(turn) = self.turn.take() {
             let Some(pace) = turn.take().await else {
                 return AuditedOutcome {
-                    result: Err(Error::RequestCutOff { sent: false }),
+                    result: Err(super::requests::cut_off(false)),
                     invoke_id: None,
                     attempted: false,
                     records: Vec::new(),
@@ -330,7 +330,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     Some(turn) => turn
                         .take()
                         .await
-                        .ok_or(Error::RequestCutOff { sent: false })?,
+                        .ok_or_else(|| super::requests::cut_off(false))?,
                     None => PaceGuard::unpaced(),
                 };
                 run.await.0

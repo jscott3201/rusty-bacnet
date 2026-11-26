@@ -418,7 +418,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     biased;
                     response = &mut *response_rx => {
                         return Ok(WindowAck::Terminal(
-                            response.map_err(|_| Error::RequestCutOff { sent: true }),
+                            response.map_err(|_| super::requests::cut_off(true)),
                         ));
                     }
                     // A transaction that left the TSM resolves the
@@ -480,7 +480,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         // Can't happen: the request holds a sender of this
                         // channel until its transfer ends. Were it to, the
                         // segments sent so far may have reached the device.
-                        return Err(Error::RequestCutOff { sent: true });
+                        return Err(super::requests::cut_off(true));
                         }
                     },
                     _ = &mut segment_timer => {

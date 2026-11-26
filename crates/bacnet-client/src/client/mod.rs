@@ -893,14 +893,18 @@ fn max_apdu_bucket_at_or_below(limit: u16) -> Option<u16> {
     bacnet_encoding::apdu::max_apdu_header_at_or_below(u32::from(limit)).ok()
 }
 
+/// Called for every request: the refusal is built out of line, so this
+/// stays small enough to inline (#1833).
 fn cap_max_apdu_to_transport(configured: u16, transport_limit: u16) -> Result<u16, Error> {
     let limit = configured.min(transport_limit);
-    max_apdu_bucket_at_or_below(limit).ok_or_else(|| {
-        Error::InvalidConfig(
-            Refusal::new("transport max-APDU-length {} leaves no valid BACnet APDU bucket")
-                .with_value(u64::from(transport_limit)),
-        )
-    })
+    max_apdu_bucket_at_or_below(limit).ok_or_else(|| no_apdu_bucket(transport_limit))
+}
+
+#[cold]
+#[inline(never)]
+fn no_apdu_bucket(transport_limit: u16) -> Error {
+    let label = "transport max-APDU-length {} leaves no valid BACnet APDU bucket";
+    Error::InvalidConfig(Refusal::new(label).with_value(u64::from(transport_limit)))
 }
 
 mod audit;
