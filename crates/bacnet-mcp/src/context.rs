@@ -472,14 +472,15 @@ impl<T: TransportPort + 'static> Ctx<T> {
 
     /// The row of device `instance`, named as `text` (on `network` when it
     /// names one), at the address whose device confirmed the instance to
-    /// the client's own question (#2824): through a handle following the
-    /// instance, which asks each address claiming it which device answers
-    /// there, once an address. Every claim is checked against the policy
-    /// first, so nothing is sent where the call may not reach: one claim
-    /// the policy leaves out is refused as such, and several of which it
-    /// leaves out any as ambiguous, naming them all. A claim from an
-    /// address only the operator's one-station mark lifts is refused, as
-    /// it has no handle by instance (#2738).
+    /// the client's own question (#2824, `Client::confirm_among`): each
+    /// address claiming it is asked which device answers there, unless its
+    /// device confirmed it before. Every claim is checked against the
+    /// policy first, and exactly those are asked, so nothing is sent where
+    /// the call may not reach: one claim the policy leaves out is refused
+    /// as such, and several of which it leaves out any as ambiguous. No
+    /// Who-Is is sent, so a quiet device that never announced itself
+    /// isn't heard: the refusals ask the operator to run a discovery. A claim from an address only the operator's one-station
+    /// mark lifts is refused, as it has no handle by instance (#2738).
     async fn confirmed(
         &self,
         client: &Client<T>,
@@ -505,17 +506,17 @@ impl<T: TransportPort + 'static> Ctx<T> {
                 }
             }
         }
-        let handle = client.device(text).await.map_err(|error| match error {
-            OpsError::UnknownDevice { .. } => unknown(),
-            OpsError::Ambiguous { candidates, .. } => ToolError::ambiguous(text, &candidates),
-            // The address asked, and that its device didn't answer as the
-            // instance.
-            error @ OpsError::NotConfirmed { .. } => {
-                ToolError::refused("unconfirmed-device", error.to_string())
-            }
-            error => ToolError::Failed(format!("{text}: {error}")),
-        })?;
-        let at = handle.address();
+        // Exactly the claims the policy checked are asked, no Who-Is: an
+        // I-Am landing meanwhile adds no address the policy never saw.
+        let at = client
+            .confirm_among(instance, &addresses)
+            .await
+            .map_err(|error| match error {
+                OpsError::UnknownDevice { .. } => unknown(),
+                OpsError::Ambiguous { candidates, .. } => ToolError::ambiguous(text, &candidates),
+                error @ OpsError::NotConfirmed { .. } => ToolError::unconfirmed(text, &error),
+                error => ToolError::Failed(format!("{text}: {error}")),
+            })?;
         client
             .low_level()
             .get_device_at(at.network(), at.mac())
@@ -622,6 +623,16 @@ impl<T: TransportPort + 'static> Ctx<T> {
 
     /// The one known address claiming `instance`; `None` when none or two
     /// or more do.
+    /// [`known_at`](Self::known_at), once the device there confirmed the
+    /// instance to the client's own question, as a tool's call by the
+    /// instance asks it (#2824), or its row was registered by hand: where
+    /// a subscription by the instance may go. Sends nothing.
+    pub(crate) fn confirmed_at(&self, instance: u32) -> Option<DeviceAddress> {
+        let at = self.known_at(instance)?;
+        let client = self.client.as_ref()?;
+        (client.confirmed_at(&at) == Some(instance)).then_some(at)
+    }
+
     pub(crate) fn known_at(&self, instance: u32) -> Option<DeviceAddress> {
         let known = self.known.locked();
         let mut claims = known

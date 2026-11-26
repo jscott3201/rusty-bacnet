@@ -19,6 +19,8 @@ use serde_json::{Map, Value, json};
 use super::write::{Peer, Step};
 use super::write_task::{self, hand_off, open};
 use super::{Spec, schema};
+use bacnet_ops::DeviceAddress;
+
 use crate::context::{Call, Ctx};
 use crate::errors::ToolError;
 use crate::writes::McpCaller;
@@ -244,21 +246,32 @@ async fn attached<T: TransportPort + 'static>(
         .cloned()
         .collect();
     let ids: BTreeSet<u64> = chosen.iter().map(|e| e.id).collect();
-    // Where the entries' writes went, found as the desk finds it (nothing
-    // is sent); one written before #2560 kept no address, so its device is
-    // the one the discovery table holds for its instance. The job checks
-    // the desk finds the same address again (`McpCaller::reverting`).
-    let client = ctx.client()?.low_level();
+    // Where the entries' writes went, found as the desk finds it. One
+    // written before #2560 kept no address: its device is where the claims
+    // of its instance, each checked against the policy first, answer as it
+    // (#2824: a question each, no Who-Is). The job checks the desk finds
+    // the same address again (`McpCaller::reverting`).
+    let ops = ctx.client()?;
+    let client = ops.low_level();
     let first = chosen
         .iter()
         .find(|e| e.address.is_some())
         .or(chosen.first());
     let address = match first {
-        Some(entry) => Some(
-            revert_address(client, entry, false)
-                .await
-                .map_err(|unsent| unplaced(entry, unsent))?,
-        ),
+        Some(entry) => {
+            if entry.address.is_none() {
+                for claim in ctx.claims(entry.device, None).await {
+                    if let Some(at) = DeviceAddress::of(&claim) {
+                        ctx.allow(&at, entry.device)?;
+                    }
+                }
+            }
+            Some(
+                revert_address(client, ops.limits(), entry, false)
+                    .await
+                    .map_err(|unsent| unplaced(entry, unsent))?,
+            )
+        }
         None => None,
     };
     let own = client.network_number();
@@ -311,6 +324,7 @@ async fn attached<T: TransportPort + 'static>(
 fn unplaced(entry: &Entry, unsent: Unsent) -> ToolError {
     match unsent {
         Unsent::Contested { .. } => ToolError::refused("ambiguous-device", unsent.to_string()),
+        Unsent::Unconfirmed { .. } => ToolError::refused("unconfirmed-device", unsent.to_string()),
         Unsent::NotLooking { device } => ToolError::UnknownDevice {
             // Its address, or for an entry from before addresses its instance.
             device: match entry.address {

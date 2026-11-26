@@ -121,10 +121,9 @@ async fn a_device_that_moves_before_the_confirmation_is_not_written() {
         match announced {
             true => {
                 assert_eq!(body["reason"], json!("unconfirmed-device"), "{reply}");
-                assert!(
-                    message.contains("isn't confirmed at 10.0.0.3:47808"),
-                    "{body}"
-                );
+                assert!(message.contains("Ask the operator"), "{body}");
+                assert_eq!(body["claims"][0]["address"], json!("10.0.0.3:47808"));
+                assert_eq!(body["claims"][0]["confirmed"], json!(false));
             }
             false => {
                 assert_eq!(body["reason"], json!("stale"), "{reply}");
@@ -397,9 +396,20 @@ async fn a_forged_claim_is_asked_and_refused() {
             "{tool}: {reply}"
         );
         let message = body["message"].as_str().unwrap();
+        assert!(message.contains("Ask the operator"), "{tool}: {message}");
         assert!(
-            message.contains("isn't confirmed at 10.0.0.3:47808"),
-            "{tool}: {message}"
+            !message.contains("10.0.0.3"),
+            "{tool}: no address to name: {message}"
+        );
+        assert_eq!(
+            body["claims"],
+            json!([{
+                "address": "10.0.0.3:47808",
+                "confirmed": false,
+                "answer": "another-device",
+                "answer_instance": alias,
+            }]),
+            "{tool}: {body}"
         );
     }
     assert_eq!(alias_slot(&lab, alias, 12).await, PropertyValue::Null);

@@ -84,6 +84,12 @@ async fn the_minute_gates_and_the_watch_cap_span_the_sessions() {
     let reason = &refused["structuredContent"]["reason"];
     assert_eq!(reason, &json!("rate-limited"), "{refused}");
 
+    // A point by its instance is listened to once the device confirmed
+    // its instance to the server's own question, as a tool's call asks
+    // (#2824).
+    let read = json!({ "device": 1201, "reads": [{ "object": "ai:1" }] });
+    let read = first.call("bacnet_read", read).await;
+    assert_eq!(read["isError"], json!(false), "{read}");
     let (_, accepted) = first.listen(&[AI1]).await;
     assert_eq!(accepted, [AI1]);
     let (_, accepted) = second.listen(&[AI3, AI1]).await;

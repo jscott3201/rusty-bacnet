@@ -216,8 +216,13 @@ async fn two_networks_holding_one_instance_are_two_devices() {
     let body = &by_instance["structuredContent"];
     assert_eq!(body["reason"], json!("ambiguous-device"), "{by_instance}");
     let message = body["message"].as_str().unwrap_or_default();
+    assert!(message.contains("Ask the operator"), "{by_instance}");
     assert_eq!(
-        message, "device 1201 is claimed by 10.0.0.2:47808 and 2001:0x33; name one by its address",
+        body["claims"],
+        json!([
+            { "address": "10.0.0.2:47808", "confirmed": false },
+            { "address": "2001:0x33", "confirmed": false },
+        ]),
         "{by_instance}"
     );
     let routed = lab
@@ -281,11 +286,8 @@ async fn a_scoped_instance_names_the_claim_on_its_network() {
         json!("unconfirmed-device"),
         "{unconfirmed}"
     );
-    let message = unconfirmed["message"].as_str().unwrap();
-    assert!(
-        message.contains("isn't confirmed at 2001:0x33"),
-        "{message}"
-    );
+    assert_eq!(unconfirmed["claims"][0]["address"], json!("2001:0x33"));
+    assert_eq!(unconfirmed["claims"][0]["answer"], json!("silent"));
     lab.low
         .add_routed_device(bacnet_client::discovery::RoutedDeviceConfig {
             instance: LAB,
