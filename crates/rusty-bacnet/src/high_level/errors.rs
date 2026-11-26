@@ -107,7 +107,9 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
         ),
         OpsError::ObjectList { source, .. } => object_list(message, *source, style),
         // A write through a following handle not sent (#2795): its
-        // addresses in the link's own form, the hint among `candidates`.
+        // addresses in the link's own form in the message, and as
+        // (network, MAC) in `at` and `candidate`, an unconfirmed hint kept
+        // out of `candidates`, which are real choices.
         OpsError::NotConfirmed {
             instance,
             at,
@@ -132,10 +134,9 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
                     target: Some(instance.to_string()),
                     instance: Some(instance),
                     ambiguous: false,
-                    candidates: candidate
-                        .iter()
-                        .map(|address| (address.network(), address.mac().to_vec()))
-                        .collect(),
+                    candidates: Vec::new(),
+                    at: Some((at.network(), at.mac().to_vec())),
+                    candidate: candidate.map(|address| (address.network(), address.mac().to_vec())),
                 },
             )
         }

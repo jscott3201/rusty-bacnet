@@ -138,6 +138,12 @@ async def next_where(watch: Watch, test, seconds: float = 15.0) -> WatchUpdate:
             return update
 
 
+def mac_of(address: str) -> bytes:
+    """The B/IP MAC of ``address`` (``host:port``)."""
+    host, port = address.rsplit(":", 1)
+    return bytes(int(octet) for octet in host.split(".")) + int(port).to_bytes(2, "big")
+
+
 def i_am(instance: int) -> bytes:
     """An I-Am of device ``instance``, as a B/IP broadcast."""
     apdu = (bytes([0x10, 0x00, 0xC4]) + ((8 << 22) | instance).to_bytes(4, "big")
@@ -388,9 +394,9 @@ class FollowTests(Lab):
                 await dev.write("ai:1", "out-of-service", "true")
             error = caught.exception
             self.assertEqual((error.target, error.instance), (str(DEVICE), DEVICE))
-            host, port = new.rsplit(":", 1)
-            mac = bytes(int(octet) for octet in host.split(".")) + int(port).to_bytes(2, "big")
-            self.assertEqual(error.candidates, [(0, mac)])
+            self.assertEqual(error.at, (0, mac_of(self.address)))
+            self.assertEqual(error.candidate, (0, mac_of(new)))
+            self.assertEqual(error.candidates, [], "a hint is no choice")
             self.assertIn(f"isn't confirmed at {self.address}", str(error))
             self.assertIn(f"the discovery table has it at {new}", str(error))
             self.assertEqual(dev.address, self.address, "a write moves no handle")

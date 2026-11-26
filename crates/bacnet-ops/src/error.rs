@@ -98,19 +98,21 @@ pub enum OpsError {
         candidates: Vec<DeviceAddress>,
     },
     /// A write (or relinquish) through a handle following an instance was
-    /// refused before anything was sent (#2795): the device isn't
-    /// confirmed at the address the handle holds (asked, the device there
-    /// doesn't answer as the instance, or no route to it is known), and a
-    /// write never goes to another address on its own. A read through the
-    /// handle looks for the device, asking both addresses; a write after it
-    /// goes where the read confirmed it.
+    /// refused before anything was sent (#2795): the device isn't taken for
+    /// the instance at the address the handle holds (its table row names
+    /// another device there, and asked, the device there is silent or
+    /// another; or no route to it is known), and a write never goes to
+    /// another address on its own. A read through the handle looks for the
+    /// device, asking its address first; a write after it goes where the
+    /// read moved the handle.
     NotConfirmed {
         /// The instance the handle follows.
         instance: u32,
         /// The address the handle holds.
         at: DeviceAddress,
         /// The one other address the discovery table has the instance at,
-        /// if one: a hint, not asked.
+        /// if one: an unconfirmed hint (the table takes I-Ams nobody asked
+        /// for), not asked.
         candidate: Option<DeviceAddress>,
     },
     /// The device, or the way to it, didn't answer: the request timed out

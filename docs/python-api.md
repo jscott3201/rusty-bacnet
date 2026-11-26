@@ -646,19 +646,25 @@ Addresses read as `device()` reads them back.
 One WriteProperty, acknowledged.
 
 **The rule for writes through a handle made from an instance (#2795):** a
-write (or `relinquish`) goes only to the address the handle holds, while
-the device there is still taken for the instance (the discovery table
-names it there, or the device answers as it when asked). Otherwise nothing
-is sent and it raises `BacnetLookupError`, its message naming both
-addresses, `instance` the instance and `candidates` the one other address
-the table has it at, if any. It never moves to another address on its own:
-a read through the handle looks for the device (asking its old address
-first, and moving only when that isn't the device and the new one names
-it), and a write after it goes where the read confirmed the device. Not
-covered yet: a relayed I-Am nobody asked for still changes the router
-station a routed device is reached through (#2823), and a handle's first
-placement of an instance takes the discovery table's row as it stands
-(#2824).
+write (or `relinquish`) goes only to the address the handle already
+holds, while the device there is taken for the instance, as it is when its discovery-table row
+is absent or names the instance (neither is the device's own answer, and
+neither has an age limit), or the device's last own answer there named
+it; else one identity read is sent within the call, and an answer as
+the instance, an unclear one (a Reject, an Abort, another error) or the
+client's own failure keeps the write there. Otherwise nothing is sent and it raises
+`BacnetLookupError`, its message naming both addresses, with `instance`,
+`at` (the address held) and `candidate` (the one other address the table
+has the instance at, an unconfirmed hint, or None) as `(network, mac)`. A
+write never moves the handle: a read through it looks for the device,
+asking its old address first and moving only when that isn't the device
+and the new address names it, and a write after it goes to the new place.
+What this leaves: a read moves a following handle once its old address
+misses one identity question (about 24 s at the default timers; about 3
+to 6 s for a routed address with no row) while another address names the
+instance, and later writes go to the new place. A routed device's path
+through its router is #2823, and a new handle's first resolution of an
+instance is #2824.
 
 ```python
 await ahu.write("av:1", "pv", "72.5@8")            # priority 8, in the text
@@ -871,7 +877,7 @@ ask only the instances between them: give both or neither.
 | Raised | When |
 |--------|------|
 | `TypeError`, `ValueError` | An argument that names nothing: when the call is made for a wrong type or bad text, on await for what needs the started client's link. Nothing was sent |
-| `BacnetLookupError` (also `LookupError`) | No device could be placed for the name, or a write through a following handle wasn't sent because the device isn't confirmed where the handle holds it. `target` is the name, and `instance` the instance it holds (None for an address) |
+| `BacnetLookupError` (also `LookupError`) | No device could be placed for the name, or a write through a following handle wasn't sent because the device isn't taken for the instance where the handle holds it. `target` is the name, and `instance` the instance it holds (None for an address); for that write, `at` is the address held and `candidate` an unconfirmed hint, as `(network, mac)` |
 | `BacnetAmbiguousDeviceError` | A `BacnetLookupError`: two or more addresses claim the instance. `candidates` are targets |
 | `BacnetWriteDeniedError` | The write policy refuses the priority. Nothing was sent |
 | `BacnetProtocolError`, `BacnetRejectError`, `BacnetAbortError` | The device's own Error, Reject or Abort |

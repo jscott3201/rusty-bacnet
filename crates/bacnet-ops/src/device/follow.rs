@@ -159,17 +159,19 @@ impl<T: TransportPort + 'static> Device<T> {
     }
 
     /// Where to send the next write or relinquish: a pinned handle's
-    /// address, or the place a following handle holds, only when the
-    /// device there is still taken for its instance: the table names it
-    /// there, or the device answered as it when asked, as for a read
-    /// ([`target`](Self::target)). A write never moves a handle (#2795):
-    /// otherwise nothing is sent, and the error names where the table has
-    /// the instance now.
+    /// address, or the place a following handle already holds, only while
+    /// the device there is taken for its instance: its table row is absent
+    /// or names it (neither the device's own answer, nor aged), or the
+    /// device's last own answer there named it; otherwise it is asked once
+    /// here, and an answer as the instance, an unclear one or the client's
+    /// own failure keeps the write there. A write never moves a handle
+    /// (#2795): else nothing is sent, and the error names where the table
+    /// has the instance now, unconfirmed.
     ///
     /// # Errors
     ///
-    /// [`OpsError::NotConfirmed`] when the device at the held place doesn't
-    /// answer as the instance. Nothing but the ask is sent then.
+    /// [`OpsError::NotConfirmed`] when the device at the held place, asked,
+    /// is silent or another device. Nothing but the ask is sent then.
     pub(crate) async fn write_target(&self) -> Result<DeviceAddress, OpsError> {
         let here = self.address();
         let Pin::Follows { instance, .. } = &self.pin else {
@@ -362,8 +364,9 @@ impl<T: TransportPort + 'static> Client<T> {
     /// ([`stays`](Self::stays)) and the candidate's does
     /// ([`answers_as`](Self::answers_as)), telling the events receivers.
     /// With no route to `from`, its station is asked for first, by a
-    /// Who-Is addressed to it, then one to its network: found, the read
-    /// goes there again; silent, that is its answer. If another handle
+    /// Who-Is for the instance addressed to it, then one to its network:
+    /// found as the instance, the read goes there again; silent, or
+    /// another device answering, that is its answer. If another handle
     /// sharing `followed` moved it meanwhile, where it went. `None` to stay
     /// and keep the read's error (#2795).
     ///
@@ -382,11 +385,15 @@ impl<T: TransportPort + 'static> Client<T> {
             return Ok(Some(now));
         }
         if routeless {
-            match self.find_station(from, None).await {
-                // Found: the read goes there again.
-                Ok(_) => return Ok(Some(from.clone())),
-                // Asked, and silent: look elsewhere.
-                Err(OpsError::UnknownDevice { asked: Some(_), .. }) => {}
+            let range = DeviceInstanceRange::single(key.1).ok();
+            match self.find_station(from, range).await {
+                // Found as the instance: the read goes there again.
+                Ok(row) if row.object_identifier.instance_number() == key.1 => {
+                    return Ok(Some(from.clone()));
+                }
+                // Another device answers there, or none, asked: look
+                // elsewhere.
+                Ok(_) | Err(OpsError::UnknownDevice { asked: Some(_), .. }) => {}
                 // Nothing asked (a clone that sends no Who-Is), or the
                 // client failed: no word of the device's.
                 Err(_) => return Ok(None),

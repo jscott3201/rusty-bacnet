@@ -6,7 +6,7 @@
 
 use bacnet_types::enums::ConfirmedServiceChoice;
 
-use super::test_bus::{Bus, N, at, client, name_of, requests, server, settle, stop};
+use super::test_bus::{Bus, N, TurnAway, at, client, name_of, requests, server, settle, stop};
 use super::*;
 
 const WRITE: ConfirmedServiceChoice = ConfirmedServiceChoice::WRITE_PROPERTY;
@@ -167,4 +167,43 @@ async fn a_write_to_a_reused_address_fails_not_confirmed() {
     assert_eq!(requests(&sent, READ, 2) - before, 1, "the question");
     assert_eq!(requests(&sent, WRITE, 2), 0);
     stop(vec![other]).await;
+}
+
+/// S1: station 3 claims N, and station 2 turns the handle's questions
+/// away with a Reject, then with an Abort: no word of which device it is,
+/// so the handle stays and nothing is read at station 3. Before a read
+/// (another device announced at station 2) the read goes to station 2;
+/// after a lost read (station 2's row aged out) its timeout stands.
+#[tokio::test(start_paused = true)]
+async fn a_turned_away_question_keeps_the_handle() {
+    for how in [TurnAway::Reject, TurnAway::Abort] {
+        let (bus, _client, sent, device, servers) = lab().await;
+        bus.i_am(2, N + 1);
+        bus.i_am(3, N);
+        settle().await;
+        bus.turn_away(2, 2, how);
+        assert_eq!(name_of(&device).await.unwrap(), "A", "{how:?}");
+        assert_eq!(device.address(), at(2), "{how:?}");
+        assert_eq!(
+            requests(&sent, READ, 3),
+            0,
+            "{how:?}: nothing read at station 3"
+        );
+        stop(servers).await;
+
+        let (bus, client, sent, device, servers) = lab().await;
+        client.low_level().clear_devices().await;
+        bus.i_am(3, N);
+        settle().await;
+        bus.lose(2, 1);
+        bus.turn_away(2, 2, how);
+        assert!(name_of(&device).await.unwrap_err().timed_out(), "{how:?}");
+        assert_eq!(device.address(), at(2), "{how:?}");
+        assert_eq!(
+            requests(&sent, READ, 3),
+            0,
+            "{how:?}: nothing read at station 3"
+        );
+        stop(servers).await;
+    }
 }

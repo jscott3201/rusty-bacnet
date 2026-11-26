@@ -13028,37 +13028,43 @@ or another device announces itself at it) key on its `DeviceAddress`
 (network and MAC), so two devices sharing an instance stay apart and one
 device named two ways waits at one gate. The discovery table is filled
 by I-Ams nobody asked for, which anyone can send, so a following handle
-believes it only after asking (#2795). **Writes never move a handle:**
-`write` and `relinquish` go only to the place the handle holds, while the
-device there is still taken for the instance (the table names it there, or
-the device, asked when the table says another announced itself there,
-answers as it, or says nothing of which it is); otherwise nothing is sent
-and the call fails with `OpsError::NotConfirmed { instance, at, candidate
-}`, `candidate` the one other address the table has the instance at, as a
-hint, and so does a write that finds no route. **A read may move it:** to
+never moves on it alone (#2795). **Writes never move a handle:** `write`
+and `relinquish` go only to the place the handle already holds, while
+the device there is taken for the instance, as it is when its discovery-table row
+is absent or names the instance (neither is the device's own answer, and
+neither has an age limit), or the device's last own answer there named
+it; else one identity read is sent within the call, and an answer as
+the instance, an unclear one (a Reject, an Abort, another error) or the
+client's own failure keeps the write there. Otherwise nothing is sent and the call fails with
+`OpsError::NotConfirmed { instance, at, candidate }`, `candidate` the one
+other address the table has the instance at, an unconfirmed hint; so does
+a write that finds no route. **A read may move it:** to
 the one other address on its network claiming the instance, telling
 `Client::events` (`ClientEvent::Moved`), only once the device at the
 handle's own address was asked which it is and didn't answer as the
 instance (silent, by a timeout alone, or another device), and the device at
 the new address names the instance (by the wildcard instance, or, as the
 handle's own address was asked first, by having that instance's Device
-object). A read checks so before it is sent when another device has
-announced itself at the handle's address (still the instance, or no word
-of which it is, the handle stays, and an answer by the wildcard is
-remembered); after it times out, or a router refuses it, when the row at
-its address is gone or only the other address answered the one Who-Is an
-earlier timeout sent for the instance, on the network where it was last
-reached and never on every network (at most one every `QUIET` for the
-handles following it); and after it finds no route to a routed address,
-once a Who-Is addressed to the station, then one to its network, drew no
-answer (an answer sends the read there again). A later write goes where a
-read confirmed the device. A handle made later for the instance joins the
-place the others reach it at, whatever the table says, and a watch hub
-moves the handles only when its own move asked their address (#2795).
-Not covered yet: an I-Am nobody asked for, relayed by a router, still
-changes which router station a routed device is reached through (#2823),
-and a handle's first placement of an instance, the write it may make
-before any read, takes the discovery table's row as it stands (#2824). A
+object). A read checks so before it is sent when the handle's address
+isn't taken for the instance as above, another device having announced
+itself there (still the instance, or no word of which it is, the handle
+stays, and an answer by the wildcard is remembered); after it times out,
+or a router refuses it, when the row at its address is gone or only the
+other address answered the one Who-Is an earlier timeout sent for the
+instance, on the network where it was last reached and never on every
+network (at most one every `QUIET` for the handles following it); and
+after it finds no route to a routed address, once a Who-Is for the
+instance addressed to the station, then one to its network, drew no
+answer as the instance (one sends the read there again). A later write
+goes where a read moved the handle. A handle made later for the instance
+joins the place the others reach it at, whatever the table says, and a
+watch hub moves the handles only when its own move asked their address
+and found another device there (#2795). What this leaves: a read moves a following handle once its old address
+misses one identity question (about 24 s at the default timers; about 3
+to 6 s for a routed address with no row) while another address names the
+instance, and later writes go to the new place. A routed device's path
+through its router is #2823, and a new handle's first resolution of an
+instance is #2824. A
 clone that sends no Who-Is
 (`with_resolve_wait(None)`) goes by the I-Am times instead: its own address
 announced `QUIET` before the other's. A duplicate claim is no move. A pinned
@@ -13609,7 +13615,7 @@ row constants.
 | `watch::Point { device: u32, .. }`, `Copy` | `watch::Point { device: DeviceAddress, .. }`, `Clone`, from `Device::point`; entries, schedulers and subscription targets key on the address, never an instance lookup |
 | `watch::Point { device: DeviceAddress, .. }` | `watch::Point { device: Target, .. }`: `Binding::At(address)`, or `Binding::Follows { instance, network }`, which the hub follows; `Device::point` picks by the handle (#2795) |
 | a following handle's points pinned at its address, given up with `Why::Moved` | following its instance: `Update::{at, instance, moved}`, `Snapshot::moved`, `Lease::at` |
-| a following handle moving on the discovery table's rows, and with the hub's look | a read moves it only once its own address, asked, isn't the device and the new address names it; a write never moves it (`OpsError::NotConfirmed`) (#2795) |
+| a following handle moving on the discovery table's rows, and with the hub's look | a read moves it only once its own address, asked, isn't the device (one missed question counts) and the new address names it; a write never moves it (`OpsError::NotConfirmed`); a routed device's path is #2823, a new handle's first resolution #2824 (#2795) |
 | `watch::{Hub, Lease, Changes, Snapshot, Samples, Sample, WatchOptions, Reads, Backoff, Fallback, MissingDevice, Lifetime, HubStats, renewal_margin, first, POINT_PROPERTIES, MISSING, MIN_POLL, POLL_FLOOR, MAX_ROWS, MAX_SAMPLES}` | the same names under `watch::hub` |
 | `watch::{State, Source}` (the snapshot's) | `watch::hub::{Phase, Source}`; `watch::State` is the update's one state with its reason |
 | a point whose instance two addresses claim failing its start as ambiguous | two points, one an address |

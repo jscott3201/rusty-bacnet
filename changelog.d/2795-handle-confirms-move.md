@@ -1,7 +1,7 @@
 ---
 section: Security
 ---
-- A following device handle no longer trusts the discovery table alone: a
-  write goes only where the device is confirmed, else nowhere, and a read
-  moves it only after its old address, asked, is not the device and the new
-  one names it (#2795; open: #2823, #2824).
+- A write through a following handle never moves it: it goes only where
+  the handle holds the device, else nowhere. A read moves it only after its
+  old address, asked, isn't the device (one missed question counts) and the
+  new one names it (#2795; open: #2823, #2824).

@@ -110,6 +110,19 @@ pub(crate) struct Bus {
     /// The Time_Of_Device_Restart each station answers a ReadProperty of
     /// with, in place of its server, which has none.
     restart_times: Mutex<std::collections::HashMap<u8, Vec<u8>>>,
+    /// Confirmed requests to each station still to draw a Reject or an
+    /// Abort from it in place of its server's answer.
+    turning: Mutex<std::collections::HashMap<u8, (usize, TurnAway)>>,
+}
+
+/// How a station turns a confirmed request away: it says nothing of which
+/// device it is either way.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum TurnAway {
+    /// A Reject PDU, reason other.
+    Reject,
+    /// An Abort PDU from the server, reason out-of-resources.
+    Abort,
 }
 
 impl Bus {
@@ -150,7 +163,10 @@ impl Bus {
                     let broken = bus.broken.lock().unwrap();
                     broken.iter().any(|n| mac(*n) == to)
                 });
-                if !broken && !bus.lost(to) && !bus.restart_time_answered(&source, &frame.npdu, to)
+                if !broken
+                    && !bus.lost(to)
+                    && !bus.restart_time_answered(&source, &frame.npdu, to)
+                    && !bus.turned_away(&source, &frame.npdu, to)
                 {
                     bus.deliver(&source, &frame.npdu, to);
                 }
@@ -208,6 +224,47 @@ impl Bus {
         .encode(&mut ack)
         .unwrap();
         self.deliver(&MacAddr::from_slice(&mac(n)), &ack, Some(from.as_slice()));
+        true
+    }
+
+    /// The next `count` confirmed requests to station `n` draw `how` from
+    /// it in place of its server's answer, while it answers the rest.
+    pub(crate) fn turn_away(&self, n: u8, count: usize, how: TurnAway) {
+        self.turning.lock().unwrap().insert(n, (count, how));
+    }
+
+    /// Answer `npdu` from `from` to `to` here when it is a confirmed request
+    /// to a station turning requests away: whether it did.
+    fn turned_away(&self, from: &MacAddr, npdu: &[u8], to: Option<&[u8]>) -> bool {
+        let Some(n) = to.and_then(|to| (0..=u8::MAX).find(|n| mac(*n) == to)) else {
+            return false;
+        };
+        let Ok(decoded) = decode_npdu(Bytes::copy_from_slice(npdu)) else {
+            return false;
+        };
+        let apdu = &decoded.payload;
+        if apdu.len() < 4 || apdu[0] >> 4 != 0 {
+            return false;
+        }
+        let how = {
+            let mut turning = self.turning.lock().unwrap();
+            match turning.get_mut(&n) {
+                Some((left, how)) if *left > 0 => {
+                    *left -= 1;
+                    *how
+                }
+                _ => return false,
+            }
+        };
+        let answer = match how {
+            TurnAway::Reject => [1u8, 0, 0x60, apdu[2], 0],
+            TurnAway::Abort => [1u8, 0, 0x71, apdu[2], 9],
+        };
+        self.deliver(
+            &MacAddr::from_slice(&mac(n)),
+            &answer,
+            Some(from.as_slice()),
+        );
         true
     }
 

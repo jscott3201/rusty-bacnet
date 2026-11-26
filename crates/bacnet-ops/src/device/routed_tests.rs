@@ -559,3 +559,28 @@ async fn a_routed_write_with_no_route_goes_nowhere_else() {
     assert_eq!(following.address(), six, "station 6 answered again");
     lab.stop().await;
 }
+
+/// A routed following handle whose row aged out, its station 6 another
+/// device now: the read finds no route, and station 6, asked for again,
+/// doesn't answer as the instance. The read isn't sent there again, where
+/// it would read another device; station 8 names the instance, and the
+/// read goes there.
+#[tokio::test(start_paused = true)]
+async fn a_station_found_again_as_another_device_is_not_read() {
+    let mut lab = Routed::new(|near| near.port(1)).await;
+    lab.discover().await;
+    let following = lab.client.device("3:1001").await.unwrap();
+    let eight = DeviceAddress::new(3, &mac(8)).unwrap();
+    let six = lab.servers.remove(1);
+    stop(vec![six]).await;
+    lab.servers
+        .push(server(lab.three.port(6), N + 1, "reused").await);
+    lab.servers
+        .push(server(lab.three.port(8), N, "moved").await);
+    lab.client.low_level().clear_devices().await;
+    lab.near.i_am_from(254, Some((3, &mac(8))), N);
+    settle().await;
+    assert_eq!(name_of(&following).await.unwrap(), "moved");
+    assert_eq!(following.address(), eight);
+    lab.stop().await;
+}

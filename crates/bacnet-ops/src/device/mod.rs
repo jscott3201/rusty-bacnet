@@ -33,14 +33,19 @@
 //! instance is heard at one other address while its own has gone quiet
 //! ([`QUIET`]). A following handle's place moves only on its device's
 //! answers (#2795: the discovery table is filled by I-Ams nobody asked
-//! for). A write or relinquish never moves it: it goes to the place the
-//! handle holds while the device there is still taken for the instance,
-//! else nothing is sent ([`OpsError::NotConfirmed`]). A read moves it to
-//! the one other address on its network claiming its instance, telling
-//! [`Client::events`] ([`ClientEvent::Moved`]), once the device at its own
-//! address was asked which it is and isn't the instance (silent, by a
-//! timeout alone, or another device) and the device at the new address
-//! names the instance, when:
+//! for). A write or relinquish never moves it: it goes only to the place
+//! the handle already holds while the device there is taken for the
+//! instance: its discovery-table row is absent or names the instance
+//! (neither is the device's own answer, and neither has an age limit), or
+//! the device's last own answer there named it; else one identity read is
+//! sent within the call, and an answer as the instance, an unclear one (a
+//! Reject, an Abort, another error) or the client's own failure keeps the
+//! write there. Otherwise nothing is sent ([`OpsError::NotConfirmed`]). A
+//! read moves it to the one other address on its network claiming its
+//! instance, telling [`Client::events`] ([`ClientEvent::Moved`]), once the
+//! device at its own address was asked which it is and isn't the instance
+//! (silent, by a timeout alone, or another device) and the device at the
+//! new address names the instance, when:
 //!
 //! - before the read, another device has announced itself at its address
 //!   (still the instance when asked, or no word of which it is, the handle
@@ -54,16 +59,24 @@
 //!   instance an earlier timeout sent, on the network where the device was
 //!   last reached, never on every network ([`QUIET`] says how often it
 //!   asks, and how a clone that sends no Who-Is decides instead);
-//! - after the read found no route to a routed address, a Who-Is
-//!   addressed to the station, then one to its network, drew no answer (an
-//!   answer sends the read there again).
+//! - after the read found no route to a routed address, a Who-Is for the
+//!   instance addressed to the station, then one to its network, drew no
+//!   answer as the instance (one sends the read there again).
 //!
 //! Two or more other claims fail a timed-out request as ambiguous, and
 //! otherwise its error stays as it was. Handles following one instance on
 //! one network share where it is, so one moving takes the others with it;
 //! a handle made later for the instance joins them where they are, whatever
 //! the table says, and a watch hub following the instance moves them when
-//! its own reads find the device elsewhere ([`crate::watch`]).
+//! its own reads find the device elsewhere after asking their address
+//! ([`crate::watch`]).
+//!
+//! What this leaves: a read moves a following handle once its old address
+//! misses one identity question (about 24 s at the default timers; about 3
+//! to 6 s for a routed address with no row) while another address names
+//! the instance, and later writes go to the new place. A routed device's
+//! path through its router is #2823, and a new handle's first resolution
+//! of an instance is #2824.
 
 /// Evaluate `$body` with `$at` where the device is reached now
 /// ([`Device::target`]), and for a following handle whose request timed

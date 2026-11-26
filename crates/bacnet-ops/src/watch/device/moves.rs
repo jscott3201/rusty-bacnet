@@ -235,11 +235,25 @@ impl<T: TransportPort + 'static> Device<T> {
                 looked,
             });
         } else {
-            // No point of it watched here: they were given up for another
-            // device here, which the hub asked. Here failing for the hub's
-            // own request, or no route here: nothing asked.
-            self.moved(instance, to, !watched);
+            // No point of it watched here: given up for another device the
+            // hub's ask found here, the address was asked; given up for no
+            // word of the device's (unconfirmed), or here failing for the
+            // hub's own request, or no route here: nothing asked.
+            let asked = !watched && self.replaced_here(instance);
+            self.moved(instance, to, asked);
         }
+    }
+
+    /// Whether a point of `instance` here was given up for another device
+    /// the hub's ask found answering here: this address was asked, and
+    /// isn't the device. A point given up as unconfirmed is no such word.
+    fn replaced_here(&self, instance: u32) -> bool {
+        self.rows.values().any(|row| {
+            matches!(
+                row.shared.lock().snapshot.why,
+                Some(Why::Replaced { watched, .. }) if watched == instance
+            )
+        })
     }
 
     /// Whether the device at the address is failing: in its backoff, or a
@@ -266,7 +280,8 @@ impl<T: TransportPort + 'static> Device<T> {
     pub(super) fn left_job(&mut self, instance: u32) -> Option<Job> {
         if !self.rows.values().any(|row| watches(row, instance)) {
             if let Some(cue) = self.moves.asking.take() {
-                self.moved(cue.instance, cue.to, true);
+                let asked = self.replaced_here(cue.instance);
+                self.moved(cue.instance, cue.to, asked);
             }
             return None;
         }

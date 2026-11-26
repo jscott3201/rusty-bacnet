@@ -16,7 +16,7 @@ use super::hub::Hub;
 use super::move_cue_tests::{Handle, Lab};
 use super::stream_tests::{number, ready, until};
 use super::*;
-use crate::device::test_bus::{Bus, N, at, client, server, settle, stop};
+use crate::device::test_bus::{Bus, N, at, client, requests, server, settle, stop};
 
 fn ai(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
@@ -112,7 +112,7 @@ async fn a_point_added_racing_a_move_is_never_stranded() {
 async fn the_hubs_own_look_moves_no_handle() {
     let bus = Bus::new();
     let mut servers = vec![server(bus.port(2), N, "old").await];
-    let (client, _sent) = client(&bus).await;
+    let (client, sent) = client(&bus).await;
     let device = client.device(N).await.unwrap();
     let mut events = client.events();
     let mut watch = client.watch([device.point("ai:1").unwrap()]).unwrap();
@@ -123,6 +123,13 @@ async fn the_hubs_own_look_moves_no_handle() {
     assert_eq!(update.at, at(3));
     assert_eq!(device.address(), at(2), "the handle stays");
     assert!(events.try_recv().is_err(), "no handle moved");
+    // A write goes to station 2, where the handle holds the device, and
+    // nowhere else.
+    let write = bacnet_types::enums::ConfirmedServiceChoice::WRITE_PROPERTY;
+    let error = device.write("ai:1 oos", "true", None).await.unwrap_err();
+    assert!(error.timed_out(), "{error:?}");
+    assert_eq!(requests(&sent, write, 2), 1);
+    assert_eq!(requests(&sent, write, 3), 0, "nothing written at station 3");
     drop((watch, device));
     settle().await;
     bus.unsilence(2);
@@ -226,4 +233,32 @@ async fn frames_from_the_address_left_take_nothing() {
     let update = until(&mut lab.watch, |u| number(u) == Some(78.0)).await;
     assert_eq!(update.at, at(3));
     lab.stop().await;
+}
+
+/// A following point left unconfirmed at station 2 (its device refuses the
+/// read that names it) goes to station 3 when a cue sends the hub there
+/// (as another handle's move would) and its read finds the device, but
+/// nothing asked station 2 which device it is: this handle stays.
+#[tokio::test(start_paused = true)]
+async fn an_unconfirmed_point_moves_no_handle() {
+    let bus = Bus::new();
+    let mut servers = vec![server(bus.port(2), N, "refuser").await];
+    let (client, _sent) = client(&bus).await;
+    bus.i_am(2, N);
+    settle().await;
+    client.refuse_wildcard(&at(2));
+    let device = client.device(N).await.unwrap();
+    let mut events = client.events();
+    let mut watch = client.watch([device.point("ai:1").unwrap()]).unwrap();
+    until(&mut watch, |u| u.state != State::Starting).await;
+    servers.push(server(bus.port(3), N, "new").await);
+    bus.i_am(3, N);
+    pooled_hub(&client).inner.registry.moved(N, &at(2), at(3));
+    let update = until(&mut watch, |u| u.moved.is_some()).await;
+    assert_eq!(update.at, at(3));
+    assert_eq!(device.address(), at(2), "the handle stays");
+    assert!(events.try_recv().is_err(), "no handle moved");
+    drop((watch, device));
+    settle().await;
+    stop(servers).await;
 }
