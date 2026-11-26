@@ -13014,13 +13014,21 @@ or another device announces itself at it) key on its `DeviceAddress`
 (network and MAC), so two devices sharing an instance stay apart and one
 device named two ways waits at one gate. A following handle moves to the one other address on its
 network claiming the instance, and tells `Client::events`
-(`ClientEvent::Moved`): before a request when another device has announced
-itself at its address; after a request times out, or finds no route to a
+(`ClientEvent::Moved`), only once the device there names the instance to
+the handle's own read by the wildcard instance (or, for a device that
+refuses that, has that instance's Device object): the discovery table is
+filled by I-Ams nobody asked for, so two forged ones never take a write
+elsewhere (#2795). It does so before a request when another device has
+announced itself at its address and the device there, asked first, doesn't
+answer as the instance (still the instance, the handle stays, and the
+answer is remembered); after a request times out, or finds no route to a
 routed address, when its row is gone; and after a timeout while its address
 still claims the instance, when only the other address answered the one
 Who-Is an earlier timeout sent for it, on the network where it was last
 reached and never on every network (at most one every `QUIET` for the
-handles following it). A clone that sends no Who-Is
+handles following it), the old address not asked again after its own
+request failed. A handle made later for the instance joins the place the
+others reach it at, whatever the table says. A clone that sends no Who-Is
 (`with_resolve_wait(None)`) goes by the I-Am times instead: its own address
 announced `QUIET` before the other's. A duplicate claim is no move. A pinned
 handle stays, and `Device::moved_to` says where its instance is heard now,
@@ -13184,10 +13192,14 @@ watches; `watch::hub` is the layer under it. A point comes from a handle:
 `device.point("ai:1")`, `device.point("bv:3 pv")` or
 `device.point("ao:2 priority-array[8]")`, in the grammar `Device::read`
 takes, and `device.watch(["ai:1", "bv:3 pv"])` is shorthand for a watch of
-those. A point names its device by the handle's `DeviceAddress`, so two
-devices sharing an instance are two points, and one station named two
-ways is one. A Present_Value is watched by SubscribeCOV on its object; any
-other property, or an element, by SubscribeCOVProperty.
+those. A point names its device by a `watch::Target`: a pinned handle's
+`Target::At(address)`, or a following handle's `Target::Follows { instance,
+network }` (#2795), which the hub follows from address to address
+(`device.watch_target()` gives a handle's). Two
+devices sharing an instance, each named by its address, are two points,
+and one station named two ways is one. A Present_Value is watched by
+SubscribeCOV on its object; any other property, or an element, by
+SubscribeCOVProperty.
 
 ```rust
 use bacnet_ops::watch::{State, Why};
@@ -13205,25 +13217,39 @@ while let Some(u) = watch.next().await {
     match &u.state {
         State::Gone { why: Why::Moved { to } } => println!("moved to {to}"),
         State::Gone { why: Why::Replaced { watched, found } } => {
-            println!("device {found} answers at {} now, not {watched}", u.point.device)
+            println!("device {found} answers at {} now, not {watched}", u.at)
         }
         state => println!("{} {text} {:?} via {:?}", u.point, state, u.via),
+    }
+}
+
+// A handle from an instance follows its device: its points too.
+let vav = client.device(1234).await?;
+let mut watch = vav.watch(["ai:1"])?;
+while let Some(u) = watch.next().await {
+    if let Some(moved) = &u.moved {
+        println!("{} followed from {} to {} at {:?}", u.point, moved.from, moved.to, moved.when);
     }
 }
 ```
 
 An `Update` (`#[non_exhaustive]`) carries:
 
-- `point`;
+- `point`, as watched (the key a caller's map keeps across a move), `at`
+  (the `DeviceAddress` it is watched at now), `device` (the instance, when
+  known) and `moved` (a following point's latest move the hub took, a
+  `watch::Moved { from, to, when }`; `None` for a pinned point and before
+  any move);
 - `state`, one `watch::State`: `Starting`, `Subscribed`, `Polled { why }`,
   `Unreachable { why }` or `Gone { why }`, where `why` is a `watch::Why`:
   `Refused` (the device said no; not asked again), `PollOnly` (the
   watch's settings poll every point), `NoAnswer` (the first read or the
   subscription had no answer), `Full` (its subscription table was full)
   and `Lapsed` (a renewal failed), each asked again after a backoff,
-  `Missing` for a remote address with no router known, `Moved { to }`, or
-  `Replaced { watched, found }` (another device answers at the point's
-  address now);
+  `Missing` for a remote address with no router known, `Moved { to }` (a
+  pinned point's device answers there now), or `Replaced { watched, found }`
+  (another device answers at the point's address now; a following point is
+  `Unreachable` for it while the hub looks for its device);
 - `value` (a `Value`, an object watch's Present_Value, named by the units
   and state texts the first read had) and `error`: `value` alone is
   current; both together, a value read earlier while the latest read
@@ -13331,15 +13357,15 @@ never ends on its own: drop it to stop.
 A device that stops answering (a poll or a first read fails; a point whose
 renewal failed goes to the next poll) is looked for: the one other address
 claiming its instance when the row at its address names another instance
-now, or where a following handle moved by its own rule (one Who-Is at
-most every `QUIET`). That address, or one a following handle moved to for
-a request of its own (before a request, a handle moves on the discovery
-table's rows alone, which I-Ams nobody asked for fill), is only a cue
-(#2812): the device there is asked which it is, by one ReadProperty of its
-Device object by the wildcard instance through its gate and the client's
-rate, at once and then on the pace of a claim's asks (below). Its points
-are given up (`State::Gone { why: Why::Moved { to } }`) only when that
-answer names their instance and the device is gone from their address:
+now, or where a following handle's rule would take it (one Who-Is at most
+every `QUIET`), which moves no handle. That address, or one a following
+handle moved to for a request of its own, is only a cue (#2812): the
+device there is asked which it is, by one ReadProperty of its Device
+object by the wildcard instance through its gate and the client's rate,
+at once and then on the pace of a claim's asks (below). Its pinned points
+are given up (`State::Gone { why: Why::Moved { to } }`), and its following
+points go there (below), only when that answer names their instance and
+the device is gone from their address:
 its device is asked once more, as a claim is checked, whatever the
 address looked like before (a renewal or poll may fail for many reasons,
 and a router's reject for a routed address can be forged). The ask is
@@ -13363,9 +13389,7 @@ The pace and the one slot a cue
 waits in belong to the watched address, whichever addresses cues name: a
 stream of forged cues can hold a real move's read to one a lifetime, or
 take a real cue's slot, until the hub's own look after an unanswered poll
-cues the real address again. The hub's look still moves an application's
-following handle before anything is read there; the hub that follows
-devices (#2795) changes that. A row
+cues the real address again. A row
 merely gone from the discovery table (aged out of a quiet device) is no
 move, nor are the announcement times `Device::moved_to` reports: a
 duplicate starting up while the device misses a request looks the same,
@@ -13374,8 +13398,37 @@ nothing its old address sends is taken as its own. The move doesn't
 stick: a point started at the address later starts as any other, and the
 given-up points start again once the address announces itself for the
 instance, or answers a start while the discovery table names it there.
-The hub doesn't follow a device on its own; watch the point at `to`,
-which a following handle's `point` now gives.
+Watch a pinned point at `to`, or follow its instance.
+
+**Following (#2795).** A following point (`Target::Follows`) is never
+given up for a move. On the same answers the hub hands it to the
+scheduler at the new address with its subscriber process identifier and
+its values: its update says so (`moved`, `at`) with `State::Starting`,
+then it is read and subscribed there and its values come from there. The
+hub follows each instance from one place, shared with the client's
+following handles, which it keeps alive and moves with its points (telling
+`Client::events`), so a point added while a move is checked starts where
+the hub follows the device then and goes with the others. Its renewals at
+the old address stop and nothing is cancelled there: the device there is
+another or silent by the move's own answers, so that subscription lapses
+with its lifetime (a device that kept its table through the move takes the
+new subscription, with the same identifier, as the same one). While
+another device answers at its address a following point is
+`State::Unreachable { why: Why::Replaced { .. } }` as the hub looks for its
+device; two or more other addresses claiming the instance move nothing.
+A following point's start asks the device at its address which it is
+(one read by the wildcard instance an address, unless the device named
+itself to the client already), and one naming another instance makes the
+point unreachable there (`Why::Replaced`) before anything of the start is
+taken: nothing is subscribed at another device. A following point is
+placed when watched where the hub follows its device
+already, else where the client's handles following it reach it, else at
+the one address claiming it in the discovery table: `WatchError::UnknownDevice`
+or `WatchError::Ambiguous` refuse one that can't be placed, taking
+nothing. A pinned point and a following point of one object are two points
+(two subscriptions) on a shared hub. A device that refuses the wildcard
+read is never followed by the hub, as a read by one instance names
+nothing; a following handle takes that read for its own requests.
 
 A watched device is its address and an instance (#2603). One rule
 decides it: only an answer to a request the hub sent may set the instance
@@ -13452,9 +13505,9 @@ for it, cancels included, since the new device never held its
 subscription, and its values are dropped. It becomes `Why::Moved` once its
 instance announces itself at one other address and the device there names
 itself so when read (one paced read there, as above), and
-starts again when its address answers for it again. A pinned handle's
-points stay given up until then; a following handle moves by its own
-rule, and its `point` gives the point at the new address to watch. Not
+starts again when its address answers for it again. A pinned point stays
+given up until then; a following one is unreachable until the hub's reads
+find its device elsewhere, and goes there. Not
 caught: a device taking the address before the watched device named
 itself, or at all for a device that refuses the wildcard read (it is
 taken as the point's device), and a device that never announces itself
@@ -13515,6 +13568,9 @@ row constants.
 |---|---|
 | `Hub::new(..) -> Result<Hub, String>`, subscriber ranges handed out in turn, wrapping after 256 hubs made | `Result<Hub, WatchError>` (`Settings`, `NoRuntime`, `Hubs`); the next range no live hub holds, going round, given back once the hub is gone (#2561) |
 | `watch::Point { device: u32, .. }`, `Copy` | `watch::Point { device: DeviceAddress, .. }`, `Clone`, from `Device::point`; entries, schedulers and subscription targets key on the address, never an instance lookup |
+| `watch::Point { device: DeviceAddress, .. }` | `watch::Point { device: Target, .. }`: `Target::At(address)`, or `Target::Follows { instance, network }`, which the hub follows; `Device::point` picks by the handle (#2795) |
+| a following handle's points pinned at its address, given up with `Why::Moved` | following its instance: `Update::{at, device, moved}`, `Snapshot::moved`, `Lease::at` |
+| a following handle moving on the discovery table's rows, and with the hub's look | only once the device at the new address names the instance to its read (#2795) |
 | `watch::{Hub, Lease, Changes, Snapshot, Samples, Sample, WatchOptions, Reads, Backoff, Fallback, MissingDevice, Lifetime, HubStats, renewal_margin, first, POINT_PROPERTIES, MISSING, MIN_POLL, POLL_FLOOR, MAX_ROWS, MAX_SAMPLES}` | the same names under `watch::hub` |
 | `watch::{State, Source}` (the snapshot's) | `watch::hub::{Phase, Source}`; `watch::State` is the update's one state with its reason |
 | a point whose instance two addresses claim failing its start as ambiguous | two points, one an address |

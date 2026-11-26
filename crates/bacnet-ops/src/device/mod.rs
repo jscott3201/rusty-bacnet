@@ -33,11 +33,16 @@
 //! instance is heard at one other address while its own has gone quiet
 //! ([`QUIET`]). A following handle moves to the one other address on its
 //! network claiming its instance, tells [`Client::events`]
-//! ([`ClientEvent::Moved`]) and sends there, when:
+//! ([`ClientEvent::Moved`]) and sends there, once the device there names
+//! its instance in an answer to the handle's own read (#2795: the
+//! discovery table is filled by I-Ams nobody asked for, which move no
+//! handle on their own), when:
 //!
-//! - before a request, another device has announced itself at its address
-//!   (with no other claim the request fails as [`OpsError::UnknownDevice`],
-//!   with two or more as ambiguous, and nothing is sent);
+//! - before a request, another device has announced itself at its address,
+//!   and the device there, asked, doesn't answer as the instance (still
+//!   the instance, the handle stays; with no other claim, or one that
+//!   doesn't answer as it, the request fails as [`OpsError::UnknownDevice`],
+//!   with two or more claims as ambiguous, and the request isn't sent);
 //! - after a request timed out, or found no route left to a routed
 //!   address, no row there claims the instance any more;
 //! - after a request timed out while its address still claims the
@@ -48,7 +53,10 @@
 //!
 //! Two or more other claims fail a timed-out request as ambiguous, and
 //! otherwise its error stays as it was. Handles following one instance on
-//! one network share where it is, so one moving takes the others with it.
+//! one network share where it is, so one moving takes the others with it;
+//! a handle made later for the instance joins them where they are, whatever
+//! the table says, and a watch hub following the instance moves them when
+//! its own reads find the device elsewhere ([`crate::watch`]).
 
 /// Evaluate `$body` with `$at` where the device is reached now
 /// ([`Device::target`]), and for a following handle whose request timed
@@ -82,6 +90,7 @@ macro_rules! sent {
 pub(crate) use sent;
 
 mod address;
+pub(crate) mod confirm;
 mod follow;
 mod misses;
 mod reads;
@@ -97,7 +106,8 @@ use bacnet_transport::any::AnyTransport;
 use bacnet_transport::port::TransportPort;
 
 pub use self::address::DeviceAddress;
-use self::follow::Followed;
+pub(crate) use self::confirm::Answer;
+pub(crate) use self::follow::{FollowKey, Followed};
 pub(crate) use self::follow::{Follows, keep_room};
 pub use self::misses::MISS_MEMORY;
 pub(crate) use self::misses::StationMisses;
@@ -208,10 +218,11 @@ pub struct Duplicate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ClientEvent {
-    /// A handle following `instance` found it gone from `from` (another
-    /// device announced itself there, or it stopped answering there while
-    /// `to` answered for it) and moved to `to`, the one other address
-    /// claiming it.
+    /// The handles following `instance` found it gone from `from` (another
+    /// device answers there, or it stopped answering there while `to`
+    /// answered for it) and moved to `to`, the one other address claiming
+    /// it, once the device there named the instance to a read of the
+    /// handle's or of a watch hub following it (#2795).
     Moved {
         /// The device instance.
         instance: u32,
@@ -346,6 +357,9 @@ impl<T: TransportPort + 'static> Device<T> {
 
 #[cfg(test)]
 mod ask_tests;
+
+#[cfg(test)]
+mod confirm_tests;
 
 #[cfg(test)]
 mod discover_tests;

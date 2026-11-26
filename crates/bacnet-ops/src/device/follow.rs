@@ -1,9 +1,19 @@
 //! What the client keeps for its handles: where each followed instance is
-//! reached now, shared by the handles following it, with when they last
-//! asked where it went, and the instances read by the wildcard for
-//! addresses the discovery table doesn't hold. A following handle checks
-//! its address before each request, and looks for its device again here
-//! after a request times out or finds no route.
+//! reached now, shared by the handles following it (and the watch hubs
+//! following it, #2795), with when they last asked where it went, and the
+//! instances read by the wildcard for addresses the discovery table
+//! doesn't hold. A following handle checks its address before each
+//! request, and looks for its device again here after a request times out
+//! or finds no route.
+//!
+//! The discovery table is filled by I-Ams nobody asked for, which anyone
+//! can send, so what it says of a move is only a cue (#2795): before the
+//! handles move, the device at the new address is asked which it is, and
+//! only one naming the instance takes them there. Before a request, a
+//! table saying another device announced itself at the handles' address
+//! has that address asked first: still the device, nothing moves. After a
+//! request of theirs there failed, only the new address is asked, as the
+//! watch hub does after its own request went unanswered (#2812).
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -16,9 +26,11 @@ use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 use tokio::sync::broadcast::error::TryRecvError;
 
+use super::confirm::{Answer, left_silence, silence};
 use super::resolve::{ambiguous, unknown};
 use super::{ClientEvent, Device, DeviceAddress, Pin, QUIET};
 use crate::client::{Client, ResolveScope, Scope, lock, timed_out};
+use crate::watch::WatchError;
 
 /// Where the handles following one instance on one network reach it, and
 /// when they last asked where it went. They share it, so one that moves
@@ -26,15 +38,15 @@ use crate::client::{Client, ResolveScope, Scope, lock, timed_out};
 #[derive(Debug)]
 pub(crate) struct Place {
     /// Where the instance is reached now.
-    pub(super) at: DeviceAddress,
+    pub(crate) at: DeviceAddress,
     /// When the last Who-Is for the instance went out after a timeout
     /// ([`Client::ask`]), on the discovery table's clock.
     asked: Option<Instant>,
 }
 
 /// A [`Place`], shared by the handles following one instance on one
-/// network.
-pub(super) type Followed = Arc<Mutex<Place>>;
+/// network, and by the watch hubs following it.
+pub(crate) type Followed = Arc<Mutex<Place>>;
 
 /// What a following handle follows: the network it was named on (`2:1234`)
 /// or any (`None`, for `1234`), and the instance.
@@ -100,17 +112,23 @@ impl Elsewhere {
 
 impl<T: TransportPort + 'static> Device<T> {
     /// Where to send the next request: a pinned handle's address, or where
-    /// a following handle reaches its instance now. When another device
-    /// has announced itself at a following handle's address, the instance
-    /// is elsewhere: the handle moves to the one other address claiming it
-    /// on its network, telling the events receivers.
+    /// a following handle reaches its instance now. When the discovery
+    /// table says another device announced itself at a following handle's
+    /// address (and the device there hasn't named itself the handle's
+    /// instance to the client since), with one other address claiming the
+    /// instance on its network, both are the table's word: the device here
+    /// is asked which it is (only a timeout is its silence), and still the
+    /// instance, the handle stays. Otherwise the device at the other
+    /// address is asked, and only when it names the instance does the
+    /// handle move there, telling the events receivers (#2795).
     ///
     /// # Errors
     ///
     /// When another device announced itself at a following handle's
     /// address: [`Error::UnknownDevice`] with no other address claiming
-    /// the instance, and [`Error::AmbiguousDevice`] with two or more.
-    /// Nothing is sent then.
+    /// the instance, or one that doesn't answer as it, and
+    /// [`Error::AmbiguousDevice`] with two or more. Nothing but those
+    /// asks is sent then.
     pub(crate) async fn target(&self) -> Result<DeviceAddress, Error> {
         let here = self.address();
         let Pin::Follows {
@@ -124,13 +142,27 @@ impl<T: TransportPort + 'static> Device<T> {
         let claimed = here
             .row(self.client.low_level())
             .await
-            .is_none_or(|row| row.object_identifier.instance_number() == *instance);
+            .is_none_or(|row| row.object_identifier.instance_number() == *instance)
+            || self.client.said(&here) == Some(*instance);
         if claimed {
             return Ok(here);
         }
         let key = self.client.key(*network, *instance);
         match self.client.elsewhere(*instance, key.0, &here).await {
-            Elsewhere::Moved(to) => Ok(self.client.move_to(key, followed, &here, to)),
+            Elsewhere::Moved(to) => {
+                match self.client.which_at(&here, *instance, left_silence).await {
+                    // The table's row here is stale or forged: the device's own
+                    // answer says so, and is remembered (a read by the wildcard).
+                    Answer::Is(found) | Answer::Has(found) if found == *instance => Ok(here),
+                    // The client's own failure, or a router's reject: no word of
+                    // the device's. The request fails as it would.
+                    Answer::Failed => Ok(here),
+                    _ => match self.client.answers_as(&to, *instance).await {
+                        true => Ok(self.client.move_to(key, followed, &here, to)),
+                        false => Err(unknown(*instance, *network)),
+                    },
+                }
+            }
             // It claims the instance again by now.
             Elsewhere::Shared { .. } => Ok(here),
             Elsewhere::Nowhere => Err(unknown(*instance, *network)),
@@ -179,21 +211,17 @@ impl<T: TransportPort + 'static> Device<T> {
 impl<T: TransportPort + 'static> Client<T> {
     /// The follow-table key of a handle following `instance` named on
     /// `network`: this client's own network, once known, is the local one.
-    pub(super) fn key(&self, network: Option<u16>, instance: u32) -> FollowKey {
+    pub(crate) fn key(&self, network: Option<u16>, instance: u32) -> FollowKey {
         (self.scope(network), instance)
     }
 
-    /// The shared place of the handles following `key`, which is at
-    /// `address` now: a handle still following it there or elsewhere
-    /// moves with it, telling the events receivers.
+    /// The shared place of the handles following `key`, which the
+    /// discovery table has at `address` now. Handles following it already
+    /// stay where they reach it: the table's word moves none of them, only
+    /// the device's answer to a request of theirs (#2795).
     pub(super) fn follow(&self, key: FollowKey, address: DeviceAddress) -> Followed {
         let mut follows = lock(&self.shared.follows);
         if let Some(followed) = follows.get(&key).and_then(Weak::upgrade) {
-            let from = std::mem::replace(&mut lock(&followed).at, address.clone());
-            let from = self.localized(from);
-            if from != address {
-                self.moved(key.1, from, address);
-            }
             return followed;
         }
         let followed = Arc::new(Mutex::new(Place {
@@ -205,18 +233,67 @@ impl<T: TransportPort + 'static> Client<T> {
         followed
     }
 
+    /// The place a watch hub follows `key`'s instance from (#2795): the one
+    /// the client's handles share, wherever they reach it, else a new one
+    /// at the one address claiming it in the discovery table now. Sends
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`WatchError::UnknownDevice`] when no handle follows it and no
+    /// address claims it, [`WatchError::Ambiguous`] when two or more do.
+    pub(crate) fn follow_place(&self, key: FollowKey) -> Result<Followed, WatchError> {
+        let mut follows = lock(&self.shared.follows);
+        if let Some(followed) = follows.get(&key).and_then(Weak::upgrade) {
+            return Ok(followed);
+        }
+        let (network, instance) = key;
+        let (own, table) = self.low_level().localized_device_snapshot();
+        let mut claims: Vec<DeviceAddress> = table
+            .iter()
+            .filter(|row| row.object_identifier.instance_number() == instance)
+            .filter_map(DeviceAddress::of)
+            .map(|address| address.localized(own))
+            .filter(|address| network.is_none_or(|network| address.network() == network))
+            .collect();
+        claims.sort();
+        claims.dedup();
+        let address = match claims.as_slice() {
+            [address] => address.clone(),
+            [] => return Err(WatchError::UnknownDevice { instance, network }),
+            _ => return Err(WatchError::Ambiguous { instance, claims }),
+        };
+        let followed = Arc::new(Mutex::new(Place {
+            at: address,
+            asked: None,
+        }));
+        keep_room(&mut follows, |entry| entry.strong_count() > 0);
+        follows.insert(key, Arc::downgrade(&followed));
+        Ok(followed)
+    }
+
+    /// Where `followed` reaches its instance now, as this client keys
+    /// addresses.
+    pub(crate) fn place_of(&self, followed: &Followed) -> DeviceAddress {
+        self.localized(lock(followed).at.clone())
+    }
+
+    /// Whether the device at `address` answers as device `instance`: by
+    /// the wildcard instance, or, for a device that refuses that, by having
+    /// that instance's Device object (one request, two for a device refusing
+    /// the wildcard for the first time).
+    pub(crate) async fn answers_as(&self, address: &DeviceAddress, instance: u32) -> bool {
+        self.which_at(address, instance, silence).await.instance() == Some(instance)
+    }
+
     /// Where `key`'s instance is now, for a following handle whose request
-    /// at `from` timed out (`wait` its clone's resolve wait, `None` for a
-    /// clone that sends no Who-Is) or found no route (`wait` `None`), with
-    /// one other address claiming it: there when no row at `from` claims
-    /// it any more. While `from` still claims it too, with `wait` `None`
-    /// there when `from` last announced itself [`QUIET`] before the other
-    /// did; otherwise there once only the other answered the Who-Is the
-    /// handles last sent ([`only_other_answered`](Self::only_other_answered)),
-    /// and until then the handle stays and asks ([`ask`](Self::ask)). With
-    /// no other claim the handle stays, asking when `wait` is set. If
-    /// another handle sharing `followed` moved it meanwhile, where it went.
-    /// `None` to stay and keep the request's error.
+    /// at `from` failed, once the device there names the instance
+    /// ([`candidate`](Self::candidate) says where to ask): the handles move
+    /// there, telling the events receivers. If another handle sharing
+    /// `followed` moved it meanwhile, where it went. `None` to stay and keep
+    /// the request's error: no candidate, or one whose device doesn't
+    /// answer as the instance (#2795). The request at `from` just failed,
+    /// so that address isn't asked again.
     ///
     /// # Errors
     ///
@@ -228,11 +305,48 @@ impl<T: TransportPort + 'static> Client<T> {
         from: &DeviceAddress,
         wait: Option<Duration>,
     ) -> Result<Option<DeviceAddress>, Error> {
-        let (network, instance) = key;
         let now = self.localized(lock(followed).at.clone());
         if now != *from {
             return Ok(Some(now));
         }
+        let Some(to) = self.candidate(key, followed, from, wait).await? else {
+            return Ok(None);
+        };
+        if !self.answers_as(&to, key.1).await {
+            tracing::debug!(
+                "device {} is said to answer at {to}, which doesn't answer as it; the handle \
+                 stays at {from}",
+                key.1
+            );
+            return Ok(None);
+        }
+        Ok(Some(self.move_to(key, followed, from, to)))
+    }
+
+    /// Where `key`'s instance may be now, for a following handle whose
+    /// request at `from` timed out (`wait` its clone's resolve wait, `None`
+    /// for a clone that sends no Who-Is) or found no route (`wait` `None`),
+    /// with one other address claiming it: there when no row at `from`
+    /// claims it any more. While `from` still claims it too, with `wait`
+    /// `None` there when `from` last announced itself [`QUIET`] before the
+    /// other did; otherwise there once only the other answered the Who-Is
+    /// the handles last sent
+    /// ([`only_other_answered`](Self::only_other_answered)), and until then
+    /// `None`, asking ([`ask`](Self::ask)). With no other claim `None`,
+    /// asking when `wait` is set. A candidate only: it moves nothing, and
+    /// the device there hasn't said which it is.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AmbiguousDevice`] when two or more other addresses claim it.
+    pub(crate) async fn candidate(
+        &self,
+        key: FollowKey,
+        followed: &Followed,
+        from: &DeviceAddress,
+        wait: Option<Duration>,
+    ) -> Result<Option<DeviceAddress>, Error> {
+        let (network, instance) = key;
         let to = match (self.elsewhere(instance, network, from).await, wait) {
             (Elsewhere::Contested(claims), _) => return Err(ambiguous(instance, &claims)),
             (Elsewhere::Moved(to), _) => to,
@@ -252,7 +366,7 @@ impl<T: TransportPort + 'static> Client<T> {
             }
             (Elsewhere::Nowhere, None) => return Ok(None),
         };
-        Ok(Some(self.move_to(key, followed, from, to)))
+        Ok(Some(to))
     }
 
     /// Whether only the other address answered the Who-Is the handles
@@ -311,8 +425,10 @@ impl<T: TransportPort + 'static> Client<T> {
 
     /// Move the handles sharing `followed` from `from` to `to`, telling the
     /// events receivers, unless another handle moved them meanwhile: where
-    /// they are now.
-    pub(super) fn move_to(
+    /// they are now. Only once the device at `to` named the instance in an
+    /// answer to the client: a handle's own ([`relocate`](Self::relocate),
+    /// [`Device::target`]) or a watch hub's (#2795).
+    pub(crate) fn move_to(
         &self,
         key: FollowKey,
         followed: &Followed,

@@ -19,22 +19,25 @@
 //! the device's instance went. The address it finds, or one a following
 //! handle moved to ([`DeviceSlot::moved`]), is a cue ([`moves`]): a job
 //! reads which device answers there, and only one naming the instance
-//! gives every point up with [`Why::Moved`]: their renewals stop and
-//! nothing more is sent for them, cancels included, so a subscription
-//! still held there lapses with its lifetime. The move doesn't stick: a
-//! point arriving later starts as any other, and the given-up points start
-//! again once the address answers or announces itself for the instance
-//! again.
+//! gives every pinned point up with [`Why::Moved`] and hands every
+//! following one to the scheduler there ([`follow`]): their renewals here
+//! stop and nothing more is sent for them here, cancels included, so a
+//! subscription still held here lapses with its lifetime. The move doesn't
+//! stick for pinned points: a point arriving later starts as any other, and
+//! the given-up points start again once the address answers or announces
+//! itself for the instance again.
 //!
 //! Cancels go while the device answers. One it leaves unanswered puts the
 //! device in its poll backoff, and while it is there the cancels left are
 //! not sent, so dropping every point of a silent device costs at most one
 //! cancel's wait.
 //!
-//! Each point keeps the instance its address named when its watch started
-//! ([`identity`]): another device answering there is never taken for it,
-//! and the device announcing itself again is subscribed again early.
+//! Each point keeps the instance its address named when its watch started,
+//! a following point the instance it follows ([`identity`]): another device
+//! answering there is never taken for it, and the device announcing itself
+//! again is subscribed again early.
 
+mod follow;
 mod identity;
 mod moves;
 
@@ -396,8 +399,9 @@ impl<T: TransportPort + 'static> Device<T> {
                 }
                 row.mode = Mode::Starting;
                 let shared = Arc::clone(&row.shared);
+                let address = self.address.clone();
                 Some(Box::pin(async move {
-                    let started = charged(account, jobs::start(inner, shared)).await;
+                    let started = charged(account, jobs::start(inner, shared, address)).await;
                     Done::Started {
                         process,
                         started: Box::new(started),
@@ -422,7 +426,7 @@ impl<T: TransportPort + 'static> Device<T> {
                 managed,
             }) => {
                 let process = shared.process;
-                let point = shared.point.clone();
+                let point = (shared.point.clone(), self.address.clone());
                 Some(Box::pin(async move {
                     let answered = jobs::cancel(inner, process, point, target, managed).await;
                     Done::Cancelled(holder, answered)
@@ -533,7 +537,7 @@ impl<T: TransportPort + 'static> Device<T> {
         shared.lock().snapshot.cov = started.cov;
         let Some(first) = started.first else {
             // No route to the device is known.
-            let address = &shared.point.device;
+            let address = &self.address;
             let note = format!(
                 "no route to {address}: the discovery table knows no router to network {}",
                 address.network()

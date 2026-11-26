@@ -3413,6 +3413,13 @@ class Watch:
     change the points while another task iterates. The watch never ends on
     its own, even when a point is given up or every point removed.
 
+    A watch of a handle made from an instance (``follows``) follows its
+    device (#2795): once the watch's own reads find the device at another
+    address and its old one no longer answering as it, the points move
+    there, each update saying so (``WatchUpdate.moved``) and where it is
+    watched (``WatchUpdate.address``). An announcement alone moves nothing.
+    A watch of a handle made from an address stays there.
+
     It ends on ``close()``, when the object goes away, or on its client's
     ``stop()``, whichever comes first: ``__anext__`` raises
     ``StopAsyncIteration`` then and ever after, saying why, and the
@@ -3431,8 +3438,17 @@ class Watch:
     @property
     def address(self) -> str:
         """Where the device answered when the watch was made, as text
-        ``BACnetClient.device`` reads back: every point is at this
-        address."""
+        ``BACnetClient.device`` reads back. A watch of a handle made from an
+        address keeps every point there; one of a handle made from an
+        instance follows the device, and each update's ``address`` says
+        where it answers now."""
+        ...
+
+    @property
+    def follows(self) -> bool:
+        """True when the watch follows its device's instance from address
+        to address (a handle made from an instance), False when it watches
+        one address."""
         ...
 
     @property
@@ -3467,8 +3483,9 @@ class Watch:
             | tuple[ObjectIdentifier | str, PropertyIdentifier | str, int]
         ],
     ) -> Awaitable[int]:
-        """Watch ``points`` too, at the watch's address, each in what
-        ``read_many`` takes; those watched already are left as they are.
+        """Watch ``points`` too, of the watch's device (at its address, or
+        following it, as the watch does), each in what ``read_many`` takes;
+        those watched already are left as they are.
         Resolves to the count newly watched. Each new point is read, then
         subscribed (or polled) under the watch's settings; one another
         watch of the same settings holds joins its subscription. Raised:
@@ -3547,8 +3564,27 @@ class WatchUpdate:
 
     @property
     def address(self) -> str:
-        """Where the point's device answers, as text ``BACnetClient.device``
-        reads back: the watch's address."""
+        """Where the point is watched now, as text ``BACnetClient.device``
+        reads back: the watch's address, or, for a watch that follows its
+        device, where the device answers now."""
+        ...
+
+    @property
+    def device(self) -> Optional[int]:
+        """The device's instance, when known: the one a following watch
+        follows, else the one the device at the address named, or the
+        discovery table's."""
+        ...
+
+    @property
+    def moved(self) -> Optional[WatchMove]:
+        """For a watch that follows its device: the latest move the watch
+        took (it watches the point at ``moved.to``, which is ``address``,
+        since ``moved.timestamp``); None before any move, and always for a
+        watch of one address. A consumer that falls behind sees the latest
+        move only: compare ``timestamp`` to tell a new one. The update a
+        move makes is ``"starting"``, with the value read before; values
+        from the new address follow."""
         ...
 
     @property
@@ -3575,11 +3611,13 @@ class WatchUpdate:
         subscription haven't finished), ``"subscribed"`` (values come as
         COV notifications), ``"polled"`` (read with the device's other
         polled points; ``why`` says why), ``"unreachable"`` (the device
-        didn't answer the last request; polled again after a backoff) or
-        ``"gone"`` (given up: nothing more is sent for it and nothing its
-        address sends is taken as its own; ``why`` says whether the device
-        moved or another device took its address). ``"other"`` for a
-        state this version doesn't name."""
+        didn't answer the last request, polled again after a backoff; or,
+        for a watch that follows its device, another device answers at its
+        address, ``why.kind == "replaced"``, while the watch looks for it)
+        or ``"gone"`` (a watch of one address only: given up, nothing more
+        is sent for it and nothing its address sends is taken as its own;
+        ``why`` says whether the device moved or another device took its
+        address). ``"other"`` for a state this version doesn't name."""
         ...
 
     @property
@@ -3664,8 +3702,10 @@ class WatchReason:
         each subscribed again after a backoff; ``"missing"`` (no router to
         a remote device's network is known); ``"moved"`` (the device
         answers at ``to`` now) or ``"replaced"`` (device ``found`` answers
-        at the address now, not ``watched``), either of which gives the
-        point up; ``"foreign-sender"`` (its notifications name device
+        at the address now, not ``watched``), either of which gives up a
+        point of a watch of one address (a following watch is unreachable
+        for ``"replaced"`` while it looks for its device, and follows a
+        move); ``"foreign-sender"`` (its notifications name device
         ``sender``, which can't be told from another device there, so it
         is polled). ``"other"`` for a reason this version doesn't name."""
         ...
@@ -3702,6 +3742,32 @@ class WatchReason:
         ...
 
     def __str__(self) -> str: ...
+    def __repr__(self) -> str: ...
+
+
+class WatchMove:
+    """Where a followed device moved, as a watch took it (#2795): its own
+    reads named the device at ``to``, and its old address no longer
+    answered as it. Frozen; refuses ``copy`` and ``pickle``."""
+
+    @property
+    def from_(self) -> str:
+        """Where the device answered before, as text ``BACnetClient.device``
+        reads back. ``from_``, as ``from`` is a keyword."""
+        ...
+
+    @property
+    def to(self) -> str:
+        """Where it answers now, as text ``BACnetClient.device`` reads
+        back."""
+        ...
+
+    @property
+    def timestamp(self) -> float:
+        """When the watch took the move, as POSIX seconds by the wall
+        clock, as ``time.time()``."""
+        ...
+
     def __repr__(self) -> str: ...
 
 
@@ -4250,10 +4316,16 @@ class Device:
         ``watch_poll_interval``, ``watch_subscribe``); watches with equal
         settings share their subscriptions (#2603).
 
-        The points are at the device's address now: a following handle
-        whose device moves later reports it (``why.kind == "moved"``)
-        rather than following, and another device answering at the address
-        is reported (``"replaced"``) and never taken for this one.
+        A handle made from an instance (``follows``) watches its device
+        wherever it answers (#2795): once the watch's own reads find the
+        device at another address and its old one no longer answering as
+        it, the points move there, each update saying so (``moved``, a
+        ``WatchMove``) and where it is watched (``address``); while another
+        device answers at its address the points are ``"unreachable"``
+        (``why.kind == "replaced"``), never taken for it. A handle made from
+        an address watches that address: a device that moves away is
+        reported (``"gone"``, ``why.kind == "moved"``), another device there
+        too (``"replaced"``). An announcement alone moves nothing.
 
         The watch runs on its own until it ends: ``close()`` (or leaving
         ``async with``), the object going away, or the client's ``stop()``.

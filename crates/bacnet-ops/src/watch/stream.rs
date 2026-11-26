@@ -29,7 +29,8 @@ use super::hub::{self, Hub, Lease, Snapshot, Source};
 use super::sample::Via;
 use super::shared::Shared;
 use super::support::CovSupport;
-use super::{Point, WatchError, Why};
+use super::{Moved, Point, WatchError, Why};
+use crate::device::DeviceAddress;
 use crate::format::{Floats, PropertyError, RawRow, StateTexts, Value, ValueFormat, units};
 
 /// The most points one of a client's pooled hubs watches at once, every
@@ -70,16 +71,23 @@ pub enum State {
     /// backoff that grows to a minute, then as [`Polled`](Self::Polled)
     /// once it answers. `why` it isn't subscribed: any of the reasons a
     /// polled point carries, or [`Why::Missing`] while no route to a
-    /// remote address is known.
+    /// remote address is known. A following point
+    /// ([`Target::Follows`](super::Target::Follows)) whose address another
+    /// device answers at now is unreachable for [`Why::Replaced`] while the
+    /// hub looks for its device (#2795).
     Unreachable {
         /// Why it isn't subscribed.
         why: Why,
     },
     /// Given up: nothing more is sent for it, and nothing its address
-    /// sends is taken as its own. [`Why::Moved`]: the device answers at
-    /// another address now, so watch the point there; [`Why::Replaced`]:
-    /// another device answers at its address now. Either way the point
-    /// starts again if its address answers for its instance again.
+    /// sends is taken as its own. [`Why::Moved`]: a pinned point's device
+    /// answers at another address now, so watch the point there (or follow
+    /// its instance); [`Why::Replaced`]: another device answers at a pinned
+    /// point's address now. Either way the point starts again if its
+    /// address answers for its instance again. [`Why::Missing`]: no route
+    /// to the address is known, and the hub's settings say not to wait. A
+    /// following point is never given up for a move or for another device
+    /// at its address ([`Update::moved`]).
     Gone {
         /// Why it was given up.
         why: Why,
@@ -123,8 +131,28 @@ impl State {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Update {
-    /// The point.
+    /// The point, as the watch holds it ([`Watch::points`]): the key a
+    /// caller's map of points keeps across a followed device's move. It is
+    /// the point as named, but for an address on the client's own network,
+    /// which is the local station once the client knows the network's
+    /// number, and a following point named on that network, which is
+    /// network 0 then.
     pub point: Point,
+    /// Where the point is watched now: a pinned point's address, or where
+    /// the hub follows a following point's device (#2795).
+    pub at: DeviceAddress,
+    /// The device's instance, when known: a following point's own, else
+    /// the one the device at the address named, or the discovery table's
+    /// row there.
+    pub device: Option<u32>,
+    /// The latest move of a following point's device the hub took: it
+    /// watches the point at `moved.to` (`at`) since `moved.when`, and
+    /// nothing from `moved.from` is the point's. The update a move makes
+    /// is [`State::Starting`], with the values read before; values from the
+    /// new address follow. A consumer that falls behind sees the latest
+    /// move only: compare `when` to tell a new one. `None` for a pinned
+    /// point, and before any move.
+    pub moved: Option<Moved>,
     /// How its watch goes.
     pub state: State,
     /// The property's value as last read or notified (an object watch's
@@ -300,16 +328,19 @@ pub(super) fn listen(shared: &Shared, listener: Listener) {
 fn update(shared: &Shared, mark: Mark) -> Update {
     let point = shared.point.clone();
     let (property, _) = point.property();
-    let (rows, via, state, cov, failure, updated) = {
+    let ((rows, via, state, cov, failure, updated), (at, device, moved)) = {
         let entry = shared.lock();
         let snapshot = &entry.snapshot;
         (
-            snapshot.rows.clone(),
-            snapshot.via,
-            State::of(snapshot),
-            snapshot.cov,
-            entry.failure.clone(),
-            entry.wall,
+            (
+                snapshot.rows.clone(),
+                snapshot.via,
+                State::of(snapshot),
+                snapshot.cov,
+                entry.failure.clone(),
+                entry.wall,
+            ),
+            (entry.at.clone(), entry.identity, snapshot.moved.clone()),
         )
     };
     let (value, error) = match rows.iter().find(|(p, _)| *p == property) {
@@ -319,6 +350,9 @@ fn update(shared: &Shared, mark: Mark) -> Update {
     };
     Update {
         point,
+        at,
+        device,
+        moved,
         state,
         value,
         error,

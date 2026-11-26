@@ -38,6 +38,7 @@ from rusty_bacnet import (
     PropertyValue,
     Value,
     Watch,
+    WatchMove,
     WatchReason,
     WatchUpdate,
 )
@@ -317,6 +318,54 @@ class LifetimeTests(Lab):
             await watch.close()
         values = [u.value.value.value for u in seen if u.value is not None]
         self.assertNotIn(999.0, values)
+
+
+class FollowTests(Lab):
+    async def test_a_watch_of_an_instance_follows_its_device(self) -> None:
+        # The same device answering at its own address too: where it goes
+        # once the relay's address falls silent and the table forgets it.
+        moved = await plant(DEVICE, 55.0)
+        self.addAsyncCleanup(cleanup, moved.stop)
+        new = await moved.local_address()
+        async with client() as c:
+            await c.discover(scope=self.address, wait=0.3)
+            dev = await c.device(DEVICE)
+            self.assertTrue(dev.follows)
+            watch = await dev.watch(["ai:1"], lifetime=4, poll_interval=1)
+            self.assertTrue(watch.follows)
+            first = await next_where(watch, subscribed)
+            self.assertEqual((first.address, first.device, first.moved),
+                             (self.address, DEVICE, None))
+            self.relay.passing = 0
+            await c.clear_devices()
+            await c.discover(scope=new, wait=0.3)
+            went = await next_where(watch, lambda u: u.moved is not None, 30)
+            self.assertIsInstance(went.moved, WatchMove)
+            self.assertEqual((went.moved.from_, went.moved.to, went.address),
+                             (self.address, new, new))
+            self.assertLess(abs(went.moved.timestamp - time.time()), 60)
+            self.assertEqual(repr(went.moved), f"WatchMove({self.address} -> {new})")
+            with self.assertRaises(TypeError):
+                pickle.dumps(went.moved)
+            # The same point, now from the device's own address.
+            self.assertEqual((went.object_id, went.device), (AI, DEVICE))
+            await next_where(watch, lambda u: subscribed(u) and u.address == new, 30)
+            await moved.set_present_value_local(AI, PropertyValue.real(56.5))
+            update = await next_where(watch, valued(56.5))
+            self.assertEqual((update.address, update.moved.to), (new, new))
+            self.assertEqual(dev.address, new, "the handle went with it")
+            await watch.close()
+            self.assertEqual(await active(moved), 0)
+
+    async def test_a_watch_of_an_address_stays_there(self) -> None:
+        async with client() as c:
+            dev = await c.device(self.address)
+            watch = await dev.watch(["ai:1"])
+            self.assertFalse(watch.follows)
+            update = await next_where(watch, subscribed)
+            self.assertEqual((update.address, update.device, update.moved),
+                             (self.address, DEVICE, None))
+            await watch.close()
 
 
 class EndTests(Lab):
@@ -704,7 +753,7 @@ class ChangeTests(Lab):
 
 
 class StubParityTests(unittest.TestCase):
-    CLASSES = ("Watch", "WatchUpdate", "WatchReason")
+    CLASSES = ("Watch", "WatchUpdate", "WatchReason", "WatchMove")
 
     def test_every_public_member_matches_the_stub(self) -> None:
         for name in self.CLASSES:

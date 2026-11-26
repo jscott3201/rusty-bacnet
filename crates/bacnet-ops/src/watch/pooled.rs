@@ -164,7 +164,9 @@ impl<T: TransportPort + 'static> Device<T> {
     /// Watch `points` of this device, each in the grammar of
     /// [`point`](Self::point) (`"ai:1"`, `"ao:2 priority-array[8]"`) or a
     /// tuple, under its client's [`watch_settings`](Client::watch_settings):
-    /// shorthand for [`Client::watch`] of each point.
+    /// shorthand for [`Client::watch`] of each point. A following handle's
+    /// points follow its device from address to address (#2795), a pinned
+    /// one's stay at its address ([`point`](Self::point)).
     ///
     /// # Errors
     ///

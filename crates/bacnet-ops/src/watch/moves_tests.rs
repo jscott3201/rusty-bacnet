@@ -163,7 +163,7 @@ async fn a_device_whose_address_names_another_is_reported_moved() {
     let update = until(&mut late, |u| u.value.is_some() || u.error.is_some()).await;
     assert!(!matches!(update.state, State::Gone { .. }), "{update:?}");
     let update = until(&mut lab.watch, |u| u.state == State::Subscribed).await;
-    assert_eq!(update.point.device, at(2));
+    assert_eq!(update.at, at(2));
     let update = latest(&mut late).await;
     assert!(
         update.is_none_or(|u| !matches!(u.state, State::Gone { .. })),
@@ -187,7 +187,7 @@ async fn a_start_answered_for_the_instance_brings_a_moved_point_back() {
         .unwrap();
     until(&mut late, |u| u.value.is_some()).await;
     let update = until(&mut lab.watch, |u| u.state == State::Subscribed).await;
-    assert_eq!(update.point.device, at(2));
+    assert_eq!(update.at, at(2));
     drop(late);
     lab.stop().await;
 }
@@ -234,24 +234,47 @@ async fn a_duplicate_starting_up_does_not_end_a_watch() {
 
 /// A handle following an instance: when its device stops answering, the
 /// hub asks where it went as the handle would, once, and once only the
-/// other address has answered, the point is reported moved there, the
-/// handle moves with it, and the point watched again from the handle is
-/// subscribed at the new address.
+/// other address has answered and named the device to the hub's read, the
+/// point goes there (#2795): the same point, its update saying where it
+/// went, then values from the new address. The handle moves with it, and
+/// the point watched again from the handle is the same point.
 #[tokio::test(start_paused = true)]
-async fn a_following_device_that_moves_is_reported_by_the_hub() {
+async fn a_following_device_that_moves_is_followed_by_the_hub() {
     let bus = Bus::new();
     let mut servers = vec![server(bus.port(2), N, "old").await];
-    let (client, _sent) = client(&bus).await;
+    let (client, sent) = client(&bus).await;
     let device = client.device(N).await.unwrap();
     assert!(device.follows());
     assert_eq!(device.address(), at(2));
+    let point = device.point("ai:1").unwrap();
+    assert_eq!(
+        point.device,
+        Target::Follows {
+            instance: N,
+            network: None
+        }
+    );
     let mut events = client.events();
-    let mut watch = client.watch([device.point("ai:1").unwrap()]).unwrap();
-    until(&mut watch, |u| u.state == State::Subscribed).await;
+    let mut watch = client.watch([point.clone()]).unwrap();
+    let first = until(&mut watch, |u| u.state == State::Subscribed).await;
+    assert_eq!(
+        (first.at, first.device, first.moved),
+        (at(2), Some(N), None)
+    );
     servers.push(server(bus.port(3), N, "new").await);
     bus.silence(2);
-    let update = until(&mut watch, |u| matches!(u.state, State::Gone { .. })).await;
-    assert_eq!(moved_to(&update), Some(&at(3)), "{update:?}");
+    let update = until(&mut watch, |u| {
+        assert!(!matches!(u.state, State::Gone { .. }), "{u:?}");
+        u.moved.is_some()
+    })
+    .await;
+    assert_eq!(update.point, point, "the same point");
+    let moved = update.moved.clone().unwrap();
+    assert_eq!(
+        (&moved.from, &moved.to, &update.at),
+        (&at(2), &at(3), &at(3))
+    );
+    assert!(moved.when.elapsed().is_ok());
     assert_eq!(
         events.try_recv().unwrap(),
         ClientEvent::Moved {
@@ -261,19 +284,39 @@ async fn a_following_device_that_moves_is_reported_by_the_hub() {
         }
     );
     assert_eq!(device.address(), at(3), "the handle moved too");
+    until(&mut watch, |u| u.state == State::Subscribed).await;
+    set(&servers[1], 42.0).await;
+    let update = until(&mut watch, |u| number(u) == Some(42.0)).await;
+    assert_eq!(
+        (update.at, update.moved.map(|m| m.to)),
+        (at(3), Some(at(3)))
+    );
     let mut again = client.watch([device.point("ai:1").unwrap()]).unwrap();
     let update = until(&mut again, |u| u.state == State::Subscribed).await;
-    assert_eq!(update.point.device, at(3));
+    assert_eq!((update.point, update.at), (point, at(3)));
     assert_eq!(servers[1].cov_counters().subscriptions_active, 1);
+    let before = subscribes(&sent, 2);
     drop((watch, again, device));
     settle().await;
+    assert_eq!(
+        servers[1].cov_counters().subscriptions_active,
+        0,
+        "cancelled"
+    );
+    assert_eq!(
+        subscribes(&sent, 2),
+        before,
+        "nothing cancelled at station 2"
+    );
+    bus.unsilence(2);
     stop(servers).await;
 }
 
-/// A following handle that moves for a request of its own tells the hub,
-/// which gives up the points at the old address without waiting for one of
-/// its own to fail, once the new address names the device and the old one,
-/// asked once more, doesn't answer (#2812).
+/// A following handle that moves for a request of its own (once the new
+/// address named the device to it) tells the hub, which takes the
+/// following point there without waiting for one of its own requests to
+/// fail, once the new address names the device to its own read and the old
+/// one, asked once more, doesn't answer (#2812, #2795).
 #[tokio::test(start_paused = true)]
 async fn a_handle_moving_for_its_own_request_tells_the_hub() {
     let bus = Bus::new();
@@ -291,8 +334,9 @@ async fn a_handle_moving_for_its_own_request_tells_the_hub() {
     tokio::time::sleep(Duration::from_secs(5)).await;
     assert!(device.read("ai:1 pv").await.is_ok());
     assert_eq!(device.address(), at(3));
-    let update = until(&mut watch, |u| matches!(u.state, State::Gone { .. })).await;
-    assert_eq!(moved_to(&update), Some(&at(3)), "{update:?}");
+    let update = until(&mut watch, |u| u.moved.is_some()).await;
+    assert_eq!(update.at, at(3), "{update:?}");
+    until(&mut watch, |u| u.state == State::Subscribed).await;
     drop((watch, device));
     settle().await;
     stop(servers).await;
@@ -322,7 +366,7 @@ async fn one_station_named_two_ways_is_one_point() {
     let device = client.device(at(2)).await.unwrap();
     let local = device.point("ai:1").unwrap();
     let routed = Point {
-        device: crate::DeviceAddress::new(1, &mac(2)).unwrap(),
+        device: Target::At(crate::DeviceAddress::new(1, &mac(2)).unwrap()),
         ..local.clone()
     };
     assert_ne!(local, routed, "two ways of writing it");
@@ -379,7 +423,7 @@ async fn a_quiet_duplicate_aged_out_is_no_move() {
         u.point == points[0] && u.state == State::Subscribed
     })
     .await;
-    assert_eq!(back.point.device, at(2));
+    assert_eq!(back.at, at(2));
     drop((watch, two, three));
     settle().await;
     stop(servers).await;

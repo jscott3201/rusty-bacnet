@@ -502,6 +502,8 @@ property, or an element, by SubscribeCOVProperty.
 ```python
 async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
     async for update in watch:
+        if update.moved is not None:
+            print("followed to", update.moved.to, "from", update.moved.from_)
         if update.state == "gone":
             print(update.object_id, "given up:", update.why)
         elif update.value is not None:
@@ -526,9 +528,10 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
   point's state. A consumer that falls behind gets one update a point with
   its latest value and state, never a queue of old ones: `.folded` counts
   the changes folded away.
-- `await watch.add(points)` watches more points at the watch's address
-  (resolving to how many were new: a point held already is left as it
-  is), and `await watch.remove(points)` stops watching some (resolving to
+- `await watch.add(points)` watches more points of the watch's device,
+  at its address or following it as the watch does (resolving to how many
+  were new: a point held already is left as it is), and
+  `await watch.remove(points)` stops watching some (resolving to
   how many it held), both while another task iterates. Once `remove` has
   run, no step begun after hands out a removed point, an update already
   waiting included; a step already waiting may still get one it had
@@ -561,12 +564,23 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
   retries, or for a client from `endpoint.client()` the endpoint's
   `apdu_timeout_ms` and `apdu_retries` (#2603). At the default 6 s that is
   48 s before a five-minute lifetime ends.
-- The points are at the device's address now. A following handle whose
-  device moves later is reported (`why.kind == "moved"`, `why.to`) rather
-  than followed: watch again from the handle, which has moved. Another
-  device answering at the address is reported (`"replaced"`, with
-  `why.watched` and `why.found`), and nothing from it is ever taken for
-  the point; the point comes back if its device answers there again.
+- A handle made from an instance (`ahu.follows`) makes a watch that
+  follows its device (`watch.follows`, #2795). Once the watch's own reads
+  find the device at another address (the device there names itself so)
+  and its old address no longer answers as it, the points move there:
+  each update says so (`.moved`, a `WatchMove` with `.from_`, `.to` and
+  `.timestamp`) and where the point is watched (`.address`); the move's
+  own update is `"starting"`, then values come from the new address. An
+  I-Am, or a handle that moved, only has the watch check; two addresses
+  answering as the device move nothing. While another device answers at
+  its address the points are `"unreachable"` (`why.kind == "replaced"`),
+  never taken for it, as the watch looks for its device.
+- A handle made from an address watches that address. A device that moves
+  away is reported (`"gone"`, `why.kind == "moved"`, `why.to`): watch it
+  there, or from a handle made from its instance. Another device answering
+  at the address is reported (`"gone"`, `"replaced"`, with `why.watched`
+  and `why.found`), and nothing from it is ever taken for the point; the
+  point comes back if its device answers there again.
 - Cancelling a step loses no update: one on its way when the cancel
   landed comes first next time. Concurrent steps complete one at a time,
   each with the next update.
@@ -577,7 +591,8 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
   raises on a stopped client, `BacnetLookupError` for a following handle
   whose device can't be placed, and `RuntimeError` past 256 settings.
   Nothing is sent until the watch starts.
-- `.address`, `.points` (`(object, property, array_index)` tuples, added
+- `.address` (where the device answered when the watch was made),
+  `.follows`, `.points` (`(object, property, array_index)` tuples, added
   ones last), `.lifetime`, `.poll_interval`, `.subscribe`, `.folded`,
   `.closed`, `len()`.
 
@@ -586,9 +601,11 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `.address` | `str` | Where the point's device answers, as `device()` reads back |
+| `.address` | `str` | Where the point is watched now, as `device()` reads back: for a following watch, where its device answers now |
+| `.device` | `int \| None` | The device's instance, when known |
+| `.moved` | `WatchMove \| None` | A following watch's latest move (`.from_`, `.to`, `.timestamp`); None before any, and for a watch of one address |
 | `.object_id`, `.property_id`, `.array_index` | `ObjectIdentifier`, `PropertyIdentifier`, `int \| None` | The point: Present_Value for one named by its object alone |
-| `.state` | `str` | `"starting"`, `"subscribed"`, `"polled"`, `"unreachable"` or `"gone"` |
+| `.state` | `str` | `"starting"`, `"subscribed"`, `"polled"`, `"unreachable"` or `"gone"` (a watch of one address only) |
 | `.why` | `WatchReason \| None` | Why the point isn't subscribed; None while it is, or while starting |
 | `.value` | `Value \| None` | The value as last read or notified; its text names the units or the state |
 | `.error` | `BacnetError \| None` | Why the latest read gave no value, unraised; with `.value` set too, that value is an earlier one |
@@ -610,8 +627,15 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
 | `"lapsed"` | `.error` (or None) | A renewal failed; asked again after a backoff |
 | `"missing"` | | No router to the device's remote network is known |
 | `"foreign-sender"` | `.sender` | Its notifications name device `sender`, which can't be told from another device at the address; polled |
-| `"moved"` | `.to` | The device answers at `to` now: the point is given up |
-| `"replaced"` | `.watched`, `.found` | Device `found` answers at the address now, not `watched`: the point is given up |
+| `"moved"` | `.to` | The device answers at `to` now: a watch of one address gives the point up |
+| `"replaced"` | `.watched`, `.found` | Device `found` answers at the address now, not `watched`: a watch of one address gives the point up; a following watch is `"unreachable"` while it looks for its device |
+
+#### `WatchMove`
+
+Where a following watch's device moved, as the watch took it: `.from_`
+(where it answered before; `from` is a keyword), `.to` (where it answers
+now) and `.timestamp` (POSIX seconds). Addresses read as `device()` reads
+them back.
 
 ### Writing
 

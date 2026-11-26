@@ -305,35 +305,46 @@ async fn a_replaced_point_is_moved_once_its_device_turns_up_elsewhere() {
 }
 
 /// A watch made through a following handle, whose device moved to station
-/// 3 while another device took station 2: the point is reported moved
-/// there, the handle follows it, and the point watched again from the
-/// handle is subscribed at station 3. The watch itself stays at its
-/// address, as the handle's points are made there (`Device::point`).
+/// 3 while another device took station 2 (#2795): the point, unreachable
+/// while the hub looks for its device, follows it there once the hub's
+/// read names it, the handle with it; nothing of the device now at station
+/// 2 is taken, and nothing is subscribed or cancelled there. The point
+/// watched again from the handle is the same point.
 #[tokio::test(start_paused = true)]
-async fn a_following_watch_whose_address_was_taken_reports_the_move() {
+async fn a_following_watch_whose_address_was_taken_follows_the_device() {
     let bus = Bus::new();
     let old = server(bus.port(2), N, "old").await;
-    let (client, _sent) = client(&bus).await;
+    let (client, sent) = client(&bus).await;
     let device = client.device(N).await.unwrap();
     assert!(device.follows());
-    let mut watch = client.watch([device.point("ai:1").unwrap()]).unwrap();
+    let point = device.point("ai:1").unwrap();
+    let mut watch = client.watch([point.clone()]).unwrap();
     until(&mut watch, |u| u.state == State::Subscribed).await;
     stop(vec![old]).await;
     let moved = server(bus.port(3), N, "moved").await;
     bus.i_am(3, N);
     let taker = server(bus.port(2), N + 1, "taker").await;
+    let cov = bacnet_types::enums::ConfirmedServiceChoice::SUBSCRIBE_COV;
+    let before = crate::device::test_bus::requests(&sent, cov, 2);
     bus.i_am(2, N + 1);
     let update = until(&mut watch, |u| {
-        matches!(gone_for(u), Some(Why::Moved { .. }))
+        assert!(!matches!(u.state, State::Gone { .. }), "{u:?}");
+        u.moved.is_some()
     })
     .await;
-    assert_eq!(gone_for(&update), Some(&Why::Moved { to: at(3) }));
+    assert_eq!(update.point, point);
+    assert_eq!(update.at, at(3));
     assert_eq!(device.address(), at(3), "the handle followed it");
     let mut again = client.watch([device.point("ai:1").unwrap()]).unwrap();
     let update = until(&mut again, |u| u.state == State::Subscribed).await;
-    assert_eq!(update.point.device, at(3));
-    assert_eq!(moved.cov_counters().subscriptions_active, 1);
+    assert_eq!((update.point, update.at), (point, at(3)));
+    assert_eq!(moved.cov_counters().subscriptions_active, 1, "one point");
     assert_eq!(taker.cov_counters().subscriptions_active, 0);
+    assert_eq!(
+        crate::device::test_bus::requests(&sent, cov, 2),
+        before,
+        "nothing subscribed or cancelled at station 2"
+    );
     drop((watch, again, device));
     settle().await;
     stop(vec![moved, taker]).await;

@@ -24,7 +24,7 @@ use bacnet_client::client::{
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::{Error, RemoteError};
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::ObjectIdentifier;
 
 use super::hub::Inner;
 use super::hub::first::first_read;
@@ -33,7 +33,9 @@ use super::shared::Shared;
 use super::support::{CovSupport, fills_table, refuses_service};
 use super::{Point, Watched};
 use crate::client::batch::{self, BatchRow, Missing};
-use crate::client::{device_error, failed_locally, timed_out, unreachable};
+use crate::client::{device_error, failed_locally, unreachable};
+pub(super) use crate::device::Answer;
+use crate::device::confirm::{left_silence, named, silence};
 use crate::device::{DeviceAddress, path_to};
 use crate::format::{PropertyError, RawRow};
 
@@ -117,9 +119,10 @@ pub(super) fn poll_row(reads: &Reads, process: u32, point: &Point) -> BatchRow<u
 pub(super) async fn start<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     shared: Arc<Shared>,
+    address: DeviceAddress,
 ) -> Started {
     let (process, point) = (shared.process, &shared.point);
-    let address = &point.device;
+    let address = &address;
     let client = &inner.client;
     let said = client.said(address);
     let before = match said {
@@ -153,12 +156,22 @@ pub(super) async fn start<T: TransportPort + 'static>(
     // The point's device, from what answered at its address, unless an
     // answer named it already or the device refused that read before.
     let unknown = shared.confirmed().is_none() && !client.wildcard_refused(address);
+    // A following point's device is its own instance (#2795): the table's
+    // row names nothing of the device there, so it is asked, once an
+    // address, unless it said which it is already.
+    let follows = point.device.instance();
+    let ask = before.is_none() || (follows.is_some() && said.is_none());
     let (before, vouched) = match before {
-        None if unknown && first.is_ok() => (client.ask_instance(address).await.ok(), true),
+        _ if ask && unknown && first.is_ok() => (client.ask_instance(address).await.ok(), true),
         known => (known, said.is_some()),
     };
+    // The device here named another instance: no subscription of a
+    // following point is asked of it.
+    let elsewhere = vouched && follows.is_some_and(|own| before.is_some_and(|said| said != own));
     let (outcome, observed, cov) = if first.as_ref().is_err_and(unreachable) {
         // Subscribing would only time out too.
+        (Outcome::NotAsked, None, known)
+    } else if elsewhere {
         (Outcome::NotAsked, None, known)
     } else if !inner.options.subscribe {
         (Outcome::PollOnly, None, known)
@@ -328,21 +341,6 @@ fn identity_row() -> BatchRow<u32> {
     }
 }
 
-/// The instance `rows` (an identity row's answer) name, if they name one.
-fn named(rows: &[RawRow]) -> Option<u32> {
-    let (_, raw) = rows
-        .iter()
-        .find(|(p, _)| *p == PropertyIdentifier::OBJECT_IDENTIFIER)?;
-    match crate::format::decode_all(raw.as_ref().ok()?).as_deref() {
-        Some([PropertyValue::ObjectIdentifier(device)])
-            if device.object_type() == ObjectType::DEVICE =>
-        {
-            Some(device.instance_number())
-        }
-        _ => None,
-    }
-}
-
 impl Polled {
     /// The device stopped answering: the poll gave up on the rows left.
     pub(super) fn unreachable(&self) -> bool {
@@ -425,25 +423,6 @@ pub(super) async fn verify<T: TransportPort + 'static>(
     inner.client.instance_at(&address).await
 }
 
-/// What the device at an address said of itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Answer {
-    /// It named itself this instance, read by the wildcard instance.
-    Is(u32),
-    /// It has this Device object, read by its instance: no proof of which
-    /// device it is, as a gateway may answer for any instance.
-    Has(u32),
-    /// It has no Device object of the instance asked for.
-    Not,
-    /// It answered with another error, which says neither.
-    Unclear,
-    /// The client's own failure (a request never sent, or cut short):
-    /// nothing from the device.
-    Failed,
-    /// It didn't answer.
-    Silent,
-}
-
 /// Ask the device at `address` which instance it is (#2603): one
 /// ReadProperty of its Device object's Object_Identifier by the wildcard
 /// instance, or, for a device that refused that before, of `watched`'s
@@ -454,7 +433,7 @@ pub(super) async fn confirm<T: TransportPort + 'static>(
     address: DeviceAddress,
     watched: u32,
 ) -> Answer {
-    confirm_by(inner, address, watched, silence).await
+    inner.client.which_at(&address, watched, silence).await
 }
 
 /// [`confirm`], asked whether device `watched` is still at `address` now
@@ -465,28 +444,7 @@ pub(super) async fn still_there<T: TransportPort + 'static>(
     address: DeviceAddress,
     watched: u32,
 ) -> Answer {
-    confirm_by(inner, address, watched, left_silence).await
-}
-
-/// [`confirm`], with `quiet` saying which errors are no answer.
-async fn confirm_by<T: TransportPort + 'static>(
-    inner: Arc<Inner<T>>,
-    address: DeviceAddress,
-    watched: u32,
-    quiet: fn(&Error) -> Option<Answer>,
-) -> Answer {
-    let client = &inner.client;
-    if !client.wildcard_refused(&address) {
-        match client.ask_instance(&address).await {
-            Ok(instance) => return Answer::Is(instance),
-            Err(error) => {
-                if let Some(answer) = quiet(&error) {
-                    return answer;
-                }
-            }
-        }
-    }
-    probe_by(inner, address, watched, quiet).await
+    inner.client.which_at(&address, watched, left_silence).await
 }
 
 /// The instance the device at `address` names itself, read by the
@@ -511,60 +469,7 @@ pub(super) async fn probe<T: TransportPort + 'static>(
     address: DeviceAddress,
     instance: u32,
 ) -> Answer {
-    probe_by(inner, address, instance, silence).await
-}
-
-/// [`probe`], with `quiet` saying which errors are no answer.
-async fn probe_by<T: TransportPort + 'static>(
-    inner: Arc<Inner<T>>,
-    address: DeviceAddress,
-    instance: u32,
-    quiet: fn(&Error) -> Option<Answer>,
-) -> Answer {
-    let Ok(device) = ObjectIdentifier::new(ObjectType::DEVICE, instance) else {
-        return Answer::Unclear;
-    };
-    let property = PropertyIdentifier::OBJECT_IDENTIFIER;
-    let reader = inner.client.reader(&address, Some(instance));
-    match reader
-        .rp(device, property, None)
-        .await
-        .map_err(device_error)
-    {
-        Ok(raw) => named(&[(property, Ok(raw))]).map_or(Answer::Unclear, Answer::Has),
-        Err(error) => quiet(&error).unwrap_or(match error.remote() {
-            Some(RemoteError::Error { code, .. }) if code == ErrorCode::UNKNOWN_OBJECT => {
-                Answer::Not
-            }
-            _ => Answer::Unclear,
-        }),
-    }
-}
-
-/// The answer `error` makes when the device said nothing: none, or the
-/// client's own failure, which says nothing of it.
-fn silence(error: &Error) -> Option<Answer> {
-    if unreachable(error) {
-        Some(Answer::Silent)
-    } else if failed_locally(error) {
-        Some(Answer::Failed)
-    } else {
-        None
-    }
-}
-
-/// [`silence`] for whether a device left its address: only the request
-/// timing out is its silence. A router's reject (which anyone on a routed
-/// path can send), the link failing the send, or another of the client's
-/// own failures says nothing of the device ([`Answer::Failed`]).
-pub(super) fn left_silence(error: &Error) -> Option<Answer> {
-    if timed_out(error) {
-        Some(Answer::Silent)
-    } else if unreachable(error) || failed_locally(error) {
-        Some(Answer::Failed)
-    } else {
-        None
-    }
+    inner.client.has_device(&address, instance, silence).await
 }
 
 /// A device's Time_Of_Device_Restart, as read.
@@ -616,14 +521,14 @@ pub(super) async fn restart_time<T: TransportPort + 'static>(
 pub(super) async fn cancel<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     process: u32,
-    point: Point,
+    (point, address): (Point, DeviceAddress),
     target: Station,
     managed: Option<ManagedCOVSubscription>,
 ) -> bool {
     let client = inner.client.low_level();
     let limits = inner.client.limits();
     let cancel = async {
-        let _turn = limits.turn(&point.device).await;
+        let _turn = limits.turn(&address).await;
         if let Some(managed) = managed {
             managed.stop().await;
         }
@@ -656,10 +561,10 @@ pub(super) async fn cancel<T: TransportPort + 'static>(
     }
 }
 
-/// Where the device last at `address`, claiming `instance`, answers now,
-/// after a request there went unanswered (see
-/// [`Client::relocated`](crate::Client)); `None` while it may still be
-/// there.
+/// Where the device last at `address`, claiming `instance`, may answer
+/// now, after a request there went unanswered (see
+/// [`Client::relocated`](crate::Client)): a candidate, which moves no
+/// handle; `None` while it may still be there.
 pub(super) async fn locate<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     address: DeviceAddress,

@@ -185,6 +185,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<watch::PyWatch>()?;
     m.add_class::<watch_update::PyWatchUpdate>()?;
     m.add_class::<watch_update::PyWatchReason>()?;
+    m.add_class::<watch_update::PyWatchMove>()?;
     errors::register(m)
 }
 

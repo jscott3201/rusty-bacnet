@@ -19,10 +19,13 @@
 //! application does takes a [`Watch`] from its hub
 //! ([`Hub::stream`](hub::Hub::stream)).
 //!
-//! A point names its device by address: the hub keys its entries, its
-//! per-device schedulers and its subscriptions' targets on it, so two
-//! devices sharing an instance are two devices, and one announcing itself
-//! again at its address keeps its entries. Each point is read once, then
+//! A point names its device by address or by instance ([`Target`]): a
+//! pinned handle's points are at its address, a following handle's follow
+//! its instance (#2795). The hub keys its entries on the point, and runs
+//! one scheduler a device address, which a following point is handed to
+//! when its device moves; so two devices sharing an instance, each named by
+//! its address, are two devices, and one announcing itself again at its
+//! address keeps its entries. Each point is read once, then
 //! subscribed for a finite lifetime (SubscribeCOV for an object,
 //! SubscribeCOVProperty for one property) through the client's managed
 //! subscriptions, which renew it before it lapses. Points the device won't
@@ -66,11 +69,10 @@
 //! fails; a point whose renewal failed goes to the next poll), the
 //! scheduler asks where its instance went: the one other address
 //! claiming it when the row at the address names another instance now, or
-//! where a following handle moved by its own rule (re-resolving after a
-//! timeout, at most one Who-Is every [`QUIET`](crate::device::QUIET)).
+//! where a following handle's rule would take it (after a timeout, at most
+//! one Who-Is every [`QUIET`](crate::device::QUIET)), moving no handle.
 //! That address, or one a following handle moved to for a request of its
-//! own (on the discovery table's rows, which I-Ams nobody asked for fill),
-//! is only a cue (#2812): the device there is asked which it is, by one
+//! own, is only a cue (#2812): the device there is asked which it is, by one
 //! read of its Device object by the wildcard instance, paced as a claim's
 //! asks, and the points are given up as moved ([`Why::Moved`]) only when
 //! that answer names their instance and the device is gone from their
@@ -85,8 +87,21 @@
 //! stick: a point started there later starts as any other, and the
 //! given-up points start again once the address announces itself for the
 //! instance, or answers a start while the discovery table names it there.
-//! The hub doesn't follow a device to its new address; watch the point
-//! there.
+//! A pinned point stays given up; watch it at the new address, or follow
+//! the instance.
+//!
+//! A following point is never given up for a move: on the same answers
+//! the hub hands it, with its subscriber process identifier and its
+//! values, to the scheduler at the new address, which reads and subscribes
+//! it there; its [`Update::moved`] says where it went, and the client's
+//! handles following the instance move with it. Its renewals at the old
+//! address stop and nothing is cancelled there (the device there is
+//! another or silent), so that subscription lapses with its lifetime.
+//! While another device answers at its address a following point is
+//! unreachable ([`Why::Replaced`]) as the hub looks for its device. The
+//! hub follows each instance from one place, so following points added
+//! meanwhile start where it follows the device then, and a move it took
+//! takes them all.
 //!
 //! Lifetimes are finite by construction ([`hub::Lifetime`] can't be zero)
 //! and at most eight hours, the longest every device must take: a
@@ -105,11 +120,12 @@ mod pooled;
 mod sample;
 mod settings;
 mod shared;
+mod slot;
 mod stream;
 mod support;
 
 pub use self::control::WatchControl;
-pub use self::point::{Point, Watched, Why};
+pub use self::point::{Moved, Point, Target, Watched, Why};
 pub use self::sample::Via;
 pub(crate) use self::settings::Pool;
 pub use self::settings::WatchSettings;
@@ -153,6 +169,26 @@ pub enum WatchError {
     /// ([`WatchControl::close`]), its stream ended, or its hub shut down.
     /// A [`WatchControl`] of it can no longer change it.
     Closed,
+    /// A following point's device can't be found (#2795): no handle on the
+    /// client follows its instance and no address claims it in the
+    /// discovery table, on its network when it names one. Make a handle on
+    /// the device first ([`Client::device`](crate::Client::device)), which
+    /// asks for it.
+    UnknownDevice {
+        /// The instance.
+        instance: u32,
+        /// The network named, if any.
+        network: Option<u16>,
+    },
+    /// Two or more addresses claim a following point's instance in the
+    /// discovery table, and no handle on the client follows it (#2795):
+    /// name the device by one of them.
+    Ambiguous {
+        /// The instance.
+        instance: u32,
+        /// Every address claiming it.
+        claims: Vec<crate::DeviceAddress>,
+    },
 }
 
 impl std::fmt::Display for WatchError {
@@ -172,6 +208,22 @@ impl std::fmt::Display for WatchError {
                  first"
             ),
             Self::Closed => f.write_str("the watch has ended"),
+            Self::UnknownDevice {
+                instance,
+                network: Some(network),
+            } => write!(f, "no address claims device {network}:{instance}"),
+            Self::UnknownDevice { instance, .. } => {
+                write!(f, "no address claims device {instance}")
+            }
+            Self::Ambiguous { instance, claims } => {
+                let claims: Vec<String> = claims.iter().map(ToString::to_string).collect();
+                write!(
+                    f,
+                    "device {instance} is claimed by {} addresses ({}): name it by one",
+                    claims.len(),
+                    claims.join(", ")
+                )
+            }
         }
     }
 }
@@ -184,6 +236,8 @@ mod asked_tests;
 mod claimants_tests;
 #[cfg(test)]
 mod control_tests;
+#[cfg(test)]
+mod follow_tests;
 #[cfg(test)]
 mod identity_tests;
 #[cfg(test)]

@@ -45,9 +45,13 @@
 //! that one. So forged cues can hold a real move's read to one a lifetime,
 //! or take its slot; the scheduler's own look after each unanswered poll
 //! cues the real address again. A handle that moved stays where it moved,
-//! whatever the reads find, and the hub's own look ([`Client::relocated`])
-//! still moves a following handle before anything is read there (for the
-//! hub that follows devices, #2795).
+//! whatever the reads find; the hub's own look ([`Client::relocated`])
+//! moves no handle, but a move the reads bore out takes the handles
+//! following the instance with the hub's following points (#2795).
+//!
+//! When the reads bear a move out, the pinned points are given up
+//! ([`Why::Moved`]) and the following ones go to the new address
+//! ([`follow`](super::follow)).
 //!
 //! [`Client::relocated`]: crate::Client
 
@@ -57,9 +61,9 @@ use std::sync::Arc;
 use bacnet_transport::port::TransportPort;
 use tokio::time::Instant;
 
-use super::super::Why;
 use super::super::hub::Phase;
 use super::super::jobs::{self, Answer};
+use super::super::{Target, Why};
 use super::identity::{Pace, give_up};
 use super::{Device, Done, Job, Mode, Op, Row};
 use crate::device::DeviceAddress;
@@ -112,6 +116,18 @@ fn goes(row: &Row, instance: u32) -> bool {
         _ => true,
     };
     theirs && live && !row.removing
+}
+
+/// Whether `row` follows the device of `instance` (#2795) on a network
+/// `to` is on: its watch goes there when the device does.
+fn follows_to(row: &Row, instance: u32, to: &DeviceAddress) -> bool {
+    match row.shared.point.device {
+        Target::Follows {
+            instance: followed,
+            network,
+        } => followed == instance && network.is_none_or(|network| network == to.network()),
+        Target::At(_) => false,
+    }
 }
 
 /// Whether `row` is a watched point of the device of `instance` (or of no
@@ -322,28 +338,46 @@ impl<T: TransportPort + 'static> Device<T> {
     }
 
     /// The device of `instance` answers at `to` now, as answers there and
-    /// at the address showed: give its points up (those of another instance
-    /// stay), stopping their renewals and sending nothing more for them,
-    /// each noting the instance it was given up for; a point given up for
-    /// that instance already, its address taken by another device, now says
-    /// where it went.
+    /// at the address showed. Its pinned points are given up (those of
+    /// another instance stay), stopping their renewals and sending nothing
+    /// more for them, each noting the instance it was given up for; a point
+    /// given up for that instance already, its address taken by another
+    /// device, now says where it went. Its following points go to `to`
+    /// ([`follow`](super::follow)). No start runs now: the scheduler runs
+    /// one job at a time, and this is another's end.
     fn moved(&mut self, instance: u32, to: DeviceAddress) {
         tracing::info!(
-            "device {instance} at {} answers at {to} now; its watches stop",
+            "device {instance} at {} answers at {to} now; its pinned watches stop and its \
+             following ones go there",
             self.address
         );
         let seq = &self.inner.registry.seq;
         let note = format!("the device answers at {to} now; watch it there");
         let mut gone = Vec::new();
+        let mut going = Vec::new();
+        let mut keys = Vec::new();
         for (process, row) in &mut self.rows {
-            if goes(row, instance) {
+            if !goes(row, instance) {
+                continue;
+            }
+            if follows_to(row, instance, &to) {
+                going.push(*process);
+                if let Target::Follows { instance, network } = row.shared.point.device {
+                    keys.push(self.inner.client.key(network, instance));
+                }
+            } else {
                 let why = Why::Moved { to: to.clone() };
                 give_up(row, why, note.clone(), seq, instance);
                 gone.push(*process);
             }
         }
-        self.ops
-            .retain(|op| !matches!(op, Op::Start(process) if gone.contains(process)));
+        self.ops.retain(|op| {
+            !matches!(op, Op::Start(process) if gone.contains(process) || going.contains(process))
+        });
+        keys.sort_unstable();
+        keys.dedup();
+        self.follow_moved(keys, &to);
+        self.hand_over(going, &to);
     }
 }
 

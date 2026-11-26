@@ -5,7 +5,11 @@
 //!
 //! Each row holds a lease on its point and reads the point's sample stream,
 //! so every value reaches the row's history and the CSV log, whatever the
-//! hub folds together. [`run`] is polled beside the session loop under
+//! hub folds together. A row names its device by instance, so its point
+//! follows the instance (#2795): the hub watches it where the device
+//! answers, and moves it, row and all, once its own reads say the device
+//! went elsewhere; the list is told in a notice. [`run`] is polled beside
+//! the session loop under
 //! `join!`, like the browser, and its loop's arms never await. When the
 //! session ends it shuts the hub down, which cancels every subscription
 //! (Clauses 13.14.2 and 13.15.2), waiting at most [`CANCEL_WAIT`] for the
@@ -23,10 +27,11 @@ use std::time::Duration;
 
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::limits::RequestLimits;
+use bacnet_ops::target::AddressStyle;
 use bacnet_ops::watch::hub::{
     self, Backoff, Hub, Lease, Lifetime, MissingDevice, Reads, Samples, Snapshot,
 };
-use bacnet_ops::watch::{Point as WatchPoint, Watched, Why};
+use bacnet_ops::watch::{Moved, Point as WatchPoint, Target, Watched, Why};
 use bacnet_ops::{Client, DeviceAddress};
 use bacnet_transport::port::TransportPort;
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -113,10 +118,10 @@ pub(crate) fn hub_options(options: &WatchOptions) -> hub::WatchOptions {
     }
 }
 
-/// A row's point as the hub watches it, at its device's address `at`:
-/// Present_Value by SubscribeCOV on the object, any other property by
-/// SubscribeCOVProperty.
-pub(crate) fn hub_point(point: &Point, at: DeviceAddress) -> WatchPoint {
+/// A row's point as the hub watches it, following its device's instance
+/// on the row's network (#2795): Present_Value by SubscribeCOV on the
+/// object, any other property by SubscribeCOVProperty.
+pub(crate) fn hub_point(point: &Point) -> WatchPoint {
     let watched = if point.whole_object() {
         Watched::Object
     } else {
@@ -126,7 +131,10 @@ pub(crate) fn hub_point(point: &Point, at: DeviceAddress) -> WatchPoint {
         }
     };
     WatchPoint {
-        device: at,
+        device: Target::Follows {
+            instance: point.device,
+            network: point.network,
+        },
         object: point.object,
         watched,
     }
@@ -165,6 +173,8 @@ struct Row {
     dropped: u64,
     /// Whether its start was over at the last tick.
     started: bool,
+    /// The device's latest move the row was told of.
+    moved: Option<Moved>,
     /// Writes its values out with the format of its first read.
     writer: Writer,
 }
@@ -175,6 +185,8 @@ struct State<'s, T: TransportPort + 'static> {
     sink: &'s EventSink,
     options: &'s WatchOptions,
     hub: Hub<T>,
+    /// How the link writes addresses, for the notices.
+    style: AddressStyle,
     rows: BTreeMap<RowId, Row>,
     /// Notifications the hub's receiver had lost at the last tick.
     lagged: u64,
@@ -211,12 +223,12 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
             self.source(id, Source::Failed(format!("at most {MAX_ROWS} rows")));
             return;
         }
-        let Some(at) = at else {
+        if at.is_none() {
             let missing = format!("device {} is not in the device table", point.device);
             self.source(id, Source::Failed(missing));
             return;
-        };
-        match self.hub.watch(hub_point(&point, at)) {
+        }
+        match self.hub.watch(hub_point(&point)) {
             Ok(lease) => {
                 let samples = lease.samples();
                 self.rows.insert(
@@ -228,6 +240,7 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
                         source: Source::Starting,
                         dropped: 0,
                         started: false,
+                        moved: None,
                         writer: Writer::new(point),
                     },
                 );
@@ -272,8 +285,25 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
         let lifetime = self.options.lifetime;
         let mut samples = Vec::new();
         let mut gone = Vec::new();
+        let mut moves = Vec::new();
         for (&id, row) in &mut self.rows {
             let snapshot = row.lease.snapshot();
+            if snapshot.moved != row.moved {
+                row.moved.clone_from(&snapshot.moved);
+                if let Some(moved) = &snapshot.moved {
+                    tracing::info!(
+                        "watch row {id}: device {} answers at {} now, moved from {}",
+                        row.point.device_label(),
+                        moved.to.styled(self.style),
+                        moved.from.styled(self.style)
+                    );
+                    let (from, to) = (moved.from.styled(self.style), moved.to.styled(self.style));
+                    let notice = (row.point.device_label(), from, to);
+                    if !moves.contains(&notice) {
+                        moves.push(notice);
+                    }
+                }
+            }
             let polled = snapshot.source == Some(hub::Source::Poll);
             let mut taken = Taken::default();
             while let Some(sample) = row.samples.try_next() {
@@ -328,6 +358,11 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
         }
         for id in gone {
             self.remove(id);
+        }
+        for (device, from, to) in moves {
+            self.outbox.push_back(WatchEvent::Notice(format!(
+                "Device {device} moved from {from} to {to}; its watch rows follow it."
+            )));
         }
         if !samples.is_empty() {
             samples.sort_by_key(|(_, sample)| sample.at);
@@ -390,26 +425,28 @@ fn csv_line(point: &Point, written: &Written) -> String {
     )
 }
 
-/// The watch list's hub over `client`. The session makes it before the
-/// MCP listener's, so it takes the client's first range of subscriber
-/// process identifiers whatever order the workers start in (#2185).
+/// The watch list's hub over `client`, with how its link writes
+/// addresses. The session makes it before the MCP listener's, so it takes
+/// the client's first range of subscriber process identifiers whatever
+/// order the workers start in (#2185).
 pub(crate) fn hub<T: TransportPort + 'static>(
     client: &Client<T>,
     options: &WatchOptions,
-) -> Result<Hub<T>, String> {
-    Hub::new(client.clone(), hub_options(options)).map_err(|error| error.to_string())
+) -> Result<(Hub<T>, AddressStyle), String> {
+    let hub = Hub::new(client.clone(), hub_options(options)).map_err(|error| error.to_string())?;
+    Ok((hub, client.address_style()))
 }
 
 /// Serve watch commands on `hub` until `commands` closes or the session
 /// is cancelled, then shut the hub down, cancelling every subscription.
 pub(crate) async fn run<T: TransportPort + 'static>(
-    hub: Result<Hub<T>, String>,
+    hub: Result<(Hub<T>, AddressStyle), String>,
     sink: &EventSink,
     mut commands: mpsc::Receiver<Command>,
     rate: &Arc<RequestLimits>,
     options: &WatchOptions,
 ) {
-    let hub = match hub {
+    let (hub, style) = match hub {
         Ok(hub) => hub,
         Err(error) => {
             tracing::error!("the watch list can't start: {error}");
@@ -420,6 +457,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         sink,
         options,
         hub,
+        style,
         rows: BTreeMap::new(),
         lagged: 0,
         csv: None,

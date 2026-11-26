@@ -1,12 +1,12 @@
-//! [`PyWatchUpdate`] and [`PyWatchReason`]: what a `Watch` hands out
-//! (#2561), one `bacnet-ops` watch [`Update`] decoded for Python: the
-//! point, its latest value, and how its watch goes, with the reason when
-//! it isn't subscribed.
+//! [`PyWatchUpdate`], [`PyWatchReason`] and [`PyWatchMove`]: what a
+//! `Watch` hands out (#2561), one `bacnet-ops` watch [`Update`] decoded for
+//! Python: the point, its latest value, how its watch goes, with the reason
+//! when it isn't subscribed, and where a followed device moved (#2795).
 
 use bacnet_ops::format::{Floats, StateTexts, ValueFormat};
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::target::AddressStyle;
-use bacnet_ops::watch::{Mark, State, Update, Via, Why};
+use bacnet_ops::watch::{Mark, Moved, State, Update, Via, Why};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, StatusFlags};
 use pyo3::prelude::*;
@@ -61,6 +61,8 @@ fn via_name(via: Via) -> &'static str {
 #[pyclass(name = "WatchUpdate", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyWatchUpdate {
     address: String,
+    device: Option<u32>,
+    moved: Option<Py<PyWatchMove>>,
     object: ObjectIdentifier,
     property: PropertyIdentifier,
     index: Option<u32>,
@@ -82,7 +84,12 @@ impl PyWatchUpdate {
     pub(super) fn new(py: Python<'_>, update: &Update, style: AddressStyle) -> PyResult<Self> {
         let object = update.point.object;
         let (property, index) = update.point.property();
-        let address = update.point.device.styled(style);
+        let address = update.at.styled(style);
+        let moved = update
+            .moved
+            .as_ref()
+            .map(|moved| Py::new(py, PyWatchMove::new(moved, style)))
+            .transpose()?;
         let (state, why) = state_name(&update.state);
         let why = why
             .map(|why| Py::new(py, PyWatchReason::new(why, &address, style)))
@@ -110,6 +117,8 @@ impl PyWatchUpdate {
             .transpose()?;
         Ok(Self {
             address,
+            device: update.device,
+            moved,
             object,
             property,
             index,
@@ -133,11 +142,32 @@ impl PyWatchUpdate {
 
 #[pymethods]
 impl PyWatchUpdate {
-    /// Where the point's device answers, as text `BACnetClient.device`
-    /// reads back: the watch's address.
+    /// Where the point is watched now, as text `BACnetClient.device`
+    /// reads back: the watch's address, or, for a watch that follows its
+    /// device, where the device answers now.
     #[getter]
     fn address(&self) -> &str {
         &self.address
+    }
+
+    /// The device's instance, when known: the one a following watch
+    /// follows, else the one the device at the address named, or the
+    /// discovery table's.
+    #[getter]
+    fn device(&self) -> Option<u32> {
+        self.device
+    }
+
+    /// For a watch that follows its device: the latest move the watch took,
+    /// a `WatchMove` (it watches the point at `moved.to`, which is
+    /// `address`, since `moved.timestamp`); None before any move, and
+    /// always for a watch of one address. A consumer that falls behind sees
+    /// the latest move only: compare `timestamp` to tell a new one. The
+    /// update a move makes is `"starting"`, with the value read before;
+    /// values from the new address follow.
+    #[getter]
+    fn moved(&self, py: Python<'_>) -> Option<Py<PyWatchMove>> {
+        self.moved.as_ref().map(|moved| moved.clone_ref(py))
     }
 
     /// The object.
@@ -398,6 +428,59 @@ impl PyWatchReason {
 
     fn __repr__(&self) -> String {
         format!("WatchReason({}: {})", self.kind, self.text)
+    }
+
+    /// Refuses `copy` and `pickle`. See [`crate::types::not_picklable`].
+    fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {
+        Err(crate::types::not_picklable(slf.as_any()))
+    }
+}
+
+/// Where a followed device moved, as a watch took it (#2795): its own
+/// reads named the device at `to`, and its old address no longer answered
+/// as it. Frozen; refuses `copy` and `pickle`.
+#[pyclass(name = "WatchMove", module = "rusty_bacnet", frozen)]
+pub(crate) struct PyWatchMove {
+    from: String,
+    to: String,
+    timestamp: f64,
+}
+
+impl PyWatchMove {
+    /// `moved`, its addresses shown in `style`.
+    fn new(moved: &Moved, style: AddressStyle) -> Self {
+        Self {
+            from: moved.from.styled(style),
+            to: moved.to.styled(style),
+            timestamp: crate::frames::posix_seconds(moved.when),
+        }
+    }
+}
+
+#[pymethods]
+impl PyWatchMove {
+    /// Where the device answered before, as text `BACnetClient.device`
+    /// reads back. `from_`, as `from` is a keyword.
+    #[getter]
+    fn from_(&self) -> &str {
+        &self.from
+    }
+
+    /// Where it answers now, as text `BACnetClient.device` reads back.
+    #[getter]
+    fn to(&self) -> &str {
+        &self.to
+    }
+
+    /// When the watch took the move, as POSIX seconds by the wall clock, as
+    /// `time.time()`.
+    #[getter]
+    fn timestamp(&self) -> f64 {
+        self.timestamp
+    }
+
+    fn __repr__(&self) -> String {
+        format!("WatchMove({} -> {})", self.from, self.to)
     }
 
     /// Refuses `copy` and `pickle`. See [`crate::types::not_picklable`].
