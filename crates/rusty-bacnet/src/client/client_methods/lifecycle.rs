@@ -45,7 +45,10 @@ impl BACnetClient {
         router=None,
         write_policy=None,
         resolve_scope=None,
-        accept_complex_ack_for_simple_services=false
+        accept_complex_ack_for_simple_services=false,
+        watch_lifetime=300,
+        watch_poll_interval=10.0,
+        watch_subscribe=true
     ))]
     fn new(
         py: Python<'_>,
@@ -90,8 +93,16 @@ impl BACnetClient {
         write_policy: Option<PyRef<'_, crate::high_level::PyWritePolicy>>,
         resolve_scope: Option<Bound<'_, PyAny>>,
         accept_complex_ack_for_simple_services: bool,
+        #[pyo3(from_py_with = crate::high_level::watch_lifetime_arg)] watch_lifetime: u32,
+        #[pyo3(from_py_with = crate::high_level::watch_poll_arg)] watch_poll_interval: f64,
+        #[pyo3(from_py_with = crate::high_level::watch_subscribe_arg)] watch_subscribe: bool,
     ) -> PyResult<Self> {
         let resolve_scope = crate::high_level::resolve_scope_arg(resolve_scope.as_ref())?;
+        let watch_settings = crate::high_level::client_settings(
+            watch_lifetime,
+            watch_poll_interval,
+            watch_subscribe,
+        )?;
         let router = crate::router::application::stack_router(
             transport,
             router,
@@ -196,6 +207,7 @@ impl BACnetClient {
             min_request_interval_ms,
             write_policy: write_policy.map_or_else(Default::default, |policy| policy.0),
             resolve_scope,
+            watch_settings,
             accept_complex_ack_for_simple_services,
         })
     }
@@ -243,6 +255,7 @@ impl BACnetClient {
         let router = slf.borrow().router.clone();
         let write_policy = slf.borrow().write_policy;
         let resolve_scope = slf.borrow().resolve_scope;
+        let watch_settings = slf.borrow().watch_settings.clone();
 
         crate::py_async::future_into_py(py, async move {
             let mut slot = state::starting(&inner).await?;
@@ -381,10 +394,9 @@ impl BACnetClient {
                 }
             }
             .map_err(to_py_err)?;
-            *slot = Some(state::Started::new(c, write_policy, resolve_scope));
-            // A request with its three retries, which a watch's renewals
-            // leave room for.
-            inner.set_request_budget(std::time::Duration::from_millis(timeout_ms) * 4);
+            *slot = Some(
+                state::Started::new(c, write_policy, resolve_scope).with_watches(watch_settings),
+            );
             Ok(self_ref)
         })
     }

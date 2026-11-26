@@ -59,6 +59,14 @@ impl Started {
         }
     }
 
+    /// This client, its watches taking `settings` unless a watch names
+    /// others. Their renewals leave room for the low-level client's own
+    /// timers, which the high-level client reads from it.
+    pub(super) fn with_watches(mut self, settings: bacnet_ops::WatchSettings) -> Self {
+        self.high = self.high.map(|high| high.with_watch_settings(settings));
+        self
+    }
+
     /// Stop the low-level client, once the high-level one has let go of
     /// it. A failed stop leaves the client closed to new operations (see
     /// [`close`]), so the high-level client isn't needed again. With
@@ -414,9 +422,10 @@ async fn stop_native(state: ClientInner) -> Result<(), Error> {
     // close waited for its read lease. End those subscriptions too.
     state.frames.close();
     // The watches' hubs and the handles hold the high-level client: they
-    // go first. A watch's iterator ends at once; its hub's cancels get a
+    // go first. A watch's iterator ends at once; the hubs' cancels get a
     // bounded wait.
-    let settle = state.end_watches(super::watches::END_WAIT).await;
+    let high = client.as_ref().and_then(|started| started.high.clone());
+    let settle = state.end_watches(super::watches::END_WAIT, high).await;
     state.drop_handles();
     if let Some(started) = client.as_mut()
         && let Err(error) = started.stop(settle).await

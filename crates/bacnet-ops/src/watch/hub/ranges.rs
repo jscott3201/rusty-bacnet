@@ -10,8 +10,8 @@
 //! round, a range just given back is taken again only after every other
 //! free one: a late cancel of the old hub that the network delivers after
 //! a new hub's subscription of the same point (closed, then watched again)
-//! names another process identifier. The client's own hub keeps its range
-//! for the client's life. With every range held, no further hub is made
+//! names another process identifier. A client's pooled hubs (#2603) take and
+//! give back theirs as any other hub does. With every range held, no further hub is made
 //! ([`WatchError::Hubs`](crate::watch::WatchError::Hubs)).
 
 use super::PROCESS_RANGES;

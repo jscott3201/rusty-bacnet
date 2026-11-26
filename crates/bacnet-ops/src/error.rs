@@ -124,9 +124,10 @@ pub enum OpsError {
     /// what was read or never end. What was read stays unreported: the
     /// call fails.
     Paging(PagingFault),
-    /// A watch couldn't take its points: the client's hub watches as many
-    /// as it may ([`MAX_WATCHED`](crate::watch::MAX_WATCHED)). Nothing was
-    /// watched.
+    /// A watch couldn't be made or changed ([`WatchError`] says why: its hub
+    /// watches as many points as it may, its settings are refused, every
+    /// range of subscriber process identifiers is held, or it has ended).
+    /// Nothing was watched or changed.
     Watch(WatchError),
     /// TLS material a BACnet/SC configuration refused, as its constructor
     /// reported it: a file that can't be read, PEM that doesn't decode, a

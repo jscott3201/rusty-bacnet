@@ -3,12 +3,13 @@
 //! of entries and devices. Every lock here is a std mutex held for a few
 //! field updates, never across an await. The order is the table's, then a
 //! device's inbox or what it heard ([`Heard`]), then an entry's, then a
-//! [`Watch`](super::Watch)'s mailbox, which takes no other. A watch is
+//! [`Watch`](super::Watch)'s mailbox ([`control`](super::control)), which
+//! takes no other; the registry's list of watches is a leaf. A watch is
 //! woken only once the entry's lock is let go ([`release`]).
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::task::Waker;
 use std::time::{Duration, SystemTime};
 
@@ -18,10 +19,10 @@ use bacnet_types::sync::MutexExt;
 use tokio::sync::{Notify, broadcast, watch};
 use tokio::time::Instant;
 
+use super::control::{Core, Listener};
 use super::hub::{Phase, Snapshot, Source};
 use super::options::MAX_ROWS;
 use super::sample::{Sample, Via};
-use super::stream::Listener;
 use super::{Point, Why, dispatch};
 use crate::device::DeviceAddress;
 use crate::format::{PropertyError, RawRow};
@@ -694,6 +695,9 @@ pub(super) struct Registry {
     pub(super) cancelling: AtomicUsize,
     /// The first subscriber process identifier of the hub's range.
     pub(super) process_base: u32,
+    /// The [`Watch`](super::Watch)es taken from the hub, which its
+    /// shutdown ends. A leaf lock, held only to add or take them.
+    pub(super) watches: Mutex<Vec<Weak<Core>>>,
     /// Runs once when a scheduler with nothing left is about to take the
     /// table's lock to end: a test lands an arrival in that window.
     #[cfg(test)]
@@ -727,6 +731,7 @@ impl Registry {
             tasks: watch::Sender::new(0),
             cancelling: AtomicUsize::new(0),
             process_base: first_process,
+            watches: Mutex::new(Vec::new()),
             #[cfg(test)]
             before_end: Mutex::new(None),
         }

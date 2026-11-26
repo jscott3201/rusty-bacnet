@@ -578,9 +578,13 @@ impl PyDevice {
     /// index)` tuple; each point once. A Present_Value is watched by
     /// SubscribeCOV on its object, any other property or element by
     /// SubscribeCOVProperty. Each point is read once, then subscribed for
-    /// `lifetime` seconds at a time, renewed before each lifetime ends; a
-    /// point the device won't subscribe is polled, with the device's other
-    /// polled points, every `poll_interval` seconds (1 to 3600).
+    /// `lifetime` seconds at a time (1 to 28800), renewed before each
+    /// lifetime ends; a point the device won't subscribe, or every point
+    /// with `subscribe=False`, is polled, with the device's other polled
+    /// points, every `poll_interval` seconds (1 to 3600). A keyword left
+    /// None takes the client's (`watch_lifetime`, `watch_poll_interval`,
+    /// `watch_subscribe`); watches with equal settings share their
+    /// subscriptions.
     ///
     /// The points are at the device's address now: a following handle
     /// whose device moves later reports it (`why.kind == "moved"`) rather
@@ -592,15 +596,16 @@ impl PyDevice {
     /// Its iterator then raises StopAsyncIteration, and its subscriptions
     /// are cancelled, waiting up to 5 s for the device's answers. Raised: a
     /// bad argument TypeError or ValueError (one str, no points, more than
-    /// 4096, ALL, REQUIRED or OPTIONAL, a lifetime of 0, a poll_interval
-    /// outside 1 to 3600) before the Future is made; on await what any
-    /// call raises on a stopped client, BacnetLookupError for a following
-    /// handle whose device can't be placed, and RuntimeError when the
-    /// client already holds 256 live watches. Nothing is sent until the
+    /// 4096, ALL, REQUIRED or OPTIONAL, a lifetime outside 1 to 28800, a
+    /// poll_interval outside 1 to 3600, a subscribe that isn't a bool)
+    /// before the Future is made; on await what any call raises on a
+    /// stopped client, BacnetLookupError for a following handle whose
+    /// device can't be placed, and RuntimeError when the client already
+    /// holds watches of 256 different settings. Nothing is sent until the
     /// watch starts.
     #[pyo3(
-        signature = (points, *, lifetime=None, poll_interval=None),
-        text_signature = "($self, points, *, lifetime=300, poll_interval=10.0)"
+        signature = (points, *, lifetime=None, poll_interval=None, subscribe=None),
+        text_signature = "($self, points, *, lifetime=None, poll_interval=None, subscribe=None)"
     )]
     fn watch<'py>(
         &self,
@@ -608,11 +613,12 @@ impl PyDevice {
         points: &Bound<'py, PyAny>,
         lifetime: Option<&Bound<'py, PyAny>>,
         poll_interval: Option<&Bound<'py, PyAny>>,
+        subscribe: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let wanted = super::watch::points_arg(points)?;
-        let settings = super::watch::Settings::new(lifetime, poll_interval)?;
+        let overrides = super::watch::Overrides::new(lifetime, poll_interval, subscribe)?;
         let core = Arc::clone(&self.core);
-        future_into_py(py, super::watch::open(core, wanted, settings))
+        future_into_py(py, super::watch::open(core, wanted, overrides))
     }
 
     /// The device instance: as known (`instance`), or from one read of the

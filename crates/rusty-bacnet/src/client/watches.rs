@@ -1,15 +1,17 @@
-//! A client's live watches (#2561): each Python `Watch` runs a watch hub
-//! of its own, which holds the high-level client, and so the low-level
-//! one, until the watch ends.
+//! A client's live watches (#2561, #2603): each Python `Watch` runs on one
+//! of the high-level client's watch hubs, one for each set of watch
+//! settings in use, which hold the high-level client, and so the low-level
+//! one, while a watch on them lives.
 //!
 //! The client keeps each watch here from the moment it is made, under the
 //! lease of the call that made it, until it ends: closed, dropped, or ended
-//! by the client's stop. A stop takes every watch left before it takes the
-//! low-level client: each one's iterator ends, and its hub cancels what it
-//! can within [`END_WAIT`], stops its tasks and lets go of the client. An
-//! entry is added only under a read lease and the map emptied only under
-//! the stop's exclusive hold, as for the `Device` handles, so a stop never
-//! misses a watch made on the client it stops.
+//! by the client's stop. A stop ends every watch's iterator as it is
+//! admitted; before it takes the low-level client it shuts every hub
+//! (`bacnet_ops::Client::shutdown_watches`), which ends every watch on
+//! them, cancels what it can within [`END_WAIT`], stops the hubs' tasks and
+//! lets go of the client. An entry is added only under a read lease and the
+//! map emptied only under the stop's exclusive hold, as for the `Device`
+//! handles, so a stop never misses a watch made on the client it stops.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,21 +22,17 @@ use bacnet_types::sync::MutexExt;
 
 use super::ClientInner;
 use super::state::ClientState;
-use crate::high_level::{Ended, WatchShared};
+use crate::high_level::{Ended, OpsClient, WatchShared};
 
-/// How long ending a watch waits for its hub's cancels: those not answered
-/// by then are left to lapse with their lifetime. A device that answers
-/// takes each in one round trip; one gone silent would hold each for a
-/// request's whole time with its retries.
+/// How long ending a watch waits for its cancels: those not answered by
+/// then are left to lapse with their lifetime. A device that answers takes
+/// each in one round trip; one gone silent would hold each for a request's
+/// whole time with its retries.
 pub(crate) const END_WAIT: Duration = Duration::from_secs(5);
 
 /// How long a stop waits, after its watches ended, for their hubs' last
 /// tasks to let go of the client (see [`ClientState::end_watches`]).
 pub(super) const SETTLE: Duration = Duration::from_secs(2);
-
-/// The request time a watch's renewal margin covers when the client didn't
-/// say its own: the default timers', 6 s and 3 retries.
-const DEFAULT_REQUEST_BUDGET_MS: u64 = 4 * 6_000;
 
 /// What names one watch among its client's.
 pub(crate) type WatchId = u64;
@@ -48,9 +46,6 @@ pub(crate) struct Watches {
     /// A watch was made since the last stop: its hub's tasks may still be
     /// letting go of the client when the stop takes it.
     made: AtomicBool,
-    /// A request's time with its retries on this client, in ms; 0 until
-    /// a start says.
-    request_budget_ms: AtomicU64,
 }
 
 impl ClientState {
@@ -75,22 +70,7 @@ impl ClientState {
         self.watches.live.locked().len()
     }
 
-    /// Note a request's time with its retries on the client now starting:
-    /// its watches renew early enough to cover it.
-    pub(crate) fn set_request_budget(&self, budget: Duration) {
-        let ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX);
-        self.watches.request_budget_ms.store(ms, Ordering::Relaxed);
-    }
-
-    /// A request's time with its retries on this client.
-    pub(crate) fn request_budget(&self) -> Duration {
-        match self.watches.request_budget_ms.load(Ordering::Relaxed) {
-            0 => Duration::from_millis(DEFAULT_REQUEST_BUDGET_MS),
-            ms => Duration::from_millis(ms),
-        }
-    }
-
-    /// End every watch's iterator, as a stop is admitted: its hub ends
+    /// End every watch's iterator, as a stop is admitted: their hubs end
     /// once the stop holds the client ([`Self::end_watches`]).
     pub(super) fn close_watch_streams(&self) {
         let live: Vec<Arc<WatchShared>> = self.watches.live.locked().values().cloned().collect();
@@ -99,21 +79,24 @@ impl ClientState {
         }
     }
 
-    /// A stop's first step for watches: end every watch left, all at once,
+    /// A stop's first step for watches: end every watch left, then shut
+    /// every hub of `high`, the started high-level client, all at once,
     /// each waiting up to `wait` for its cancels. True when a watch was
     /// made since the last stop: a hub that gave up on a silent device
     /// aborted its subscriptions' renewal tasks, and the runtime drops
     /// those, with their hold on the client, a moment after.
-    pub(super) async fn end_watches(&self, wait: Duration) -> bool {
+    pub(super) async fn end_watches(&self, wait: Duration, high: Option<OpsClient>) -> bool {
         let live: Vec<Arc<WatchShared>> = {
             let mut live = self.watches.live.locked();
             live.drain().map(|(_, watch)| watch).collect()
         };
-        let mut ending = tokio::task::JoinSet::new();
-        for watch in live {
-            ending.spawn(async move { watch.end(Ended::Stopped, wait).await });
+        for watch in &live {
+            watch.close_stream(Ended::Stopped);
         }
-        while ending.join_next().await.is_some() {}
+        if let Some(high) = high {
+            high.shutdown_watches(wait).await;
+        }
+        drop(live);
         self.watches.made.swap(false, Ordering::AcqRel)
     }
 }
@@ -141,10 +124,11 @@ impl WatchTie {
         }
     }
 
-    /// End the watch as closed: its iterator ends now, and its hub's end
-    /// runs on the binding runtime, so it finishes however its caller
-    /// fares, then the client forgets it. Await
-    /// [`WatchShared::end`] for it to finish. Sends nothing itself.
+    /// End the watch as closed: its iterator ends now, and its end (its
+    /// points let go, their cancels waited for) runs on the binding
+    /// runtime, so it finishes however its caller fares, then the client
+    /// forgets it. Await [`WatchShared::end`] for it to finish. Sends
+    /// nothing itself.
     pub(crate) fn close(&self) {
         self.watch.close_stream(Ended::Closed);
         if self.ending.swap(true, Ordering::AcqRel) {

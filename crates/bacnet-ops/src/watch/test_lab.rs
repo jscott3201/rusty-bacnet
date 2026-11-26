@@ -84,6 +84,9 @@ pub(super) struct Quirks {
     /// The next SubscribeCOV requests are refused for a full subscription
     /// table.
     pub(super) full_cov: AtomicU8,
+    /// Every SubscribeCOV's lifetime is refused as longer than the device
+    /// takes (a services-class value-out-of-range error).
+    pub(super) short_lifetimes: AtomicBool,
     /// The device's answers to RPM take half a second.
     pub(super) slow_rpm_ack: AtomicBool,
     /// The device's acknowledgements of SubscribeCOV take half a second.
@@ -515,6 +518,15 @@ fn forwards(
         if service == SUBSCRIBE_COV && take(&quirks.full_cov) {
             let class = ErrorClass::RESOURCES.to_raw() as u8;
             let code = ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT.to_raw() as u8;
+            answer(
+                handle,
+                vec![0x50, invoke, SUBSCRIBE_COV, 0x91, class, 0x91, code],
+            );
+            return false;
+        }
+        if service == SUBSCRIBE_COV && quirks.short_lifetimes.load(Ordering::Relaxed) {
+            let class = ErrorClass::SERVICES.to_raw() as u8;
+            let code = ErrorCode::VALUE_OUT_OF_RANGE.to_raw() as u8;
             answer(
                 handle,
                 vec![0x50, invoke, SUBSCRIBE_COV, 0x91, class, 0x91, code],

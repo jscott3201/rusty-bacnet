@@ -837,41 +837,84 @@ returns (#2561). An async iterator of `WatchUpdate`s, each point's
 latest value and how its watch goes; `async with` closes it on the
 way out.
 
-The watch runs a watch hub of its own: each point is read, then
-subscribed for COV for `lifetime` seconds at a time and renewed
-before each lifetime ends; a point the device won't subscribe is polled
-with the device's other polled points. An update comes with each value
-read or notified and each change of a point's state. A consumer that
-falls behind gets one update a point, with its latest value and state,
-never a queue of old ones (`folded` counts the changes folded away).
-A cancel that lands while an update is on its way puts it back: the
-next `__anext__` returns it first. Concurrent `__anext__` calls
-complete one at a time, each with the next update. The watch never
-ends on its own, even when a point is given up.
+The watch runs on one of its client's watch hubs, which every watch of
+the same settings (`lifetime`, `poll_interval`, `subscribe`)
+shares (#2603): a point two of them hold is one subscription. Each
+point is read, then subscribed for COV for `lifetime` seconds at a
+time and renewed before each lifetime ends; a point the device won't
+subscribe, or every point when `subscribe` is False, is polled with
+the device's other polled points. An update comes with each value read
+or notified and each change of a point's state. A consumer that falls
+behind gets one update a point, with its latest value and state, never
+a queue of old ones (`folded` counts the changes folded away). A
+cancel that lands while an update is on its way puts it back: the next
+`__anext__` returns it first. Concurrent `__anext__` calls complete
+one at a time, each with the next update. `add` and `remove`
+change the points while another task iterates. The watch never ends on
+its own, even when a point is given up or every point removed.
 
 It ends on `close()`, when the object goes away, or on its client's
 `stop()`, whichever comes first: `__anext__` raises
 `StopAsyncIteration` then and ever after, saying why, and the
-subscriptions are cancelled, the device's answers waited for up to
-5 s; any not answered by then lapse with their lifetime. It holds the
-client only through its own hub, which a stop ends before it stops
-the client: a stop with live watches waits for their cancels, all at
-once, up to 5 s for a device that doesn't answer, and up to 2 s more
-for their hubs to let go of the client. A client started again
-doesn't revive it: watch again. A client holds at most 256 live
-watches (each runs a hub with a range of subscriber process
-identifiers of its own): one more raises `RuntimeError` until one
-ends. Frozen; compares by identity and refuses `copy` and
-`pickle`.
+subscriptions no other watch holds are cancelled, the device's answers
+waited for up to 5 s; any not answered by then lapse with their
+lifetime. It holds the client only through its hub, which a stop shuts
+before it stops the client: a stop with live watches waits for their
+cancels, all at once, up to 5 s for a device that doesn't answer, and
+up to 2 s more for the hubs to let go of the client. A client started
+again doesn't revive it: watch again. A client runs at most 256 hubs
+at once, one for each set of watch settings in use (each with a range
+of subscriber process identifiers of its own): a watch of a 257th
+raises `RuntimeError` until one ends. Frozen; compares by identity
+and refuses `copy` and `pickle`.
 
 Properties:
 
 - `address: str`: Where the device answered when the watch was made, as text `BACnetClient.device` reads back: every point is at this address.
-- `points: tuple[tuple[ObjectIdentifier, PropertyIdentifier, Optional[int]], ...]`: The points watched, in the order named, each once, as `(object, property, array_index)`: Present\_Value for a point named by its object alone.
+- `points: tuple[tuple[ObjectIdentifier, PropertyIdentifier, Optional[int]], ...]`: The points watched, in the order named, added ones last, each once, as `(object, property, array_index)`: Present\_Value for a point named by its object alone.
 - `lifetime: int`: Each subscription's lifetime, in seconds.
 - `poll_interval: float`: The least time between two polls of the device, in seconds.
+- `subscribe: bool`: Whether points are subscribed for COV where the device takes it; False polls every point.
 - `folded: int`: Changes folded into a later update of the same point because the watch hadn't handed the earlier one out yet, as of the last update handed out.
 - `closed: bool`: True once the watch has ended: closed, or its client stopped.
+
+### Watch.add
+
+```python
+def add(
+    self,
+    points: Iterable[str | ObjectIdentifier | tuple[ObjectIdentifier | str, PropertyIdentifier | str] | tuple[ObjectIdentifier | str, PropertyIdentifier | str, int]],
+) -> Awaitable[int]
+```
+
+Watch `points` too, at the watch's address, each in what
+`read_many` takes; those watched already are left as they are.
+Resolves to the count newly watched. Each new point is read, then
+subscribed (or polled) under the watch's settings; one another
+watch of the same settings holds joins its subscription. Raised:
+`TypeError` or `ValueError` for a bad argument (one str, bytes
+or bytearray, no points, more than 4096, ALL, REQUIRED or OPTIONAL)
+before the awaitable is made; on await `RuntimeError` once the
+watch has ended, or when the points would take the watch's hub past
+4096 (nothing is added then).
+
+### Watch.remove
+
+```python
+def remove(
+    self,
+    points: Iterable[str | ObjectIdentifier | tuple[ObjectIdentifier | str, PropertyIdentifier | str] | tuple[ObjectIdentifier | str, PropertyIdentifier | str, int]],
+) -> Awaitable[int]
+```
+
+Stop watching `points` in this watch, each in what
+`read_many` takes. Done before this returns: no `__anext__`
+begun after hands out one of them, an update already waiting
+included; one already waiting may still get an update it had
+taken. Resolves to the count removed. A point no other watch holds
+is cancelled on the wire afterwards, best effort, without delaying
+this. Raised: `TypeError` or `ValueError` for a bad argument,
+`RuntimeError` once the watch has ended.
 
 ### Watch.close
 
@@ -959,7 +1002,7 @@ and `pickle`.
 
 Properties:
 
-- `kind: Literal['refused', 'no-answer', 'full', 'lapsed', 'missing', 'moved', 'replaced', 'foreign-sender', 'other']`: The reason: `"refused"` (the device refused the subscription; not asked again), `"no-answer"` (the first read or the subscription went unanswered), `"full"` (the device's subscription table was full) or `"lapsed"` (a renewal failed), each subscribed again after a backoff; `"missing"` (no router to a remote device's network is known); `"moved"` (the device answers at `to` now) or `"replaced"` (device `found` answers at the address now, not `watched`), either of which gives the point up; `"foreign-sender"` (its notifications name device `sender`, which can't be told from another device there, so it is polled). `"other"` for a reason this version doesn't name.
+- `kind: Literal['refused', 'poll-only', 'no-answer', 'full', 'lapsed', 'missing', 'moved', 'replaced', 'foreign-sender', 'other']`: The reason: `"refused"` (the device refused the subscription; not asked again), `"poll-only"` (the watch polls every point, `subscribe=False`), `"no-answer"` (the first read or the subscription went unanswered), `"full"` (the device's subscription table was full) or `"lapsed"` (a renewal failed), each subscribed again after a backoff; `"missing"` (no router to a remote device's network is known); `"moved"` (the device answers at `to` now) or `"replaced"` (device `found` answers at the address now, not `watched`), either of which gives the point up; `"foreign-sender"` (its notifications name device `sender`, which can't be told from another device there, so it is polled). `"other"` for a reason this version doesn't name.
 - `error: Optional[str]`: The device's error, or the client's, as text, for `"refused"`, `"no-answer"`, `"full"` and `"lapsed"`; else None.
 - `to: Optional[str]`: For `"moved"`: where the device answers now, as text `BACnetClient.device` reads back; else None.
 - `watched: Optional[int]`: For `"replaced"`: the instance an earlier answer named for the point; else None.
@@ -1371,8 +1414,9 @@ def watch(
     self,
     points: Iterable[str | ObjectIdentifier | tuple[ObjectIdentifier | str, PropertyIdentifier | str] | tuple[ObjectIdentifier | str, PropertyIdentifier | str, int]],
     *,
-    lifetime: int = 300,
-    poll_interval: float = 10.0,
+    lifetime: Optional[int] = None,
+    poll_interval: Optional[float] = None,
+    subscribe: Optional[bool] = None,
 ) -> Awaitable[Watch]
 ```
 
@@ -1385,10 +1429,13 @@ Each item of `points` is what `read_many` takes: text
 (its Present\_Value), or an `(object, property)` or `(object, property, index)` tuple; each point once. A Present\_Value is
 watched by SubscribeCOV on its object, any other property or element
 by SubscribeCOVProperty. Each point is read once, then subscribed
-for `lifetime` seconds at a time, renewed before each lifetime
-ends; a point the device won't subscribe is polled, with the
-device's other polled points, every `poll_interval` seconds (1 to
-3600).
+for `lifetime` seconds at a time (1 to 28800), renewed before
+each lifetime ends; a point the device won't subscribe, or every
+point with `subscribe=False`, is polled, with the device's other
+polled points, every `poll_interval` seconds (1 to 3600). A
+keyword left None takes the client's (`watch_lifetime`,
+`watch_poll_interval`, `watch_subscribe`); watches with equal
+settings share their subscriptions (#2603).
 
 The points are at the device's address now: a following handle
 whose device moves later reports it (`why.kind == "moved"`)
@@ -1401,13 +1448,16 @@ Its iterator then raises `StopAsyncIteration`, and its
 subscriptions are cancelled, waiting up to 5 s for the device's
 answers. Raised: TypeError or ValueError for a bad argument when
 the call is made (one str, no points, more than 4096, ALL, REQUIRED
-or OPTIONAL, a lifetime of 0, a `poll_interval` outside 1 to
-3600; a bool for either); on await what any call raises on a
-stopped client, and `BacnetLookupError` for a following handle
-whose device can't be placed, and `RuntimeError` when the client
-already holds 256 live watches. Nothing is sent until the watch
-starts. A client from `endpoint.client()` leaves room in each
-renewal for a request on the default timers (6 s, 3 retries).
+or OPTIONAL, a lifetime outside 1 to 28800, a `poll_interval`
+outside 1 to 3600; a bool for either, and anything but a bool for
+`subscribe`); on await what any call raises on a stopped client,
+and `BacnetLookupError` for a following handle whose device can't
+be placed, and `RuntimeError` when the client already runs
+watches of 256 different settings. Nothing is sent until the watch
+starts. Each renewal leaves room for two requests with every retry
+on the client's own timers (its `apdu_timeout_ms`; for a client
+from `endpoint.client()`, the endpoint's `apdu_timeout_ms` and
+`apdu_retries`).
 
 ### Device.resolve_instance
 

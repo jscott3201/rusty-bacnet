@@ -74,6 +74,7 @@ use crate::device::{ClientEvent, DeviceAddress, Follows};
 use crate::format::Value;
 use crate::limits::RequestLimits;
 use crate::reading::Reading;
+use crate::watch::WatchSettings;
 use crate::write::WritePolicy;
 
 #[cfg(doc)]
@@ -151,9 +152,11 @@ impl DeviceSummary {
 /// clone: clones share everything but how a handle made from an instance
 /// looks for its device: how long it waits for an I-Am
 /// ([`with_resolve_wait`](Self::with_resolve_wait)) and where its Who-Is
-/// goes ([`with_resolve_scope`](Self::with_resolve_scope)); and the
+/// goes ([`with_resolve_scope`](Self::with_resolve_scope)); the
 /// priorities its handles may write at
-/// ([`with_write_policy`](Self::with_write_policy)).
+/// ([`with_write_policy`](Self::with_write_policy)); and the settings its
+/// watches take ([`with_watch_settings`](Self::with_watch_settings)), whose
+/// hubs every clone shares by settings ([`watch_with`](Self::watch_with)).
 ///
 /// What the client learns of a device it keeps by the device's address,
 /// for every handle and clone: that it refused ReadPropertyMultiple
@@ -185,6 +188,8 @@ pub struct Client<T: TransportPort + 'static = AnyTransport> {
     resolve_scope: ResolveScope,
     /// The priorities this clone's handles may write and relinquish at.
     write_policy: WritePolicy,
+    /// What this clone's watches take unless told otherwise.
+    pub(crate) watch_settings: WatchSettings,
 }
 
 /// What a [`Client`]'s clones share. Each std mutex is held only to look up
@@ -204,9 +209,9 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// The ranges of subscriber process identifiers the client's live hubs
     /// hold, so no two alive at once share one (#2185).
     pub(crate) ranges: Mutex<crate::watch::hub::ranges::Ranges>,
-    /// The client's own hub, which its [`watch`](Client::watch)es share
-    /// while any holds a point, and its range of process identifiers.
-    pub(crate) hub: Mutex<crate::watch::OwnHub<T>>,
+    /// The hubs the client's [`watch`](Client::watch)es run on, one for
+    /// each set of watch settings in use. Taken before `ranges`.
+    pub(crate) watch_pool: Mutex<crate::watch::Pool<T>>,
     /// What each address's device declared and did of COV
     /// ([`CovSupport`](crate::watch::CovSupport)).
     pub(crate) cov: Mutex<HashMap<DeviceAddress, crate::watch::CovMemory>>,
@@ -228,6 +233,10 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// instances announced at each address.
     pub(crate) changes: Mutex<broadcast::Receiver<DeviceEvent>>,
     pub(crate) events: broadcast::Sender<ClientEvent>,
+    /// One confirmed request's time with every retry on the low-level
+    /// client (its APDU timeout times one more than its retries), which a
+    /// watch's renewals leave room for.
+    pub(crate) request_budget: Duration,
 }
 
 impl<T: TransportPort + 'static> Clone for Client<T> {
@@ -237,6 +246,7 @@ impl<T: TransportPort + 'static> Clone for Client<T> {
             resolve_wait: self.resolve_wait,
             resolve_scope: self.resolve_scope,
             write_policy: self.write_policy,
+            watch_settings: self.watch_settings.clone(),
         }
     }
 }
@@ -251,6 +261,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// any other worker on the same low-level client).
     pub fn new(client: Arc<BACnetClient<T>>, limits: Arc<RequestLimits>) -> Self {
         let changes = Mutex::new(client.device_events());
+        let request_budget = client.apdu_timeout() * (u32::from(client.apdu_retries()) + 1);
         Self {
             shared: Arc::new(Shared {
                 client,
@@ -258,29 +269,32 @@ impl<T: TransportPort + 'static> Client<T> {
                 no_rpm: Mutex::new(HashSet::new()),
                 rpm_limits: Mutex::new(HashMap::new()),
                 ranges: Mutex::default(),
-                hub: Mutex::new(crate::watch::OwnHub::new()),
+                watch_pool: Mutex::new(crate::watch::Pool::new()),
                 cov: Mutex::new(HashMap::new()),
                 follows: Mutex::new(HashMap::new()),
                 instances: Mutex::new(HashMap::new()),
                 station_misses: Mutex::default(),
                 changes,
                 events: broadcast::channel(64).0,
+                request_budget,
             }),
             resolve_wait: Some(RESOLVE_WAIT),
             resolve_scope: ResolveScope::default(),
             write_policy: WritePolicy::default(),
+            watch_settings: WatchSettings::default(),
         }
     }
 
     /// A clone with the settings [`new`](Self::new) gives, whichever clone
-    /// this is: what the client's own watch hub works with (it never
-    /// writes).
+    /// this is: what the client's watch hubs work with (they never write,
+    /// and their own settings are theirs).
     pub(crate) fn base(&self) -> Self {
         Self {
             shared: Arc::clone(&self.shared),
             resolve_wait: Some(RESOLVE_WAIT),
             resolve_scope: ResolveScope::default(),
             write_policy: WritePolicy::default(),
+            watch_settings: WatchSettings::default(),
         }
     }
 

@@ -490,7 +490,7 @@ showing them, since a device can put control characters in its names.
 
 ### Watching
 
-#### `watch(points, *, lifetime=300, poll_interval=10.0) -> Watch`
+#### `watch(points, *, lifetime=None, poll_interval=None, subscribe=None) -> Watch`
 
 Watches points of the device and hands out their changes as an async
 iterator of `WatchUpdate`s. Each item of `points` is what `read_many`
@@ -509,35 +509,58 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
 ```
 
 - Each point is read once (its value, Status_Flags, units, name and state
-  texts), then subscribed for `lifetime` seconds at a time and renewed
-  before each lifetime ends. A point the device won't subscribe is polled,
-  with the device's other polled points, every `poll_interval` seconds (1
-  to 3600). A device that refuses COV altogether is remembered, and its
-  later points are polled without asking.
+  texts), then subscribed for `lifetime` seconds at a time (1 to 28800,
+  eight hours, the longest every device must take) and renewed before each
+  lifetime ends. A point the device won't subscribe, or every point with
+  `subscribe=False`, is polled, with the device's other polled points,
+  every `poll_interval` seconds (1 to 3600). A device that refuses COV
+  altogether is remembered, and its later points are polled without
+  asking.
+- A keyword left None takes the client's: `BACnetClient(watch_lifetime=300,
+  watch_poll_interval=10.0, watch_subscribe=True)` are the defaults, and
+  `client.watch_lifetime`, `.watch_poll_interval` and `.watch_subscribe`
+  read them back. Watches with equal settings share the client's hub for
+  them, so a point two of them hold is one subscription on the device
+  (#2603).
 - An update comes with each value read or notified and each change of a
   point's state. A consumer that falls behind gets one update a point with
   its latest value and state, never a queue of old ones: `.folded` counts
   the changes folded away.
-- The watch never ends on its own. It ends on `close()` (or leaving
-  `async with`), when the object goes away, or on the client's `stop()`,
-  whichever comes first: a step then raises `StopAsyncIteration` and every
-  step after it, saying why, and the subscriptions are cancelled, the
-  device's answers waited for up to 5 s. Any not answered by then lapse
-  with their lifetime, which is never indefinite.
-- The watch holds the client only through a watch hub of its own, which a
-  stop ends before it stops the client. A stop with live watches waits
-  for their cancels, all at once: up to 5 s for a device that doesn't
-  answer, and up to 2 s more for their hubs to let go of the client. A
-  client started again doesn't revive a watch: watch again. A `Device`
-  made from an instance makes its handle again after a restart, so
-  `await ahu.watch(...)` works as before.
-- Each watch's hub has a range of subscriber process identifiers of its
-  own, so two watches never share a subscription. A client holds at most
-  256 live watches (one still cancelling counts); one more raises
-  `RuntimeError` until one ends.
-- Each renewal goes early enough to cover a request with its retries on
-  the client's `apdu_timeout_ms` (three retries); a client from
-  `endpoint.client()` leaves room for the default timers' (6 s).
+- `await watch.add(points)` watches more points at the watch's address
+  (resolving to how many were new: a point held already is left as it
+  is), and `await watch.remove(points)` stops watching some (resolving to
+  how many it held), both while another task iterates. Once `remove` has
+  run, no step begun after hands out a removed point, an update already
+  waiting included; a step already waiting may still get one it had
+  taken. A removed point no other watch holds is cancelled on the wire
+  afterwards, best effort; one added again is read afresh. Both take
+  `points` as `watch` does and raise `RuntimeError` once the watch has
+  ended; `add` raises it too when the points would take the watch's hub
+  past 4096.
+- The watch never ends on its own, not even with every point removed. It
+  ends on `close()` (or leaving `async with`), when the object goes away,
+  or on the client's `stop()`, whichever comes first: a step then raises
+  `StopAsyncIteration` and every step after it, saying why, and the
+  subscriptions no other watch holds are cancelled, the device's answers
+  waited for up to 5 s. Any not answered by then lapse with their
+  lifetime, which is never indefinite.
+- The watch holds the client only through its hub, which a stop shuts
+  before it stops the client. A stop with live watches waits for their
+  cancels, all at once: up to 5 s for a device that doesn't answer, and up
+  to 2 s more for the hubs to let go of the client. A client started again
+  doesn't revive a watch: watch again. A `Device` made from an instance
+  makes its handle again after a restart, so `await ahu.watch(...)` works
+  as before.
+- Each hub has a range of subscriber process identifiers of its own, so
+  watches of different settings never share a subscription. A client runs
+  at most 256 hubs at once, one for each set of settings in use (one still
+  cancelling counts): a watch of a 257th raises `RuntimeError` until one
+  ends.
+- Each renewal goes early enough to leave room for two requests with
+  every retry on the client's own timers: its `apdu_timeout_ms` with three
+  retries, or for a client from `endpoint.client()` the endpoint's
+  `apdu_timeout_ms` and `apdu_retries` (#2603). At the default 6 s that is
+  48 s before a five-minute lifetime ends.
 - The points are at the device's address now. A following handle whose
   device moves later is reported (`why.kind == "moved"`, `why.to`) rather
   than followed: watch again from the handle, which has moved. Another
@@ -549,13 +572,15 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
   each with the next update.
 - Raised when the call is made: `TypeError` or `ValueError` for one str,
   no points, more than 4096, `ALL`, `REQUIRED` or `OPTIONAL`, a lifetime
-  of 0, a `poll_interval` outside 1 to 3600, or a bool for either. On
-  await: what any call raises on a stopped client, `BacnetLookupError`
-  for a following handle whose device can't be placed, and
-  `RuntimeError` past 256 live watches.
+  outside 1 to 28800, a `poll_interval` outside 1 to 3600, a bool for
+  either, or a `subscribe` that isn't a bool. On await: what any call
+  raises on a stopped client, `BacnetLookupError` for a following handle
+  whose device can't be placed, and `RuntimeError` past 256 settings.
   Nothing is sent until the watch starts.
-- `.address`, `.points` (`(object, property, array_index)` tuples),
-  `.lifetime`, `.poll_interval`, `.folded`, `.closed`, `len()`.
+- `.address`, `.points` (`(object, property, array_index)` tuples, added
+  ones last), `.lifetime`, `.poll_interval`, `.subscribe`, `.folded`,
+  `.closed`, `len()`.
+
 
 #### `WatchUpdate`
 
@@ -579,6 +604,7 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
 | `.kind` | Fields | Meaning |
 |---------|--------|---------|
 | `"refused"` | `.error` | The device refused the subscription; polled, not asked again |
+| `"poll-only"` | | The watch polls every point (`subscribe=False`) |
 | `"no-answer"` | `.error` | The first read or the subscription went unanswered; asked again after a backoff |
 | `"full"` | `.error` | The device's subscription table was full; asked again after a backoff |
 | `"lapsed"` | `.error` (or None) | A renewal failed; asked again after a backoff |
@@ -1971,6 +1997,9 @@ client = BACnetClient(
     router=None,                 # Keyword-only; a BACnetRouter, with transport="router"
     write_policy=None,           # Keyword-only; a WritePolicy for Device.write and relinquish: see "The write policy"
     resolve_scope=None,          # Keyword-only; "local" (None), "global" or a network: where device(1234) asks, see "Devices and targets"
+    watch_lifetime=300,          # Keyword-only; Device.watch's default COV lifetime, 1 to 28800 s, see "Watching"
+    watch_poll_interval=10.0,    # Keyword-only; Device.watch's default poll interval, 1 to 3600 s
+    watch_subscribe=True,        # Keyword-only; False polls every point of a watch that doesn't say
     # MS/TP options (serial_port, mstp_*): see "MS/TP serial ports"
     # IPv6 options:
     ipv6_interface=None,         # IPv6 selected local address; None means ::

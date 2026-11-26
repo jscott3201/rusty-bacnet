@@ -68,7 +68,7 @@ async fn two_devices_sharing_an_instance_are_two_points() {
     let three = client.device(at(3)).await.unwrap();
     let points = [two.point("ai:1").unwrap(), three.point("ai:1").unwrap()];
     let mut watch = client.watch(points.clone()).unwrap();
-    assert_eq!(watch.points().count(), 2);
+    assert_eq!(watch.points().len(), 2);
     let mut subscribed = std::collections::HashSet::new();
     while subscribed.len() < 2 {
         let update = until(&mut watch, |u| u.state == State::Subscribed).await;
@@ -327,7 +327,7 @@ async fn one_station_named_two_ways_is_one_point() {
     };
     assert_ne!(local, routed, "two ways of writing it");
     let mut watch = client.watch([local.clone(), routed]).unwrap();
-    assert_eq!(watch.points().collect::<Vec<_>>(), [&local]);
+    assert_eq!(watch.points(), std::slice::from_ref(&local));
     until(&mut watch, |u| u.state == State::Subscribed).await;
     assert_eq!(servers[0].cov_counters().subscriptions_active, 1);
     drop((watch, device));
@@ -421,7 +421,7 @@ async fn a_revival_racing_the_last_drop_leaves_nothing() {
             "yields {yields}: a subscription nobody holds"
         );
         assert!(
-            client.shared.hub.lock().unwrap().hub.upgrade().is_none(),
+            client.shared.watch_pool.lock().unwrap().live() == 0,
             "yields {yields}: the hub ended"
         );
         drop(device);

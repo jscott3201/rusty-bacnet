@@ -2,15 +2,22 @@
 //! however many listeners share it (#2067, #2560).
 //!
 //! An application calls [`Client::watch`](crate::Client::watch) with
-//! points from [`Device::point`](crate::Device::point) and reads the
-//! [`Watch`], a stream of [`Update`]s: each point's latest value, its
-//! Status_Flags and when it came, and its [`State`], which holds the
-//! reason ([`Why`]) whenever the point isn't subscribed. That is the one
-//! way an application watches. Under it is [`hub`], for a front end that
-//! runs its own hub (the `bacnet` tool's watch list and MCP server keep a
-//! history, serve several sessions and pick their own settings); one that
-//! picks its own settings but reads updates as an application does takes
-//! a [`Watch`] from its hub ([`Hub::stream`](hub::Hub::stream)).
+//! points from [`Device::point`](crate::Device::point) (or
+//! [`Device::watch`](crate::Device::watch) with the points' names) and
+//! reads the [`Watch`], a stream of [`Update`]s: each point's latest
+//! value, its Status_Flags and when it came, and its [`State`], which
+//! holds the reason ([`Why`]) whenever the point isn't subscribed. Its
+//! [`WatchControl`] adds and removes points while another task reads it.
+//! The client's [`WatchSettings`] (lifetime, poll interval, subscribe or
+//! poll only) are its builder's, and
+//! [`Client::watch_with`](crate::Client::watch_with) takes others for one
+//! watch; watches with equal settings share one hub. That
+//! is the one way an application watches. Under it is [`hub`], for a
+//! front end that runs its own hub (the `bacnet` tool's watch list and MCP
+//! server keep a history, serve several sessions and pick their own
+//! settings); one that picks its own settings but reads updates as an
+//! application does takes a [`Watch`] from its hub
+//! ([`Hub::stream`](hub::Hub::stream)).
 //!
 //! A point names its device by address: the hub keys its entries, its
 //! per-device schedulers and its subscriptions' targets on it, so two
@@ -81,36 +88,45 @@
 //! The hub doesn't follow a device to its new address; watch the point
 //! there.
 //!
-//! Lifetimes are finite by construction ([`hub::Lifetime`] can't be zero):
-//! a subscription that never lapses is a write in the `bacnet` tool's
+//! Lifetimes are finite by construction ([`hub::Lifetime`] can't be zero)
+//! and at most eight hours, the longest every device must take: a
+//! subscription that never lapses is a write in the `bacnet` tool's
 //! command classes (`bacnet_tool::class`), and the hub never sends one.
 
 pub mod hub;
 
+mod control;
 mod device;
 mod dispatch;
 mod jobs;
 mod options;
 mod point;
+mod pooled;
 mod sample;
+mod settings;
 mod shared;
 mod stream;
 mod support;
 
+pub use self::control::WatchControl;
 pub use self::point::{Point, Watched, Why};
 pub use self::sample::Via;
-pub(crate) use self::stream::OwnHub;
-pub use self::stream::{MAX_WATCHED, State, Update, Watch};
+pub(crate) use self::settings::Pool;
+pub use self::settings::WatchSettings;
+pub use self::stream::{MAX_WATCHED, Mark, State, Update, Watch};
 pub use self::support::CovSupport;
 pub(crate) use self::support::{CovMemory, services};
 
-/// Why a watch wasn't started: nothing was watched, and nothing sent.
+use bacnet_types::error::Refusal;
+
+/// Why a watch, or a change to one, was refused: nothing was watched or
+/// changed, and nothing sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WatchError {
     /// The points would take the hub past the most it watches at once,
     /// points still cancelling included ([`MAX_WATCHED`] for a client's
-    /// own hub, [`hub::WatchOptions::max_points`] for another).
+    /// pooled hubs, [`hub::WatchOptions::max_points`] for another).
     Full {
         /// The most.
         max: usize,
@@ -119,17 +135,24 @@ pub enum WatchError {
     Shut,
     /// Called outside a Tokio runtime, which the hub's tasks need.
     NoRuntime,
-    /// [`Hub::new`](hub::Hub::new) was given settings
-    /// [`WatchOptions::validate`](hub::WatchOptions::validate) refuses, for
-    /// this reason.
-    Settings(String),
+    /// Settings a hub doesn't take, which
+    /// [`WatchOptions::validate`](hub::WatchOptions::validate) (or
+    /// [`Lifetime::new`](hub::Lifetime::new)) refuses: the text says which
+    /// and why. It is for a person; the limits a caller acts on are
+    /// constants ([`Lifetime::MAX`](hub::Lifetime::MAX),
+    /// [`hub::MAX_POLL`], [`hub::POLL_FLOOR`]).
+    Settings(Refusal),
     /// Every range of subscriber process identifiers on the client is held:
-    /// this many hubs live on it, the client's own included, or are still
-    /// cancelling. Drop one first.
+    /// this many hubs live on it, its pooled ones included (one a set of
+    /// watch settings in use), or are still cancelling. End one first.
     Hubs {
         /// The most.
         max: usize,
     },
+    /// The watch has ended: dropped, closed
+    /// ([`WatchControl::close`]), its stream ended, or its hub shut down.
+    /// A [`WatchControl`] of it can no longer change it.
+    Closed,
 }
 
 impl std::fmt::Display for WatchError {
@@ -141,12 +164,14 @@ impl std::fmt::Display for WatchError {
             ),
             Self::Shut => f.write_str("the hub has shut down"),
             Self::NoRuntime => f.write_str("a watch needs a Tokio runtime"),
-            Self::Settings(reason) => write!(f, "the hub's settings are refused: {reason}"),
+            Self::Settings(reason) => write!(f, "the watch settings are refused: {reason}"),
             Self::Hubs { max } => write!(
                 f,
-                "{max} watch hubs live on this client already, each with its own range of \
-                 subscriber process identifiers: end one first"
+                "{max} watch hubs live on this client already, one for each set of watch \
+                 settings, each with its own range of subscriber process identifiers: end one \
+                 first"
             ),
+            Self::Closed => f.write_str("the watch has ended"),
         }
     }
 }
@@ -158,6 +183,8 @@ mod asked_tests;
 #[cfg(test)]
 mod claimants_tests;
 #[cfg(test)]
+mod control_tests;
+#[cfg(test)]
 mod identity_tests;
 #[cfg(test)]
 mod lifecycle_tests;
@@ -168,11 +195,15 @@ mod moves_tests;
 #[cfg(test)]
 mod naming_tests;
 #[cfg(test)]
+mod race_tests;
+#[cfg(test)]
 mod ranges_tests;
 #[cfg(test)]
 mod restart_tests;
 #[cfg(test)]
 mod scheduler_tests;
+#[cfg(test)]
+mod settings_tests;
 #[cfg(test)]
 mod state_tests;
 #[cfg(test)]

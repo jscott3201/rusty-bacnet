@@ -56,6 +56,7 @@ impl BACnetClient {
             min_request_interval_ms: 0,
             write_policy: bacnet_ops::WritePolicy::default(),
             resolve_scope: bacnet_ops::ResolveScope::Local,
+            watch_settings: bacnet_ops::WatchSettings::default(),
             // The endpoint's session config set its client's (#2721).
             accept_complex_ack_for_simple_services: false,
         }

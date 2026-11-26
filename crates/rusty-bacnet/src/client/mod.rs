@@ -326,6 +326,9 @@ pub struct BACnetClient {
     /// (#2561): this network alone unless `resolve_scope=` says otherwise,
     /// which on a router's application is each of its networks (#2601).
     resolve_scope: bacnet_ops::ResolveScope,
+    /// What a `Device.watch` takes unless it names its own (#2603), from
+    /// the `watch_*` keywords.
+    watch_settings: bacnet_ops::WatchSettings,
     /// Whether a Complex-ACK completes a write-like request as a success,
     /// for a device in the field that answers so (#2721).
     accept_complex_ack_for_simple_services: bool,
