@@ -374,7 +374,9 @@ pub enum Error {
     #[error("transport error: {0}")]
     Transport(#[from] std::io::Error),
 
-    /// Request timed out.
+    /// Request timed out: its peer gave no answer within the wait. A send
+    /// that this side's own link didn't carry before a deadline is an
+    /// `Error::Transport` of kind `TimedOut` instead (#1833).
     #[error("request timed out after {0:?}")]
     Timeout(Duration),
 
