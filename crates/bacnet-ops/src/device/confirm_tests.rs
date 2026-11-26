@@ -101,11 +101,12 @@ async fn a_candidate_that_doesnt_name_the_device_takes_no_handle() {
 }
 
 /// Another device took the handle's address and the instance's only other
-/// claim is a station that doesn't answer as it: the request fails as
-/// unknown, the address's device asked and the other station asked, and
-/// the request itself goes nowhere.
+/// claim is a station where nothing answers: a write fails as not
+/// confirmed, naming that station, with the address's device asked and
+/// nothing sent anywhere else (#2795); a read asks that station and fails
+/// as unknown.
 #[tokio::test(start_paused = true)]
-async fn a_reused_address_with_a_silent_claim_fails_unknown() {
+async fn a_reused_address_with_a_silent_claim_sends_no_write() {
     let bus = Bus::new();
     let (client, sent) = client(&bus).await;
     let mut first = server(bus.port(2), N, "A").await;
@@ -118,9 +119,19 @@ async fn a_reused_address_with_a_silent_claim_fails_unknown() {
     bus.i_am(3, N);
     settle().await;
     let error = device.write("ai:1 oos", "true", None).await.unwrap_err();
-    assert!(matches!(error, OpsError::UnknownDevice { .. }), "{error}");
+    assert!(
+        matches!(&error, OpsError::NotConfirmed { candidate: Some(c), .. } if *c == at(3)),
+        "{error}"
+    );
     assert_eq!(requests(&sent, WRITE, 2) + requests(&sent, WRITE, 3), 0);
-    assert_eq!(requests(&sent, READ, 3), 1, "station 3 asked");
+    assert_eq!(
+        requests(&sent, READ, 3),
+        0,
+        "a write asks nothing elsewhere"
+    );
+    let error = name_of(&device).await.unwrap_err();
+    assert!(matches!(error, OpsError::UnknownDevice { .. }), "{error}");
+    assert_eq!(requests(&sent, READ, 3), 1, "a read asks station 3");
     assert_eq!(device.address(), at(2));
     stop(vec![other]).await;
 }

@@ -182,8 +182,9 @@ async fn a_reused_address_moves_a_following_handle_before_it_sends() {
 }
 
 /// Another device announcing itself at a following handle's address, with
-/// no other address claiming the instance: the request fails as unknown,
-/// and nothing is sent.
+/// no other address claiming the instance: the device there is asked which
+/// it is, and as another, the request fails as unknown and isn't sent
+/// (#2795).
 #[tokio::test(start_paused = true)]
 async fn a_reused_address_with_no_other_claim_fails_unsent() {
     let bus = Bus::new();
@@ -203,7 +204,7 @@ async fn a_reused_address_with_no_other_claim_fails_unsent() {
         matches!(&error, OpsError::UnknownDevice { target, asked: None } if target == "1001"),
         "{error}"
     );
-    assert_eq!(sent.len(), before, "nothing sent");
+    assert_eq!(sent.len() - before, 1, "only the question");
     assert_eq!(device.address(), at(2));
     stop(vec![other]).await;
 }

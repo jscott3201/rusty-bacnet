@@ -365,6 +365,13 @@ impl Shared {
         release(entry);
     }
 
+    /// The point, placed at its device's old address but never started
+    /// there, starts at `to`, where the hub follows its device now (#2795).
+    /// Called under the table's lock.
+    pub(super) fn rehome(&self, to: &DeviceAddress) {
+        self.lock().at = to.clone();
+    }
+
     /// The hub follows the point's device from `from` to `to` (#2795):
     /// nothing from `from` is the point's from now on, and it starts again
     /// at `to`, keeping its values (the same device) and its subscriber
@@ -643,6 +650,10 @@ pub(super) struct Registry {
     /// table's lock to end: a test lands an arrival in that window.
     #[cfg(test)]
     pub(super) before_end: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Runs once when a scheduler is about to hand its following points
+    /// on for a move: a test adds a point in that window.
+    #[cfg(test)]
+    pub(super) before_move: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl Registry {
@@ -676,6 +687,8 @@ impl Registry {
             watches: Mutex::new(Vec::new()),
             #[cfg(test)]
             before_end: Mutex::new(None),
+            #[cfg(test)]
+            before_move: Mutex::new(None),
         }
     }
 

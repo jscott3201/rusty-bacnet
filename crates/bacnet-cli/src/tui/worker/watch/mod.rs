@@ -145,7 +145,7 @@ pub(crate) fn hub_point(point: &Point) -> WatchPoint {
 fn source_of(snapshot: &Snapshot, lifetime: u32) -> Option<Source> {
     match (&snapshot.why, snapshot.source) {
         (None, Some(hub::Source::Cov)) => Some(Source::Cov { lifetime }),
-        (Some(Why::Missing | Why::Moved { .. } | Why::Replaced { .. }), _) => {
+        (Some(Why::Missing | Why::Moved { .. } | Why::Replaced { .. } | Why::Unconfirmed), _) => {
             snapshot.note.clone().map(Source::Failed)
         }
         (Some(why), Some(hub::Source::Poll)) => Some(Source::Polled(match why {
@@ -249,6 +249,37 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
         }
     }
 
+    /// Watch row `id` at the address its device answers at now, by its
+    /// address: the hub can't follow a device that won't say which it is.
+    fn pin(&mut self, id: RowId) {
+        let Some(row) = self.rows.get_mut(&id) else {
+            return;
+        };
+        let mut point = row.lease.point();
+        let at = row.lease.at();
+        tracing::info!(
+            "watch row {id}: device {} won't say which it is at {}; watching that address",
+            row.point.device_label(),
+            at.styled(self.style)
+        );
+        point.device = Binding::At(at);
+        match self.hub.watch(point) {
+            Ok(lease) => {
+                row.samples = lease.samples();
+                row.dropped = 0;
+                row.started = false;
+                row.lease = lease;
+            }
+            Err(error) => {
+                let failed = Source::Failed(error.to_string());
+                self.outbox.push_back(WatchEvent::Source {
+                    row: id,
+                    source: failed,
+                });
+            }
+        }
+    }
+
     fn csv(&mut self, on: bool) {
         let notice = match (on, self.csv.take(), &self.options.workspace) {
             (true, Some(log), _) => {
@@ -286,8 +317,16 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
         let mut samples = Vec::new();
         let mut gone = Vec::new();
         let mut moves = Vec::new();
+        let mut pinned = Vec::new();
         for (&id, row) in &mut self.rows {
             let snapshot = row.lease.snapshot();
+            if snapshot.why == Some(Why::Unconfirmed) {
+                // Its device refuses the read that names it, so the hub
+                // can't follow it (#2795): the row watches its address, as
+                // the list did before following.
+                pinned.push(id);
+                continue;
+            }
             if snapshot.moved != row.moved {
                 row.moved.clone_from(&snapshot.moved);
                 if let Some(moved) = &snapshot.moved {
@@ -358,6 +397,9 @@ impl<'s, T: TransportPort + 'static> State<'s, T> {
         }
         for id in gone {
             self.remove(id);
+        }
+        for id in pinned {
+            self.pin(id);
         }
         for (device, from, to) in moves {
             self.outbox.push_back(WatchEvent::Notice(format!(

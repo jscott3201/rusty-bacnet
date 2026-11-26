@@ -28,6 +28,7 @@ import unittest
 
 import rusty_bacnet
 from rusty_bacnet import (
+    BacnetLookupError,
     BACnetClient,
     BACnetServer,
     Device,
@@ -135,6 +136,14 @@ async def next_where(watch: Watch, test, seconds: float = 15.0) -> WatchUpdate:
         update = await asyncio.wait_for(anext(watch), left)
         if test(update):
             return update
+
+
+def i_am(instance: int) -> bytes:
+    """An I-Am of device ``instance``, as a B/IP broadcast."""
+    apdu = (bytes([0x10, 0x00, 0xC4]) + ((8 << 22) | instance).to_bytes(4, "big")
+            + bytes([0x22, 0x05, 0xC4, 0x91, 0x03, 0x21, 0x2A]))
+    npdu = bytes([0x01, 0x00]) + apdu
+    return bytes([0x81, 0x0B]) + (len(npdu) + 4).to_bytes(2, "big") + npdu
 
 
 def subscribed(update: WatchUpdate) -> bool:
@@ -354,9 +363,40 @@ class FollowTests(Lab):
             await moved.set_present_value_local(AI, PropertyValue.real(56.5))
             update = await next_where(watch, valued(56.5))
             self.assertEqual((update.address, update.moved.to), (new, new))
-            self.assertEqual(dev.address, new, "the handle went with it")
+            # The watch took the move after its own request at the relay's
+            # address went unanswered, so the handle stays until a read of
+            # its own asks there and finds the device moved.
+            self.assertEqual(dev.address, self.address)
+            self.assertEqual((await dev.read("ai:1")).data, 56.5)
+            self.assertEqual(dev.address, new)
             await watch.close()
             self.assertEqual(await active(moved), 0)
+
+    async def test_a_write_never_moves_a_following_handle(self) -> None:
+        moved = await plant(DEVICE, 55.0)
+        self.addAsyncCleanup(cleanup, moved.stop)
+        new = await moved.local_address()
+        async with client() as c:
+            await c.discover(scope=self.address, wait=0.3)
+            dev = await c.device(DEVICE)
+            # The table: another device at the relay's address, which then
+            # answers nothing, and the device at its own.
+            self.relay.answer(i_am(OTHER))
+            await c.discover(scope=new, wait=0.3)
+            self.relay.passing = 0
+            with self.assertRaises(BacnetLookupError) as caught:
+                await dev.write("ai:1", "out-of-service", "true")
+            error = caught.exception
+            self.assertEqual((error.target, error.instance), (str(DEVICE), DEVICE))
+            host, port = new.rsplit(":", 1)
+            mac = bytes(int(octet) for octet in host.split(".")) + int(port).to_bytes(2, "big")
+            self.assertEqual(error.candidates, [(0, mac)])
+            self.assertIn(f"isn't confirmed at {self.address}", str(error))
+            self.assertIn(f"the discovery table has it at {new}", str(error))
+            self.assertEqual(dev.address, self.address, "a write moves no handle")
+            # Nothing was written at the device's own address either.
+            there = await c.device(new)
+            self.assertIs((await there.read("ai:1", "out-of-service")).data, False)
 
     async def test_a_watch_of_an_address_stays_there(self) -> None:
         async with client() as c:

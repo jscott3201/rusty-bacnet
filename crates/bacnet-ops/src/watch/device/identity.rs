@@ -828,7 +828,8 @@ impl<T: TransportPort + 'static> Device<T> {
         let (Some(watched), Some(found)) = (identity, found) else {
             return false;
         };
-        if watched == found || stale {
+        // The device's own word, for a following point, is never stale.
+        if watched == found || (stale && !(follows && vouched)) {
             return false;
         }
         if row.removing || row.shared.is_stopped() {

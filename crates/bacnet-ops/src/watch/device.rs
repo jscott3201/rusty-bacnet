@@ -55,7 +55,7 @@ use tokio::time::Instant;
 
 use super::Why;
 use super::hub::{Inner, MISSING, Phase, Source};
-use super::jobs::{self, Answer, Outcome, Polled, Started};
+use super::jobs::{self, Answer, Outcome, Polled, Skipped, Started};
 use super::options::MissingDevice;
 use super::sample::Via;
 use super::shared::{Arrival, DeviceSlot, FirstSample, Running, Shared};
@@ -517,6 +517,10 @@ impl<T: TransportPort + 'static> Device<T> {
 
     fn started(&mut self, process: u32, started: Started) {
         if self.started_elsewhere(process, &started) {
+            return;
+        }
+        if started.skipped == Some(Skipped::Unconfirmed) {
+            self.unconfirmed(process);
             return;
         }
         let missing = self.inner.options.missing;

@@ -288,7 +288,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// way (Clause 16.10.2). A station found so is remembered
     /// ([`StationMisses`](super::StationMisses)), and its next lookup asks
     /// its network at once. Nothing goes further, and never globally.
-    async fn find_station(
+    pub(super) async fn find_station(
         &self,
         address: &DeviceAddress,
         range: Option<DeviceInstanceRange>,

@@ -94,7 +94,9 @@
 //! the hub hands it, with its subscriber process identifier and its
 //! values, to the scheduler at the new address, which reads and subscribes
 //! it there; its [`Update::moved`] says where it went, and the client's
-//! handles following the instance move with it. Its renewals at the old
+//! handles following the instance move with it when the hub asked their
+//! old address (not when it took the move after its own request there went
+//! unanswered). Its renewals at the old
 //! address stop and nothing is cancelled there (the device there is
 //! another or silent), so that subscription lapses with its lifetime.
 //! While another device answers at its address a following point is
@@ -239,6 +241,8 @@ mod asked_tests;
 mod claimants_tests;
 #[cfg(test)]
 mod control_tests;
+#[cfg(test)]
+mod follow_race_tests;
 #[cfg(test)]
 mod follow_tests;
 #[cfg(test)]

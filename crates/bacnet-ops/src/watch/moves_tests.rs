@@ -18,8 +18,8 @@ use super::State;
 use super::stream_tests::{latest, next, number, ready, until};
 use super::*;
 use crate::Device;
+use crate::device::QUIET;
 use crate::device::test_bus::{Bus, N, at, client, client_on, mac, requests, server, settle, stop};
-use crate::device::{ClientEvent, QUIET};
 
 fn ai1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()
@@ -236,8 +236,11 @@ async fn a_duplicate_starting_up_does_not_end_a_watch() {
 /// hub asks where it went as the handle would, once, and once only the
 /// other address has answered and named the device to the hub's read, the
 /// point goes there (#2795): the same point, its update saying where it
-/// went, then values from the new address. The handle moves with it, and
-/// the point watched again from the handle is the same point.
+/// went, then values from the new address. The hub took the move after
+/// its own request at the old address went unanswered, without asking it
+/// once more, so the handle stays (only a move whose old address was asked
+/// moves handles); the point watched again from the handle is the same
+/// point, still at the new address, where the hub follows the device.
 #[tokio::test(start_paused = true)]
 async fn a_following_device_that_moves_is_followed_by_the_hub() {
     let bus = Bus::new();
@@ -276,15 +279,8 @@ async fn a_following_device_that_moves_is_followed_by_the_hub() {
     );
     assert!(moved.when.elapsed().is_ok());
     assert_eq!(moved.count, 1);
-    assert_eq!(
-        events.try_recv().unwrap(),
-        ClientEvent::Moved {
-            instance: N,
-            from: at(2),
-            to: at(3)
-        }
-    );
-    assert_eq!(device.address(), at(3), "the handle moved too");
+    assert!(events.try_recv().is_err(), "no handle moved");
+    assert_eq!(device.address(), at(2), "the handle stays");
     until(&mut watch, |u| u.state == State::Subscribed).await;
     set(&servers[1], 42.0).await;
     let update = until(&mut watch, |u| number(u) == Some(42.0)).await;

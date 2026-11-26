@@ -97,6 +97,22 @@ pub enum OpsError {
         /// Every address claiming it, ordered by network and then MAC.
         candidates: Vec<DeviceAddress>,
     },
+    /// A write (or relinquish) through a handle following an instance was
+    /// refused before anything was sent (#2795): the device isn't
+    /// confirmed at the address the handle holds (asked, the device there
+    /// doesn't answer as the instance, or no route to it is known), and a
+    /// write never goes to another address on its own. A read through the
+    /// handle looks for the device, asking both addresses; a write after it
+    /// goes where the read confirmed it.
+    NotConfirmed {
+        /// The instance the handle follows.
+        instance: u32,
+        /// The address the handle holds.
+        at: DeviceAddress,
+        /// The one other address the discovery table has the instance at,
+        /// if one: a hint, not asked.
+        candidate: Option<DeviceAddress>,
+    },
     /// The device, or the way to it, didn't answer: the request timed out
     /// (the client's own timeout, or the transaction state machine giving
     /// up on its retries), the link failed, or a router on the way refused
@@ -387,6 +403,22 @@ impl fmt::Display for OpsError {
                     write!(f, "{address}")?;
                 }
                 f.write_str("; name one by its address")
+            }
+            Self::NotConfirmed {
+                instance,
+                at,
+                candidate,
+            } => {
+                write!(
+                    f,
+                    "device {instance} isn't confirmed at {at}, where the handle reaches it \
+                     (another device or none answers there, or no route to it is known), \
+                     and a write never goes elsewhere on its own"
+                )?;
+                if let Some(candidate) = candidate {
+                    write!(f, "; the discovery table has it at {candidate}")?;
+                }
+                f.write_str(": read through the handle first, which looks for the device")
             }
             Self::Unreachable { source, .. } => write!(f, "{source}"),
             Self::Refused {

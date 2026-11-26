@@ -67,6 +67,19 @@ pub(super) struct Started {
     pub(super) outcome: Outcome,
     /// What is known of the point's COV now.
     pub(super) cov: CovSupport,
+    /// A following point's device was asked which it is before anything
+    /// was read, and nothing more was sent (#2795).
+    pub(super) skipped: Option<Skipped>,
+}
+
+/// Why nothing was read for a following point's start (#2795).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Skipped {
+    /// The device at the address named another instance (`before`).
+    Elsewhere,
+    /// The device there refuses the read that names it: nothing there can
+    /// confirm it.
+    Unconfirmed,
 }
 
 /// Whether a start asked for its subscription, and how that went.
@@ -145,6 +158,7 @@ pub(super) async fn start<T: TransportPort + 'static>(
             read_at: None,
             outcome: Outcome::NotAsked,
             cov: known,
+            skipped: None,
         };
     };
     // Before anything is sent: the device may notify as soon as it takes
@@ -154,24 +168,58 @@ pub(super) async fn start<T: TransportPort + 'static>(
     let first = read(&inner, point, address, before).await;
     let read_at = Some((Instant::now(), SystemTime::now()));
     // The point's device, from what answered at its address, unless an
-    // answer named it already or the device refused that read before.
+    // answer named it already or the device refused that read before. A
+    // following point's device is its own instance (#2795): the table's row
+    // names nothing of the device there, so it is asked, once an address,
+    // unless it named itself to the client already.
     let unknown = shared.confirmed().is_none() && !client.wildcard_refused(address);
-    // A following point's device is its own instance (#2795): the table's
-    // row names nothing of the device there, so it is asked, once an
-    // address, unless it said which it is already.
     let follows = point.device.instance();
     let ask = before.is_none() || (follows.is_some() && said.is_none());
+    let mut refused = follows.is_some() && said.is_none() && client.wildcard_refused(address);
     let (before, vouched) = match before {
-        _ if ask && unknown && first.is_ok() => (client.ask_instance(address).await.ok(), true),
+        _ if ask && unknown && first.is_ok() => match client.ask_instance(address).await {
+            Ok(found) => (Some(found), true),
+            Err(error) => {
+                refused |= !unreachable(&error) && !failed_locally(&error);
+                (None, true)
+            }
+        },
         known => (known, said.is_some()),
     };
-    // The device here named another instance: no subscription of a
-    // following point is asked of it.
-    let elsewhere = vouched && follows.is_some_and(|own| before.is_some_and(|said| said != own));
+    // Nothing of the start is a following point's, and nothing is asked of
+    // the device, when the device there named another instance, or can't
+    // say which it is (it refuses that read): a read of the instance's own
+    // Device object names nothing, and no address the device left was
+    // asked. The first read's values are dropped.
+    let skipped = match follows {
+        Some(own) if vouched && before.is_some_and(|found| found != own) => {
+            Some(Skipped::Elsewhere)
+        }
+        Some(_)
+            if refused
+                && !first
+                    .as_ref()
+                    .is_err_and(|e| unreachable(e) || failed_locally(e)) =>
+        {
+            Some(Skipped::Unconfirmed)
+        }
+        _ => None,
+    };
+    if skipped.is_some() {
+        return Started {
+            target: Some(target),
+            before,
+            vouched,
+            instance: before,
+            first: None,
+            read_at: None,
+            outcome: Outcome::NotAsked,
+            cov: known,
+            skipped,
+        };
+    }
     let (outcome, observed, cov) = if first.as_ref().is_err_and(unreachable) {
         // Subscribing would only time out too.
-        (Outcome::NotAsked, None, known)
-    } else if elsewhere {
         (Outcome::NotAsked, None, known)
     } else if !inner.options.subscribe {
         (Outcome::PollOnly, None, known)
@@ -208,6 +256,7 @@ pub(super) async fn start<T: TransportPort + 'static>(
         read_at,
         outcome,
         cov,
+        skipped: None,
     }
 }
 

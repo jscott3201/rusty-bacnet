@@ -104,6 +104,9 @@ pub(crate) struct Bus {
     ports: Mutex<Vec<Port>>,
     /// Stations a unicast to fails at the sender.
     broken: Mutex<HashSet<u8>>,
+    /// Unicasts to each station still to be lost on the way, as one lost
+    /// datagram is.
+    losing: Mutex<std::collections::HashMap<u8, usize>>,
     /// The Time_Of_Device_Restart each station answers a ReadProperty of
     /// with, in place of its server, which has none.
     restart_times: Mutex<std::collections::HashMap<u8, Vec<u8>>>,
@@ -147,7 +150,8 @@ impl Bus {
                     let broken = bus.broken.lock().unwrap();
                     broken.iter().any(|n| mac(*n) == to)
                 });
-                if !broken && !bus.restart_time_answered(&source, &frame.npdu, to) {
+                if !broken && !bus.lost(to) && !bus.restart_time_answered(&source, &frame.npdu, to)
+                {
                     bus.deliver(&source, &frame.npdu, to);
                 }
                 async move {
@@ -227,6 +231,27 @@ impl Bus {
             if port.mac.as_slice() == mac(n) {
                 port.silent = silent;
             }
+        }
+    }
+
+    /// The next `count` unicasts to station `n` are lost on the way: one
+    /// request it misses, as a lost datagram, while it answers the rest.
+    pub(crate) fn lose(&self, n: u8, count: usize) {
+        self.losing.lock().unwrap().insert(n, count);
+    }
+
+    /// Whether a unicast to `to` is lost, counting it.
+    fn lost(&self, to: Option<&[u8]>) -> bool {
+        let Some(n) = to.and_then(|to| (0..=u8::MAX).find(|n| mac(*n) == to)) else {
+            return false;
+        };
+        let mut losing = self.losing.lock().unwrap();
+        match losing.get_mut(&n) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                true
+            }
+            _ => false,
         }
     }
 

@@ -421,7 +421,9 @@ impl<T: TransportPort + 'static> Hub<T> {
             if let Some(key) = self.follow_key(point)
                 && !places.contains_key(&key)
             {
-                places.insert(key, client.follow_place(key)?);
+                let place = client.follow_place(key)?;
+                let at = client.place_of(&place);
+                places.insert(key, (place, at));
             }
         }
         let mut fresh = Vec::new();
@@ -472,7 +474,7 @@ impl<T: TransportPort + 'static> Hub<T> {
         &self,
         table: &mut shared::Table,
         point: Point,
-        place: Option<Followed>,
+        place: Option<(Followed, DeviceAddress)>,
         fresh: &mut Vec<(DeviceAddress, Arc<DeviceSlot>)>,
     ) -> Arc<Shared> {
         let registry = &self.inner.registry;
@@ -485,11 +487,7 @@ impl<T: TransportPort + 'static> Hub<T> {
             (Binding::At(address), _) => address.clone(),
             (Binding::Follows { .. }, key) => {
                 let key = key.expect("a following point has a key");
-                table.follow(key, || {
-                    let place = place.expect("placed before the table's lock");
-                    let at = self.inner.client.place_of(&place);
-                    (place, at)
-                })
+                table.follow(key, || place.expect("placed before the table's lock"))
             }
         };
         // Within the hub's own range, never 0 or another hub's.

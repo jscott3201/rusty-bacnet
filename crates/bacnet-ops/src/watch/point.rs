@@ -255,4 +255,12 @@ pub enum Why {
         /// The instance the notifications name.
         sender: u32,
     },
+    /// A following point's device can't be confirmed at the address the
+    /// point was placed at (#2795): the device there refuses the read that
+    /// names it, a read of the instance's own Device object names nothing
+    /// on its own (a gateway answers for any instance), and no address the
+    /// device left was asked. Nothing it answers is taken and nothing is subscribed there: the
+    /// point is [`State::Unreachable`](super::State::Unreachable). Watch
+    /// such a device by its address ([`Binding::At`]).
+    Unconfirmed,
 }

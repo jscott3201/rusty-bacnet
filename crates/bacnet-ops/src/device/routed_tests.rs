@@ -524,3 +524,38 @@ async fn a_bare_instance_with_a_remote_row_needs_no_who_is() {
     );
     lab.stop().await;
 }
+
+/// The reviewer's recipe U: a routed following handle whose row aged out
+/// (here, the table is cleared) while one I-Am, routed from station 8 on
+/// network 3, names its instance, where a responder answers as it. A write
+/// finds no route and goes nowhere else (#2795); a read asks for station 6
+/// again, which answers, and reads there. Nothing reaches station 8.
+#[tokio::test(start_paused = true)]
+async fn a_routed_write_with_no_route_goes_nowhere_else() {
+    let mut lab = Routed::new(|near| near.port(1)).await;
+    lab.discover().await;
+    let following = lab.client.device("3:1001").await.unwrap();
+    let six = DeviceAddress::new(3, &mac(6)).unwrap();
+    let eight = DeviceAddress::new(3, &mac(8)).unwrap();
+    assert_eq!(following.address(), six);
+    lab.servers
+        .push(server(lab.three.port(8), N, "impostor").await);
+    lab.client.low_level().clear_devices().await;
+    lab.near.i_am_from(254, Some((3, &mac(8))), N);
+    settle().await;
+    lab.sent.clear();
+    let error = following.write("ai:1 oos", "true", None).await.unwrap_err();
+    assert!(
+        matches!(&error, OpsError::NotConfirmed { candidate: Some(c), .. } if *c == eight),
+        "{error:?}"
+    );
+    let write = bacnet_types::enums::ConfirmedServiceChoice::WRITE_PROPERTY;
+    assert_eq!(
+        super::test_bus::requests(&lab.sent, write, 254),
+        0,
+        "nothing sent"
+    );
+    assert_eq!(name_of(&following).await.unwrap(), "on three");
+    assert_eq!(following.address(), six, "station 6 answered again");
+    lab.stop().await;
+}

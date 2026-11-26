@@ -352,6 +352,14 @@ impl PyWatchReason {
                     format!("device {found} answers at {address} now, not device {watched}"),
                 )
             },
+            Why::Unconfirmed => reason(
+                "unconfirmed",
+                None,
+                format!(
+                    "the device at {address} refuses the read that names it, so the device \
+                     can't be confirmed there; watch it by its address"
+                ),
+            ),
             Why::ForeignSender { sender } => Self {
                 sender: Some(*sender),
                 ..reason(
@@ -380,7 +388,9 @@ impl PyWatchReason {
     /// (device `found` answers at the address now, not `watched`), either
     /// of which gives the point up; `"foreign-sender"` (its notifications
     /// name device `sender`, which can't be told from another device
-    /// there, so it is polled). `"other"` for a reason this version
+    /// there, so it is polled); `"unconfirmed"` (a following watch's device
+    /// refuses the read that names it at its address, so nothing it answers is taken
+    /// there: watch it by its address). `"other"` for a reason this version
     /// doesn't name.
     #[getter]
     fn kind(&self) -> &'static str {

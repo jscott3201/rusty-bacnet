@@ -85,9 +85,12 @@ impl<T: TransportPort + 'static> Device<T> {
     /// slot: use [`relinquish`](Self::relinquish)), and for a write to
     /// Priority_Array, which is read-only; [`OpsError::Denied`] for a
     /// priority the client's [`WritePolicy`](crate::WritePolicy) refuses
-    /// (1, 2, 5 and 6 by default). Then the device's refusal as
-    /// [`OpsError::Refused`], and [`OpsError::Unreachable`] for no answer,
-    /// in which case the write may or may not have been applied.
+    /// (1, 2, 5 and 6 by default); for a handle following an instance,
+    /// [`OpsError::NotConfirmed`] when the device isn't confirmed at the
+    /// address the handle holds, as a write never goes to another one
+    /// (#2795). Then the device's refusal as [`OpsError::Refused`], and
+    /// [`OpsError::Unreachable`] for no answer, in which case the write may
+    /// or may not have been applied.
     pub async fn write(
         &self,
         property: impl IntoProperty,
@@ -282,16 +285,12 @@ impl<T: TransportPort + 'static> Device<T> {
         // before the device is looked up, as the encoding itself refuses it.
         check_property_value(order.property.property, &order.value.raw, 3)
             .map_err(|refused| OpsError::Client(refused.within("WriteProperty").into()))?;
-        let address = self.target().await?;
+        let address = self.write_target().await?;
         let result = self.write_at(&address, order).await;
-        // No route: nothing was sent. A timeout is never sent again.
-        if matches!(result, Err(Error::UnknownDevice { .. }))
-            && let Some(to) = self.retry(&address, &result).await?
-        {
-            let result = self.write_at(&to, order).await;
-            return result
-                .map(|()| to.clone())
-                .map_err(|e| OpsError::at(&to, e));
+        // No route: nothing was sent, and a write never goes elsewhere on
+        // its own (#2795). A timeout is never sent again.
+        if self.follows() && matches!(result, Err(Error::UnknownDevice { .. })) {
+            return Err(self.not_confirmed(address).await);
         }
         result
             .map(|()| address.clone())

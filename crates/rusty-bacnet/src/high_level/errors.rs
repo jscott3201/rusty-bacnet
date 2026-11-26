@@ -106,6 +106,39 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
             ),
         ),
         OpsError::ObjectList { source, .. } => object_list(message, *source, style),
+        // A write through a following handle not sent (#2795): its
+        // addresses in the link's own form, the hint among `candidates`.
+        OpsError::NotConfirmed {
+            instance,
+            at,
+            candidate,
+        } => {
+            let mut text = format!(
+                "device {instance} isn't confirmed at {}, where the handle reaches it \
+                 (another device or none answers there, or no route to it is known), and a \
+                 write never goes elsewhere on its own",
+                at.styled(style)
+            );
+            if let Some(candidate) = &candidate {
+                text.push_str(&format!(
+                    "; the discovery table has it at {}",
+                    candidate.styled(style)
+                ));
+            }
+            text.push_str(": read through the handle first, which looks for the device");
+            lookup_error(
+                text,
+                Lookup {
+                    target: Some(instance.to_string()),
+                    instance: Some(instance),
+                    ambiguous: false,
+                    candidates: candidate
+                        .iter()
+                        .map(|address| (address.network(), address.mac().to_vec()))
+                        .collect(),
+                },
+            )
+        }
         OpsError::UnknownDevice { target, asked } => lookup_error(
             match asked {
                 // Ops' own text names the Rust call that widens the scope.

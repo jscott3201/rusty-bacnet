@@ -45,8 +45,9 @@ async fn a_responder_naming_the_device_elsewhere_ends_no_watch() {
 }
 
 /// The same with station 2 gone quiet after it answered the forged claim:
-/// the handle's read there times out, station 3 names the device to the
-/// handle's ask, and the handle moves there. The hub, told, reads station
+/// the handle's read there times out, the handle asks station 2 once
+/// more (silent) and station 3 (the device), and moves there. The hub,
+/// told, reads station
 /// 3, asks station 2 once more, which doesn't answer, and the following
 /// point goes to station 3.
 #[tokio::test(start_paused = true)]
@@ -63,7 +64,11 @@ async fn a_responder_naming_the_device_is_a_move_once_its_old_address_is_silent(
     let update = until(&mut lab.watch, |u| u.moved.is_some()).await;
     assert_eq!(update.at, at(3), "{update:?}");
     assert!(lab.reads_at(3) >= 2, "the handle's read and the hub's");
-    assert_eq!(lab.reads_at(2) - before, 1, "the hub's ask");
+    assert_eq!(
+        lab.reads_at(2) - before,
+        2,
+        "the handle's ask and the hub's"
+    );
     until(&mut lab.watch, |u| u.state == State::Subscribed).await;
     lab.bus.unsilence(2);
     lab.stop().await;

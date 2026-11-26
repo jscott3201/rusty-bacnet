@@ -31,25 +31,32 @@
 //!
 //! A pinned handle never moves: [`Device::moved_to`] says when its
 //! instance is heard at one other address while its own has gone quiet
-//! ([`QUIET`]). A following handle moves to the one other address on its
-//! network claiming its instance, tells [`Client::events`]
-//! ([`ClientEvent::Moved`]) and sends there, once the device there names
-//! its instance in an answer to the handle's own read (#2795: the
-//! discovery table is filled by I-Ams nobody asked for, which move no
-//! handle on their own), when:
+//! ([`QUIET`]). A following handle's place moves only on its device's
+//! answers (#2795: the discovery table is filled by I-Ams nobody asked
+//! for). A write or relinquish never moves it: it goes to the place the
+//! handle holds while the device there is still taken for the instance,
+//! else nothing is sent ([`OpsError::NotConfirmed`]). A read moves it to
+//! the one other address on its network claiming its instance, telling
+//! [`Client::events`] ([`ClientEvent::Moved`]), once the device at its own
+//! address was asked which it is and isn't the instance (silent, by a
+//! timeout alone, or another device) and the device at the new address
+//! names the instance, when:
 //!
-//! - before a request, another device has announced itself at its address,
-//!   and the device there, asked, doesn't answer as the instance (still
-//!   the instance, the handle stays; with no other claim, or one that
-//!   doesn't answer as it, the request fails as [`OpsError::UnknownDevice`],
-//!   with two or more claims as ambiguous, and the request isn't sent);
-//! - after a request timed out, or found no route left to a routed
-//!   address, no row there claims the instance any more;
-//! - after a request timed out while its address still claims the
+//! - before the read, another device has announced itself at its address
+//!   (still the instance when asked, or no word of which it is, the handle
+//!   stays; with no other claim, or one that doesn't answer as it, the
+//!   read fails as [`OpsError::UnknownDevice`], with two or more claims as
+//!   ambiguous, and the read isn't sent);
+//! - after the read timed out, or a router refused it, no row at its
+//!   address claims the instance any more;
+//! - after the read timed out while its address still claims the
 //!   instance, only the other address answered the one Who-Is for the
 //!   instance an earlier timeout sent, on the network where the device was
 //!   last reached, never on every network ([`QUIET`] says how often it
-//!   asks, and how a clone that sends no Who-Is decides instead).
+//!   asks, and how a clone that sends no Who-Is decides instead);
+//! - after the read found no route to a routed address, a Who-Is
+//!   addressed to the station, then one to its network, drew no answer (an
+//!   answer sends the read there again).
 //!
 //! Two or more other claims fail a timed-out request as ambiguous, and
 //! otherwise its error stays as it was. Handles following one instance on
@@ -387,6 +394,9 @@ mod router_app_tests;
 
 #[cfg(test)]
 pub(crate) mod test_bus;
+
+#[cfg(test)]
+mod write_follow_tests;
 
 #[cfg(test)]
 #[path = "tests.rs"]
