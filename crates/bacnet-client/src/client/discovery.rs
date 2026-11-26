@@ -173,6 +173,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.device_table.lock().get(network, mac).cloned()
     }
 
+    /// Whether the discovered devices table is full (4,096 addresses): an
+    /// I-Am from an address it holds no row for is dropped, unheard, until
+    /// a row goes, so a device answering a Who-Is now may go unseen. A
+    /// lookup that must hear every claim checks this after its Who-Is.
+    pub fn device_table_full(&self) -> bool {
+        self.device_table.lock().is_full()
+    }
+
     /// Clear the discovered devices table.
     pub async fn clear_devices(&self) {
         self.device_table.lock().clear();

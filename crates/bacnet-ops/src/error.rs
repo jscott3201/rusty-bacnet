@@ -133,6 +133,16 @@ pub enum OpsError {
         /// write through a following handle (#2795).
         placing: bool,
     },
+    /// A first placement of `instance` by its instance settled with the
+    /// client's discovery table full (4,096 addresses, #2824): an I-Am from
+    /// an address the table held no row for, the device's own answer to
+    /// the Who-Is among them, was dropped unheard, so the claims it holds
+    /// may leave the device out. Nothing but the Who-Is was sent. Name the
+    /// device by its address, or make room in the table.
+    TableFull {
+        /// The Device instance named.
+        instance: u32,
+    },
     /// The device, or the way to it, didn't answer: the request timed out
     /// (the client's own timeout, or the transaction state machine giving
     /// up on its retries), the link failed, or a router on the way refused
@@ -468,6 +478,12 @@ impl fmt::Display for OpsError {
                 let text = self.not_confirmed_text(&|address| address.to_string());
                 f.write_str(&text.unwrap_or_default())
             }
+            Self::TableFull { instance } => write!(
+                f,
+                "device {instance} isn't placed: the discovery table is full (4,096 \
+                 addresses), so the device's own answer to the Who-Is for it may have been \
+                 dropped unheard; nothing was asked: name the device by its address"
+            ),
             Self::Unreachable { source, .. } => write!(f, "{source}"),
             Self::Refused {
                 error,

@@ -138,6 +138,11 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
                 },
             )
         }
+        // A placement settled with the discovery table full (#2824): the
+        // device may be unheard, so it is a lookup that failed.
+        OpsError::TableFull { instance } => {
+            lookup_error(message, Lookup::unknown(instance.to_string()))
+        }
         OpsError::UnknownDevice { target, asked } => lookup_error(
             match asked {
                 // Ops' own text names the Rust call that widens the scope.

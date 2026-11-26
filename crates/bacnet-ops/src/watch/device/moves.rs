@@ -369,6 +369,11 @@ impl<T: TransportPort + 'static> Device<T> {
                 "two or more addresses claiming device {instance} answer as it, or may, so \
                  which one it is isn't confirmed; watch it by its address"
             ),
+            Skipped::TableFull => format!(
+                "the discovery table is full, so the device's own claim to device {instance} \
+                 may have been dropped, and its place at {at} isn't confirmed; watch it by its \
+                 address"
+            ),
             Skipped::Unsent => format!(
                 "the Who-Is for device {instance} couldn't be sent, so its place at {at} isn't \
                  confirmed; watch it again once the link is back, or by its address"

@@ -51,6 +51,9 @@ pub(crate) enum Settled {
     /// The Who-Is for the instance couldn't be sent: nothing settled the
     /// place, so nothing is watched there.
     Unsent,
+    /// The discovery table was full once the Who-Is settled: the device's
+    /// own claim may have been dropped, so nothing is watched there.
+    TableFull,
 }
 
 impl<T: TransportPort + 'static> Client<T> {
@@ -277,7 +280,15 @@ impl<T: TransportPort + 'static> Client<T> {
         let known = live.and_then(|(here, answer)| Some((here, answer?)));
         let mut claims = self.claims_and(instance, network, held.as_ref()).await;
         if !self.any_registered(&claims, instance).await {
-            self.look_once((key, named), &claims, (turn, since)).await?;
+            let looked = self.look_once((key, named), &claims, (turn, since)).await;
+            // A full table drops an I-Am from an address it holds no row
+            // for: the device's own answer may be missing from the claims.
+            if matches!(looked, Ok(()) | Err(OpsError::UnknownDevice { .. }))
+                && self.low_level().device_table_full()
+            {
+                return Err(OpsError::TableFull { instance });
+            }
+            looked?;
             claims = self.claims_and(instance, network, held.as_ref()).await;
         }
         if claims.is_empty() {
@@ -301,7 +312,7 @@ impl<T: TransportPort + 'static> Client<T> {
     ///
     /// The send's own, when the Who-Is couldn't be sent: no claim is asked
     /// then. With no claim, [`OpsError::UnknownDevice`] when nothing
-    /// answered.
+    /// answered. Its caller checks the discovery table isn't full after.
     async fn look_once(
         &self,
         (key, named): (FollowKey, Option<u16>),
@@ -366,7 +377,9 @@ impl<T: TransportPort + 'static> Client<T> {
     /// device confirms the instance. A place is never moved by this: the
     /// hub's own reads move its points. It counts as settled only once
     /// this ends: a start cancelled meanwhile leaves the next to settle it.
-    /// A Who-Is that couldn't be sent settles nothing ([`Settled::Unsent`]).
+    /// A Who-Is that couldn't be sent settles nothing ([`Settled::Unsent`]),
+    /// nor does one settled with the discovery table full
+    /// ([`Settled::TableFull`]).
     pub(crate) async fn settle_place(&self, key: FollowKey, here: &DeviceAddress) -> Settled {
         let since = now();
         let mut turn = self.resolving(key).await;
@@ -395,6 +408,9 @@ impl<T: TransportPort + 'static> Client<T> {
             tracing::warn!("looking for device {instance} before watching it at {here}: {error}");
             return Settled::Unsent;
         }
+        if self.low_level().device_table_full() {
+            return Settled::TableFull;
+        }
         let settled = if self.claims_and(instance, network, Some(here)).await == [here.clone()] {
             Settled::Open
         } else {
@@ -406,6 +422,7 @@ impl<T: TransportPort + 'static> Client<T> {
             match placed {
                 Ok(place) if self.place_of(&place) == *here => Settled::Here,
                 Err(OpsError::Ambiguous { .. }) => Settled::Ambiguous,
+                Err(OpsError::TableFull { .. }) => return Settled::TableFull,
                 Ok(_) | Err(_) => Settled::Open,
             }
         };

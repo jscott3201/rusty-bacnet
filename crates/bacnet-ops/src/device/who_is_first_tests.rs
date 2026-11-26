@@ -302,3 +302,50 @@ async fn a_lone_claim_places_the_handle_for_the_resolve_wait_only_provisionally(
         stop(servers).await;
     }
 }
+
+/// A full discovery table drops an I-Am from an address it holds no row
+/// for, the device's own answer to the Who-Is among them (#2824): a
+/// placement that settles with the table full fails as such, asking no
+/// claim, rather than taking the one claim the table kept, for a handle
+/// and for the low-level placement alike.
+#[tokio::test(start_paused = true)]
+async fn a_full_discovery_table_places_nothing() {
+    use crate::Scope;
+    use crate::device::{Look, place_instance};
+    use crate::limits::RequestLimits;
+    let (bus, client, sent, servers) = lab_with(true, true).await;
+    bus.i_am(3, N);
+    settle().await;
+    let low = client.low_level();
+    let mut filler = 0u32;
+    while !low.device_table_full() {
+        filler += 1;
+        let [_, a, b, c] = filler.to_be_bytes();
+        low.add_device(200_000 + filler, &[10, 9, a, b, c, 1])
+            .await
+            .unwrap();
+    }
+    let error = client.device(N).await.unwrap_err();
+    assert!(
+        matches!(error, OpsError::TableFull { instance: N }),
+        "{error:?}"
+    );
+    let look = Look {
+        scope: Scope::Local,
+        wait: RESOLVE_WAIT,
+    };
+    let limits = RequestLimits::new(0);
+    let placement = place_instance(low, &limits, N, None, Some(look), &|_| None)
+        .await
+        .unwrap();
+    assert!(
+        matches!(placement.placed, Err(OpsError::TableFull { instance: N })),
+        "{placement:?}"
+    );
+    assert_eq!(
+        requests(&sent, READ, 2) + requests(&sent, READ, 3),
+        0,
+        "nothing asked"
+    );
+    stop(servers).await;
+}

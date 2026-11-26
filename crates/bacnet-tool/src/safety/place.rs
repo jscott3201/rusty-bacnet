@@ -107,6 +107,10 @@ pub enum Unsent {
         /// Why, as the caller said.
         why: String,
     },
+    /// A revert of an entry kept without an address whose device couldn't
+    /// be placed, nothing asked: the Who-Is for it couldn't be sent, or the
+    /// discovery table was full once it settled (#2824).
+    Unplaced(OpsError),
 }
 
 impl std::fmt::Display for Unsent {
@@ -160,6 +164,7 @@ impl std::fmt::Display for Unsent {
                  where its device answers as it"
             ),
             Self::Withheld { why, .. } => write!(f, "{why}"),
+            Self::Unplaced(error) => write!(f, "{error}"),
         }
     }
 }
@@ -377,6 +382,9 @@ pub async fn revert_address<T: TransportPort + 'static>(
                 Err(Unsent::NotLooking {
                     device: format!("device {instance}"),
                 })
+            }
+            Err(error @ (OpsError::Client(_) | OpsError::TableFull { .. })) => {
+                Err(Unsent::Unplaced(error))
             }
             Err(_) => Err(Unsent::Client(Error::UnknownDevice {
                 device: instance.to_string(),

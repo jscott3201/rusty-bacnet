@@ -519,8 +519,12 @@ impl<T: TransportPort + 'static> Device<T> {
         if self.started_elsewhere(process, &started) {
             return;
         }
-        if let Some(skipped @ (Skipped::Unconfirmed | Skipped::Ambiguous | Skipped::Unsent)) =
-            started.skipped
+        if let Some(
+            skipped @ (Skipped::Unconfirmed
+            | Skipped::Ambiguous
+            | Skipped::Unsent
+            | Skipped::TableFull),
+        ) = started.skipped
         {
             self.unconfirmed(process, skipped);
             return;

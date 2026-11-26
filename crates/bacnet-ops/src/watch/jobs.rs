@@ -86,6 +86,9 @@ pub(super) enum Skipped {
     /// The Who-Is for the instance, sent before its place is first watched
     /// (#2824), couldn't be sent: nothing confirmed the place.
     Unsent,
+    /// The discovery table was full once that Who-Is settled: the device's
+    /// own claim may have been dropped (#2824).
+    TableFull,
 }
 
 /// Whether a start asked for its subscription, and how that went.
@@ -152,6 +155,7 @@ pub(super) async fn start<T: TransportPort + 'static>(
         let skipped = match client.settle_place(key, address).await {
             Settled::Ambiguous => Some(Skipped::Ambiguous),
             Settled::Unsent => Some(Skipped::Unsent),
+            Settled::TableFull => Some(Skipped::TableFull),
             Settled::Here | Settled::Open => None,
         };
         if skipped.is_some() {

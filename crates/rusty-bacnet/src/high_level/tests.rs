@@ -422,10 +422,24 @@ fn every_variant_is_mapped() {
         });
         assert!(link.is_instance_of::<PyOSError>(py), "{link}");
         assert!(link.to_string().contains("element 7 of 40"), "{link}");
+        // A placement settled with the discovery table full is a lookup
+        // that failed (#2824).
+        let full = ops_err_bip(OpsError::TableFull { instance: 7302 });
+        let lookup = lookup_error_type(py).unwrap().bind(py);
+        assert!(full.value(py).is_instance(lookup).unwrap(), "{full}");
+        assert!(full.to_string().contains("table is full"), "{full}");
+        let instance: u32 = full
+            .value(py)
+            .getattr("instance")
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert_eq!(instance, 7302);
         // The variants the other tests cover: Parse, UnknownDevice,
-        // Ambiguous, Unreachable, Refused, Client, Denied (over the wire),
-        // ReadBack (over the wire) and NoPriorityArray. With Paging, Watch
-        // and ObjectList that is all twelve.
+        // Ambiguous, NotConfirmed, Unreachable, Refused, Client, Denied
+        // (over the wire), ReadBack (over the wire) and NoPriorityArray.
+        // With Paging, Watch, ObjectList and TableFull that is all
+        // fourteen.
     });
 }
 

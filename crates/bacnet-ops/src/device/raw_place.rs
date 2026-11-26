@@ -190,6 +190,11 @@ pub async fn place_instance<T: TransportPort + 'static>(
         } else {
             tokio::time::sleep(settle).await;
         }
+        // A full table drops an I-Am from an address it holds no row for:
+        // the device's own answer may be missing from the claims.
+        if client.device_table_full() {
+            return Ok(failed(OpsError::TableFull { instance }));
+        }
         claims = self::claims(client, instance, scoped).await;
     }
     if let Some((at, why)) = claims
