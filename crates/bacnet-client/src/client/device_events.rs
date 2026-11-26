@@ -43,7 +43,8 @@ pub(super) fn heard_i_am(
 ) -> IAmWants {
     let mut table = table.lock();
     // A router relaying back an I-Am from this client's own network names a
-    // local device: one row, as it is one peer (#1358, #1465). The number is
+    // local device, as a request relayed that way does (#1404): one row, as
+    // it is one peer (#1358). The number is
     // read under the lock its learning folds the table under, so a routed
     // row made before then is folded by that, and none is made after it
     // (#2572). While the number is unknown the relay is a routed station.

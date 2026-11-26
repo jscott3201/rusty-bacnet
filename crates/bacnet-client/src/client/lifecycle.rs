@@ -677,6 +677,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// answers back onto this network sees those requests time out and
     /// this count rise.
     ///
+    /// Only this client's requests are counted, and a relayed answer for a
+    /// request sent straight to a device only once the client knows its
+    /// network's number. A server's own writes and notifications to a local
+    /// device that get only a relayed answer time out with a debug log; a
+    /// server counter comes with the server half of #2831.
+    ///
     /// Not covered: an answer relayed through the request's own router
     /// (that router would have to check where it came from); a request sent
     /// by local broadcast ([`Station::routed_via_local_broadcast`]), which

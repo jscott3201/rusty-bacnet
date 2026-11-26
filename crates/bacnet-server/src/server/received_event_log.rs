@@ -125,7 +125,7 @@ impl ReceivedEventLog {
     /// Spend one of `source`'s records at `now`, or say there are none left.
     ///
     /// A source is keyed by the network address it sent from, as the stack
-    /// reads every request's sender ([`CanonicalPeer::from_source`], #1465),
+    /// reads every request's sender ([`CanonicalPeer::from_source`], #1404),
     /// not by the Initiating Device Identifier in the notification. That
     /// identifier is whatever the sender writes, so a node keyed by it could
     /// claim a new one for each notification and take a fresh allowance

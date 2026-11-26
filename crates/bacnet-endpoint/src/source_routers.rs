@@ -43,8 +43,9 @@ pub(crate) enum SourceRoute {
 }
 
 impl SourceRoute {
-    /// The peer a confirmed record's answer comes from: the station itself,
-    /// as the SNET/SADR a router adds names it (#1465).
+    /// The peer a confirmed record's answer is matched to
+    /// ([`CanonicalPeer::of_answer`]): the station's MAC for a direct route,
+    /// the network and MAC a router adds as SNET/SADR for a routed one.
     pub(crate) fn peer(&self) -> CanonicalPeer {
         match self {
             Self::Direct(mac) => CanonicalPeer::direct(mac),

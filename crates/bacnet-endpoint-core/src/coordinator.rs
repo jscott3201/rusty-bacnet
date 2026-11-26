@@ -105,10 +105,11 @@ impl CanonicalPeer {
     /// keyed to its MAC, so only an answer from that MAC with no SNET
     /// completes it. One relayed with this network as SNET completes only a
     /// request still keyed to that routed form, sent before the number was
-    /// known, and the requester checks its sender as it checks any routed
-    /// answer's. A frame's SNET and SADR are its sender's own claim; the
-    /// link address it comes from is the part a sender can't choose on most
-    /// links.
+    /// known. The client then checks its sender as it checks any routed
+    /// answer's; the server takes the same admission but doesn't check the
+    /// sender yet (the server half of #2831). A frame's SNET and SADR are
+    /// its sender's own claim; the link address it comes from is the part a
+    /// sender can't choose on most links.
     pub fn of_answer(immediate_mac: &[u8], routed_source: Option<&NpduAddress>) -> Self {
         match routed_source {
             Some(source) if !source.mac_address.is_empty() => {

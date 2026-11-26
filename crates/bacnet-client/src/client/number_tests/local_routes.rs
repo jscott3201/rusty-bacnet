@@ -525,7 +525,8 @@ async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed
 }
 
 /// An I-Am a router relays back from this network, with its number as
-/// SNET, names a local device (#1465): it lands on the
+/// SNET, names a local device, as a request relayed that way does (#1404):
+/// it lands on the
 /// device's local row, so the device and its relayed I-Am are one device,
 /// not an ambiguous instance (#2560). While the number is unknown the relay
 /// is a routed station of its own, and the instance is ambiguous: learning
