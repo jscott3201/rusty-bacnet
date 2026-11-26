@@ -396,11 +396,6 @@ impl<T: TransportPort + 'static> Ctx<T> {
             OpsError::UnknownDevice { .. } => unknown(),
             OpsError::Ambiguous { candidates, .. } => ToolError::ambiguous(&text, &candidates),
             OpsError::Parse { reason, .. } => ToolError::invalid("device", reason),
-            // The address asked, and that its device didn't answer as the
-            // instance (#2824).
-            error @ OpsError::NotConfirmed { .. } => {
-                ToolError::refused("unconfirmed-device", error.to_string())
-            }
             error => ToolError::Failed(format!("{text}: {error}")),
         };
         let parsed = target::parse_target(&text).map_err(|e| ToolError::invalid("device", e))?;
@@ -513,6 +508,8 @@ impl<T: TransportPort + 'static> Ctx<T> {
         let handle = client.device(text).await.map_err(|error| match error {
             OpsError::UnknownDevice { .. } => unknown(),
             OpsError::Ambiguous { candidates, .. } => ToolError::ambiguous(text, &candidates),
+            // The address asked, and that its device didn't answer as the
+            // instance.
             error @ OpsError::NotConfirmed { .. } => {
                 ToolError::refused("unconfirmed-device", error.to_string())
             }
