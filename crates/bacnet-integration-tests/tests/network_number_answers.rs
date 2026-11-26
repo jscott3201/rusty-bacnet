@@ -32,10 +32,11 @@ const ASKER: u8 = 99;
 const TURN: Duration = Duration::from_millis(5);
 /// The clients among the nodes, which ask about an announcement (#2826).
 const CLIENTS: usize = 2;
-/// Past the window a client gives the answers to its question: the
+/// Past the window a client gives the answers to its question (the
 /// longest a node may hold its answer, 10 s, which outlasts its default APDU
-/// timeout, the 2 s margin, and a little more (#2826).
-const PAST_THE_WINDOW: Duration = Duration::from_millis(12_500);
+/// timeout, and a 2 s margin) and the router check after it, its 6 s APDU
+/// timeout, with a little more (#2826).
+const PAST_THE_WINDOW: Duration = Duration::from_millis(18_500);
 
 fn number_is(number: u16, flag: u8) -> Vec<u8> {
     let [high, low] = number.to_be_bytes();

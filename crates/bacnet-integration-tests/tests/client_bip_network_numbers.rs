@@ -37,13 +37,14 @@ async fn client(transport: BipTransport) -> std::io::Result<(Client, SocketAddrV
     // keeps these wall-clock tests quick.
     let options =
         ClientOptions::default().with_number_window(std::time::Duration::from_millis(WINDOW_MS));
-    let client = bounded(BACnetClient::start_with_options(
-        ClientConfig::default(),
-        transport,
-        options,
-    ))
-    .await
-    .map_err(port_retry::bind_error)?;
+    // The router check after a window waits one APDU timeout (#2826).
+    let config = ClientConfig {
+        apdu_timeout_ms: WINDOW_MS,
+        ..ClientConfig::default()
+    };
+    let client = bounded(BACnetClient::start_with_options(config, transport, options))
+        .await
+        .map_err(port_retry::bind_error)?;
     let mac = client.local_mac();
     assert_eq!(&mac[..4], &[127, 0, 0, 1]);
     let local = SocketAddrV4::new(Ipv4Addr::LOCALHOST, u16::from_be_bytes([mac[4], mac[5]]));
@@ -93,7 +94,8 @@ async fn in_a_window(client: &Client, sink: &UdpSocket, announce: impl Future<Ou
         .await
         .unwrap();
     announce.await;
-    tokio::time::sleep(std::time::Duration::from_millis(WINDOW_MS + 200)).await;
+    // The window, and the router check after it when the number changes.
+    tokio::time::sleep(std::time::Duration::from_millis(2 * WINDOW_MS + 200)).await;
 }
 
 #[tokio::test]

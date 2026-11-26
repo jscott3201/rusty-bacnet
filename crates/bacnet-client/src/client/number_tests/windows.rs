@@ -177,7 +177,8 @@ async fn an_answer_queued_before_the_close_counts() {
     tokio::time::sleep(PAST_EVERY_WINDOW).await;
     assert_eq!(site.client.network_number(), None, "still held");
     site.gate.add_permits(100);
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    // The router check before the number is taken: the APDU timeout.
+    tokio::time::sleep(Duration::from_millis(6_100)).await;
     assert_eq!(site.client.network_number(), Some(THIS_NETWORK));
     site.client.stop().await.unwrap();
 }
@@ -197,4 +198,35 @@ async fn the_longest_apdu_timeout_does_not_stop_the_owner() {
     let owner = site.client.network_number_task.as_ref().expect("an owner");
     assert!(!owner.is_finished(), "the owner is still running");
     site.client.stop().await.unwrap();
+}
+
+/// A window doesn't close while answers that came before its close still
+/// wait in the Number owner's queue (#2826): they count in it. Here the
+/// router's answer is in, the owner then waits in the send of the question
+/// a link return calls for, and a stranger's answer naming another number
+/// comes and waits in the queue past the close. Both count in one window,
+/// which decides nothing. Were the window closed first, the router's number
+/// would be taken, then the stranger's, from a window of its own. Run a few
+/// times over, since which of two ready turns the owner takes first is the
+/// runtime's choice.
+#[tokio::test(start_paused = true)]
+async fn an_answer_waiting_in_the_queue_keeps_its_window_open() {
+    const STRANGER: [u8; 1] = [66];
+    for run in 0..8 {
+        let mut site = gated().await;
+        site.gate.add_permits(1);
+        site.client.what_is_network_number(None).await.unwrap();
+        bounded(site.entered.acquire()).await.unwrap().forget();
+        broadcast_from(&site.inbound, &number(THIS_NETWORK, 1), &ROUTER).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        site.back.send_modify(|count| *count += 1);
+        bounded(site.entered.acquire()).await.unwrap().forget();
+        broadcast_from(&site.inbound, &number(THIS_NETWORK + 1, 1), &STRANGER).await;
+        tokio::time::sleep(PAST_EVERY_WINDOW).await;
+        site.gate.add_permits(100);
+        tokio::time::sleep(PAST_EVERY_WINDOW).await;
+        assert_eq!(site.client.network_number(), None, "run {run}");
+        assert_eq!(site.client.network_number_disagreements(), 1, "run {run}");
+        site.client.stop().await.unwrap();
+    }
 }

@@ -359,8 +359,14 @@ impl Peer {
     pub async fn quiet_for(&mut self, span: Duration) {
         let link = self.link.clone();
         let quiet = async {
-            let frame = self.next_data().await;
-            panic!("unexpected data frame {frame:?}; {}", link.report());
+            loop {
+                let frame = self.next_data().await;
+                // The router check a client makes before it takes a number
+                // (Who-Is-Router-To-Network, #2826).
+                if !frame.data.starts_with(&[1, 0x80, 0x00]) {
+                    panic!("unexpected data frame {frame:?}; {}", link.report());
+                }
+            }
         };
         let _ = tokio::time::timeout(span, quiet).await;
         self.await_token().await;

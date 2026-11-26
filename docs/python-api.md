@@ -3462,9 +3462,9 @@ come. A router answers at once; where only nodes that are not routers hold
 the number, the answer can take up to ten seconds (#2597). A standalone
 `BACnetClient` takes the number only from the answers to its own question,
 when every answer heard in the window after it (the APDU timeout or ten
-seconds, whichever is longer, and two more) names that number; a network
-it reaches through a router is taken one router check later, and only if
-no router on the link answers that it routes there. A Network-Number-Is it
+seconds, whichever is longer, and two more) names that number, and a new
+number only after a router check, one APDU timeout, finds no router on the
+link that routes there: about 18 s after the question at the defaults. A Network-Number-Is it
 did not ask for that names another number makes it ask (at most once a
 minute, then less often), and never sets the number by itself (#2826).
 `network_number_disagreements()` counts the windows that decided nothing

@@ -337,7 +337,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             broadcast::channel::<DeviceCollisionEvent>(DEVICE_EVENT_CHANNEL_CAPACITY);
         let device_collision_tx_dispatch = device_collision_tx.clone();
         // Made ahead of the Number owner, whose router check listens to the
-        // reports and reads the routed paths (#2826).
+        // reports (#2826).
         let (network_report_tx, _) = broadcast::channel(NETWORK_REPORT_CHANNEL_CAPACITY);
         let network_report_tx_dispatch = network_report_tx.clone();
         let routed_path_limits = Arc::new(RoutedPathLimits::new(routed_path_quarantine_horizon(
@@ -351,7 +351,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 link_returns,
                 window: options.number_window(&config),
                 reports: network_report_tx.clone(),
-                paths: Arc::clone(&routed_path_limits),
                 check_wait: Duration::from_millis(config.apdu_timeout_ms),
             };
             let (tx, task) = inbound.spawn_number_owner(owner);

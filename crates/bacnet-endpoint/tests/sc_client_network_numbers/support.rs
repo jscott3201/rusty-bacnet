@@ -61,7 +61,12 @@ impl Peer {
         frame
     }
     pub async fn number(&self, expected: u16) {
-        let frame = self.receive().await;
+        let mut frame = self.receive().await;
+        // The router check a client makes before it takes a number
+        // (Who-Is-Router-To-Network, #2826) is no Number reply.
+        while frame.payload.starts_with(&[1, 0x80, 0x00]) {
+            frame = self.receive().await;
+        }
         assert_eq!(frame.destination_vmac, Some(BROADCAST_VMAC));
         assert_eq!(
             frame.payload.as_ref(),
@@ -102,13 +107,14 @@ impl Fixture {
         // question, within a window after it (#2826): a short one, through
         // the test hook, keeps this wall-clock test quick.
         let options = ClientOptions::default().with_number_window(Duration::from_millis(WINDOW_MS));
-        let client = bounded(BACnetClient::start_with_options(
-            ClientConfig::default(),
-            transport,
-            options,
-        ))
-        .await
-        .unwrap();
+        // The router check after a window waits one APDU timeout.
+        let config = ClientConfig {
+            apdu_timeout_ms: WINDOW_MS,
+            ..ClientConfig::default()
+        };
+        let client = bounded(BACnetClient::start_with_options(config, transport, options))
+            .await
+            .unwrap();
         let peer = Peer::connect(
             bounded(TlsWebSocket::connect(&url, ca.node_tls.clone()))
                 .await
@@ -154,7 +160,8 @@ impl Fixture {
         assert_eq!(question.destination_vmac, None, "to the peer alone");
         assert_eq!(question.payload.as_ref(), QUERY);
         self.peer.send(destination, npdu).await;
-        tokio::time::sleep(Duration::from_millis(WINDOW_MS + 200)).await;
+        // The window, and the router check after it when the number changes.
+        tokio::time::sleep(Duration::from_millis(2 * WINDOW_MS + 200)).await;
     }
 
     /// Stops the client (or drops it bare), waits until the hub and direct

@@ -166,8 +166,10 @@ pub const PAST_THE_WINDOW: std::time::Duration = std::time::Duration::from_milli
 
 /// Teach the harness client `value`, flagged `flag`, the way a router
 /// does (#2826): the client asks, the router's answer comes in the window
-/// the question opens, and the client takes it when the window closes.
-/// Runs on paused time; the question is taken from `outbound`.
+/// the question opens, and the client takes it once the router check after
+/// the window (its APDU timeout, 5 s) finds no router routing there. Runs
+/// on paused time; the question, and the check's router query when the
+/// number changes, are taken from `outbound`.
 pub async fn teach(
     client: &BACnetClient<TestTransport>,
     inbound: &mpsc::Sender<ReceivedNpdu>,
@@ -178,5 +180,10 @@ pub async fn teach(
     client.what_is_network_number(None).await.unwrap();
     asked(outbound).await;
     broadcast_from(inbound, &number(value, flag), &ROUTER_MAC).await;
-    tokio::time::sleep(PAST_THE_WINDOW).await;
+    tokio::time::sleep(PAST_THE_WINDOW + std::time::Duration::from_millis(5_100)).await;
+    while let Ok(sent) = outbound.try_recv() {
+        assert!(sent.destination.is_empty(), "a broadcast");
+        let check = [1, 0x80, 0x00, (value >> 8) as u8, value as u8];
+        assert_eq!(sent.npdu.as_ref(), check, "the router check alone");
+    }
 }

@@ -186,10 +186,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// device, #2572, and when an announcement it did not ask for names
     /// another number, #2826). The answers count for a window after the
     /// question: the APDU timeout or the ten seconds a node that is not a
-    /// router may hold its answer, whichever is longer, and two more. A
-    /// number the client reaches through a router (routed rows or a routed
-    /// path on it) is taken one router check later, an APDU timeout, and
-    /// only when no router on this link answers that it routes there.
+    /// router may hold its answer, whichever is longer, and two more; a
+    /// new number is taken one router check later, an APDU timeout, and
+    /// only when no router on this link answers that it routes there:
+    /// about 18 s after the question at the default APDU timeout.
     /// `None` until then, and always on a link that takes no network number
     /// controls. A routed address naming this network is a station on this
     /// one. A client on an endpoint's seat holds the number its node holds,

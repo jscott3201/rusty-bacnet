@@ -317,7 +317,8 @@ async fn a_link_return_asks_again_after_a_first_question_while_unknown() {
     site.answered(THIS_NETWORK, 0).await;
     site.link_returns();
     let frames = site.settled().await;
-    assert_eq!(frames.len(), 4, "a known number is not asked for");
+    // The fifth is the router check before the number was taken (#2826).
+    assert_eq!(frames.len(), 5, "a known number is not asked for");
     site.client.stop().await.unwrap();
 }
 
@@ -393,10 +394,14 @@ pub(super) struct Gated {
     pub(super) sent: SendLog,
     pub(super) entered: Arc<Semaphore>,
     pub(super) gate: Arc<Semaphore>,
+    /// The link's returns, which the client asks again on while the number
+    /// is unknown.
+    pub(super) back: watch::Sender<u64>,
 }
 
 pub(super) async fn gated() -> Gated {
     let (inbound, receiver) = mpsc::channel(64);
+    let (back, returns) = watch::channel(0);
     let entered = Arc::new(Semaphore::new(0));
     let gate = Arc::new(Semaphore::new(0));
     let (reached, held) = (Arc::clone(&entered), Arc::clone(&gate));
@@ -404,6 +409,7 @@ pub(super) async fn gated() -> Gated {
         .local_mac(&[1])
         .inbound(receiver)
         .number_controls()
+        .link_returns(returns)
         .on_send(move |frame| {
             let (reached, held) = (Arc::clone(&reached), Arc::clone(&held));
             async move {
@@ -425,6 +431,7 @@ pub(super) async fn gated() -> Gated {
         sent,
         entered,
         gate,
+        back,
     }
 }
 
@@ -480,7 +487,7 @@ async fn the_owner_neither_asks_twice_nor_stops_while_a_question_is_held() {
         send_to_client(&site.inbound, &i_am(10), &ROUTER, routed).await;
         tokio::time::sleep(Duration::from_millis(10)).await;
         inject(&site.inbound, &number(THIS_NETWORK, 0), true).await;
-        tokio::time::sleep(PAST_THE_WINDOW).await;
+        tokio::time::sleep(PAST_THE_WINDOW + PAST_THE_CHECK).await;
         assert_eq!(site.client.network_number(), Some(THIS_NETWORK));
         assert_eq!(site.asks(), 1, "the held question alone");
         site.gate.add_permits(10);
@@ -494,7 +501,9 @@ async fn the_owner_neither_asks_twice_nor_stops_while_a_question_is_held() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     let frames = site.sent.frames();
     assert_eq!(site.asks(), 1, "{frames:?}");
-    assert_eq!(frames.len(), 2, "{frames:?}");
+    // The question, the router check before the number was taken (#2826),
+    // and the Who-Is.
+    assert_eq!(frames.len(), 3, "{frames:?}");
     site.client.stop().await.unwrap();
 }
 

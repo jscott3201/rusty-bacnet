@@ -18,8 +18,10 @@ async fn taught(flag: u8) -> Site {
     let site = open_site(true).await;
     site.taught(7, flag).await;
     let frames = site.sent.take();
-    assert_eq!(frames.len(), 1, "its question alone: {frames:?}");
+    // Its question, and the router check before it took the number.
+    assert_eq!(frames.len(), 2, "{frames:?}");
     assert_eq!(frames[0].npdu.as_ref(), QUERY);
+    assert_eq!(frames[1].npdu.as_ref(), [1, 0x80, 0x00, 0, 7]);
     site
 }
 
@@ -137,8 +139,10 @@ async fn a_client_without_the_number_stays_quiet() {
     site.taught(7, 1).await;
     tokio::time::sleep(ANSWER_DELAY_MAX * 2).await;
     let frames = site.sent.frames();
-    assert_eq!(frames.len(), 1, "its own question alone: {frames:?}");
+    // Its own question and its router check, and no answer.
+    assert_eq!(frames.len(), 2, "{frames:?}");
     assert_eq!(frames[0].npdu.as_ref(), QUERY);
+    assert_eq!(frames[1].npdu.as_ref(), [1, 0x80, 0x00, 0, 7]);
     site.client.stop().await.unwrap();
 }
 

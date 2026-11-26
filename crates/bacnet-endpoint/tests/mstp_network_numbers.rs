@@ -34,10 +34,11 @@ enum Clock {
     Wall,
 }
 
-/// Past the window a standalone client gives the answers to its question:
-/// the longest a node may hold its answer, 10 s, which outlasts its default
-/// APDU timeout, the 2 s margin, and a little more (#2826).
-const PAST_THE_WINDOW: Duration = Duration::from_millis(12_500);
+/// Past the window a standalone client gives the answers to its question
+/// (the longest a node may hold its answer, 10 s, which outlasts its default
+/// APDU timeout, and a 2 s margin) and the router check after it, its 6 s
+/// APDU timeout, with a little more (#2826).
+const PAST_THE_WINDOW: Duration = Duration::from_millis(18_500);
 
 /// Broadcast the Network-Number-Is `npdu` from the peer. The server and the
 /// endpoint take one as it comes (Clause 6.4.20). A standalone client takes

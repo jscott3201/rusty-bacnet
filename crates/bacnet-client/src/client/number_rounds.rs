@@ -33,10 +33,9 @@
 //!   own queue turned away, full, after the question went. What is lost
 //!   before those queues, in the socket's buffer or on the link, is not
 //!   seen.
-//! - A number the client reaches through a router (it holds routed rows on
-//!   it, or a routed path to it) is taken only after the router check
-//!   (`number_check`): no router on this link may answer that it routes
-//!   there.
+//! - A number other than the one the client holds, none included, is
+//!   taken only after the router check (`number_check`): no router on this
+//!   link may answer that it routes there.
 //! - A window that decides nothing for two numbers or a possibly lost
 //!   answer, or that the router check refuses, keeps what the client held
 //!   and counts in
@@ -56,11 +55,11 @@
 //!   question that goes takes the hold. One naming the number the client
 //!   holds changes no route and is applied as it comes.
 //!
-//! An honest site ends where it did, one window later, and one router check
-//! later still when the client reaches the number through a router (a
-//! router relaying local I-Ams back, #2572): a router announcing its number
-//! at its start draws one question, and the router's answer is taken when
-//! the window closes. A station that announces another number now has to
+//! An honest site ends where it did, one window and one router check later
+//! (about 18 s after the question at the default APDU timeout): a router
+//! announcing its number at its start draws one question, and the router's
+//! answer is taken once the window has closed and the check found no router
+//! routing there. A station that announces another number now has to
 //! answer the question too; a router on the link that answers it names the
 //! real number, and one that routes to the claimed number refuses it in the
 //! check. Left open, as a class: a link where no station that knows the

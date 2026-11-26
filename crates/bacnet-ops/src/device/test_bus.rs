@@ -77,10 +77,11 @@ pub(crate) async fn settle() {
 }
 
 /// Wait out the window in which the bus client takes the answers to its
-/// What-Is-Network-Number (#2826): the longest a node may hold its answer,
-/// 10 s, which outlasts the client's 1 s APDU timeout, and 2 s more.
+/// What-Is-Network-Number (the longest a node may hold its answer, 10 s,
+/// which outlasts the client's 1 s APDU timeout, and 2 s more) and the
+/// router check after it, that APDU timeout (#2826).
 pub(crate) async fn past_the_window() {
-    tokio::time::sleep(Duration::from_millis(12_100)).await;
+    tokio::time::sleep(Duration::from_millis(13_100)).await;
 }
 
 /// Wait, for up to 20 s, until `low` holds its network's number: the

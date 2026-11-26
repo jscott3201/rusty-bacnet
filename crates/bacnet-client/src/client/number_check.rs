@@ -1,26 +1,28 @@
-//! The router check before a number the client reaches through a router is
-//! taken (#2826, maintainer decision 2026-11-26).
+//! The router check before the client takes a new number (#2826,
+//! maintainer decisions 2026-11-26).
 //!
-//! A window's answers agreed on a number the client holds routed rows on,
-//! or a routed path to: devices it reaches through a router there. Taking
-//! it would make them local. A router lists the networks it can reach,
-//! never the one its port is on (Clause 6.6.3.2), so a link can't be a
-//! network a router on it routes to. Before taking the number the client
-//! broadcasts its own router query (Who-Is-Router-To-Network) for it and
-//! listens for one APDU timeout:
+//! A window's answers agreed on a number other than the one the client
+//! holds, none included. Taking it would make every device the client
+//! reaches through a router on that network local, now and later. A router
+//! lists the networks it can reach, never the one its port is on (Clause
+//! 6.6.3.2), so a link can't be a network a router on it routes to. Before
+//! taking the number the client broadcasts its own router query
+//! (Who-Is-Router-To-Network) for it and listens for one APDU timeout:
 //!
-//! - no router on this link answers: the number is taken, and the routed
-//!   rows on it fold (#2572), one check later than they used to;
+//! - no router on this link answers: the number is taken, and routed rows
+//!   on it fold (#2572), one check later than they used to;
 //! - a router answers that it routes there: the number is refused;
 //! - an answer may have been lost, to a lagging report receiver or to the
 //!   layer's or the Number owner's queue: the number is refused too.
 //!
 //! A refusal keeps what the client held and counts in
 //! [`BACnetClient::network_number_disagreements`](super::BACnetClient::network_number_disagreements):
-//! the answers and a router disagree, or may have. A number with no routed
-//! row or path on it is taken without a check: nothing the client reaches
-//! moves. Each check is one query for one window that agreed, and windows
-//! come only from the client's own questions, which are paced.
+//! the answers and a router disagree, or may have. Each check is one query
+//! for one window that agreed, and windows come only from the client's own
+//! questions, which are paced. A router that, against the clause, lists the
+//! network of the port the query came in on keeps the client from taking
+//! that number at all: the client stays as it was, which is safe, and the
+//! counter shows it.
 use super::i_have::collect_until;
 use super::network_number::Asking;
 use super::*;
@@ -32,7 +34,6 @@ pub(super) struct RouterCheck<'a, T: TransportPort> {
     pub(super) network: &'a NetworkLayer<T>,
     pub(super) reports: &'a broadcast::Sender<ReceivedNetworkReport>,
     pub(super) asking: &'a Asking,
-    pub(super) paths: &'a RoutedPathLimits,
     /// How long the check listens: the client's APDU timeout.
     pub(super) wait: Duration,
 }
@@ -49,12 +50,6 @@ pub(super) enum Routed {
 }
 
 impl<T: TransportPort + 'static> RouterCheck<'_, T> {
-    /// Whether taking `number` needs the check: the client holds a routed
-    /// row on it in `table`, or a routed path to it.
-    pub(super) fn needed(&self, table: &SyncMutex<DeviceTable>, number: u16) -> bool {
-        table.lock().routes_on(number) || self.paths.has_path_to(number)
-    }
-
     /// Ask the routers on this link which of them routes to `number`, and
     /// listen for the wait.
     pub(super) async fn routed(&self, number: u16) -> Routed {

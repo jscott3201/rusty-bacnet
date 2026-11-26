@@ -11,10 +11,9 @@
 //! never asked for again.
 //!
 //! The number itself comes only from the answers to the client's own
-//! questions, when every one names it, and for a network the client
-//! reaches through a router only after a router check; an announcement it
-//! did not ask for that names another number is a cue to ask (#2826,
-//! [`number_rounds`]).
+//! questions, when every one names it, and a new one only after a router
+//! check; an announcement it did not ask for that names another number is
+//! a cue to ask (#2826, [`number_rounds`]).
 //!
 //! The client also answers the question when it holds the number. It is
 //! not a router, so the same clause lets it hold its answer to a broadcast
@@ -409,8 +408,8 @@ impl std::ops::Deref for Discovery {
 /// folds and the asking it shares with the client, the table's
 /// subscribers, the link's returns, when the transport reports them, how
 /// long the answers to a question count, and what the router check before
-/// a routed network's number is taken needs: the client's network reports,
-/// its routed paths and the check's wait, the APDU timeout (#2826).
+/// a change of number needs: the client's network reports and the check's
+/// wait, the APDU timeout (#2826).
 pub(super) struct Owner {
     pub(super) discovery: Arc<Discovery>,
     pub(super) device_tx: broadcast::Sender<DeviceEvent>,
@@ -418,7 +417,6 @@ pub(super) struct Owner {
     pub(super) link_returns: Option<watch::Receiver<u64>>,
     pub(super) window: Duration,
     pub(super) reports: broadcast::Sender<ReceivedNetworkReport>,
-    pub(super) paths: Arc<RoutedPathLimits>,
     pub(super) check_wait: Duration,
 }
 
@@ -460,9 +458,9 @@ struct Held<'a> {
 
 impl Held<'_> {
     /// Act on what a closed window of answers decided (#2826): count and
-    /// log a split; take an agreed number, after the router check when the
-    /// client reaches that network through a router, unless a router
-    /// routes there or may have said so.
+    /// log a split or a possible loss; take an agreed number that changes
+    /// the one held only after the router check, unless a router routes
+    /// there or may have said so.
     async fn decided<T: TransportPort + 'static>(
         &mut self,
         decision: Decision,
@@ -493,7 +491,9 @@ impl Held<'_> {
             }
             Decision::Agreed { number, flag } => (number, flag),
         };
-        if number != self.state.snapshot().0 && check.needed(self.table, number) {
+        // Every change of number waits for the check (maintainer decision,
+        // 2026-11-26).
+        if number != self.state.snapshot().0 {
             match check.routed(number).await {
                 Routed::Nowhere => {}
                 Routed::Here => {
@@ -588,7 +588,6 @@ pub(super) fn spawn<T: TransportPort + 'static>(
             mut link_returns,
             window,
             reports,
-            paths,
             check_wait,
         } = owner;
         let asking = &discovery.asking;
@@ -596,7 +595,6 @@ pub(super) fn spawn<T: TransportPort + 'static>(
             network: &network,
             reports: &reports,
             asking,
-            paths: &paths,
             wait: check_wait,
         };
         let mut held = Held {

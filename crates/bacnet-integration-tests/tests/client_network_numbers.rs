@@ -15,7 +15,16 @@ mod port_retry;
 const BROADCAST: Ipv4Addr = Ipv4Addr::new(127, 255, 255, 255);
 /// The window the client's question opens here (#2826).
 const WINDOW_MS: u64 = 500;
-const PAST_THE_WINDOW: Duration = Duration::from_millis(WINDOW_MS + 200);
+/// The client's APDU timeout here: the router check after a window waits
+/// one (#2826).
+fn config() -> ClientConfig {
+    ClientConfig {
+        apdu_timeout_ms: 500,
+        ..ClientConfig::default()
+    }
+}
+/// Past the window and the router check after it.
+const PAST_THE_WINDOW: Duration = Duration::from_millis(WINDOW_MS + 500 + 200);
 /// The B/IP MAC of `socket`, its address and port.
 fn sink_mac(socket: &UdpSocket) -> Vec<u8> {
     let SocketAddr::V4(address) = socket.local_addr().unwrap() else {
@@ -36,7 +45,9 @@ async fn expect(observer: &UdpSocket, source: SocketAddrV4, number: u8) {
         let mut wire = [0; 256];
         loop {
             let (n, from) = observer.recv_from(&mut wire).await.unwrap();
-            if from != SocketAddr::V4(source) {
+            // The router check the client makes before it takes a number
+            // (Who-Is-Router-To-Network, #2826) is no reply.
+            if from != SocketAddr::V4(source) || wire[4..n].starts_with(&[1, 0x80, 0x00]) {
                 continue;
             }
             // Independent BVLC and NPDU bytes, not the production decoder.
@@ -72,10 +83,9 @@ async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
         // question, within a window after it (#2826): a short one, through
         // the test hook, keeps this wall-clock test quick.
         let options = ClientOptions::default().with_number_window(Duration::from_millis(WINDOW_MS));
-        let mut client =
-            BACnetClient::start_with_options(ClientConfig::default(), transport, options)
-                .await
-                .unwrap();
+        let mut client = BACnetClient::start_with_options(config(), transport, options)
+            .await
+            .unwrap();
         let mac = client.local_mac();
         assert_eq!(&mac[..4], &[127, 0, 0, 1]);
         assert_eq!(u16::from_be_bytes([mac[4], mac[5]]), port);

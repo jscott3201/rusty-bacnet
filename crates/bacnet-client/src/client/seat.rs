@@ -323,7 +323,6 @@ fn spawn_seated_number<T: TransportPort + 'static>(
             mut link_returns,
             window: _,
             reports: _,
-            paths: _,
             check_wait: _,
         } = owner;
         let network = &held.network;

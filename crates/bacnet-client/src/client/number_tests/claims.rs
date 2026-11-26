@@ -215,7 +215,7 @@ async fn taught(site: &Site) {
     site.client.what_is_network_number(None).await.unwrap();
     let answer = number(THIS_NETWORK, 1);
     broadcast_from(&site.inbound, &answer, &ROUTER).await;
-    tokio::time::sleep(PAST_THE_WINDOW).await;
+    tokio::time::sleep(PAST_THE_WINDOW + PAST_THE_CHECK).await;
     assert_eq!(site.client.network_number(), Some(THIS_NETWORK));
 }
 
@@ -237,8 +237,9 @@ async fn an_unasked_number_does_not_replace_a_learned_one() {
 }
 
 /// A router that announces this network's number at its start, unasked:
-/// the client asks once, at once, and takes the router's answer when the
-/// window closes.
+/// the client asks once, at once, and takes the router's answer once the
+/// window has closed and the router check after it found no router
+/// routing there.
 #[tokio::test(start_paused = true)]
 async fn a_routers_announcement_is_asked_about_and_taken() {
     let mut site = open_site(true).await;
@@ -247,7 +248,7 @@ async fn a_routers_announcement_is_asked_about_and_taken() {
     assert_eq!(site.client.network_number(), None, "not taken unasked");
     assert_eq!(questions(&site), 1, "{:?}", site.sent.frames());
     broadcast_from(&site.inbound, &number(THIS_NETWORK, 1), &ROUTER).await;
-    tokio::time::sleep(PAST_THE_WINDOW).await;
+    tokio::time::sleep(PAST_THE_WINDOW + PAST_THE_CHECK).await;
     assert_eq!(site.client.network_number(), Some(THIS_NETWORK));
     assert_eq!(questions(&site), 1, "asked once");
     site.client.stop().await.unwrap();

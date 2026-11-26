@@ -86,11 +86,11 @@ async fn one_number_with_mixed_flags_is_taken_as_configured() {
     site.client.what_is_network_number(None).await.unwrap();
     broadcast_from(&site.inbound, &number(THIS_NETWORK, 0), &NODE).await;
     broadcast_from(&site.inbound, &number(THIS_NETWORK, 1), &ROUTER).await;
-    tokio::time::sleep(PAST_THE_WINDOW).await;
+    tokio::time::sleep(PAST_THE_CHECK).await;
     assert_eq!(site.client.network_number(), Some(THIS_NETWORK));
     site.client.what_is_network_number(None).await.unwrap();
     broadcast_from(&site.inbound, &number(THIS_NETWORK + 1, 0), &NODE).await;
-    tokio::time::sleep(PAST_THE_WINDOW).await;
+    tokio::time::sleep(PAST_THE_CHECK).await;
     assert_eq!(site.client.network_number(), Some(THIS_NETWORK), "kept");
     assert_eq!(site.client.network_number_disagreements(), 0);
     site.client.stop().await.unwrap();
@@ -220,4 +220,41 @@ async fn a_stop_during_the_check_takes_nothing() {
     assert!(stopped.elapsed() < Duration::from_secs(1), "no wait for it");
     tokio::time::sleep(PAST_THE_CHECK).await;
     assert_eq!(site.client.network_number(), None);
+}
+
+/// The check runs before any change of number (maintainer decision,
+/// 2026-11-26), rows or no rows: a stranger's claim to the remote network,
+/// answered by the stranger alone on a link whose router doesn't answer
+/// What-Is-Network-Number, is refused because the router routes there,
+/// though the client holds nothing on that network.
+#[tokio::test(start_paused = true)]
+async fn a_claimed_number_a_router_routes_to_is_refused_with_no_rows_on_it() {
+    let mut site = open_site(true).await;
+    for _ in 0..2 {
+        broadcast_from(&site.inbound, &number(REMOTE_NETWORK, 1), &STRANGER).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(PAST_THE_WINDOW).await;
+    assert_eq!(router_queries(&site, REMOTE_NETWORK), 1, "the check");
+    router_routes_to(&site, REMOTE_NETWORK).await;
+    tokio::time::sleep(PAST_THE_CHECK).await;
+    assert_eq!(site.client.network_number(), None);
+    assert_eq!(site.client.network_number_disagreements(), 1);
+    site.client.stop().await.unwrap();
+}
+
+/// An honest number no router routes to is taken once the check finds no
+/// router: a window and an APDU timeout after the question.
+#[tokio::test(start_paused = true)]
+async fn an_honest_number_is_taken_after_the_check() {
+    let mut site = open_site(true).await;
+    site.client.what_is_network_number(None).await.unwrap();
+    broadcast_from(&site.inbound, &number(THIS_NETWORK, 1), &ROUTER).await;
+    tokio::time::sleep(PAST_THE_WINDOW).await;
+    assert_eq!(site.client.network_number(), None, "checking first");
+    assert_eq!(router_queries(&site, THIS_NETWORK), 1);
+    tokio::time::sleep(PAST_THE_CHECK).await;
+    assert_eq!(site.client.network_number(), Some(THIS_NETWORK));
+    assert_eq!(site.client.network_number_disagreements(), 0);
+    site.client.stop().await.unwrap();
 }

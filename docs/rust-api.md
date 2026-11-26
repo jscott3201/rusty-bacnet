@@ -11024,14 +11024,15 @@ where they are not.
   precedence. A window in which a control may have been lost (the network
   layer's control queue or the Number owner's queue turned one away)
   decides nothing either.
-- A number the client reaches through a router (it holds routed rows on
-  it, or a routed path to it) is taken only after a router check: the
-  client broadcasts Who-Is-Router-To-Network for it and listens for an
-  APDU timeout. A router lists the networks it routes to, never the one
-  its port is on (Clause 6.6.3.2), so an answer that a router on this link
-  routes there refuses the number, and so does an answer that may have
-  been lost. Only when no router answers is it taken, and the routed rows
-  fold.
+- A number other than the one the client holds, none included, is
+  taken only after a router check: the client broadcasts
+  Who-Is-Router-To-Network for it and listens for an APDU timeout. A
+  router lists the networks it routes to, never the one its port is on
+  (Clause 6.6.3.2), so an answer that a router on this link routes there
+  refuses the number, and so does an answer that may have been lost. Only
+  when no router answers is it taken, and routed rows on it fold. An
+  honest number is so taken about 18 s after the question at the default
+  APDU timeout (a 12 s window and a 6 s check).
 - A window that decides nothing for two numbers, for an answer that may
   have been lost, or because the check refuses it, keeps what the client
   held and counts in `network_number_disagreements()`. One whose question
@@ -11043,7 +11044,7 @@ where they are not.
   while cues keep coming. Only a question that went takes the hold.
 
 So a router announcing its number at its start draws one question, and
-its answer is taken a window later. A router on the link that answers the
+its answer is taken a window and a check later. A router on the link that answers the
 question names the real number; one that routes to a claimed network
 refuses it in the check. A router that answers neither message, or whose
 answer comes late or is lost, leaves room: on a link where no station that knows the number
@@ -11066,6 +11067,11 @@ and endpoints with a registered Network Port configured with the number
 never answer with a stale one. The standalone client has no setting for
 its own number.
 
+Another: a router that, against Clause 6.6.3.2, lists the network of the
+port a router query came in on keeps the client from taking that number,
+since the check refuses it each time. The client stays as it was, which is
+safe, and `network_number_disagreements()` shows it.
+
 Until the answer comes, the table is in an interim state. A relay heard then
 makes a routed row for the same device, so its instance is ambiguous, though
 both rows stay reachable by address. A request named by the device's local
@@ -11074,7 +11080,7 @@ routed row exists: while the number is unknown nothing says the routed row's
 network is this one, and the same MAC names other devices on other networks,
 so the client doesn't size by that row. Learning the number, when the window
 of answers closes and the router check after it finds no router routing
-there (one APDU timeout later than the answer used to fold it), folds the
+there (a window and an APDU timeout after the question), folds the
 table in the same locked step: a
 routed row on this network whose station has a local row is removed and
 reported `Lost`; one without becomes the local row, keeping what its I-Am
