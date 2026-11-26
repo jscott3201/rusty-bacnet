@@ -13094,13 +13094,24 @@ forwards its answer here, as a peer or by foreign-device registration.
 (`192.168.1.10`, `2:0x05`, `5:0xFF:one-station` or a `DeviceAddress`) it is pinned there (an
 address on the client's own network, once `BACnetClient::network_number`
 knows it, is the local station), from an instance (`1234`, or `2:1234` on
-one network) it follows the one address claiming it (none: one Who-Is for
-it, waiting `with_resolve_wait`'s time, to the network the target names
+one network) it follows the instance from where a device confirmed it to the
+client's own question (#2824): each address claiming it (none: one Who-Is
+for it, waiting `with_resolve_wait`'s time, to the network the target names
 or, for a bare instance, to the client's `ResolveScope`, this network alone
 unless `with_resolve_scope` or the builders' `.resolve_scope(..)` widen it,
-a miss failing as `OpsError::UnknownDevice` that says where it asked; two or
-more, then or after the wait: `OpsError::Ambiguous`), and from a discovery
-result it is pinned and knows the instance. The handle's async reads are
+a miss failing as `OpsError::UnknownDevice` that says where it asked) is
+asked which device answers there, all at once, by one read of its Device
+object by the wildcard instance (of the instance's own Device object for a
+device that refuses that), unless its device confirmed the instance before
+(remembered per address, and forgotten with the instance read for it) or
+its row was registered by hand. The handle goes to the one address that
+confirms it while no other is left open by an unclear answer; one claim
+that doesn't fails as `OpsError::NotConfirmed` naming it, and several, or
+two left open, as `OpsError::Ambiguous`. An I-Am, even one answering the
+client's own Who-Is, confirms nothing. While handles follow the instance
+already, a new one joins them as their next read would, sending nothing
+while their address holds it. From a discovery result it is pinned and
+knows the instance. The handle's async reads are
 `read` (one property, as a `Value`), `read_many` (a bulk read, as
 `Readings`), `read_object` (an object's properties, all or a list),
 `list_objects`, `describe_device`, `read_trend` (trend, event and audit log
@@ -13147,14 +13158,18 @@ after it finds no route to a routed address, once a Who-Is for the
 instance addressed to the station, then one to its network, drew no
 answer as the instance (one sends the read there again). A later write
 goes where a read moved the handle. A handle made later for the instance
-joins the place the others reach it at, whatever the table says, and a
-watch hub moves the handles only when its own move asked their address
-and found another device there (#2795). What this leaves: a read moves a following handle once its old address
-misses one identity question (about 24 s at the default timers; about 3
-to 6 s for a routed address with no row) while another address names the
-instance, and later writes go to the new place. A routed device's path
-through its router is #2823, and a new handle's first resolution of an
-instance is #2824. A
+joins the place the others reach it at, whatever the table says elsewhere,
+and a watch hub moves the handles only when its own move asked their
+address and found another device there (#2795). What this leaves: a read
+moves a following handle once its old address misses one identity question
+(about 24 s at the default timers; about 3 to 6 s for a routed address with
+no row) while another address names the instance, and later writes go to
+the new place. A routed device's path through its router is #2823. Nothing
+in BACnet/IP is authenticated, so a station answering the client's question
+as the instance at its own address, while the device itself is absent,
+silent or unheard, can't be told from the device having moved there; with
+the device claiming it too and answering, the caller gets
+`OpsError::Ambiguous`, never a silent choice (#2824). A
 clone that sends no Who-Is
 (`with_resolve_wait(None)`) goes by the I-Am times instead: its own address
 announced `QUIET` before the other's. A duplicate claim is no move. A pinned
@@ -13705,7 +13720,7 @@ row constants.
 | `watch::Point { device: u32, .. }`, `Copy` | `watch::Point { device: DeviceAddress, .. }`, `Clone`, from `Device::point`; entries, schedulers and subscription targets key on the address, never an instance lookup |
 | `watch::Point { device: DeviceAddress, .. }` | `watch::Point { device: Target, .. }`: `Binding::At(address)`, or `Binding::Follows { instance, network }`, which the hub follows; `Device::point` picks by the handle (#2795) |
 | a following handle's points pinned at its address, given up with `Why::Moved` | following its instance: `Update::{at, instance, moved}`, `Snapshot::moved`, `Lease::at` |
-| a following handle moving on the discovery table's rows, and with the hub's look | a read moves it only once its own address, asked, isn't the device (one missed question counts) and the new address names it; a write never moves it (`OpsError::NotConfirmed`); a routed device's path is #2823, a new handle's first resolution #2824 (#2795) |
+| a following handle moving on the discovery table's rows, and with the hub's look | a read moves it only once its own address, asked, isn't the device (one missed question counts) and the new address names it; a write never moves it (`OpsError::NotConfirmed`); a routed device's path is #2823; a new handle is placed only where a device answered as its instance (#2795, #2824) |
 | `watch::{Hub, Lease, Changes, Snapshot, Samples, Sample, WatchOptions, Reads, Backoff, Fallback, MissingDevice, Lifetime, HubStats, renewal_margin, first, POINT_PROPERTIES, MISSING, MIN_POLL, POLL_FLOOR, MAX_ROWS, MAX_SAMPLES}` | the same names under `watch::hub` |
 | `watch::{State, Source}` (the snapshot's) | `watch::hub::{Phase, Source}`; `watch::State` is the update's one state with its reason |
 | a point whose instance two addresses claim failing its start as ambiguous | two points, one an address |

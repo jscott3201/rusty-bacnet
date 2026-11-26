@@ -49,10 +49,12 @@ pub(crate) struct Place {
     /// When the last Who-Is for the instance went out after a timeout
     /// ([`Client::ask`]), on the discovery table's clock.
     asked: Option<Instant>,
-    /// A device confirmed the instance here, or where the place moved
-    /// from, to a question of the client's own (#2824): a handle's when it
-    /// was made, or a read's before a move. A watch hub's place made from
-    /// the discovery table alone isn't, until then.
+    /// The device here confirmed the instance to a question of the
+    /// client's own (#2824): the one a handle's placement asked, or the read
+    /// that moved the place here. A watch hub's place made from the
+    /// discovery table alone isn't confirmed until then. What changes at
+    /// the address later is for the handles' own rules to judge
+    /// ([`Client::joining`], [`Device::target`]).
     confirmed: bool,
 }
 

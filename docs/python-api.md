@@ -176,13 +176,18 @@ far = await client.device("2:1234")            # instance 1234 on network 2
   asked on its network first from then on. It never moves: `await
   ahu.moved_to()` says where its instance is heard now, once its own
   address has gone quiet.
-- **A following handle** needs the device's address. One address claiming
-  the instance in the discovery table gives it. None sends one Who-Is for
-  that instance and waits up to 3 seconds: to the network the target names,
-  or for a bare instance to the client's `resolve_scope`, this network
-  alone unless `BACnetClient(resolve_scope="global")` or
-  `resolve_scope=<network>` widens it. Later, when the device stops
-  answering at its address and one other address claims the instance, the
+- **A following handle** needs the device's address, where a device
+  confirmed the instance to the client's own question (#2824). Each address
+  claiming the instance in the discovery table is asked which device
+  answers there, once: one read of its Device object, none for an address
+  whose device confirmed it before or a row registered with `add_device`.
+  None claiming it sends one Who-Is for that instance and waits up to 3
+  seconds (to the network the target names, or for a bare instance to the
+  client's `resolve_scope`, this network alone unless
+  `BACnetClient(resolve_scope="global")` or `resolve_scope=<network>`
+  widens it), then asks the ones that answered: an I-Am confirms nothing,
+  as anyone can send one. Later, when the device stops answering at its
+  address and one other address claims the instance and answers as it, the
   handle moves there and the call goes on.
 
 A wrong type raises `TypeError` and text the grammar refuses `ValueError`,
@@ -192,10 +197,13 @@ when the call is made. On await:
   client, say) raises `ValueError`;
 - an instance no address claims and none answered for, or a routed address
   with no router known, raises `BacnetLookupError`, which is also a
-  `LookupError`;
-- an instance two or more addresses claim raises
-  `BacnetAmbiguousDeviceError`, a `BacnetLookupError`. Each of its
-  `candidates` is a target: `await client.device(error.candidates[0])`.
+  `LookupError`; so does an instance claimed at one address whose device,
+  asked, didn't answer as it (silent, another device, or a refusal of the
+  question), with `at` the address asked;
+- an instance two or more addresses claim, when none of them answers as it
+  or two or more might be it, raises `BacnetAmbiguousDeviceError`, a
+  `BacnetLookupError`. Each of its `candidates` is a target: `await
+  client.device(error.candidates[0])`.
 
 #### `Device`
 
@@ -878,7 +886,7 @@ ask only the instances between them: give both or neither.
 | Raised | When |
 |--------|------|
 | `TypeError`, `ValueError` | An argument that names nothing: when the call is made for a wrong type or bad text, on await for what needs the started client's link. Nothing was sent |
-| `BacnetLookupError` (also `LookupError`) | No device could be placed for the name, or a write through a following handle wasn't sent because the device isn't taken for the instance where the handle holds it. `target` is the name, and `instance` the instance it holds (None for an address); for that write, `at` is the address held and `candidate` an unconfirmed hint, as `(network, mac)` |
+| `BacnetLookupError` (also `LookupError`) | No device could be placed for the name (an instance claimed at one address whose device, asked, didn't answer as it included, #2824), or a write through a following handle wasn't sent because the device isn't taken for the instance where the handle holds it. `target` is the name, and `instance` the instance it holds (None for an address); `at` is the address asked or held and, for that write, `candidate` an unconfirmed hint, as `(network, mac)` |
 | `BacnetAmbiguousDeviceError` | A `BacnetLookupError`: two or more addresses claim the instance. `candidates` are targets |
 | `BacnetWriteDeniedError` | The write policy refuses the priority. Nothing was sent |
 | `BacnetProtocolError`, `BacnetRejectError`, `BacnetAbortError` | The device's own Error, Reject or Abort |

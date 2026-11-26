@@ -44,10 +44,16 @@ on that network, or the address of a device in the discovery table
 `2001:0x33` behind a router, `2001:0xFF:one-station` for a MAC that is the broadcast on an MS/TP
 network but a single station on the remote link, which only the operator
 can say: a tool refuses the bare form and tells the agent to ask the
-operator; #2560, #2738); nothing is sent to resolve one, and
-every request of the call goes to the address the policy checked. An
-instance two addresses claim is refused (`ambiguous-device`), naming both:
-name one by its address.
+operator; #2560, #2738). No Who-Is is sent to resolve one, and every
+request of the call goes to the address the policy checked. An instance is
+reached only where its device answered the server's own question of which
+device answers there (#2824): each address claiming it, once the policy
+allows every one, is asked once (one read of its Device object; none for an
+address whose device confirmed it before), and a claim that doesn't answer
+as it is refused (`unconfirmed-device`), naming the address asked. An
+instance two addresses claim is refused (`ambiguous-device`), naming both,
+unless the policy allows both and only one answers as it: name one by its
+address.
 
 | Tool | Notes |
 |---|---|
