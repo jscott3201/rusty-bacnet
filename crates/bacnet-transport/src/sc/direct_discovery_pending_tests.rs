@@ -56,7 +56,7 @@ impl WebSocketPort for Hub {
         self.sent.lock().unwrap().push(request.message_id);
         let result = match self.write {
             Write::Accept => Ok(()),
-            Write::Fail => Err(Error::Encoding("hub write failed".into())),
+            Write::Fail => Err(Error::Transport(std::io::Error::other("hub write failed"))),
             Write::Stall => std::future::pending().await,
         };
         self.finished.fetch_add(1, Ordering::SeqCst);

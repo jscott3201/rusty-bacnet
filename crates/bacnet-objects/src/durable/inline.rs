@@ -100,7 +100,9 @@ mod tests {
             move |n: &u32| {
                 saves.lock().unwrap().push(format!("save {n}"));
                 if *n == 13 {
-                    Err(Error::Encoding("refused".into()))
+                    Err(Error::from(
+                        bacnet_types::error::SnapshotError::backend_failed("refused"),
+                    ))
                 } else {
                     Ok(())
                 }

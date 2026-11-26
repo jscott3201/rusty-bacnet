@@ -89,7 +89,9 @@ async fn cancelled_failed_stop_preserves_original_errors_and_attempts_later_port
             probe.fail_stop(Error::Transport(std::io::Error::from_raw_os_error(13)));
         }
         if index == 2 {
-            probe.fail_stop(Error::Encoding("second cleanup failure".into()));
+            probe.fail_stop(Error::Transport(std::io::Error::other(
+                "second cleanup failure",
+            )));
         }
         ports.push(port);
         probes.push(probe);
@@ -121,8 +123,8 @@ async fn cancelled_failed_stop_preserves_original_errors_and_attempts_later_port
     );
     assert!(
         matches!(&first.failures()[1], RouterStopFailure::Transport {
-        network_number: 2, error: Error::Encoding(detail),
-    } if detail == "second cleanup failure")
+        network_number: 2, error: Error::Transport(detail),
+    } if detail.to_string() == "second cleanup failure")
     );
     for (stopped, dropped) in counts {
         assert_eq!(stopped.load(Ordering::SeqCst), 1);

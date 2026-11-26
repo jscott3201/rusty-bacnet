@@ -184,7 +184,7 @@ fn structural_callback_retires_schedule_on_error_and_unwind() {
                 if panic_after {
                     panic!("after structural mutation")
                 }
-                Err(Error::Encoding("after structural mutation".into()))
+                Err(Error::invalid_argument("after structural mutation"))
             })
         }));
         assert_eq!(outcome.is_err(), panic_after);

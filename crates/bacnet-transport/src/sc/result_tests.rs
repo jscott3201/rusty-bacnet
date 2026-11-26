@@ -237,9 +237,9 @@ fn connect_result_generic_nak_does_not_reseed_local_vmac() {
 }
 
 fn fail_random48_vmac() -> Result<Vmac, Error> {
-    Err(Error::Encoding(
-        "test Random-48 VMAC generation failure".into(),
-    ))
+    Err(Error::Transport(std::io::Error::other(
+        "test Random-48 VMAC generation failure",
+    )))
 }
 
 #[tokio::test]

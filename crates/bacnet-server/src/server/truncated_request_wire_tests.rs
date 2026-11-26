@@ -203,7 +203,7 @@ fn request_syntax_faults_draw_the_reject_naming_them_for_every_service() {
         }
     }
     // A refusal that isn't about syntax keeps its Error PDU.
-    let refusal = Error::OutOfRange("too large".into()).into_request_reject();
+    let refusal = Error::range("too large").into_request_reject();
     let service = ConfirmedServiceChoice::READ_PROPERTY;
     assert!(matches!(reply(service, &refusal), Apdu::Error(_)));
 }

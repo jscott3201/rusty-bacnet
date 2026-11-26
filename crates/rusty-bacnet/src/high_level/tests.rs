@@ -212,7 +212,7 @@ fn ops_errors_raise_the_typed_calls_classes() {
             candidates: vec![station(), DeviceAddress::new(2, &[5]).unwrap()],
         });
         assert!(ambiguous.is_instance(py, ambiguous_error_type(py).unwrap().bind(py)));
-        let client = ops_err_bip(OpsError::Client(Error::Encoding("bad".into())));
+        let client = ops_err_bip(OpsError::Client(Error::invalid_config("bad")));
         assert!(client.value(py).get_type().is(py.get_type::<BacnetError>()));
 
         // SC TLS material, as the binding's own SC startup reports it.

@@ -131,7 +131,6 @@ fn a_failed_requests_result() {
     // (#1833); a request cut off after it may have gone out is recorded
     // with OTHER too, its outcome unknown.
     for local in [
-        Error::Encoding("local".into()),
         Error::RequestCutOff { sent: false },
         Error::RequestCutOff { sent: true },
         Error::invalid_config("local"),
@@ -187,7 +186,6 @@ fn which_requests_reached_their_target() {
     // they replace did: not attempted. So does a send its transport refused
     // as not started or stopped, which went nowhere (#1833).
     for refused in [
-        Error::Encoding("TSM response channel closed".into()),
         Error::RequestCutOff { sent: false },
         bacnet_transport::port::stopped(),
         bacnet_transport::port::stopped_for_good(),

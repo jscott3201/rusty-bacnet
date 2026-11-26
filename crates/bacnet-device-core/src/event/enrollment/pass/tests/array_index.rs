@@ -126,7 +126,10 @@ impl BACnetObject for IndexedReadProbe {
         }
         self.control.reads.lock().unwrap().push(array_index);
         if self.control.transient_failure.load(Ordering::SeqCst) {
-            return Err(Error::Encoding("transient indexed read".into()));
+            return Err(Error::state(
+                bacnet_types::error::Lifecycle::NotRunning,
+                "transient indexed read",
+            ));
         }
         if array_index == Some(17) {
             return Err(Error::protocol(

@@ -60,14 +60,22 @@ async fn check_invalid_start_and_repair(heartbeat_mode: &str) {
             let dials = dials.clone();
             move || {
                 dials.fetch_add(1, Ordering::SeqCst);
-                async { Err(Error::Encoding("unexpected primary dial".into())) }
+                async {
+                    Err(Error::Transport(std::io::Error::other(
+                        "unexpected primary dial",
+                    )))
+                }
             }
         })
         .with_failover_connector({
             let dials = dials.clone();
             move || {
                 dials.fetch_add(1, Ordering::SeqCst);
-                async { Err(Error::Encoding("unexpected failover dial".into())) }
+                async {
+                    Err(Error::Transport(std::io::Error::other(
+                        "unexpected failover dial",
+                    )))
+                }
             }
         });
     transport = match heartbeat_mode {
@@ -183,7 +191,11 @@ async fn failing_connectors_get_one_dial_each_per_round() {
                     let dials = primary_dials.clone();
                     move || {
                         dials.fetch_add(1, Ordering::SeqCst);
-                        async { Err(Error::Encoding("primary dial failed".into())) }
+                        async {
+                            Err(Error::Transport(std::io::Error::other(
+                                "primary dial failed",
+                            )))
+                        }
                     }
                 });
             if with_failover {
@@ -191,7 +203,11 @@ async fn failing_connectors_get_one_dial_each_per_round() {
                     let dials = failover_dials.clone();
                     move || {
                         dials.fetch_add(1, Ordering::SeqCst);
-                        async { Err(Error::Encoding("failover dial failed".into())) }
+                        async {
+                            Err(Error::Transport(std::io::Error::other(
+                                "failover dial failed",
+                            )))
+                        }
                     }
                 });
             }

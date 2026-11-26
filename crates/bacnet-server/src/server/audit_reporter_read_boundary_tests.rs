@@ -7,7 +7,7 @@ async fn audit_reporter_read_duplicate_admission_is_silent() {
         ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
     ] {
         let mut fixture = server(read_reporter()).await;
-        let reads = add_probe(&fixture, || Error::Encoding("unused".into())).await;
+        let reads = add_probe(&fixture, || Error::unsupported("unused")).await;
         let data = if service == ConfirmedServiceChoice::READ_PROPERTY {
             rp(probe_oid(), PropertyIdentifier::PRESENT_VALUE, None)
         } else {
@@ -55,7 +55,7 @@ async fn audit_reporter_read_duplicate_admission_is_silent() {
 async fn audit_reporter_read_admission_waits_for_read_guard_release_not_delivery() {
     for multiple in [false, true] {
         let mut fixture = server(read_reporter()).await;
-        let reads = add_probe(&fixture, || Error::Encoding("unused".into())).await;
+        let reads = add_probe(&fixture, || Error::unsupported("unused")).await;
         fixture.transport.block.store(true, Ordering::Release);
         let held_read = fixture.server.db.read().await;
         {
@@ -221,7 +221,7 @@ async fn audit_reporter_read_malformed_is_silent_disable_initiation_is_audited()
         ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE,
     ] {
         let mut fixture = server(read_reporter()).await;
-        let reads = add_probe(&fixture, || Error::Encoding("unused".into())).await;
+        let reads = add_probe(&fixture, || Error::unsupported("unused")).await;
         let data = if service == ConfirmedServiceChoice::READ_PROPERTY {
             rp(probe_oid(), PropertyIdentifier::PRESENT_VALUE, None)
         } else {
@@ -260,7 +260,7 @@ async fn audit_reporter_read_malformed_is_silent_disable_initiation_is_audited()
 async fn audit_reporter_rpm_work_bytes_and_decode_failures_discard_all_intents() {
     for failure in ["work", "bytes", "decode"] {
         let mut fixture = server(read_reporter()).await;
-        let reads = add_probe(&fixture, || Error::Encoding("unused".into())).await;
+        let reads = add_probe(&fixture, || Error::unsupported("unused")).await;
         let one = rpm(vec![spec(
             probe_oid(),
             &[(PropertyIdentifier::PRESENT_VALUE, None)],
@@ -380,7 +380,7 @@ async fn audit_reporter_rpm_256_results_reuse_64_permits_summary_deadline_and_no
             .set_issue_confirmed_notifications(confirmed)
             .unwrap();
         let mut fixture = server(reporter).await;
-        let reads = add_probe(&fixture, || Error::Encoding("unused".into())).await;
+        let reads = add_probe(&fixture, || Error::unsupported("unused")).await;
         fixture.transport.block.store(true, Ordering::Release);
         let response = dispatch(
             &fixture.server,

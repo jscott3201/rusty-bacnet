@@ -167,7 +167,11 @@ async fn refused_requests_record_nothing() {
         ),
         (
             "handler error",
-            || Err(Error::Encoding("disk full".into())),
+            || {
+                Err(Error::from(
+                    bacnet_types::error::SnapshotError::backend_failed("disk full"),
+                ))
+            },
             Some("required"),
         ),
         (

@@ -326,7 +326,9 @@ impl ColorOutputPersistence for Memory {
             let mut refusals = self.refusals.lock().unwrap();
             if *refusals > 0 {
                 *refusals -= 1;
-                return Err(Error::Encoding("refused".into()));
+                return Err(Error::from(
+                    bacnet_types::error::SnapshotError::backend_failed("refused"),
+                ));
             }
         }
         *self.held.lock().unwrap() = Some(snapshot.clone());

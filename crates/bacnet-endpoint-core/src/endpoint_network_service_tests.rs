@@ -71,7 +71,7 @@ fn capture_transport() -> (TestTransport, CaptureHandle) {
                     data_attributes: frame.attributes,
                 })
                 .await
-                .map_err(|_| Error::Encoding("capture receiver closed".into()))
+                .map_err(|_| Error::Transport(std::io::Error::other("capture receiver closed")))
             }
         })
         .build();

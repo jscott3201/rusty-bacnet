@@ -78,7 +78,9 @@ impl Held {
             "injected handler panic"
         );
         if self.fail_next.swap(false, Ordering::AcqRel) {
-            return Err(Error::Encoding("injected send error".into()));
+            return Err(Error::Transport(std::io::Error::other(
+                "injected send error",
+            )));
         }
         Ok(())
     }

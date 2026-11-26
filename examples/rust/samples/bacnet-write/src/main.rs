@@ -199,9 +199,7 @@ async fn read_present_value(
     let ack = client
         .read_property(device, oid, PropertyIdentifier::PRESENT_VALUE, None)
         .await?;
-    decode_application_value(&ack.property_value, 0)
-        .map(|(v, _)| v)
-        .map_err(|e| bacnet_types::error::Error::Encoding(e.to_string()))
+    decode_application_value(&ack.property_value, 0).map(|(v, _)| v)
 }
 
 async fn read_priority_slot(
@@ -218,9 +216,7 @@ async fn read_priority_slot(
             Some(priority as u32),
         )
         .await?;
-    let val = decode_application_value(&ack.property_value, 0)
-        .map(|(v, _)| v)
-        .map_err(|e| bacnet_types::error::Error::Encoding(e.to_string()))?;
+    let (val, _) = decode_application_value(&ack.property_value, 0)?;
     Ok(if matches!(val, PropertyValue::Null) {
         None
     } else {
@@ -338,8 +334,7 @@ async fn write_present_value(
     priority: Option<u8>,
 ) -> Result<(), bacnet_types::error::Error> {
     let mut buf = BytesMut::new();
-    encode_property_value(&mut buf, value)
-        .map_err(|e| bacnet_types::error::Error::Encoding(e.to_string()))?;
+    encode_property_value(&mut buf, value)?;
     client
         .write_property(
             device,

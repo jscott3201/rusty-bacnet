@@ -44,7 +44,9 @@ impl Probe {
             self.stop_release.notified().await;
         }
         match self.outcome.load(Ordering::SeqCst) {
-            1 => Err(Error::Encoding("injected cleanup failure".into())),
+            1 => Err(Error::Transport(std::io::Error::other(
+                "injected cleanup failure",
+            ))),
             2 => panic!("injected cleanup panic"),
             _ => {
                 let _ = self.events.send(Event::StopFinished);

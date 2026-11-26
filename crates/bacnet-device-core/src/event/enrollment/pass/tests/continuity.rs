@@ -421,13 +421,19 @@ impl BACnetObject for ObservationTarget {
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
         if self.fail_reliability && property == PropertyIdentifier::RELIABILITY {
-            return Err(Error::Encoding("transient Reliability read".into()));
+            return Err(Error::state(
+                bacnet_types::error::Lifecycle::NotRunning,
+                "transient Reliability read",
+            ));
         }
         if self.fail_indexed_value
             && property == PropertyIdentifier::PRIORITY_ARRAY
             && array_index.is_some()
         {
-            return Err(Error::Encoding("transient indexed observation".into()));
+            return Err(Error::state(
+                bacnet_types::error::Lifecycle::NotRunning,
+                "transient indexed observation",
+            ));
         }
         self.inner.read_property(property, array_index)
     }

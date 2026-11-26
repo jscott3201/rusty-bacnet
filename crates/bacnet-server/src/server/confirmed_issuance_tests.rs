@@ -86,8 +86,11 @@ impl Gate {
                 finished,
             })
             .unwrap();
-        wait.await
-            .unwrap_or_else(|_| Err(Error::Encoding("test send cancelled".into())))
+        wait.await.unwrap_or_else(|_| {
+            Err(Error::Transport(std::io::Error::other(
+                "test send cancelled",
+            )))
+        })
     }
 }
 /// A link with local MAC `[2]` that exposes each unicast as [`Issued`] and

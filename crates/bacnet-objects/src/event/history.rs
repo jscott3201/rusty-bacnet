@@ -748,7 +748,10 @@ mod tests {
                 _property: PropertyIdentifier,
                 _array_index: Option<u32>,
             ) -> Result<PropertyValue, Error> {
-                Err(Error::Encoding("not used by this test".into()))
+                Err(Error::protocol(
+                    bacnet_types::enums::ErrorClass::PROPERTY,
+                    bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
+                ))
             }
 
             fn write_property(
@@ -758,7 +761,10 @@ mod tests {
                 _value: PropertyValue,
                 _priority: Option<u8>,
             ) -> Result<(), Error> {
-                Err(Error::Encoding("not used by this test".into()))
+                Err(Error::protocol(
+                    bacnet_types::enums::ErrorClass::PROPERTY,
+                    bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
+                ))
             }
 
             fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {

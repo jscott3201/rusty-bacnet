@@ -155,16 +155,16 @@ fn decode_object_identifier_list(bytes: &[u8]) -> Vec<ObjectIdentifier> {
 mod tests;
 
 fn object_list_bounds(count: u64) -> Result<(u32, usize), bacnet_types::error::Error> {
-    let count = u32::try_from(count).map_err(|_| {
-        bacnet_types::error::Error::Encoding("object-list count exceeds u32".into())
-    })?;
+    let count = u32::try_from(count)
+        .map_err(|_| bacnet_types::error::Error::limit_reached("object-list count exceeds u32"))?;
     let capacity = usize::try_from(count)
         .ok()
         .filter(|&n| n <= MAX_OBJECT_LIST_ENTRIES)
         .ok_or_else(|| {
-            bacnet_types::error::Error::Encoding(format!(
-                "object-list count exceeds example limit of {MAX_OBJECT_LIST_ENTRIES}"
-            ))
+            bacnet_types::error::Error::LimitReached(
+                bacnet_types::error::Refusal::new("object-list count exceeds example limit of {}")
+                    .with_value(MAX_OBJECT_LIST_ENTRIES as u64),
+            )
         })?;
     Ok((count, capacity))
 }
@@ -212,8 +212,8 @@ async fn read_object_list(
         return Ok(oids);
     }
 
-    Err(bacnet_types::error::Error::Encoding(
-        "object-list empty or unsupported encoding".into(),
+    Err(bacnet_types::error::Error::unsupported(
+        "object-list empty or unsupported encoding",
     ))
 }
 

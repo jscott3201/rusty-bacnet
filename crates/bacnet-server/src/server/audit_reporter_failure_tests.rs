@@ -501,7 +501,7 @@ async fn audit_reporter_execution_error_mapping_matches_response_but_unknown_out
             Some((ErrorClass::from_raw(128), ErrorCode::from_raw(512))),
         ),
         (
-            Error::OutOfRange("injected execution failure".into()),
+            Error::range("injected execution failure"),
             Some((ErrorClass::SERVICES, ErrorCode::OTHER)),
         ),
         (Error::Timeout(Duration::from_secs(1)), None),

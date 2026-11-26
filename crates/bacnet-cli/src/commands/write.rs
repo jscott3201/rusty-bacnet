@@ -14,7 +14,7 @@ use bytes::BytesMut;
 use crate::output::{self, OutputFormat};
 
 /// Encode a `PropertyValue` into raw application-tagged bytes.
-fn encode_value(value: &PropertyValue) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn encode_value(value: &PropertyValue) -> Result<Vec<u8>, bacnet_types::error::Error> {
     let mut buf = BytesMut::new();
     encode_property_value(&mut buf, value)?;
     Ok(buf.to_vec())
@@ -172,8 +172,7 @@ pub async fn write_property_multiple_cmd<T: TransportPort + 'static>(
             let prop_values = props
                 .into_iter()
                 .map(|(prop, idx, pv, priority)| {
-                    let encoded = encode_value(&pv)
-                        .map_err(|e| bacnet_types::error::Error::Encoding(e.to_string()))?;
+                    let encoded = encode_value(&pv)?;
                     Ok(BACnetPropertyValue {
                         property_identifier: prop,
                         property_array_index: idx,

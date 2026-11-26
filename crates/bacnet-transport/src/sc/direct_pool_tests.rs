@@ -282,7 +282,9 @@ async fn failing_uri_records_backoff_and_falls_back_to_hub() {
             let dials = dials_clone.clone();
             async move {
                 dials.fetch_add(1, Ordering::SeqCst);
-                Err::<LoopbackWebSocket, Error>(Error::Encoding("dial refused".into()))
+                Err::<LoopbackWebSocket, Error>(Error::Transport(std::io::Error::other(
+                    "dial refused",
+                )))
             }
         });
     let hub_task = tokio::spawn(async move {

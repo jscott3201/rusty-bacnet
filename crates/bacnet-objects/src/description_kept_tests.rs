@@ -59,7 +59,9 @@ impl<S: Clone> Memory<S> {
 
     fn store(&self, snapshot: &S) -> Result<(), Error> {
         if self.fail.load(Ordering::SeqCst) {
-            return Err(Error::Encoding("storage unavailable".into()));
+            return Err(Error::from(
+                bacnet_types::error::SnapshotError::backend_failed("storage unavailable"),
+            ));
         }
         *self.saved.lock().unwrap() = Some(snapshot.clone());
         self.saves.fetch_add(1, Ordering::SeqCst);

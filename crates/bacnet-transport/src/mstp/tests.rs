@@ -204,10 +204,10 @@ async fn a_failed_read_ends_the_task_and_later_sends() {
     struct FailingSerial;
     impl SerialPort for FailingSerial {
         async fn write(&self, _data: &[u8]) -> Result<(), Error> {
-            Err(Error::Encoding("no port".into()))
+            Err(Error::Transport(std::io::Error::other("no port")))
         }
         async fn read(&self, _buf: &mut [u8]) -> Result<usize, Error> {
-            Err(Error::Encoding("no port".into()))
+            Err(Error::Transport(std::io::Error::other("no port")))
         }
     }
     let mut transport = MstpTransport::new(FailingSerial, config(0, 127));

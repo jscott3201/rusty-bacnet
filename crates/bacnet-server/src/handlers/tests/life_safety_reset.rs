@@ -178,7 +178,7 @@ impl BACnetObject for ResetHookSpy {
         _property: PropertyIdentifier,
         _array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        Err(Error::Encoding("unused reset-spy read".into()))
+        Err(Error::unsupported("unused reset-spy read"))
     }
 
     fn write_property(
@@ -188,7 +188,7 @@ impl BACnetObject for ResetHookSpy {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Encoding("unused reset-spy write".into()))
+        Err(Error::unsupported("unused reset-spy write"))
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {

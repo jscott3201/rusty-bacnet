@@ -26,7 +26,7 @@ async fn fails_at(index: usize, during_resolution: bool) {
             let attempted = next;
             next += 1;
             if !during_resolution && attempted == index {
-                return Err(Error::Encoding("injected build failure".into()));
+                return Err(Error::invalid_config("injected build failure"));
             }
             Ok(Owner {
                 index: attempted,
@@ -35,7 +35,7 @@ async fn fails_at(index: usize, during_resolution: bool) {
         },
         async |owner: &Owner, _| {
             if during_resolution && owner.index == index {
-                Err(Error::Encoding("injected resolution failure".into()))
+                Err(Error::Timeout(std::time::Duration::from_secs(1)))
             } else {
                 Ok(vec![1, 2, 3])
             }
@@ -86,7 +86,10 @@ async fn bip6_setup_server_address_failure_has_no_client() {
     let mut clients: Vec<()> = Vec::new();
     let mut report = StepReport::new(0, 1);
     let result = setup(
-        Err(Error::Encoding("injected server address failure".into())),
+        Err(Error::state(
+            bacnet_types::error::Lifecycle::NotRunning,
+            "injected server address failure",
+        )),
         1,
         &mut clients,
         async || -> Result<(), Error> { panic!("must not build a client") },

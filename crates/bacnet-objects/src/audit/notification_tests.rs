@@ -31,7 +31,9 @@ impl AuditLogPersistence for MemoryPersistence {
 
     fn commit(&self, snapshot: &AuditLogSnapshot) -> Result<(), Error> {
         if self.fail.load(Ordering::Acquire) {
-            return Err(Error::Encoding("injected commit failure".into()));
+            return Err(Error::from(
+                bacnet_types::error::SnapshotError::backend_failed("injected commit failure"),
+            ));
         }
         *self.snapshot.lock().unwrap() = Some(snapshot.clone());
         self.commits.fetch_add(1, Ordering::AcqRel);
@@ -596,7 +598,9 @@ impl AuditLogNotificationSink for PlainSink {
         apdu_timeout_ms: u32,
     ) -> Result<(), Error> {
         if self.fail {
-            return Err(Error::Encoding("refused".into()));
+            return Err(Error::from(
+                bacnet_types::error::SnapshotError::backend_failed("refused"),
+            ));
         }
         self.stored.push((notifications.len(), apdu_timeout_ms));
         Ok(())

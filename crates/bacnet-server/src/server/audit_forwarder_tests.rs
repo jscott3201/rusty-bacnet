@@ -41,7 +41,7 @@ impl Capture {
             std::future::pending::<()>().await;
         }
         if self.fail.load(Ordering::Acquire) {
-            return Err(Error::Encoding("injected failure".into()));
+            return Err(Error::Transport(std::io::Error::other("injected failure")));
         }
         Ok(())
     }

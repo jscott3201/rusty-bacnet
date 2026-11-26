@@ -91,7 +91,9 @@ impl<R: Clone + Send + Sync> LogPersistence<R> for MemoryLog<R> {
 
     fn commit(&self, snapshot: &LogSnapshot<R>) -> Result<(), Error> {
         if self.fail_next.swap(false, Ordering::SeqCst) {
-            return Err(Error::Encoding("injected commit failure".into()));
+            return Err(Error::from(
+                bacnet_types::error::SnapshotError::backend_failed("injected commit failure"),
+            ));
         }
         *self.stored.lock().unwrap() = Some(snapshot.clone());
         self.commits.fetch_add(1, Ordering::SeqCst);

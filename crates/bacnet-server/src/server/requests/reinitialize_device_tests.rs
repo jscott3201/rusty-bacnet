@@ -331,8 +331,8 @@ async fn reinitialize_device_handler_panic_is_answered_services_other() {
 async fn reinitialize_device_handler_reject_is_answered_services_other() {
     let reject = || Error::reject(RejectReason::PARAMETER_OUT_OF_RANGE);
     let abort = || Error::abort(AbortReason::OTHER);
-    let encoding = || Error::Encoding("handler failure".into());
-    for error in [reject, abort, encoding] {
+    let local = || Error::Transport(std::io::Error::other("handler failure"));
+    for error in [reject, abort, local] {
         let (config, _) = recording_config(None, move || Err(error()));
         assert_error(
             dispatch_with(

@@ -566,7 +566,7 @@ async fn audit_reporter_list_unknown_outcomes_are_silent_and_errors_match_respon
                 Error::protocol(ErrorClass::from_raw(128), ErrorCode::from_raw(512)),
                 true,
             ),
-            (Error::OutOfRange("execution failure".into()), true),
+            (Error::range("execution failure"), true),
             (Error::Timeout(Duration::from_secs(1)), false),
             (Error::reject(RejectReason::OTHER), false),
             (Error::abort(AbortReason::OTHER), false),

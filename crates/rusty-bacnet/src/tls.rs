@@ -3,7 +3,7 @@
 
 use bacnet_transport::sc_hub::ScHubTlsConfig;
 use bacnet_transport::sc_tls::ScNodeTlsConfig;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 
 /// Load Python hub credentials into the constrained native TLS policy: the
 /// CA bundle first, then the hub's chain and key.
@@ -27,7 +27,9 @@ pub fn required_sc_credentials<'a>(
 ) -> Result<[&'a str; 3], Error> {
     let required = |path: Option<&'a str>, name: &str| {
         path.filter(|path| !path.is_empty()).ok_or_else(|| {
-            Error::Encoding(format!("{name} must be a nonempty path for SC mutual TLS"))
+            Error::InvalidConfig(Refusal::text(format!(
+                "{name} must be a nonempty path for SC mutual TLS"
+            )))
         })
     };
     Ok([

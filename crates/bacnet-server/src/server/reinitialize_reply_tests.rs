@@ -155,7 +155,11 @@ async fn the_after_reply_hook_never_runs_for_a_refusal() {
         ),
         (
             "handler error",
-            || Err(Error::Encoding("disk full".into())),
+            || {
+                Err(Error::from(
+                    bacnet_types::error::SnapshotError::backend_failed("disk full"),
+                ))
+            },
             None,
             ErrorCode::OTHER,
         ),

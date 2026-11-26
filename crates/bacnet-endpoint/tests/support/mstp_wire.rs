@@ -5,7 +5,7 @@
 
 use bacnet_transport::mstp::codec;
 pub use bacnet_transport::mstp::codec::FrameType;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bytes::{Bytes, BytesMut};
 
 /// A decoded frame that owns its data.
@@ -27,7 +27,7 @@ pub struct MstpFrame {
 pub fn decode_frame(wire: &[u8]) -> Result<(MstpFrame, usize), Error> {
     let mut copy = wire.to_vec();
     let (frame, consumed) = codec::decode_frame_in_place(&mut copy)
-        .map_err(|error| Error::Encoding(error.to_string()))?;
+        .map_err(|error| Error::InvalidArgument(Refusal::text(error.to_string())))?;
     Ok((
         MstpFrame {
             frame_type: frame.header.frame_type,
@@ -49,7 +49,7 @@ pub fn encode_frame(buf: &mut BytesMut, frame: &MstpFrame) -> Result<(), Error> 
         &frame.data,
     )
     .encode_to_sink(&mut wire)
-    .map_err(|error| Error::Encoding(error.to_string()))?;
+    .map_err(|error| Error::InvalidArgument(Refusal::text(error.to_string())))?;
     buf.extend_from_slice(&wire);
     Ok(())
 }

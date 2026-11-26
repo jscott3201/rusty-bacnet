@@ -81,7 +81,7 @@ async fn outage_diagnostics_scale_with_windows_not_dial_attempts() {
             let dials = dials.clone();
             move || {
                 dials.fetch_add(1, Ordering::SeqCst);
-                async { Err(Error::Encoding("hub outage".into())) }
+                async { Err(Error::Transport(std::io::Error::other("hub outage"))) }
             }
         });
         let (started, ()) = tokio::join!(transport.start(), accept(&hub));
@@ -141,7 +141,7 @@ async fn reconnect_flaps_preserve_the_transport_task_diagnostic_window() {
                 hub_tx.send(hub).unwrap();
                 Ok(client)
             } else {
-                Err(Error::Encoding("flapping hub".into()))
+                Err(Error::Transport(std::io::Error::other("flapping hub")))
             };
             async { result }
         }
@@ -196,7 +196,7 @@ async fn handshake_retry_warnings_share_the_redial_diagnostic_budget() {
             let attempt = dials.fetch_add(1, Ordering::SeqCst);
             async move {
                 if attempt == 0 {
-                    Err(Error::Encoding("dial failed".into()))
+                    Err(Error::Transport(std::io::Error::other("dial failed")))
                 } else {
                     let (client, hub) = LoopbackWebSocket::pair();
                     drop(hub); // Dial succeeds; sending Connect-Request fails.
@@ -232,7 +232,9 @@ async fn failover_outcomes_bypass_a_full_diagnostic_window() {
         let failover_dials = Arc::new(AtomicUsize::new(0));
         let (hub_tx, mut hub_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut transport = transport(client, 100)
-            .with_connector(|| async { Err(Error::Encoding("primary outage".into())) })
+            .with_connector(|| async {
+                Err(Error::Transport(std::io::Error::other("primary outage")))
+            })
             .with_failover_connector({
                 let dials = failover_dials.clone();
                 move || {
@@ -241,7 +243,7 @@ async fn failover_outcomes_bypass_a_full_diagnostic_window() {
                     let hub_tx = hub_tx.clone();
                     async move {
                         if !up {
-                            return Err(Error::Encoding("failover outage".into()));
+                            return Err(Error::Transport(std::io::Error::other("failover outage")));
                         }
                         let (client, hub) = LoopbackWebSocket::pair();
                         hub_tx.send(hub).unwrap();

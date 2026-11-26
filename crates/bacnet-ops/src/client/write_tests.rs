@@ -363,7 +363,7 @@ fn reads_unsent(inner: bacnet_transport::loopback::LoopbackTransport) -> TestTra
                 !frame.broadcast && super::read_many_tests::scripted_request(&frame.npdu).is_some();
             async move {
                 match read {
-                    true => Err(Error::Encoding("the link refused the send".into())),
+                    true => Err(Error::invalid_argument("the link refused the send")),
                     false => Ok(()),
                 }
             }
@@ -378,7 +378,7 @@ fn reads_unsent(inner: bacnet_transport::loopback::LoopbackTransport) -> TestTra
 async fn a_priority_read_the_link_refused_says_why() {
     let (client, server) = lab_on(reads_unsent).await;
     let device = lab_device(&client).await;
-    let refused = |error: &OpsError| matches!(error, OpsError::Client(Error::Encoding(why)) if why == "the link refused the send");
+    let refused = |error: &OpsError| matches!(error, OpsError::Client(Error::InvalidArgument(why)) if why.to_string() == "the link refused the send");
     let error = device.priority_array("ao:1").await.unwrap_err();
     assert!(refused(&error), "{error:?}");
     assert!(!error.to_string().contains("decode"), "{error}");
@@ -433,7 +433,7 @@ fn failing(
 
 fn second_read_unsent(inner: bacnet_transport::loopback::LoopbackTransport) -> TestTransport {
     failing(inner, |_, before| {
-        (before >= 1).then(|| Error::Encoding("the link refused the send".into()))
+        (before >= 1).then(|| Error::invalid_argument("the link refused the send"))
     })
 }
 
@@ -451,7 +451,7 @@ async fn a_bulk_read_refused_part_way_keeps_its_rows() {
     assert_eq!(read.readings[0].value.as_ref().unwrap().text, "21.5");
     let stopped = read.stopped.expect("the second request was refused");
     assert!(
-        matches!(&stopped, OpsError::Client(Error::Encoding(why)) if why == "the link refused the send"),
+        matches!(&stopped, OpsError::Client(Error::InvalidArgument(why)) if why.to_string() == "the link refused the send"),
         "{stopped:?}"
     );
     assert!(!stopped.unreachable());

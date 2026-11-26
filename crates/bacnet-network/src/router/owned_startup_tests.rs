@@ -20,7 +20,9 @@ async fn rejected_start(invalid_mac: bool) {
     }
     // Secondary cleanup failure must not replace the primary startup error,
     // nor skip cleanup of the second attempted transport.
-    first.fail_stop(Error::Encoding("rollback secondary".into()));
+    first.fail_stop(Error::Transport(std::io::Error::other(
+        "rollback secondary",
+    )));
     let start = BACnetRouter::start(vec![a, b, c], RouterOptions::new());
     tokio::pin!(start);
     tokio::select! {
@@ -113,7 +115,9 @@ async fn cancellation_while_awaiting_failed_start_rollback_keeps_cleanup_running
     let (a, mut first) = port(false);
     let (mut b, second) = port(false);
     b.network_number = 2;
-    second.fail_start(Error::Encoding("named startup error".into()));
+    second.fail_start(Error::Transport(std::io::Error::other(
+        "named startup error",
+    )));
     {
         let start = BACnetRouter::start(vec![a, b], RouterOptions::new());
         tokio::pin!(start);

@@ -73,9 +73,9 @@ async fn send_message(ws: &LoopbackWebSocket, msg: &ScMessage) {
 }
 
 fn fail_random48_vmac() -> Result<Vmac, Error> {
-    Err(Error::Encoding(
-        "test Random-48 VMAC generation failure".into(),
-    ))
+    Err(Error::Transport(std::io::Error::other(
+        "test Random-48 VMAC generation failure",
+    )))
 }
 
 async fn wait_for_hub_vmac(conn: &Arc<Mutex<ScConnection>>, expected: Vmac, timeout: Duration) {
@@ -267,7 +267,7 @@ async fn primary_restore_attempts_start_one_interval_after_failover() {
             let dials = dial_tx.clone();
             async move {
                 let _ = dials.send(tokio::time::Instant::now());
-                Err::<LoopbackWebSocket, _>(Error::Encoding("primary hub still down".into()))
+                Err::<LoopbackWebSocket, _>(Error::Transport(std::io::Error::other("primary hub still down")))
             }
         })
         .with_reconnect(ScReconnectConfig {

@@ -187,11 +187,6 @@ pub(crate) fn build_database(
         {
             PyValueError::new_err(format!("duplicate object identifier: {e}"))
         }
-        bacnet_types::error::Error::Encoding(message)
-            if message.contains("duplicate object name") =>
-        {
-            PyValueError::new_err(e.to_string())
-        }
         _ => to_py_err(e),
     })
 }
@@ -278,9 +273,9 @@ pub(crate) fn build_pending_boxes(
 
 pub(crate) fn lifecycle_error(error: super::lifecycle::LifecycleError<PyErr>) -> PyErr {
     match error {
-        super::lifecycle::LifecycleError::AlreadyStarted => to_py_err(
-            bacnet_types::error::Error::Encoding("endpoint already started".into()),
-        ),
+        super::lifecycle::LifecycleError::AlreadyStarted => {
+            crate::errors::BacnetError::new_err("endpoint already started")
+        }
         super::lifecycle::LifecycleError::StartupCancelled => {
             pyo3::exceptions::PyRuntimeError::new_err("endpoint startup cancelled by close")
         }
@@ -317,7 +312,8 @@ mod build_database_tests {
         Box::new(AnalogInputObject::new(instance, name, EngineeringUnits::NO_UNITS).unwrap())
     }
 
-    /// Both duplicate kinds surface as ValueError, named for what clashed.
+    /// Both duplicate kinds surface as ValueError, named for what clashed:
+    /// each from its typed protocol error, the only form they take (#1833).
     #[test]
     fn duplicate_names_and_identifiers_are_value_errors() {
         Python::initialize();

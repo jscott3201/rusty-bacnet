@@ -162,8 +162,8 @@ fn errors_map_to_their_disconnect_causes() {
             ScDisconnectCause::UnexpectedConnectReply,
         ),
         (
-            Error::Encoding("plain".into()),
-            ScDisconnectCause::Other("encoding error: plain".into()),
+            Error::Transport(std::io::Error::other("plain")),
+            ScDisconnectCause::Other("transport error: plain".into()),
         ),
     ] {
         let mapped = ScDisconnectCause::from_error(&error);
@@ -314,11 +314,14 @@ fn connector(
         let hubs = hubs.clone();
         Box::pin(async move {
             if !up {
-                return Err(Error::Encoding("fixture hub is down".into()));
+                return Err(Error::Transport(std::io::Error::other(
+                    "fixture hub is down",
+                )));
             }
             let (client, hub) = LoopbackWebSocket::pair();
-            hubs.send(hub)
-                .map_err(|_| Error::Encoding("fixture hub receiver dropped".into()))?;
+            hubs.send(hub).map_err(|_| {
+                Error::Transport(std::io::Error::other("fixture hub receiver dropped"))
+            })?;
             Ok(client)
         })
     }

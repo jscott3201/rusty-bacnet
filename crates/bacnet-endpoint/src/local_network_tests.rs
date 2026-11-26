@@ -102,7 +102,9 @@ fn capture(
             let failing = fail_stop.swap(false, Ordering::SeqCst);
             async move {
                 if failing {
-                    Err(Error::Encoding("injected capture stop failure".into()))
+                    Err(Error::Transport(std::io::Error::other(
+                        "injected capture stop failure",
+                    )))
                 } else {
                     Ok(())
                 }
