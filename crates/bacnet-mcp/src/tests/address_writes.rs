@@ -13,15 +13,17 @@ use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use serde_json::{Value, json};
 
-use super::known::{i_am, i_am_from, until};
+use super::known::{PAST_THE_WINDOW, i_am, i_am_from, until};
 use super::writes::{answered, call, command, one, slot, writes};
 use super::{ALIASES, LAB, LAB_MAC, Lab, alias_mac};
 use crate::Policy;
 use crate::policy::ArmMode;
 
 /// Teach the client its network's number, as a router's
-/// Network-Number-Is does.
+/// Network-Number-Is does in answer to the client's question: the client
+/// takes it when the question's window closes (#2826).
 async fn learn(lab: &Lab, network: u16) {
+    lab.low.what_is_network_number(None).await.unwrap();
     let [hi, lo] = network.to_be_bytes();
     let says = bytes::Bytes::from(vec![1, 0x80, 0x13, hi, lo, 1]);
     let inbox = lab.inbox.inbound().expect("started");
@@ -29,6 +31,7 @@ async fn learn(lab: &Lab, network: u16) {
     let frame =
         bacnet_transport::port::ReceivedNpdu::unverified(says, from, true, Vec::new(), None);
     inbox.send(frame).await.unwrap();
+    tokio::time::sleep(PAST_THE_WINDOW).await;
     until(
         lab,
         |lab| lab.low.network_number() == Some(network),

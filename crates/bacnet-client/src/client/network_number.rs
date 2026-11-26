@@ -10,18 +10,37 @@
 //! keep the answer rather than repeat the question, so a known number is
 //! never asked for again.
 //!
+//! The number itself comes only from the answers to the client's own
+//! questions, when every one names it, and a new one only after a router
+//! check; an announcement it did not ask for that names another number is
+//! a cue to ask (#2826, [`number_rounds`]).
+//!
 //! The client also answers the question when it holds the number. It is
 //! not a router, so the same clause lets it hold its answer to a broadcast
 //! question for a random wait and skip it when another node answers first
 //! (#2597, [`DelayedAnswer`]); a question sent to the client alone is
 //! answered at once.
 use super::device_events::{self, TableNotices};
+use super::number_check::{Routed, RouterCheck};
 use super::*;
+use bacnet_network::layer::QueueAdmissionCounters;
+use bacnet_network::layer::ReceivedNetworkReport;
 use bacnet_network::network_number::{DelayedAnswer, NumberControl, number_is_reply};
 use bacnet_npdu::NetworkMessageType;
 use bacnet_types::network_number::NetworkNumber;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use number_rounds::{Decision, Heard, Learning, Question};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use tokio::sync::{Notify, watch};
+use tokio::time::Instant;
+
+#[path = "number_rounds.rs"]
+mod number_rounds;
+
+/// How long the answers to a question count, for a client whose APDU
+/// timeout is `apdu_timeout` (#2826): [`number_rounds::window_for`].
+pub(super) fn window_for(apdu_timeout: Duration) -> Duration {
+    number_rounds::window_for(apdu_timeout)
+}
 
 use crate::poll_gate::PollGate;
 
@@ -51,7 +70,7 @@ pub(super) enum Refusal {
 /// methods, which ask before a Who-Is, the dispatch task, which wants an
 /// ask when it stores a routed row, and the Number owner, which makes that
 /// ask and the ones a link return calls for.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct Asking {
     /// The link takes the local Number controls: without them nothing is
     /// asked, and no owner runs.
@@ -73,14 +92,82 @@ pub(super) struct Asking {
     /// Wakes the owner to ask for the dispatch task, which never waits on
     /// Number egress.
     wanted: Notify,
+    /// The client's latest question, which went or is going: the answers
+    /// heard within a window after it count (#2826).
+    asked_at: SyncMutex<Option<Question>>,
+    /// Windows whose answers named more than one number (#2826).
+    disagreements: AtomicU64,
+    /// Controls the Number owner's queue turned away, full (#2826).
+    turned_away: AtomicU64,
+    /// The network layer's control queue's counts, where this client can
+    /// read them: `None` on a seat.
+    control_drops: Option<QueueAdmissionCounters>,
 }
 
 impl Asking {
-    pub(super) fn new(numbers: bool) -> Self {
+    pub(super) fn new(numbers: bool, control_drops: Option<QueueAdmissionCounters>) -> Self {
         Self {
             numbers,
-            ..Self::default()
+            seated: false,
+            asked: AtomicBool::new(false),
+            sends: AtomicU8::new(OPEN),
+            sending: PollGate::default(),
+            wanted: Notify::new(),
+            asked_at: SyncMutex::new(None),
+            disagreements: AtomicU64::new(0),
+            turned_away: AtomicU64::new(0),
+            control_drops,
         }
+    }
+
+    /// Send a question, noting first when it goes and how many controls
+    /// were lost by then, so the answers that come in the window after it
+    /// count (#2826), and give the send's own result. A send that fails, or
+    /// is cut off before it finishes, puts the note back as it was.
+    pub(super) async fn noting<R>(
+        &self,
+        send: impl Future<Output = Result<R, Error>>,
+    ) -> Result<R, Error> {
+        let question = Question {
+            at: Instant::now(),
+            losses: self.losses(),
+        };
+        let before = self.asked_at.lock().replace(question);
+        let mut note = Note {
+            asking: self,
+            question,
+            before,
+            went: false,
+        };
+        let sent = send.await;
+        note.went = sent.is_ok();
+        sent
+    }
+
+    /// The client's latest question.
+    fn asked_at(&self) -> Option<Question> {
+        *self.asked_at.lock()
+    }
+
+    /// Controls lost so far, to the network layer's control queue or the
+    /// Number owner's own (#2826). What is lost before them, in the
+    /// socket's buffer or on the link, isn't counted.
+    pub(super) fn losses(&self) -> u64 {
+        let layer = self.control_drops.as_ref().map_or(0, |drops| {
+            let counts = drops.snapshot();
+            counts.full_drops.saturating_add(counts.closed_drops)
+        });
+        layer.saturating_add(self.turned_away.load(Ordering::Relaxed))
+    }
+
+    /// The Number owner's queue turned a control away, full.
+    pub(super) fn turned_away(&self) {
+        self.turned_away.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// [`BACnetClient::network_number_disagreements`].
+    pub(super) fn disagreements(&self) -> u64 {
+        self.disagreements.load(Ordering::Relaxed)
     }
 
     /// The client's seat closed: see [`SEALED`].
@@ -134,7 +221,7 @@ impl Asking {
             return;
         }
         let _one = self.sending.lock().await;
-        if needed() && ask(network).await {
+        if needed() && self.ask(network).await {
             self.asked.store(true, Ordering::Release);
         }
     }
@@ -168,7 +255,7 @@ impl Asking {
         let Some(_one) = self.sending.try_lock() else {
             return;
         };
-        if needed() && ask(network).await {
+        if needed() && self.ask(network).await {
             self.asked.store(true, Ordering::Release);
         }
     }
@@ -186,7 +273,85 @@ impl Asking {
             return;
         };
         if needed() {
-            ask(network).await;
+            self.ask(network).await;
+        }
+    }
+
+    /// An announcement the client did not ask for named another number than
+    /// it holds (#2826): ask, whether the number is known or not, unless a
+    /// question is going out already. Never waits on the send lock.
+    /// Whether a question went.
+    async fn cue<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) -> bool {
+        if self.is_sealed() {
+            return false;
+        }
+        let Some(_one) = self.sending.try_lock() else {
+            return false;
+        };
+        let went = self.ask(network).await;
+        if went {
+            self.asked.store(true, Ordering::Release);
+        }
+        went
+    }
+
+    /// Ask this network's number with a local broadcast
+    /// What-Is-Network-Number, which carries no DNET and is never routed
+    /// (Clause 6.4.19). Whether it went: a send that fails is logged and
+    /// left for the next need.
+    async fn ask<T: TransportPort + 'static>(&self, network: &NetworkLayer<T>) -> bool {
+        let ask =
+            network.send_network_message(NetworkMessageType::WHAT_IS_NETWORK_NUMBER, &[], None);
+        match self.noting(ask).await {
+            Ok(()) => true,
+            Err(error) => {
+                debug!(%error, "What-Is-Network-Number broadcast failed");
+                false
+            }
+        }
+    }
+}
+
+impl ClientOptions {
+    /// How long the answers to the client's What-Is-Network-Number count
+    /// (#2826): see `window_for`.
+    pub(super) fn number_window(&self, config: &ClientConfig) -> Duration {
+        #[cfg(feature = "test-support")]
+        if let Some(window) = self.number_window {
+            return window;
+        }
+        window_for(Duration::from_millis(config.apdu_timeout_ms))
+    }
+
+    /// Test support: take the answers to the client's
+    /// What-Is-Network-Number for `window` after each question, in place of
+    /// the window its APDU timeout and the longest held answer set (#2826),
+    /// so a wire test on the wall clock learns a number in well under that.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn with_number_window(mut self, window: Duration) -> Self {
+        self.number_window = Some(window);
+        self
+    }
+}
+
+/// A question's note while its send runs: put back as it was unless the
+/// send finished and went.
+struct Note<'a> {
+    asking: &'a Asking,
+    question: Question,
+    before: Option<Question>,
+    went: bool,
+}
+
+impl Drop for Note<'_> {
+    fn drop(&mut self) {
+        if self.went {
+            return;
+        }
+        let mut asked = self.asking.asked_at.lock();
+        if *asked == Some(self.question) {
+            *asked = self.before;
         }
     }
 }
@@ -212,12 +377,18 @@ pub(super) struct Discovery {
 }
 
 impl Discovery {
-    pub(super) fn new(numbers: bool, seated: bool) -> Self {
+    /// `control_drops`: the network layer's control queue's counts, which a
+    /// seated client can't read.
+    pub(super) fn new(
+        numbers: bool,
+        seated: bool,
+        control_drops: Option<QueueAdmissionCounters>,
+    ) -> Self {
         Self {
             table: SyncMutex::new(DeviceTable::new()),
             asking: Asking {
                 seated,
-                ..Asking::new(numbers)
+                ..Asking::new(numbers, control_drops)
             },
             whole_first_window: SyncMutex::new(None),
             route_cue: Notify::new(),
@@ -235,26 +406,18 @@ impl std::ops::Deref for Discovery {
 
 /// What the owner keeps beside the layer: the discovery table its learning
 /// folds and the asking it shares with the client, the table's
-/// subscribers, and the link's returns, when the transport reports them.
+/// subscribers, the link's returns, when the transport reports them, how
+/// long the answers to a question count, and what the router check before
+/// a change of number needs: the client's network reports and the check's
+/// wait, the APDU timeout (#2826).
 pub(super) struct Owner {
     pub(super) discovery: Arc<Discovery>,
     pub(super) device_tx: broadcast::Sender<DeviceEvent>,
     pub(super) collision_tx: broadcast::Sender<DeviceCollisionEvent>,
     pub(super) link_returns: Option<watch::Receiver<u64>>,
-}
-
-/// Ask this network's number with a local broadcast What-Is-Network-Number,
-/// which carries no DNET and is never routed (Clause 6.4.19). Whether it
-/// went: a send that fails is logged and left for the next need.
-async fn ask<T: TransportPort + 'static>(network: &NetworkLayer<T>) -> bool {
-    let ask = network.send_network_message(NetworkMessageType::WHAT_IS_NETWORK_NUMBER, &[], None);
-    match ask.await {
-        Ok(()) => true,
-        Err(error) => {
-            debug!(%error, "What-Is-Network-Number broadcast failed");
-            false
-        }
-    }
+    pub(super) window: Duration,
+    pub(super) reports: broadcast::Sender<ReceivedNetworkReport>,
+    pub(super) check_wait: Duration,
 }
 
 /// Broadcast the Network-Number-Is that answers a question, when the
@@ -280,10 +443,141 @@ pub(super) async fn link_returned(returns: &mut Option<watch::Receiver<u64>>) {
     }
 }
 
+/// The owner's number and what follows a change of it: the discovery
+/// table it folds, the table's subscribers, and the throttled logs.
+struct Held<'a> {
+    state: NetworkNumber,
+    table: &'a SyncMutex<DeviceTable>,
+    notices: TableNotices<'a>,
+    /// A changed number: the table follows each change, the log once an
+    /// interval.
+    changes: WarnThrottle,
+    /// A window that decided nothing for a disagreement (#2826).
+    splits: WarnThrottle,
+}
+
+impl Held<'_> {
+    /// Act on what a closed window of answers decided (#2826): count and
+    /// log a split or a possible loss; take an agreed number that changes
+    /// the one held only after the router check, unless a router routes
+    /// there or may have said so.
+    async fn decided<T: TransportPort + 'static>(
+        &mut self,
+        decision: Decision,
+        check: &RouterCheck<'_, T>,
+    ) {
+        let (number, flag) = match decision {
+            Decision::Unanswered => return,
+            Decision::Void => {
+                debug!(
+                    "a What-Is-Network-Number window's question may not have gone; it decides \
+                     nothing"
+                );
+                return;
+            }
+            Decision::Lost => {
+                return self.refused(
+                    check.asking,
+                    None,
+                    "an answer to What-Is-Network-Number may have been lost",
+                );
+            }
+            Decision::Split => {
+                return self.refused(
+                    check.asking,
+                    None,
+                    "the answers to What-Is-Network-Number named different numbers",
+                );
+            }
+            Decision::Agreed { number, flag } => (number, flag),
+        };
+        // Every change of number waits for the check (maintainer decision,
+        // 2026-11-26).
+        if number != self.state.snapshot().0 {
+            match check.routed(number).await {
+                Routed::Nowhere => {}
+                Routed::Here => {
+                    return self.refused(
+                        check.asking,
+                        Some(number),
+                        "a router on this link routes to the network the answers named",
+                    );
+                }
+                Routed::Unknown => {
+                    return self.refused(
+                        check.asking,
+                        Some(number),
+                        "a router's answer for the network the answers named may have been lost",
+                    );
+                }
+            }
+        }
+        self.apply(number, flag, check.network);
+    }
+
+    /// A window decided nothing, for `why`: count it, and log it once an
+    /// interval. `named` is the number its answers agreed on, if they did.
+    fn refused(&self, asking: &Asking, named: Option<u16>, why: &'static str) {
+        asking.disagreements.fetch_add(1, Ordering::Relaxed);
+        warn_throttled!(
+            self.splits,
+            number = self.state.snapshot().0,
+            named,
+            why,
+            "{why}; this network's number stays as it was"
+        );
+    }
+
+    /// Apply `number` with `flag` by Clause 6.4.20's precedence. A number
+    /// that changes is published and folds the discovery table.
+    fn apply<T: TransportPort + 'static>(
+        &mut self,
+        number: u16,
+        flag: u8,
+        network: &NetworkLayer<T>,
+    ) {
+        let before = self.state.snapshot().0;
+        self.state.observe(number, flag);
+        let after = self.state.snapshot().0;
+        if after == before {
+            return;
+        }
+        if before != 0 {
+            warn_throttled!(
+                self.changes,
+                previous = before,
+                number = after,
+                "this network's number changed; rows made local under the previous number \
+                 are dropped"
+            );
+        }
+        let this_network = network.local_network_number();
+        device_events::learned_number(self.table, this_network, self.state, self.notices);
+    }
+}
+
+/// A Number control and when the client heard it: an answer is judged by
+/// when it came, not when the owner took it from its queue (#2826).
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Received {
+    pub(super) control: NumberControl,
+    pub(super) at: Instant,
+}
+
+impl Received {
+    /// `control`, heard now.
+    pub(super) fn now(control: NumberControl) -> Self {
+        Self {
+            control,
+            at: Instant::now(),
+        }
+    }
+}
+
 pub(super) fn spawn<T: TransportPort + 'static>(
     network: &Arc<NetworkLayer<T>>,
     owner: Owner,
-) -> (mpsc::Sender<NumberControl>, JoinHandle<()>) {
+) -> (mpsc::Sender<Received>, JoinHandle<()>) {
     let (tx, mut rx) = mpsc::channel(CAPACITY);
     let network = Arc::clone(network);
     let task = tokio::spawn(async move {
@@ -292,17 +586,31 @@ pub(super) fn spawn<T: TransportPort + 'static>(
             device_tx,
             collision_tx,
             mut link_returns,
+            window,
+            reports,
+            check_wait,
         } = owner;
-        let (table, asking) = (&discovery.table, &discovery.asking);
-        let notices: TableNotices<'_> = (&device_tx, &collision_tx);
-        let mut state = NetworkNumber::default();
+        let asking = &discovery.asking;
+        let check = RouterCheck {
+            network: &network,
+            reports: &reports,
+            asking,
+            wait: check_wait,
+        };
+        let mut held = Held {
+            state: NetworkNumber::default(),
+            table: &discovery.table,
+            notices: (&device_tx, &collision_tx),
+            changes: WarnThrottle::default(),
+            splits: WarnThrottle::default(),
+        };
         // The answer to a broadcast What-Is-Network-Number, held for its
         // random wait and dropped when another node answers first
         // (Clause 6.4.19, #2597). It lives in this task alone.
         let mut answer = DelayedAnswer::new();
-        // Two routers that disagree flip the number on every announcement:
-        // the table follows each flip, the log once an interval.
-        let changes = WarnThrottle::default();
+        // The window a question opens, and the hold on questions that
+        // unasked announcements call for (#2826): in this task alone too.
+        let mut learning = Learning::new(window);
         loop {
             // No branch holds a lock, and each arm finishes its work, the
             // send included, before the next turn polls any of them.
@@ -321,35 +629,48 @@ pub(super) fn spawn<T: TransportPort + 'static>(
                 }
                 () = answer.due() => {
                     answer.taken();
-                    announce(&network, state).await;
+                    announce(&network, held.state).await;
+                    continue;
+                }
+                // Not while controls wait in the queue: one that came
+                // before the close is an answer still to count.
+                () = learning.closes(), if rx.is_empty() => {
+                    let decision = learning.close(asking.losses(), asking.asked_at());
+                    held.decided(decision, &check).await;
                     continue;
                 }
             };
+            let Received { control, at: now } = control;
             match control {
                 NumberControl::NumberIs { number, flag } => {
-                    let before = state.snapshot().0;
-                    state.observe(number, flag);
-                    let after = state.snapshot().0;
-                    if after != before {
-                        if before != 0 {
-                            warn_throttled!(
-                                changes,
-                                previous = before,
-                                number = after,
-                                "this network's number changed; rows made local under the \
-                                 previous number are dropped"
-                            );
-                        }
-                        let this_network = network.local_network_number();
-                        device_events::learned_number(table, this_network, state, notices);
+                    // A window that closed before this came is decided
+                    // first, so its answers and later ones never mix.
+                    if learning.due(now) {
+                        let decision = learning.close(asking.losses(), asking.asked_at());
+                        held.decided(decision, &check).await;
                     }
-                    // After the state took the announcement in, so a
-                    // number just adopted from it counts as agreeing.
-                    answer.heard(state, number, flag);
+                    let ours = held.state.snapshot().0;
+                    match learning.heard((ours, number, flag), asking.asked_at(), now) {
+                        Heard::Answer => {}
+                        // The number held: only its quality can change.
+                        Heard::Same => {
+                            held.state.observe(number, flag);
+                        }
+                        Heard::Cue { ask } => {
+                            debug!(number, ask, "an unasked Network-Number-Is is a cue");
+                            // Only a question that went takes the hold.
+                            if ask && asking.cue(&network).await {
+                                learning.cue_asked(Instant::now());
+                            }
+                        }
+                    }
+                    // After the state took the announcement in, so one
+                    // naming the number held counts as agreeing.
+                    answer.heard(held.state, number, flag);
                 }
                 NumberControl::WhatIs { broadcast } => {
-                    if answer.asked(state, broadcast) {
-                        announce(&network, state).await;
+                    if answer.asked(held.state, broadcast) {
+                        announce(&network, held.state).await;
                     }
                 }
             }

@@ -80,30 +80,43 @@ async fn client_number_worker_queue_is_bounded_and_closes_on_abort() {
         device_tx: client.device_tx.clone(),
         collision_tx: client.device_collision_tx.clone(),
         link_returns: None,
+        window: std::time::Duration::from_secs(5),
+        reports: client.network_report_tx.clone(),
+        check_wait: std::time::Duration::from_secs(5),
     };
     let (tx, task) = network_number::spawn(&client.network, owner);
-    tx.try_send(NumberControl::NumberIs {
+    tx.try_send(network_number::Received::now(NumberControl::NumberIs {
         number: 77,
         flag: 1,
-    })
+    }))
     .unwrap();
-    tx.try_send(NumberControl::WhatIs { broadcast: false })
-        .unwrap();
+    tx.try_send(network_number::Received::now(NumberControl::WhatIs {
+        broadcast: false,
+    }))
+    .unwrap();
     bounded(gates.entered.acquire()).await.unwrap().forget();
-    // The reply follows the announcement, so the layer already holds it.
-    assert_eq!(client.network.local_network_number().get(), Some(77));
-    for _ in 0..network_number::CAPACITY {
-        tx.try_send(NumberControl::WhatIs { broadcast: false })
-            .unwrap();
+    // The held send is the question the unasked announcement called for,
+    // and the number is not taken from it (#2826).
+    assert_eq!(client.network.local_network_number().get(), None);
+    // The question to this client alone waits in the queue behind it.
+    for _ in 1..network_number::CAPACITY {
+        tx.try_send(network_number::Received::now(NumberControl::WhatIs {
+            broadcast: false,
+        }))
+        .unwrap();
     }
     assert!(matches!(
-        tx.try_send(NumberControl::WhatIs { broadcast: false }),
+        tx.try_send(network_number::Received::now(NumberControl::WhatIs {
+            broadcast: false
+        })),
         Err(tokio::sync::mpsc::error::TrySendError::Full(_))
     ));
     task.abort();
     let _ = task.await;
     assert!(matches!(
-        tx.try_send(NumberControl::WhatIs { broadcast: false }),
+        tx.try_send(network_number::Received::now(NumberControl::WhatIs {
+            broadcast: false
+        })),
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_))
     ));
     client.stop().await.unwrap();

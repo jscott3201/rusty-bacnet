@@ -7005,6 +7005,17 @@ class BACnetClient:
         other devices. RuntimeError before start and after stop."""
         ...
 
+    def network_number_disagreements(self) -> Awaitable[int]:
+        """How many windows of answers to the client's What-Is-Network-Number
+        decided nothing since start because the answers disagreed or may
+        have (#2826), so it kept the number it held: they named two numbers,
+        agreed on a network the client reaches through a router that a
+        router on its link answered it routes to, or an answer may have been
+        lost. A rise means stations on the link claim different numbers for
+        it, or controls come faster than the client takes them. Always zero for an endpoint's client, whose endpoint
+        holds the number. RuntimeError before start and after stop."""
+        ...
+
     def network_reports(self) -> Awaitable[NetworkReportIterator]:
         """Follow the I-Am-Router-To-Network, Network-Number-Is,
         Reject-Message-To-Network and Initialize-Routing-Table-Ack (query

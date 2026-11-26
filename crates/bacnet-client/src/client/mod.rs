@@ -229,6 +229,10 @@ pub struct ClientOptions {
     confirmed_cov_notification_ack_policy: ConfirmedCOVNotificationAckPolicy,
     /// See [`Self::with_node_dcc_override`].
     node_dcc_override: bool,
+    /// Test support: the window for the answers to the client's
+    /// What-Is-Network-Number, in place of the one its APDU timeout sets.
+    #[cfg(feature = "test-support")]
+    number_window: Option<Duration>,
 }
 
 impl Default for ClientConfig {
@@ -260,6 +264,8 @@ impl Default for ClientOptions {
             confirmed_cov_notification_ack_policy:
                 cov_notifications::default_confirmed_cov_notification_ack_policy(),
             node_dcc_override: false,
+            #[cfg(feature = "test-support")]
+            number_window: None,
         }
     }
 }
@@ -1155,3 +1161,4 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 mod number_tests;
 
 mod network_number;
+mod number_check;

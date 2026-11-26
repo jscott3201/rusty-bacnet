@@ -57,7 +57,7 @@ async fn learning_the_number_folds_the_routed_rows_on_this_network() {
 
     let mut events = site.client.device_events();
     let mut collisions = site.client.device_collision_events();
-    site.announce(THIS_NETWORK, 0).await;
+    site.answered(THIS_NETWORK, 0).await;
     assert_eq!(site.client.discovered_devices().await.len(), 5);
 
     let ev = &mut events;
@@ -112,7 +112,7 @@ async fn a_fold_keeps_what_the_device_announced_over_a_placeholder() {
     tokio::time::sleep(Duration::from_millis(5)).await;
 
     let mut events = site.client.device_events();
-    site.announce(THIS_NETWORK, 0).await;
+    site.answered(THIS_NETWORK, 0).await;
     let ev = &mut events;
     expect(ev, DeviceEventKind::Lost, 9, Some(THIS_NETWORK), &PEER);
     let updated = expect(ev, DeviceEventKind::Updated, 9, None, &PEER);
@@ -162,7 +162,7 @@ async fn a_changed_number_drops_the_rows_local_by_the_old_one() {
     send_to_client(inbound, &i_am(14), &ROUTER, relayed(THIS_NETWORK, &[8])).await;
     send_to_client(inbound, &i_am(13), &ROUTER, relayed(NEW_NETWORK, &[7])).await;
     tokio::time::sleep(Duration::from_millis(5)).await;
-    site.announce(THIS_NETWORK, 0).await;
+    site.answered(THIS_NETWORK, 0).await;
     // A relay after learning lands on a local row by the number alone;
     // device 14, folded like device 10, is then heard directly.
     send_to_client(inbound, &i_am(12), &ROUTER, relayed(THIS_NETWORK, &[6])).await;
@@ -171,7 +171,7 @@ async fn a_changed_number_drops_the_rows_local_by_the_old_one() {
     assert!(site.client.get_device_at(0, &[6]).await.is_some());
 
     let mut events = site.client.device_events();
-    site.announce(NEW_NETWORK, 1).await;
+    site.taught(NEW_NETWORK, 1).await;
     let ev = &mut events;
     expect(ev, DeviceEventKind::Lost, 10, None, &[4]);
     expect(ev, DeviceEventKind::Lost, 12, None, &[6]);

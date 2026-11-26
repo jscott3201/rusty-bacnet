@@ -50,6 +50,12 @@ pub(super) fn i_am_from(instance: u32, source: Option<NpduAddress>) -> BytesMut 
 }
 
 /// Wait until `holds` is true of the lab, on the paused clock.
+/// Past the window in which the lab client takes the answers to its
+/// What-Is-Network-Number: the longest a node may hold its answer, 10 s,
+/// which outlasts its APDU timeout, the 2 s margin, and the router check
+/// after it, its 1 s APDU timeout (#2826).
+pub(super) const PAST_THE_WINDOW: Duration = Duration::from_millis(13_500);
+
 pub(super) async fn until(lab: &Lab, holds: impl Fn(&Lab) -> bool, what: &str) {
     for _ in 0..1_000 {
         if holds(lab) {
@@ -145,12 +151,16 @@ async fn the_own_network_number_names_the_local_network() {
         .call("bacnet_describe_device", arguments.clone())
         .await;
     assert_eq!(result["isError"], json!(true), "not yet: {result}");
-    // A router on the link broadcasts this network's number, configured.
+    // A router on the link answers the client's question with this
+    // network's number, configured; the client takes it when the question's
+    // window, its APDU timeout, closes (#2826).
+    lab.low.what_is_network_number(None).await.unwrap();
     let says = bytes::Bytes::from_static(&[1, 0x80, 0x13, 0, 7, 1]);
     let inbox = lab.inbox.inbound().expect("started");
     let from = MacAddr::from_slice(&LAB_MAC);
     let frame = ReceivedNpdu::unverified(says, from, true, Vec::new(), None);
     inbox.send(frame).await.unwrap();
+    tokio::time::sleep(PAST_THE_WINDOW).await;
     until(&lab, |lab| lab.low.network_number() == Some(7), "learned").await;
     let result = lab.agent.call("bacnet_describe_device", arguments).await;
     assert_ne!(result["isError"], json!(true), "{result}");

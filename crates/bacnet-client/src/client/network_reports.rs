@@ -179,14 +179,41 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
-    /// The number of the network this client is on, once a
-    /// Network-Number-Is has taught it ([`Self::what_is_network_number`]
-    /// asks, and the client asks by itself before its first Who-Is or when
-    /// it first stores a routed device, #2572); `None` until then, and
-    /// always on a link that takes no network number controls. A routed
-    /// address naming this network is a station on this one.
+    /// The number of the network this client is on, once every answer to
+    /// one of its What-Is-Network-Number questions named it
+    /// ([`Self::what_is_network_number`] asks, and the client asks by
+    /// itself before its first Who-Is, when it first stores a routed
+    /// device, #2572, and when an announcement it did not ask for names
+    /// another number, #2826). The answers count for a window after the
+    /// question: the APDU timeout or the ten seconds a node that is not a
+    /// router may hold its answer, whichever is longer, and two more; a
+    /// new number is taken one router check later, an APDU timeout, and
+    /// only when no router on this link answers that it routes there:
+    /// about 18 s after the question at the default APDU timeout.
+    /// `None` until then, and always on a link that takes no network number
+    /// controls. A routed address naming this network is a station on this
+    /// one. A client on an endpoint's seat holds the number its node holds,
+    /// which the node still takes from any announcement.
     pub fn network_number(&self) -> Option<u16> {
         self.network.local_network_number().get()
+    }
+
+    /// How many windows of answers to this client's What-Is-Network-Number
+    /// decided nothing because the answers disagreed or may have, so the
+    /// client kept what it held, a number or none (#2826): they named two
+    /// numbers, whatever their flags; they agreed on a network the client
+    /// reaches through a router and a router on this link answered that it
+    /// routes there, or its answer may have been lost; or an answer may
+    /// have been lost while the window was open (a queue turned controls
+    /// away). A window nobody answered, or whose question may not have
+    /// gone, isn't counted. A rise means stations on this link claim
+    /// different numbers for it (two routers configured apart, a station
+    /// announcing a number that is not this network's, or nodes still
+    /// answering a number the link had before it was renumbered) or that
+    /// controls come faster than the client takes them. Always zero for a
+    /// client on an endpoint's seat, whose node holds the number.
+    pub fn network_number_disagreements(&self) -> u64 {
+        self.device_table.asking.disagreements()
     }
 
     /// The numbers of the networks this client's local broadcast reaches,
@@ -211,19 +238,20 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// [`Self::network_reports`]. Ask once and keep the answer: the
     /// standard doesn't want the question repeated. A question sent counts
     /// as the one the client otherwise asks on first need (#2572), so a
-    /// later Who-Is doesn't ask again.
+    /// later Who-Is doesn't ask again, and the answers that agree within
+    /// the window it opens teach the client its number (#2826,
+    /// [`Self::network_number`]).
     pub async fn what_is_network_number(
         &self,
         destination_mac: Option<&[u8]>,
     ) -> Result<(), Error> {
         self.link_open()?;
-        self.network
-            .send_network_message(
-                NetworkMessageType::WHAT_IS_NETWORK_NUMBER,
-                &[],
-                destination_mac,
-            )
-            .await?;
+        let ask = self.network.send_network_message(
+            NetworkMessageType::WHAT_IS_NETWORK_NUMBER,
+            &[],
+            destination_mac,
+        );
+        self.device_table.asking.noting(ask).await?;
         // It is the client's question too: a later Who-Is or routed row
         // doesn't ask again (#2572).
         self.device_table.asking.asked_by_caller();
