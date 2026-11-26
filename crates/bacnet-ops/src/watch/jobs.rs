@@ -31,12 +31,12 @@ use super::hub::first::first_read;
 use super::options::{Fallback, Reads};
 use super::shared::Shared;
 use super::support::{CovSupport, fills_table, refuses_service};
-use super::{Point, Watched};
+use super::{Binding, Point, Watched};
 use crate::client::batch::{self, BatchRow, Missing};
 use crate::client::{device_error, failed_locally, unreachable};
 pub(super) use crate::device::Answer;
 use crate::device::confirm::{left_silence, named, silence};
-use crate::device::{DeviceAddress, path_to};
+use crate::device::{DeviceAddress, Settled, path_to};
 use crate::format::{PropertyError, RawRow};
 
 /// How long one cancel may take before it is given up.
@@ -80,6 +80,9 @@ pub(super) enum Skipped {
     /// The device there refuses the read that names it: nothing there can
     /// confirm it.
     Unconfirmed,
+    /// Two or more addresses claiming the instance may be the device, its
+    /// place settled as a handle's first placement is (#2824).
+    Ambiguous,
 }
 
 /// Whether a start asked for its subscription, and how that went.
@@ -128,7 +131,11 @@ pub(super) fn poll_row(reads: &Reads, process: u32, point: &Point) -> BatchRow<u
 /// unless the read had no answer or the device refused the service before.
 /// When neither the discovery table nor an earlier read knows the instance
 /// at the address, it is read once by the wildcard instance after the
-/// first read is answered, and remembered for the address (#2603).
+/// first read is answered, and remembered for the address (#2603). A
+/// following point's place, unless confirmed already, is settled first as
+/// a handle's first placement is, one Who-Is for the instance before its
+/// claims are asked (#2824): two or more that may be the device give the
+/// point up as unconfirmed, nothing read or subscribed.
 pub(super) async fn start<T: TransportPort + 'static>(
     inner: Arc<Inner<T>>,
     shared: Arc<Shared>,
@@ -137,6 +144,22 @@ pub(super) async fn start<T: TransportPort + 'static>(
     let (process, point) = (shared.process, &shared.point);
     let address = &address;
     let client = &inner.client;
+    if let Binding::Follows { instance, network } = point.device {
+        let key = client.key(network, instance);
+        if client.settle_place(key, address).await == Settled::Ambiguous {
+            return Started {
+                target: None,
+                before: None,
+                vouched: false,
+                instance: Some(instance),
+                first: None,
+                read_at: None,
+                outcome: Outcome::NotAsked,
+                cov: client.cov_known(address, &point.watched),
+                skipped: Some(Skipped::Ambiguous),
+            };
+        }
+    }
     let said = client.said(address);
     let before = match said {
         Some(said) => Some(said),

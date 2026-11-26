@@ -4948,7 +4948,10 @@ class BacnetLookupError(BacnetError, LookupError):
     answered a Who-Is for it, or no router is known for a routed address's
     network. Also a ``LookupError``. Nothing was sent to the device. The
     typed ``_from_device`` and ``_to_device`` calls raise it for an
-    instance the table doesn't hold. A write or relinquish through a handle
+    instance the table doesn't hold. ``client.device(instance)`` raises it
+    when the one address claiming the instance, asked which device answers
+    there, didn't answer as it (#2824); ``at`` is that address and
+    ``answer`` says what it did. A write or relinquish through a handle
     made from an instance raises it when the device isn't taken for the
     instance at the address the handle holds (#2795): a write never goes to
     another address on its own. Read through the handle to have it look
@@ -4960,19 +4963,27 @@ class BacnetLookupError(BacnetError, LookupError):
         instance: The instance named (``1234`` for ``"1234"`` or
             ``"2:1234"``); None when the device was named by an address.
         candidates: An empty list here.
-        at: For a write a following handle didn't send, the address it
-            holds, as ``(network, mac)`` (network 0 the local one); else
-            None.
-        candidate: For that write, the one other address the discovery
-            table has the instance at, as ``(network, mac)``, or None. An
-            unconfirmed hint: the table takes I-Ams nobody asked for, and
-            nothing asked the device there which it is.
+        at: The address asked which device answers there, as ``(network,
+            mac)`` (network 0 the local one): the instance's one claim, or
+            the address a following handle holds; else None.
+        candidate: The one other address the discovery table has the
+            instance at, as ``(network, mac)``, or None. An unconfirmed
+            hint: the table takes I-Ams nobody asked for.
+        answer: What the device at ``at`` did, asked which device it is:
+            ``"silent"``, ``"another-device"`` (``answer_instance`` names
+            it), ``"no-device-object"``, ``"refused"`` or ``"failed"``;
+            None when it wasn't asked (no route to it is known), or for
+            another lookup error.
+        answer_instance: The instance the device at ``at`` answered as, for
+            ``"another-device"``; else None.
     """
     target: Optional[str]
     instance: Optional[int]
     candidates: list[tuple[int, bytes]]
     at: Optional[tuple[int, bytes]]
     candidate: Optional[tuple[int, bytes]]
+    answer: Optional[str]
+    answer_instance: Optional[int]
 
 class BacnetAmbiguousDeviceError(BacnetLookupError):
     """Raised when a call names a device by its instance and two or more
@@ -6539,13 +6550,15 @@ class BACnetClient:
           first;
         - an instance, ``1234`` (an int or text) or ``"2:1234"`` on network
           2, gives a handle that follows the instance, placed only where a
-          device confirmed it to the client's own question (#2824): each
-          address claiming it, or answering a Who-Is for it (sent where
+          device confirmed it to the client's own question (#2824). Unless
+          a claim is confirmed already, one Who-Is for it goes first (where
           ``resolve_scope`` says for a bare instance, this network alone by
-          default, and to the network named otherwise, waiting up to 3
-          seconds), is asked which device answers there, once: one read of
-          its Device object, unless it confirmed the instance before. An
-          I-Am confirms nothing, as anyone can send one;
+          default, and to the network named otherwise), its answers given
+          half a second, or up to 3 seconds when nothing claims it; then
+          each address claiming it is asked which device answers there:
+          one read of its Device object. A first contact so costs about
+          half a second; none once confirmed. An I-Am confirms nothing, as
+          anyone can send one;
         - a ``discover()`` row or a ``DiscoveredDevice`` pins the handle to
           its address, knowing its instance.
 

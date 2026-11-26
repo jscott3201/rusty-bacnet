@@ -1,7 +1,7 @@
 ---
 section: Security
 ---
-- A device named by its instance (handles, `bacnet` commands, MCP tools, Python's
-  `client.device(n)`) is reached only where it answered the client's own
-  question of which device it is, never on an announcement alone; a station
-  answering as a device no one else claims is still taken (#2824).
+- A device named by its instance (handles, watches, `bacnet` commands, the
+  TUI's `writem`, MCP tools, old ledger reverts) is reached only where it
+  answered the client's own question, after one Who-Is when nothing is
+  confirmed yet; a station answering for an absent device still is (#2824).

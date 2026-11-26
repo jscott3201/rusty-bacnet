@@ -381,13 +381,15 @@ routed station with no learned router is asked directly
 first;
 - an instance, `1234` (an int or text) or `"2:1234"` on network
 2, gives a handle that follows the instance, placed only where a
-device confirmed it to the client's own question (#2824): each
-address claiming it, or answering a Who-Is for it (sent where
+device confirmed it to the client's own question (#2824). Unless
+a claim is confirmed already, one Who-Is for it goes first (where
 `resolve_scope` says for a bare instance, this network alone by
-default, and to the network named otherwise, waiting up to 3
-seconds), is asked which device answers there, once: one read of
-its Device object, unless it confirmed the instance before. An
-I-Am confirms nothing, as anyone can send one;
+default, and to the network named otherwise), its answers given
+half a second, or up to 3 seconds when nothing claims it; then
+each address claiming it is asked which device answers there:
+one read of its Device object. A first contact so costs about
+half a second; none once confirmed. An I-Am confirms nothing, as
+anyone can send one;
 - a `discover()` row or a `DiscoveredDevice` pins the handle to
 its address, knowing its instance.
 

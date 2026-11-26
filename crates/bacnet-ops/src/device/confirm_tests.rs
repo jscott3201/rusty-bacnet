@@ -26,12 +26,12 @@ async fn a_forged_pair_takes_no_write_elsewhere() {
         let bus = Bus::new();
         let (client, sent) = client(&bus).await;
         let mut servers = vec![server(bus.port(2), N, "A").await];
-        if responder {
-            servers.push(server(bus.port(3), N, "impostor").await);
-        }
         bus.i_am(2, N);
         settle().await;
         let device = client.device(N).await.unwrap();
+        if responder {
+            servers.push(server(bus.port(3), N, "impostor").await);
+        }
         assert_eq!(name_of(&device).await.unwrap(), "A");
         let mut events = client.events();
         bus.i_am(2, N + 1);

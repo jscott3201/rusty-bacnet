@@ -177,16 +177,17 @@ far = await client.device("2:1234")            # instance 1234 on network 2
   ahu.moved_to()` says where its instance is heard now, once its own
   address has gone quiet.
 - **A following handle** needs the device's address, where a device
-  confirmed the instance to the client's own question (#2824). Each address
-  claiming the instance in the discovery table is asked which device
-  answers there, once: one read of its Device object, none for an address
-  whose device confirmed it before or a row registered with `add_device`.
-  None claiming it sends one Who-Is for that instance and waits up to 3
-  seconds (to the network the target names, or for a bare instance to the
-  client's `resolve_scope`, this network alone unless
+  confirmed the instance to the client's own question (#2824). Unless a
+  claim is confirmed already (an address whose device confirmed it before,
+  or a row registered with `add_device`), one Who-Is for the instance goes
+  first, to the network the target names, or for a bare instance to the
+  client's `resolve_scope` (this network alone unless
   `BACnetClient(resolve_scope="global")` or `resolve_scope=<network>`
-  widens it), then asks the ones that answered: an I-Am confirms nothing,
-  as anyone can send one. Later, when the device stops answering at its
+  widens it), its answers given half a second, or up to 3 seconds when
+  nothing claims it. Then each address claiming it is asked which device
+  answers there: one read of its Device object. A first contact so costs
+  about half a second; none once confirmed. An I-Am confirms nothing, as
+  anyone can send one. Later, when the device stops answering at its
   address and one other address claims the instance and answers as it, the
   handle moves there and the call goes on.
 
@@ -198,8 +199,9 @@ when the call is made. On await:
 - an instance no address claims and none answered for, or a routed address
   with no router known, raises `BacnetLookupError`, which is also a
   `LookupError`; so does an instance claimed at one address whose device,
-  asked, didn't answer as it (silent, another device, or a refusal of the
-  question), with `at` the address asked;
+  asked, didn't answer as it, with `at` the address asked and `answer`
+  what it did (`"silent"`, `"another-device"` with `answer_instance`,
+  `"no-device-object"`, `"refused"` or `"failed"`);
 - an instance two or more addresses claim, when none of them answers as it
   or two or more might be it, raises `BacnetAmbiguousDeviceError`, a
   `BacnetLookupError`. Each of its `candidates` is a target: `await

@@ -508,10 +508,11 @@ async fn a_miss_on_the_own_network_keeps_the_target_as_written() {
 }
 
 /// A bare instance whose one row in the table is behind the router follows
-/// it there, on the default local resolve scope, sending no Who-Is: the
-/// table is asked before the network.
+/// it there, on the default local resolve scope: the row's device isn't
+/// confirmed yet, so one Who-Is goes to that scope first (#2824), and the
+/// routed station is asked which device it is.
 #[tokio::test(start_paused = true)]
-async fn a_bare_instance_with_a_remote_row_needs_no_who_is() {
+async fn a_bare_instance_with_a_remote_row_asks_it_after_a_local_who_is() {
     let mut lab = Routed::new(|near| near.port(1)).await;
     lab.servers
         .push(server(lab.three.port(7), 2002, "on three").await);
@@ -521,10 +522,7 @@ async fn a_bare_instance_with_a_remote_row_needs_no_who_is() {
     let device = lab.client.device(2002).await.unwrap();
     assert_eq!(device.address(), DeviceAddress::new(3, &mac(7)).unwrap());
     assert!(device.follows());
-    assert!(
-        super::discover_tests::who_is_frames(&lab.sent).is_empty(),
-        "no Who-Is"
-    );
+    assert_eq!(super::discover_tests::the_who_is(&lab.sent), (None, true));
     lab.stop().await;
 }
 

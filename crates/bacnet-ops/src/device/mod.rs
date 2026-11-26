@@ -21,25 +21,35 @@
 //! - **From an instance** (`1234`, or `2:1234` on one network): a handle
 //!   that follows the instance, placed only where a device confirmed it to
 //!   the client's own question (#2824). Where the handles already
-//!   following it are, once confirmed, it joins them, sending nothing.
-//!   Otherwise each address claiming it in the discovery table (none: one
-//!   Who-Is for it and a wait, [`Client::with_resolve_wait`], to the
-//!   network the target names, or for a bare instance to the client's
-//!   resolve scope, this network alone by default,
-//!   [`Client::with_resolve_scope`], and a miss fails as
-//!   [`OpsError::UnknownDevice`] saying where it asked) is asked which
-//!   device answers there, all at once: one read of its Device object by
-//!   the wildcard instance, or, for a device refusing that, of the
-//!   instance's own Device object. An address whose device confirmed the
-//!   instance before (the same memory, forgotten the same way, as the
-//!   instance read for an address) isn't asked again. The handle goes to
-//!   the one address that confirms it, while no other is left open by an
-//!   unclear answer; one claim that doesn't fails as
-//!   [`OpsError::NotConfirmed`] naming it, and several that don't, or two
-//!   or more left open, as [`OpsError::Ambiguous`], listing them, with
-//!   nothing but those questions sent. An I-Am, even one answering the
-//!   client's own Who-Is, confirms nothing: nothing in it ties it to a
-//!   request.
+//!   following it are, confirmed and still holding it, it joins them,
+//!   sending nothing. Otherwise, unless a claim is confirmed already (its
+//!   device's earlier answer, remembered and forgotten as the instance
+//!   read for an address is, or a row registered by hand), one Who-Is for
+//!   the instance goes first, to the network the target names, or for a
+//!   bare instance to the client's resolve scope, this network alone by
+//!   default ([`Client::with_resolve_scope`]), so the device itself, on
+//!   the network but quiet, claims it too: its answers are given half a
+//!   second, or, with no claim at all, the resolve wait
+//!   ([`Client::with_resolve_wait`]) for a first one, a miss failing as
+//!   [`OpsError::UnknownDevice`] saying where it asked. One resolution of
+//!   an instance runs at a time; the others wait, and share its Who-Is.
+//!   Then each claim is asked which device answers there, all at once:
+//!   one read of its Device object by the wildcard instance, or, for a
+//!   device refusing that, of the instance's own Device object. The
+//!   handle goes to the one address that confirms it, while no other is
+//!   left open by an unclear answer; one claim that doesn't fails as
+//!   [`OpsError::NotConfirmed`] naming it and what it answered, and
+//!   several that don't, or two or more left open, as
+//!   [`OpsError::Ambiguous`], listing them, with nothing but the Who-Is
+//!   and those questions sent. More claims needing a question than
+//!   [`MAX_ASKED`] are ambiguous unasked, but a single confirmed one among
+//!   them places the handle. A first contact so costs about half a second
+//!   and one read a claim, about the resolve wait when nothing answers;
+//!   none once confirmed. An I-Am, even one answering the client's own
+//!   Who-Is, confirms nothing: nothing in it ties it to a request. A new
+//!   handle never moves the handles already following the instance: one
+//!   placed elsewhere than they are fails as [`OpsError::NotConfirmed`]
+//!   naming their place, and a read through them moves them.
 //! - **From a discovery result** ([`Discovered`]): pinned, knowing the
 //!   instance.
 //!
@@ -90,12 +100,19 @@
 //! to 6 s for a routed address with no row) while another address names
 //! the instance, and later writes go to the new place. A routed device's
 //! path through its router is #2823. Nothing in BACnet/IP is
-//! authenticated, so a station that answers the client's question as the
-//! instance at its own address, while the device itself is absent, silent
-//! or hasn't announced itself, can't be told from the device having moved
-//! there: such a station is placed. With the device claiming the instance
-//! too and answering, the caller gets [`OpsError::Ambiguous`], never a
-//! silent choice.
+//! authenticated, so a station answering the client's question as the
+//! instance at its own address while the device itself is absent or
+//! silent can't be told from the device having moved there, and is
+//! placed. That class takes in: a device unheard long enough for its row
+//! to age out (ten minutes); a frame a BBMD forwards that removes a
+//! device's claim, and with it the answer remembered for its address
+//! (#2837); a B/IPv6 virtual address, which is a claim like any other;
+//! and a routed station at first sight, reached through whichever station
+//! announced it, whose answer the real router's later I-Am only cues a
+//! check of (#2830). With the device on the network and answering the
+//! first contact's Who-Is and question, the caller gets
+//! [`OpsError::Ambiguous`]; a place confirmed before is joined, as its
+//! handles' own reads judge it.
 
 /// Evaluate `$body` with `$at` where the device is reached now
 /// ([`Device::target`]), and for a following handle whose request timed
@@ -130,8 +147,10 @@ pub(crate) use sent;
 
 mod address;
 pub(crate) mod confirm;
+mod first;
 mod follow;
 mod misses;
+mod raw_place;
 mod reads;
 mod resolve;
 mod route;
@@ -146,10 +165,12 @@ use bacnet_transport::port::TransportPort;
 
 pub use self::address::DeviceAddress;
 pub use self::confirm::{Answer, MAX_ASKED, identify, placed};
+pub(crate) use self::first::{Resolving, Settled};
 pub(crate) use self::follow::{FollowKey, Followed};
 pub(crate) use self::follow::{Follows, Said, keep_room};
 pub use self::misses::MISS_MEMORY;
 pub(crate) use self::misses::StationMisses;
+pub use self::raw_place::{Look, Placement, place_instance};
 pub(crate) use self::route::{path_to, router_for};
 use crate::client::{Client, lock};
 use crate::error::OpsError;
@@ -432,6 +453,9 @@ pub(crate) mod test_bus;
 
 #[cfg(test)]
 mod write_follow_tests;
+
+#[cfg(test)]
+mod who_is_first_tests;
 
 #[cfg(test)]
 #[path = "tests.rs"]

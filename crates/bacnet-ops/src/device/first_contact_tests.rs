@@ -3,7 +3,10 @@
 //! alike. The threat: anyone on the link can send an I-Am for any instance
 //! from a station of their own, and run a responder there that answers as
 //! any device; nobody can send from another station's address. Device N
-//! answers at station 2; station 3 is the other station.
+//! answers at station 2 (unless a test leaves it out); station 3 is the
+//! other station. With no claim confirmed already, a first placement sends
+//! one Who-Is for the instance first, so a quiet device that never
+//! announced itself claims it too.
 
 use std::sync::Arc;
 
@@ -27,9 +30,25 @@ async fn lab(
     SendLog,
     Vec<BACnetServer<TestTransport>>,
 ) {
+    lab_with(true, responder).await
+}
+
+/// [`lab`], with device N at station 2 only when `device` is set.
+pub(super) async fn lab_with(
+    device: bool,
+    responder: bool,
+) -> (
+    Arc<Bus>,
+    Client<TestTransport>,
+    SendLog,
+    Vec<BACnetServer<TestTransport>>,
+) {
     let bus = Bus::new();
     let (client, sent) = client(&bus).await;
-    let mut servers = vec![server(bus.port(2), N, "A").await];
+    let mut servers = Vec::new();
+    if device {
+        servers.push(server(bus.port(2), N, "A").await);
+    }
     if responder {
         servers.push(server(bus.port(3), N, "impostor").await);
     }
@@ -38,7 +57,7 @@ async fn lab(
 }
 
 /// Writes sent anywhere.
-fn writes(sent: &SendLog) -> usize {
+pub(super) fn writes(sent: &SendLog) -> usize {
     sent.unicasts()
         .iter()
         .filter(|frame| {
@@ -48,12 +67,14 @@ fn writes(sent: &SendLog) -> usize {
         .count()
 }
 
-/// An I-Am for N from station 3, where nothing answers: at first sight,
-/// and after station 2's own row aged out. A handle by instance, named
-/// either way, fails as not confirmed at station 3 after one question
-/// there; nothing is read or written anywhere.
+/// An I-Am for N from station 3, where nothing answers, while the device
+/// at station 2 is quiet: at first sight, and after station 2's own row
+/// aged out. A handle by instance, named either way, sends one Who-Is, the
+/// device answers it, both claims are asked, and the handle is placed at
+/// station 2: its first read and first write go there, and station 3
+/// hears the question alone.
 #[tokio::test(start_paused = true)]
-async fn a_forged_claim_takes_no_first_request() {
+async fn a_forged_claim_is_passed_over_for_the_device_on_the_network() {
     for aged in [false, true] {
         for text in [false, true] {
             let (bus, client, sent, servers) = lab(false).await;
@@ -68,36 +89,81 @@ async fn a_forged_claim_takes_no_first_request() {
                 true => client.device("1001").await,
                 false => client.device(N).await,
             };
-            let error = made.unwrap_err();
-            assert!(
-                matches!(
-                    &error,
-                    OpsError::NotConfirmed { instance: N, at: here, candidate: None }
-                        if *here == at(3)
-                ),
-                "aged {aged}, text {text}: {error:?}"
-            );
+            let device = made.unwrap();
+            assert_eq!(device.address(), at(2), "aged {aged}, text {text}");
+            assert_eq!(name_of(&device).await.unwrap(), "A");
+            device.write("ai:1 oos", "true", None).await.unwrap();
+            assert_eq!(requests(&sent, WRITE, 2), 1);
             assert_eq!(requests(&sent, READ, 3), 1, "the question alone");
-            assert_eq!(requests(&sent, READ, 2) + writes(&sent), 0);
+            assert_eq!(requests(&sent, WRITE, 3), 0);
+            assert_eq!(super::test_bus::who_is(&sent), 1, "one Who-Is");
             stop(servers).await;
         }
     }
 }
 
-/// The residual: a responder at station 3 answers the question as N while
-/// the device at station 2 has never announced itself. Nothing tells the
-/// two apart, so the handle goes there; the question is the one request
-/// more.
+/// The residual's quiet half: the device is absent, and station 3, where
+/// nothing answers, claims N. The Who-Is draws no other claim, station 3
+/// is asked, and the handle fails as not confirmed there, saying it was
+/// silent; nothing is read or written.
 #[tokio::test(start_paused = true)]
-async fn a_station_answering_as_an_unheard_device_is_placed() {
+async fn a_forged_claim_alone_takes_no_first_request() {
+    let (bus, client, sent, servers) = lab_with(false, false).await;
+    bus.i_am(3, N);
+    settle().await;
+    let error = client.device(N).await.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            OpsError::NotConfirmed {
+                instance: N,
+                at: here,
+                candidate: None,
+                answer: Some(Answer::Silent),
+                placing: true,
+            } if *here == at(3)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(requests(&sent, READ, 3), 1, "the question alone");
+    assert_eq!(writes(&sent), 0);
+    stop(servers).await;
+}
+
+/// A responder at station 3 answers as N while the device at station 2 has
+/// never announced itself: the Who-Is draws the device's own claim, both
+/// answer as N, and the handle fails as ambiguous, naming both. Station 3
+/// hears the question alone: nothing read there, nothing written anywhere.
+#[tokio::test(start_paused = true)]
+async fn a_station_answering_as_an_unheard_device_is_ambiguous_while_the_device_is_on_the_network()
+{
     let (bus, client, sent, servers) = lab(true).await;
+    bus.i_am(3, N);
+    settle().await;
+    let error = client.device(N).await.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            OpsError::Ambiguous { instance: N, candidates } if *candidates == [at(2), at(3)]
+        ),
+        "{error:?}"
+    );
+    assert_eq!(requests(&sent, READ, 3), 1, "the question alone");
+    assert_eq!(writes(&sent), 0);
+    stop(servers).await;
+}
+
+/// The residual: the device is absent, and a responder at station 3
+/// answers as N. Nothing tells the two apart, so the handle goes there.
+#[tokio::test(start_paused = true)]
+async fn a_station_answering_as_an_absent_device_is_placed() {
+    let (bus, client, sent, servers) = lab_with(false, true).await;
     bus.i_am(3, N);
     settle().await;
     let device = client.device(N).await.unwrap();
     assert_eq!(device.address(), at(3));
     assert_eq!(requests(&sent, READ, 3), 1, "the question");
     assert_eq!(name_of(&device).await.unwrap(), "impostor");
-    assert_eq!(requests(&sent, READ, 2), 0);
     stop(servers).await;
 }
 
@@ -239,18 +305,22 @@ async fn a_device_that_moved_is_placed_where_it_answers() {
 }
 
 /// Handles follow N at station 2, confirmed there; then another device
-/// announces itself at station 2 and N is claimed at station 3. A handle
-/// made now asks station 2 first, as the handles' next read would: still
-/// N, or turning the question away, it joins them there and station 3 is
-/// never asked; silent, it is placed where station 3 answers as N, and
-/// the handles move with it, as a read would move them (#2795).
+/// announces itself at station 2, and a responder claims N at station 3. A
+/// handle made now asks station 2 first, as the handles' next read would:
+/// still N, or turning the question away, it joins them there and station
+/// 3 is never asked. Silent, the claims are asked and station 3 answers as
+/// N, but a new handle never moves the live ones (#2795): it fails as not
+/// confirmed at station 2, with station 3 as the candidate, nothing moved;
+/// a read through the first handle then moves it, and a handle made after
+/// joins it there.
 #[tokio::test(start_paused = true)]
 async fn a_new_handle_asks_its_place_before_joining_it() {
     for station_two in ["answers", "turns away", "silent"] {
-        let (bus, client, sent, servers) = lab(true).await;
+        let (bus, client, sent, mut servers) = lab(false).await;
         bus.i_am(2, N);
         settle().await;
         let first = client.device(N).await.unwrap();
+        servers.push(server(bus.port(3), N, "impostor").await);
         bus.i_am(2, N + 1);
         bus.i_am(3, N);
         settle().await;
@@ -260,41 +330,71 @@ async fn a_new_handle_asks_its_place_before_joining_it() {
             _ => {}
         }
         let mut events = client.events();
-        let again = client.device(N).await.unwrap();
-        let (to, asked_three) = match station_two {
-            "silent" => (at(3), 1),
-            _ => (at(2), 0),
-        };
-        assert_eq!(again.address(), to, "{station_two}");
-        assert_eq!(first.address(), to, "{station_two}: they share it");
-        assert_eq!(requests(&sent, READ, 3), asked_three, "{station_two}");
-        assert_eq!(events.try_recv().is_ok(), to == at(3), "{station_two}");
+        let again = client.device(N).await;
+        if station_two != "silent" {
+            assert_eq!(again.unwrap().address(), at(2), "{station_two}");
+            assert_eq!(requests(&sent, READ, 3), 0, "{station_two}");
+            stop(servers).await;
+            continue;
+        }
+        let error = again.unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                OpsError::NotConfirmed {
+                    at: here,
+                    candidate: Some(there),
+                    answer: Some(Answer::Silent),
+                    placing: true,
+                    ..
+                } if *here == at(2) && *there == at(3)
+            ),
+            "{error:?}"
+        );
+        assert_eq!(first.address(), at(2), "nothing moved");
+        assert!(events.try_recv().is_err(), "nothing moved");
+        assert_eq!(name_of(&first).await.unwrap(), "impostor");
+        assert_eq!(first.address(), at(3), "the handle's own read moved it");
+        assert_eq!(client.device(N).await.unwrap().address(), at(3));
         stop(servers).await;
     }
 }
 
-/// More claims than [`MAX_ASKED`] are refused as ambiguous with nothing
-/// sent.
+/// More claims needing a question than [`MAX_ASKED`] are refused as
+/// ambiguous with no question sent; but one among them registered by hand,
+/// the application's own word, places the handle, as a confirmed place is
+/// joined, with no Who-Is and nothing asked.
 #[tokio::test(start_paused = true)]
 async fn too_many_claims_are_refused_unasked() {
-    let (bus, client, sent, servers) = lab(false).await;
-    let count = u8::try_from(MAX_ASKED).unwrap() + 1;
-    for station in 3..3 + count {
-        bus.i_am(station, N);
+    for registered in [false, true] {
+        let (bus, client, sent, servers) = lab_with(registered, false).await;
+        let count = u8::try_from(MAX_ASKED).unwrap() + 1;
+        for station in 3..3 + count {
+            bus.i_am(station, N);
+        }
+        settle().await;
+        if registered {
+            client.low_level().add_device(N, &mac(2)).await.unwrap();
+        }
+        let made = client.device(N).await;
+        match registered {
+            true => assert_eq!(made.unwrap().address(), at(2)),
+            false => assert!(
+                matches!(&made, Err(OpsError::Ambiguous { candidates, .. }) if candidates.len() == MAX_ASKED + 1),
+                "{made:?}"
+            ),
+        }
+        assert!(sent.unicasts().is_empty(), "nothing asked");
+        assert_eq!(super::test_bus::who_is(&sent), usize::from(!registered));
+        stop(servers).await;
     }
-    settle().await;
-    let error = client.device(N).await.unwrap_err();
-    assert!(
-        matches!(&error, OpsError::Ambiguous { candidates, .. } if candidates.len() == MAX_ASKED + 1),
-        "{error:?}"
-    );
-    assert!(sent.unicasts().is_empty(), "nothing asked");
-    stop(servers).await;
 }
 
 /// A watch following N made its place at station 3 from the table alone (a
 /// forged claim): a handle made after asks station 3 rather than joining
-/// that place unasked, and fails as not confirmed there.
+/// that place unasked, and as it never moves the watch's place (#2795),
+/// fails as not confirmed there, with the device's own address, found by
+/// the Who-Is, as the candidate.
 #[tokio::test(start_paused = true)]
 async fn a_handle_never_joins_a_place_no_device_confirmed() {
     use crate::watch::{Binding, Point, Watched};
@@ -316,7 +416,11 @@ async fn a_handle_never_joins_a_place_no_device_confirmed() {
     let watch = client.watch([point]).unwrap();
     let error = client.device(N).await.unwrap_err();
     assert!(
-        matches!(&error, OpsError::NotConfirmed { at: here, .. } if *here == at(3)),
+        matches!(
+            &error,
+            OpsError::NotConfirmed { at: here, candidate: Some(there), .. }
+                if *here == at(3) && *there == at(2)
+        ),
         "{error:?}"
     );
     assert_eq!(writes(&sent), 0);
@@ -327,11 +431,13 @@ async fn a_handle_never_joins_a_place_no_device_confirmed() {
 
 /// A routed I-Am for N from station 3 on the client's own link, naming
 /// station 7 on network 2 (the device sits at station 5 there, behind the
-/// router at station 254, unheard): `2:1001` asks the claimed station
-/// through station 3, which doesn't answer, and fails as not confirmed;
-/// nothing else goes through station 3.
+/// router at station 254, unheard): `2:1001` sends one Who-Is to network 2,
+/// which the device answers through the router; the claimed station is
+/// asked through station 3 and doesn't answer, so the handle is placed at
+/// station 5, and its write goes there. Nothing else goes through station
+/// 3.
 #[tokio::test(start_paused = true)]
-async fn a_forged_routed_claim_takes_no_first_request() {
+async fn a_forged_routed_claim_is_passed_over_for_the_device() {
     use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
     let (near, two) = (Bus::new(), Bus::new());
     let ports = [(&near, 1), (&two, 2)]
@@ -346,12 +452,9 @@ async fn a_forged_routed_claim_takes_no_first_request() {
     settle().await;
     near.i_am_from(3, Some((2, &mac(7))), N);
     settle().await;
-    let error = client.device("2:1001").await.unwrap_err();
-    let claimed = DeviceAddress::new(2, &mac(7)).unwrap();
-    assert!(
-        matches!(&error, OpsError::NotConfirmed { at: here, .. } if *here == claimed),
-        "{error:?}"
-    );
+    let device = client.device("2:1001").await.unwrap();
+    assert_eq!(device.address(), DeviceAddress::new(2, &mac(5)).unwrap());
+    device.write("ai:1 oos", "true", None).await.unwrap();
     let through = |n: u8| {
         sent.unicasts()
             .iter()
@@ -359,7 +462,7 @@ async fn a_forged_routed_claim_takes_no_first_request() {
             .count()
     };
     assert_eq!(through(3), 1, "the question alone");
-    assert_eq!(writes(&sent), 0);
+    assert_eq!(writes(&sent), 1, "the write, through the router");
     stop(servers).await;
     router.stop().await.unwrap();
 }

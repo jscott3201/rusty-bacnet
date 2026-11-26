@@ -56,6 +56,9 @@ pub(crate) struct Place {
     /// the address later is for the handles' own rules to judge
     /// ([`Client::joining`], [`Device::target`]).
     confirmed: bool,
+    /// A watch hub settled the place once already ([`Client::settle_place`]):
+    /// its later starts there go by the hub's own reads, sending no Who-Is.
+    pub(super) settled: bool,
 }
 
 /// What the device at an address said of itself to one of the client's
@@ -213,16 +216,25 @@ impl<T: TransportPort + 'static> Device<T> {
         let Pin::Follows { instance, .. } = &self.pin else {
             return Ok(here);
         };
-        if self.client.holds(&here, *instance).await || self.client.stays(&here, *instance).await {
+        if self.client.holds(&here, *instance).await {
             return Ok(here);
         }
-        Err(self.not_confirmed(here).await)
+        let answer = self.client.which_at(&here, *instance, left_silence).await;
+        if stays_on(answer, *instance) {
+            return Ok(here);
+        }
+        Err(self.not_confirmed(here, Some(answer)).await)
     }
 
-    /// The error of a write a following handle won't send from `here`:
-    /// with the one other address the discovery table has its instance at,
-    /// as a hint. Sends nothing.
-    pub(crate) async fn not_confirmed(&self, here: DeviceAddress) -> OpsError {
+    /// The error of a write a following handle won't send from `here`,
+    /// whose device gave `answer` when asked (`None`: no route to it is
+    /// known): with the one other address the discovery table has its
+    /// instance at, as a hint. Sends nothing.
+    pub(crate) async fn not_confirmed(
+        &self,
+        here: DeviceAddress,
+        answer: Option<Answer>,
+    ) -> OpsError {
         let (instance, network) = match &self.pin {
             Pin::Follows {
                 instance, network, ..
@@ -238,6 +250,8 @@ impl<T: TransportPort + 'static> Device<T> {
             instance,
             at: here,
             candidate,
+            answer,
+            placing: false,
         }
     }
 
@@ -340,19 +354,24 @@ impl<T: TransportPort + 'static> Client<T> {
     }
 
     /// The place of the handles following `key`, at `address`, where its
-    /// device has just confirmed the instance (#2824), the live place's
-    /// address `asked` too. A live place still at `asked`, whose device
-    /// didn't confirm it, moves there, telling the events receivers, as a
-    /// read moves it once its own address was asked (#2795); one at
-    /// `address` is marked confirmed. One that went elsewhere meanwhile,
-    /// or appeared meanwhile, stays where it is, unasked, and this handle
-    /// joins it there.
+    /// device has just confirmed the instance (#2824), with what each claim
+    /// `asked` answered: a new one, or the live one there, marked
+    /// confirmed. A new handle's placement never moves the handles or a
+    /// watch hub following the instance already (#2795: only their own
+    /// reads move them).
+    ///
+    /// # Errors
+    ///
+    /// For a live place elsewhere: [`OpsError::NotConfirmed`] naming it,
+    /// with what its device answered and `address` as the candidate, or
+    /// [`OpsError::Ambiguous`] naming both when it wasn't asked (it
+    /// appeared meanwhile).
     pub(super) fn place_confirmed(
         &self,
         key: FollowKey,
         address: DeviceAddress,
-        asked: Option<&DeviceAddress>,
-    ) -> Followed {
+        asked: &[(DeviceAddress, Answer)],
+    ) -> Result<Followed, OpsError> {
         let held = {
             let mut follows = lock(&self.shared.follows);
             match follows.get(&key).and_then(Weak::upgrade) {
@@ -362,25 +381,39 @@ impl<T: TransportPort + 'static> Client<T> {
                         at: address,
                         asked: None,
                         confirmed: true,
+                        settled: false,
                     }));
                     keep_room(&mut follows, |entry| entry.strong_count() > 0);
                     follows.insert(key, Arc::downgrade(&followed));
-                    return followed;
+                    return Ok(followed);
                 }
             }
         };
-        let from = {
-            let mut place = lock(&held);
-            let from = self.localized(place.at.clone());
-            if from == address {
-                place.confirmed = true;
-            }
-            (from != address && Some(&from) == asked).then_some(from)
-        };
-        if let Some(from) = from {
-            self.move_to(key, &held, &from, address);
+        let mut place = lock(&held);
+        let here = self.localized(place.at.clone());
+        if here == address {
+            place.confirmed = true;
+            drop(place);
+            return Ok(held);
         }
-        held
+        let instance = key.1;
+        Err(match asked.iter().find(|(at, _)| *at == here) {
+            Some((_, answer)) => OpsError::NotConfirmed {
+                instance,
+                at: here,
+                candidate: Some(address),
+                answer: Some(*answer),
+                placing: true,
+            },
+            None => {
+                let mut candidates = vec![here, address];
+                candidates.sort();
+                OpsError::Ambiguous {
+                    instance,
+                    candidates,
+                }
+            }
+        })
     }
 
     /// The place a watch hub follows `key`'s instance from (#2795): the one
@@ -422,6 +455,7 @@ impl<T: TransportPort + 'static> Client<T> {
             at: address,
             asked: None,
             confirmed: false,
+            settled: false,
         }));
         keep_room(&mut follows, |entry| entry.strong_count() > 0);
         follows.insert(key, Arc::downgrade(&followed));
@@ -450,11 +484,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// Reject or an Abort), or the client failed the ask, a router's reject
     /// included. Only silence or another device moves a handle (#2795).
     pub(crate) async fn stays(&self, here: &DeviceAddress, instance: u32) -> bool {
-        match self.which_at(here, instance, left_silence).await {
-            Answer::Is(found) | Answer::Has(found) => found == instance,
-            Answer::Unclear | Answer::Failed => true,
-            Answer::Not | Answer::Silent => false,
-        }
+        stays_on(self.which_at(here, instance, left_silence).await, instance)
     }
 
     /// Where `key`'s instance is now, for a following handle whose read at
@@ -805,6 +835,18 @@ impl<T: TransportPort + 'static> Client<T> {
 
         // And the COV support learned there, on the same terms (#2603).
         self.forget_cov(&changed, missed);
+    }
+}
+
+/// Whether a following handle stays where its device gave `answer`, asked
+/// which it is ([`Client::stays`]): as the instance, or with no word of
+/// which it is (another error, a Reject or an Abort, or the client's own
+/// failure). Only silence or another device moves a handle (#2795).
+pub(super) fn stays_on(answer: Answer, instance: u32) -> bool {
+    match answer {
+        Answer::Is(found) | Answer::Has(found) => found == instance,
+        Answer::Unclear | Answer::Failed => true,
+        Answer::Not | Answer::Silent => false,
     }
 }
 

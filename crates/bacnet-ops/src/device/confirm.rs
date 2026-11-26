@@ -35,8 +35,9 @@ use crate::format::RawRow;
 use crate::limits::RequestLimits;
 
 /// The most addresses a handle's first placement asks which device
-/// answers there (#2824): an instance claimed at more is refused as
-/// ambiguous, with nothing sent.
+/// answers there (#2824): an instance claimed at more, of which no one is
+/// confirmed already, is refused as ambiguous, with nothing sent
+/// ([`over_cap`]).
 pub const MAX_ASKED: usize = 8;
 
 /// What the device at an address said of itself, asked which device it is
@@ -121,16 +122,52 @@ pub fn placed(instance: u32, asked: &[(DeviceAddress, Answer)]) -> Result<Device
             target: instance.to_string(),
             asked: None,
         }),
-        (0, _, [(address, _)]) => Err(OpsError::NotConfirmed {
+        (0, _, [(address, answer)]) => Err(OpsError::NotConfirmed {
             instance,
             at: address.clone(),
             candidate: None,
+            answer: Some(*answer),
+            placing: true,
         }),
         (0, _, _) => Err(ambiguous(
             asked.iter().map(|(address, _)| address.clone()).collect(),
         )),
         _ => Err(ambiguous(open)),
     }
+}
+
+/// When more of `claims` than [`MAX_ASKED`] would need a question (no
+/// answer known for them yet): the one claim confirmed already (its
+/// device's earlier answer remembered, or a row registered by hand) places
+/// the handle, as a place confirmed before is joined, and otherwise the
+/// instance is ambiguous, with nothing sent. `None` while the questions may
+/// be asked.
+pub(crate) fn over_cap(
+    instance: u32,
+    claims: &[(DeviceAddress, Option<Answer>)],
+) -> Option<Result<DeviceAddress, OpsError>> {
+    let unasked = claims.iter().filter(|(_, known)| known.is_none()).count();
+    if unasked <= MAX_ASKED {
+        return None;
+    }
+    let confirmed: Vec<&DeviceAddress> = claims
+        .iter()
+        .filter(|(_, known)| known.is_some_and(|answer| answer.confirms(instance)))
+        .map(|(address, _)| address)
+        .collect();
+    Some(match confirmed.as_slice() {
+        [address] => Ok((*address).clone()),
+        _ => {
+            let mut candidates: Vec<DeviceAddress> =
+                claims.iter().map(|(address, _)| address.clone()).collect();
+            candidates.sort();
+            candidates.dedup();
+            Err(OpsError::Ambiguous {
+                instance,
+                candidates,
+            })
+        }
+    })
 }
 
 /// Ask the device at `address` which device it is, for a first contact
@@ -200,7 +237,7 @@ async fn object_answer<T: TransportPort + 'static>(
 /// Poll every one of `futures` until all are done: their outputs, in
 /// order. Each wake polls every one still running, so none waits unpolled
 /// behind another (#1494); dropping it drops them all.
-async fn every<F: Future>(futures: impl IntoIterator<Item = F>) -> Vec<F::Output> {
+pub(crate) async fn every<F: Future>(futures: impl IntoIterator<Item = F>) -> Vec<F::Output> {
     let mut running: Vec<Pin<Box<F>>> = futures.into_iter().map(Box::pin).collect();
     let mut done: Vec<Option<F::Output>> = running.iter().map(|_| None).collect();
     std::future::poll_fn(|cx| {
@@ -307,67 +344,5 @@ impl<T: TransportPort + 'static> Client<T> {
     ) -> Answer {
         let reader = self.reader(address, Some(instance));
         object_answer(&reader, instance, quiet).await
-    }
-
-    /// Where a handle made from `instance` is placed among `claims`, the
-    /// addresses claiming it (#2824): each is asked which device answers
-    /// there ([`which_at`](Self::which_at), all at once), unless its device
-    /// confirmed the instance to the client before, or `known` holds its
-    /// answer already, and the answers decide ([`placed`]). A device
-    /// refusing the wildcard that has the instance's Device object is
-    /// remembered so too. More than [`MAX_ASKED`] claims are refused as
-    /// ambiguous, with nothing sent.
-    ///
-    /// # Errors
-    ///
-    /// As [`placed`].
-    pub(crate) async fn confirm(
-        &self,
-        instance: u32,
-        claims: &[DeviceAddress],
-        known: Option<&(DeviceAddress, Answer)>,
-    ) -> Result<DeviceAddress, OpsError> {
-        if claims.len() > MAX_ASKED {
-            return Err(OpsError::Ambiguous {
-                instance,
-                candidates: claims.to_vec(),
-            });
-        }
-        let asks = claims.iter().map(|claim| async move {
-            match known {
-                Some((at, answer)) if at == claim => *answer,
-                _ => self.claimed(claim, instance).await,
-            }
-        });
-        let answers = every(asks).await;
-        let asked: Vec<(DeviceAddress, Answer)> = claims.iter().cloned().zip(answers).collect();
-        for (claim, answer) in &asked {
-            tracing::debug!("device {instance} is claimed at {claim}, which answered {answer:?}");
-        }
-        placed(instance, &asked)
-    }
-
-    /// What the device at `claim` says of being device `instance`: as it
-    /// confirmed before, or asked now. Only a timeout is its silence. A
-    /// row the application registered by hand, never announced, is its own
-    /// word, as an address it names is: taken as the device's, unasked.
-    async fn claimed(&self, claim: &DeviceAddress, instance: u32) -> Answer {
-        let registered = claim.row(self.low_level()).await.is_some_and(|row| {
-            row.last_announced.is_none() && row.object_identifier.instance_number() == instance
-        });
-        if registered {
-            return Answer::Is(instance);
-        }
-        if self.confirmed_as(claim) == Some(instance) {
-            return match self.said(claim) {
-                Some(_) => Answer::Is(instance),
-                None => Answer::Has(instance),
-            };
-        }
-        let answer = self.which_at(claim, instance, left_silence).await;
-        if answer == Answer::Has(instance) {
-            self.vouch(claim.clone(), instance);
-        }
-        answer
     }
 }

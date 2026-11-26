@@ -22,6 +22,9 @@ async fn a_following_handle_moves_to_the_one_other_claim() {
     settle().await;
     let device = client.device(N).await.unwrap();
     let alongside = client.device(N).await.unwrap();
+    // The handle's first placement sent one Who-Is for the instance (#2824).
+    let made = who_is(&sent);
+    assert_eq!(made, 1);
     assert_eq!(name_of(&device).await.unwrap(), "A");
     // Station 2 last announced itself long before the new one did.
     tokio::time::sleep(QUIET * 2).await;
@@ -33,12 +36,12 @@ async fn a_following_handle_moves_to_the_one_other_claim() {
     let error = name_of(&device).await.unwrap_err();
     assert!(error.timed_out(), "{error}");
     assert_eq!(device.address(), at(2), "the timeout asked, and stayed");
-    assert_eq!(who_is(&sent), 1);
+    assert_eq!(who_is(&sent) - made, 1);
     tokio::time::sleep(RESOLVE_WAIT).await;
     assert_eq!(name_of(&device).await.unwrap(), "B");
     assert_eq!(device.address(), at(3));
     assert_eq!(alongside.address(), at(3), "the handles move together");
-    assert_eq!(who_is(&sent), 1, "asked once");
+    assert_eq!(who_is(&sent) - made, 1, "asked once");
     assert_eq!(
         events.try_recv().unwrap(),
         ClientEvent::Moved {
@@ -59,15 +62,13 @@ async fn a_following_handle_moves_to_the_one_other_claim() {
 async fn a_duplicate_does_not_capture_a_following_handle() {
     let bus = Bus::new();
     let (client, _) = client(&bus).await;
-    let servers = vec![
-        server(bus.port(2), N, "A").await,
-        server(bus.port(3), N, "B").await,
-    ];
+    let mut servers = vec![server(bus.port(2), N, "A").await];
     bus.i_am(2, N);
     settle().await;
     let device = client.device(N).await.unwrap();
     assert_eq!(name_of(&device).await.unwrap(), "A");
     // The duplicate appears: commissioning, or a forged I-Am.
+    servers.push(server(bus.port(3), N, "B").await);
     bus.i_am(3, N);
     settle().await;
     let mut events = client.events();
@@ -87,14 +88,12 @@ async fn a_duplicate_does_not_capture_a_following_handle() {
 async fn a_following_handle_stays_when_two_others_claim_it() {
     let bus = Bus::new();
     let (client, _) = client(&bus).await;
-    let servers = vec![
-        server(bus.port(2), N, "A").await,
-        server(bus.port(3), N, "B").await,
-        server(bus.port(4), N, "C").await,
-    ];
+    let mut servers = vec![server(bus.port(2), N, "A").await];
     bus.i_am(2, N);
     settle().await;
     let device = client.device(N).await.unwrap();
+    servers.push(server(bus.port(3), N, "B").await);
+    servers.push(server(bus.port(4), N, "C").await);
     bus.i_am(3, N);
     bus.i_am(4, N);
     settle().await;
@@ -121,6 +120,8 @@ async fn no_other_claim_sends_once() {
     bus.i_am(2, N);
     settle().await;
     let device = client.device(N).await.unwrap();
+    // The handle's first placement sent one Who-Is for the instance (#2824).
+    let made = who_is(&sent);
     assert_eq!(name_of(&device).await.unwrap(), "A");
     bus.silence(2);
     let rp = ConfirmedServiceChoice::READ_PROPERTY;
@@ -129,7 +130,7 @@ async fn no_other_claim_sends_once() {
     assert!(error.unreachable(), "{error}");
     assert_eq!(requests(&sent, rp, 2) - before, 1, "one request");
     assert_eq!(device.address(), at(2));
-    assert_eq!(who_is(&sent), 1);
+    assert_eq!(who_is(&sent) - made, 1);
     stop(vec![lab]).await;
 }
 
@@ -215,13 +216,11 @@ async fn a_reused_address_with_no_other_claim_fails_unsent() {
 async fn a_local_link_failure_moves_nothing() {
     let bus = Bus::new();
     let (client, sent) = client(&bus).await;
-    let servers = vec![
-        server(bus.port(2), N, "A").await,
-        server(bus.port(3), N, "B").await,
-    ];
+    let mut servers = vec![server(bus.port(2), N, "A").await];
     bus.i_am(2, N);
     settle().await;
     let device = client.device(N).await.unwrap();
+    servers.push(server(bus.port(3), N, "B").await);
     tokio::time::sleep(QUIET * 2).await;
     bus.i_am(3, N);
     settle().await;

@@ -16,9 +16,9 @@ use crate::client::Discover;
 
 /// From an address a handle is pinned, from an instance claimed once it
 /// follows, from a discovery result it is pinned and knows the instance;
-/// making any of them sends nothing, but the first from the instance: it
-/// asks the device which it is, once (#2824: the I-Am answering the
-/// discovery confirms nothing). Each reads the device.
+/// making any of them sends nothing, but the first from the instance: one
+/// Who-Is for it, then the device asked which it is (#2824: the I-Am
+/// answering the discovery confirms nothing). Each reads the device.
 #[tokio::test(start_paused = true)]
 async fn handles_from_each_source_send_nothing_but_one_question() {
     let bus = Bus::new();
@@ -37,7 +37,11 @@ async fn handles_from_each_source_send_nothing_but_one_question() {
     let by_instance = client.device(N).await.unwrap();
     let by_instance_text = client.device("1001").await.unwrap();
     let by_found = client.device(&found[0]).await.unwrap();
-    assert_eq!(sent.len(), before + 1, "making handles sent one question");
+    assert_eq!(
+        sent.len(),
+        before + 2,
+        "making handles sent one Who-Is and one question"
+    );
     for (handle, follows) in [
         (&by_text, false),
         (&by_address, false),

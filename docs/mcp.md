@@ -47,13 +47,21 @@ can say: a tool refuses the bare form and tells the agent to ask the
 operator; #2560, #2738). No Who-Is is sent to resolve one, and every
 request of the call goes to the address the policy checked. An instance is
 reached only where its device answered the server's own question of which
-device answers there (#2824): each address claiming it, once the policy
-allows every one, is asked once (one read of its Device object; none for an
-address whose device confirmed it before), and a claim that doesn't answer
-as it is refused (`unconfirmed-device`), naming the address asked. An
-instance two addresses claim is refused (`ambiguous-device`), naming both,
-unless the policy allows both and only one answers as it: name one by its
-address.
+device answers there (#2824): exactly the addresses claiming it, once the
+policy allows every one, are asked once (one read of its Device object;
+none for an address whose device confirmed it before). A claim that doesn't
+answer as it is refused (`unconfirmed-device`), and an instance two
+addresses claim (`ambiguous-device`) unless the policy allows both and only
+one answers as it. Both refusals carry the addresses under `claims`, each
+marked `"confirmed": false` (with what it answered), as data: the message
+asks the agent to have the operator check the device and run a discovery,
+never to name an unconfirmed address itself. As the server sends no Who-Is
+of its own, a quiet device that never announced itself isn't heard: a
+forged claim with a responder behind it is the residual here. A
+point subscribed by its instance (a listen stream or a legacy
+subscription) goes only to an address whose device confirmed the instance
+already, as a tool's call on the device asks it; otherwise it isn't
+honoured (`unconfirmed-device`).
 
 | Tool | Notes |
 |---|---|

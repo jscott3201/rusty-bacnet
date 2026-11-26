@@ -20,6 +20,7 @@
 //! tells "sent" from "not sent" without parsing text, and never sends a
 //! relinquish twice.
 
+use bacnet_ops::device::Answer;
 use bacnet_ops::error::PagingFault;
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::target::AddressStyle;
@@ -62,6 +63,7 @@ const DENIED_ATTRIBUTES: [&str; 5] = [
 /// binding threads, so attributes are set through the exit gate.
 pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
     let message = error.to_string();
+    let not_confirmed = error.not_confirmed_text(&|address| address.styled(style));
     // A request that timed out, however the client reported it (the
     // transaction state machine's abort included), is a timeout.
     if error.timed_out() {
@@ -107,33 +109,21 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
             ),
         ),
         OpsError::ObjectList { source, .. } => object_list(message, *source, style),
-        // A handle by instance its one claim didn't confirm (#2824), or a
-        // write through a following handle not sent (#2795): its addresses
-        // in the link's own form in the message, and as (network, MAC) in
-        // `at` (the address asked) and `candidate`, an unconfirmed hint
-        // kept out of `candidates`, which are real choices.
+        // A handle by instance its claim didn't confirm (#2824), or a write
+        // through a following handle not sent (#2795): its addresses in the
+        // link's own form in the message, and as (network, MAC) in `at`
+        // (the address asked) and `candidate`, an unconfirmed hint kept out
+        // of `candidates`, which are real choices; what the device there
+        // did in `answer` and `answer_instance`.
         OpsError::NotConfirmed {
             instance,
             at,
             candidate,
+            answer,
+            ..
         } => {
-            let mut text = format!(
-                "device {instance} isn't confirmed at {}: asked which device answers there, \
-                 it didn't answer as {instance} (silent, another device, or a refusal of the \
-                 question), or no route to it is known, and nothing goes to an address its \
-                 device hasn't confirmed",
-                at.styled(style)
-            );
-            if let Some(candidate) = &candidate {
-                text.push_str(&format!(
-                    "; the discovery table has it at {}",
-                    candidate.styled(style)
-                ));
-            }
-            text.push_str(
-                ": read through a handle following it, which looks for the device, or name \
-                 the device by its address",
-            );
+            let text = not_confirmed.unwrap_or(message);
+            let (answer, answer_instance) = answered(answer);
             lookup_error(
                 text,
                 Lookup {
@@ -143,6 +133,8 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
                     candidates: Vec::new(),
                     at: Some((at.network(), at.mac().to_vec())),
                     candidate: candidate.map(|address| (address.network(), address.mac().to_vec())),
+                    answer,
+                    answer_instance,
                 },
             )
         }
@@ -330,4 +322,18 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     none.setattr("written", py.None())?;
     m.add("BacnetNoPriorityArrayError", none)?;
     Ok(())
+}
+
+/// What a device did, asked which device it is (#2824), as
+/// `BacnetLookupError.answer` and `answer_instance` say it: `None` when it
+/// wasn't asked (no route to it is known).
+fn answered(answer: Option<Answer>) -> (Option<&'static str>, Option<u32>) {
+    match answer {
+        Some(Answer::Is(found) | Answer::Has(found)) => (Some("another-device"), Some(found)),
+        Some(Answer::Not) => (Some("no-device-object"), None),
+        Some(Answer::Unclear) => (Some("refused"), None),
+        Some(Answer::Silent) => (Some("silent"), None),
+        Some(_) => (Some("failed"), None),
+        None => (None, None),
+    }
 }

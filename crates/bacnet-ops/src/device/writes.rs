@@ -290,7 +290,7 @@ impl<T: TransportPort + 'static> Device<T> {
         // No route: nothing was sent, and a write never goes elsewhere on
         // its own (#2795). A timeout is never sent again.
         if self.follows() && matches!(result, Err(Error::UnknownDevice { .. })) {
-            return Err(self.not_confirmed(address).await);
+            return Err(self.not_confirmed(address, None).await);
         }
         result
             .map(|()| address.clone())

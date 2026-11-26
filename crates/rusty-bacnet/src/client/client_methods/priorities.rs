@@ -31,12 +31,12 @@ impl BACnetClient {
     ///   `(network, mac)` pair such as a lookup error's candidate;
     /// - an instance, `1234` (an int or text) or `"2:1234"` on network 2,
     ///   gives a handle that follows the instance, placed only where a
-    ///   device confirmed it to the client's own question (#2824): each
-    ///   address claiming it, or answering a Who-Is for it (sent to this
+    ///   device confirmed it to the client's own question (#2824): unless
+    ///   a claim is confirmed already, one Who-Is for it first (to this
     ///   network alone for a bare instance and to the network named
-    ///   otherwise, waiting up to 3 seconds), is asked which device answers
-    ///   there, once: one read of its Device object, unless it confirmed
-    ///   the instance before;
+    ///   otherwise), its answers given half a second, or up to 3 seconds
+    ///   when nothing claims it; then each address claiming it asked which
+    ///   device answers there, by one read of its Device object;
     /// - a `discover()` row or a `DiscoveredDevice` pins the handle to its
     ///   address, knowing its instance.
     ///

@@ -20,13 +20,14 @@ use crate::target::{Target, VmacLookup, bip6_vmac, check_local_mac, parse_target
 
 /// How long the one Who-Is for an instance no address claims listens on
 /// past the first answer, for a second device claiming it too (within the
-/// resolve wait). Two devices answer one Who-Is moments apart, not
+/// resolve wait), and how long the answers to one sent while claims exist
+/// already are given before they are asked (#2824). Two devices answer one Who-Is moments apart, not
 /// together: a few milliseconds apart on an IP link, but on an MS/TP trunk
 /// each answers only when the token reaches it, which on a slow or busy
 /// trunk is hundreds of milliseconds. Half a second keeps a handle's first
 /// lookup quick while hearing a duplicate on all but the slowest trunks;
 /// one heard later still shows in the table, as a duplicate.
-const SETTLE: Duration = Duration::from_millis(500);
+pub(super) const SETTLE: Duration = Duration::from_millis(500);
 
 impl<T: TransportPort + 'static> Client<T> {
     /// A handle on the device `target` names ([`DeviceRef`]); see the
@@ -180,44 +181,28 @@ impl<T: TransportPort + 'static> Client<T> {
     /// network, network 0 for this client's own), placed where a device
     /// confirmed the instance to the client's own question (#2824): where
     /// the handles already following it are, once confirmed there and
-    /// still the instance's ([`Client::joining`]); otherwise at the one
-    /// address claiming it (or the ones that answer a Who-Is for it, when
-    /// none does) whose device, asked which it is, confirms it
-    /// ([`Client::confirm`]), unless it confirmed it before. The place of
-    /// the handles or a watch hub already following it is asked as a claim
-    /// too, and moves when its device is ruled out and another confirms.
+    /// still the instance's ([`Client::joining`]); otherwise where its
+    /// claims, asked after one Who-Is for it when none is confirmed already,
+    /// say it is ([`Client::resolve_claims`]). One resolution of an
+    /// instance runs at a time. A new handle never moves the handles
+    /// already following it: placed elsewhere than they are, it fails as
+    /// [`OpsError::NotConfirmed`] naming where they are, and a read through
+    /// them moves them (#2795).
     async fn following(&self, instance: u32, named: Option<u16>) -> Result<Device<T>, OpsError> {
         let network = self.scope(named);
         let key = (network, instance);
+        let since = std::time::Instant::from(tokio::time::Instant::now());
+        let mut turn = self.resolving(key).await;
         let at = match self.joining(key).await {
             Joining::Join(at) => at,
             Joining::Ask(live) => {
-                let held = live.as_ref().map(|(here, _)| here.clone());
-                let known = live.and_then(|(here, answer)| Some((here, answer?)));
-                let mut claims = self.claims(instance, network).await;
-                if let Some(held) = &held {
-                    claims.push(held.clone());
-                    claims.sort();
-                    claims.dedup();
-                }
-                if claims.is_empty() {
-                    // A second device answers the one Who-Is a little
-                    // after the first, not with it: `find_instance` listened
-                    // on for SETTLE past the first answer, so one in that
-                    // time is in the table now, and asked too.
-                    let row = self.find_instance(instance, named).await?;
-                    claims = self.claims(instance, network).await;
-                    if claims.is_empty() {
-                        let address = DeviceAddress::of(&row)
-                            .map(|address| self.localized(address))
-                            .ok_or_else(|| OpsError::from(unknown(instance, named)))?;
-                        claims.push(address);
-                    }
-                }
-                let address = self.confirm(instance, &claims, known.as_ref()).await?;
-                self.place_confirmed(key, address, held.as_ref())
+                let (address, asked) = self
+                    .resolve_claims((key, named), live, (&mut turn, since))
+                    .await?;
+                self.place_confirmed(key, address, &asked)?
             }
         };
+        drop(turn);
         Ok(Device {
             client: self.clone(),
             // As named: the follow key localizes it where it is used.
@@ -265,7 +250,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// otherwise, listening [`SETTLE`] past its answer for a second. A miss
     /// names the target as written and says where it asked: the network
     /// named, or the resolve scope.
-    async fn find_instance(
+    pub(super) async fn find_instance(
         &self,
         instance: u32,
         named: Option<u16>,
@@ -274,7 +259,6 @@ impl<T: TransportPort + 'static> Client<T> {
         let own = self.low_level().network_number();
         let network = self.scope(named);
         let sent_to = network.map_or(self.resolve_scope(), ResolveScope::on);
-        let asked = named.map_or(sent_to, ResolveScope::Network);
         let found = self
             .wait_for(&sent_to.into(), Some(range), SETTLE, |row| {
                 row.object_identifier.instance_number() == instance
@@ -284,16 +268,25 @@ impl<T: TransportPort + 'static> Client<T> {
                     })
             })
             .await?;
-        found.ok_or_else(|| {
-            let sent = self.resolve_wait().is_some();
-            match OpsError::from(unknown(instance, named)) {
-                OpsError::UnknownDevice { target, .. } => OpsError::UnknownDevice {
-                    target,
-                    asked: sent.then(|| asked.into()),
-                },
-                other => other,
-            }
-        })
+        found.ok_or_else(|| self.missing(instance, named))
+    }
+
+    /// The error for `instance` (named on `named`) that no address claims
+    /// after the Who-Is for it, naming the target as written and saying
+    /// where it asked, if it did.
+    pub(super) fn missing(&self, instance: u32, named: Option<u16>) -> OpsError {
+        let sent_to = self
+            .scope(named)
+            .map_or(self.resolve_scope(), ResolveScope::on);
+        let asked = named.map_or(sent_to, ResolveScope::Network);
+        let sent = self.resolve_wait().is_some();
+        match OpsError::from(unknown(instance, named)) {
+            OpsError::UnknownDevice { target, .. } => OpsError::UnknownDevice {
+                target,
+                asked: sent.then(|| asked.into()),
+            },
+            other => other,
+        }
     }
 
     /// The row of the station at the remote `address`, once it answers,
