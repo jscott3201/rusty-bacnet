@@ -101,7 +101,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         "An I-Am names a bound device from another address; checking both"
                     );
                     let sent = device_bindings::ask(network, comm_state, &start).await;
-                    device_bindings.write().await.check_asked(&start, sent);
+                    let now = runtime_clock::now();
+                    device_bindings.write().await.check_asked(&start, sent, now);
                 }
                 device_bindings::Heard::Inserted
                 | device_bindings::Heard::Refreshed

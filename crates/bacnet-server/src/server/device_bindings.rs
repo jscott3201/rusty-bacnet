@@ -297,6 +297,11 @@ impl DeviceBindingTable {
         is_group: impl Fn(&[u8]) -> bool,
     ) -> bacnet_objects::command_source::CommandDeviceBinding {
         use bacnet_objects::command_source::CommandDeviceBinding;
+        // Every WriteProperty asks this; a server with no bindings, most of
+        // them, reads no clock and walks no table for it.
+        if self.entries.is_empty() {
+            return CommandDeviceBinding::Unknown;
+        }
         let now = runtime_clock::now();
         let mut matched = None;
         for device in self.entries.keys() {

@@ -48,8 +48,12 @@ pub(super) struct Check {
     id: u64,
     /// When it began; its hold-off counts from here.
     began: Instant,
-    /// When its answers stop counting.
-    deadline: Instant,
+    /// How long its answers count once its Who-Is went out.
+    wait: Duration,
+    /// When its answers stop counting: set once its Who-Is went out, so a
+    /// send held up (an MS/TP station waiting for the token) costs the
+    /// bound device none of its wait.
+    deadline: Option<Instant>,
     /// Whether both its Who-Is went out: one that asked nothing moves
     /// nothing.
     asked: bool,
@@ -70,7 +74,12 @@ pub(super) struct Check {
 impl Check {
     /// Whether answers heard at `now` count.
     fn open_at(&self, now: Instant) -> bool {
-        !self.settled && now < self.deadline
+        !self.settled && self.deadline.is_none_or(|deadline| now < deadline)
+    }
+
+    /// Whether its wait is over at `now`.
+    fn over_at(&self, now: Instant) -> bool {
+        self.deadline.is_some_and(|deadline| now >= deadline)
     }
 
     /// Where the device is bound once this check is over at `now`, if it
@@ -79,7 +88,7 @@ impl Check {
     fn moved_at(&self, now: Instant) -> Option<(&DeviceBindingTarget, Instant)> {
         if self.settled
             || !self.asked
-            || now < self.deadline
+            || !self.over_at(now)
             || self.bound_answered
             || self.contested
         {
@@ -90,7 +99,8 @@ impl Check {
 
     /// Whether it still holds back another check of its device.
     fn holds_at(&self, now: Instant) -> bool {
-        now < self.deadline || now.saturating_duration_since(self.began) < CHECK_HOLD_OFF
+        self.deadline.is_some_and(|deadline| now < deadline)
+            || now.saturating_duration_since(self.began) < CHECK_HOLD_OFF
     }
 }
 
@@ -188,7 +198,13 @@ impl DeviceBindingTable {
                 bound.clone(),
                 now.saturating_duration_since(*observed_at) >= OBSERVED_BINDING_TTL,
             ),
-            None if asked => {
+            // A late answer counts too, the probe's only one: an earlier
+            // answer would have bound the device and ended the probe.
+            None if asked
+                || self
+                    .probes
+                    .asked_lately_at(&device, TokioInstant::from_std(now)) =>
+            {
                 return match self.record_observation(device, target, now) {
                     ObservationOutcome::Inserted => {
                         self.probes.answer(&device);
@@ -232,10 +248,10 @@ impl DeviceBindingTable {
         }
     }
 
-    /// Record whether `start`'s two Who-Is went out. A check whose Who-Is
-    /// did not all go out ends undecided: one that asked nothing never
-    /// moves a binding.
-    pub(in crate::server) fn check_asked(&mut self, start: &CheckStart, sent: bool) {
+    /// Record whether `start`'s two Who-Is went out, at `now`: its wait
+    /// counts from here. A check whose Who-Is did not all go out ends
+    /// undecided: one that asked nothing never moves a binding.
+    pub(in crate::server) fn check_asked(&mut self, start: &CheckStart, sent: bool, now: Instant) {
         if let Some(check) = self
             .checks
             .checks
@@ -244,6 +260,9 @@ impl DeviceBindingTable {
         {
             check.asked = sent;
             check.settled |= !sent;
+            if sent {
+                check.deadline = Some(now + check.wait.min(MAX_PROBE_WAIT));
+            }
         }
     }
 
@@ -256,7 +275,7 @@ impl DeviceBindingTable {
             if let Some((claimant, at)) = check.moved_at(now) {
                 moves.push((*device, check.bound.clone(), claimant.clone(), at));
             }
-            check.settled |= now >= check.deadline;
+            check.settled |= check.over_at(now);
         }
         for (device, bound, claimant, at) in moves {
             if let Some(BindingEntry::Observed {
@@ -335,7 +354,8 @@ impl BindingChecks {
             Check {
                 id,
                 began: now,
-                deadline: now + wait.min(MAX_PROBE_WAIT),
+                wait,
+                deadline: None,
                 asked: false,
                 bound,
                 claimant,

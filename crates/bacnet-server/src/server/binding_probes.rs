@@ -264,6 +264,15 @@ impl BindingProbes {
             .is_some_and(|probe| now < probe.deadline)
     }
 
+    /// Whether a Who-Is for `device` went out recently enough at `now` that
+    /// an answer still counts as one to it, though late: within its
+    /// hold-off, while no other Who-Is for the device may go.
+    pub(super) fn asked_lately_at(&self, device: &ObjectIdentifier, now: TokioInstant) -> bool {
+        self.probes
+            .get(device)
+            .is_some_and(|probe| probe.holds_at(now))
+    }
+
     /// `target` answered `device`'s probe at `at` from another address than
     /// the device's lapsed binding: its claim, or, beside another
     /// address's, a contest.

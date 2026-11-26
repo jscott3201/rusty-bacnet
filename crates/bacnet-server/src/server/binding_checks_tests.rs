@@ -50,7 +50,7 @@ fn checking() -> DeviceBindingTable {
     let Heard::Cue(start) = hear(&mut table, 9, CLAIMANT) else {
         panic!("another address cues a check");
     };
-    table.check_asked(&start, true);
+    table.check_asked(&start, true, now());
     table
 }
 
@@ -127,7 +127,7 @@ async fn a_check_keeps_the_binding_otherwise() {
     let Heard::Cue(start) = hear(&mut unasked, 9, CLAIMANT) else {
         panic!("a cue");
     };
-    unasked.check_asked(&start, false);
+    unasked.check_asked(&start, false, now());
     hear(&mut unasked, 9, CLAIMANT);
     // Its sender stopped before saying whether the Who-Is went out.
     let mut unreported = found();
@@ -232,4 +232,32 @@ async fn a_binding_through_this_networks_number_takes_its_stations_direct_i_am()
     };
     let heard = table.hear_i_am_at(device(9), from, now(), |_| false, Some(WAIT));
     assert_eq!(heard, Heard::Refreshed);
+}
+
+/// A check's wait counts from when its Who-Is went out, not from the cue:
+/// a send held up past the wait (an MS/TP station waiting for the token)
+/// still gives the bound device the whole wait to answer.
+#[tokio::test(start_paused = true)]
+async fn a_checks_wait_counts_from_its_send() {
+    let mut table = found();
+    let Heard::Cue(start) = hear(&mut table, 9, CLAIMANT) else {
+        panic!("a cue");
+    };
+    hear(&mut table, 9, CLAIMANT);
+    tokio::time::advance(WAIT + Duration::from_secs(1)).await;
+    table.check_asked(&start, true, now());
+    assert_eq!(hear(&mut table, 9, BOUND), Heard::Refreshed);
+    tokio::time::advance(WAIT).await;
+    assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND));
+}
+
+/// A late answer to the server's own Who-Is, the only one it drew, still
+/// binds while the probe holds the device back from another Who-Is.
+#[tokio::test(start_paused = true)]
+async fn a_sole_late_answer_binds_within_the_hold_off() {
+    let mut table = DeviceBindingTable::new();
+    table.ask_for_test(device(9), WAIT);
+    tokio::time::advance(WAIT + Duration::from_secs(10)).await;
+    assert_eq!(hear(&mut table, 9, BOUND), Heard::Inserted);
+    assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND));
 }
