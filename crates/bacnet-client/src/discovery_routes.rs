@@ -12,13 +12,19 @@
 //! minute apart, move the row ([`DeviceTable::reroute`]).
 //!
 //! The paths waiting for a check, and each one's pacing, live here, under
-//! the table's lock, in one store of at most [`MAX_PATHS`]. A path is ranked
-//! by how long the oldest row through it has been known and then by how
-//! many rows go through it, so a long-known path is checked first and is
-//! never pushed out for a newer one.
+//! the table's lock, in one store of at most [`MAX_PATHS`]: the shared
+//! [`Pacing`] (`bacnet_network::router_checks`), which the server's and the
+//! endpoint's router learning use too (#2831). A path is ranked by how long
+//! the oldest row through it has been known and then by how many rows go
+//! through it, so a long-known path is checked first and is never pushed
+//! out for a newer one.
 
 use std::cmp::Ordering;
 
+use bacnet_network::router_checks::Pacing;
+pub(crate) use bacnet_network::router_checks::{Checked, Strike};
+#[cfg(test)]
+pub(crate) use bacnet_network::router_checks::{FIRST_HOLD, STRIKE_GAP};
 use bacnet_npdu::RemoteBroadcast;
 
 use super::*;
@@ -27,19 +33,6 @@ use super::*;
 /// full takes the place of the lowest-ranked path, if it outranks it, and
 /// is dropped otherwise: the row stays as it is either way.
 pub(crate) const MAX_PATHS: usize = 256;
-
-/// How long after a path's first check the next may run. Each check that
-/// leaves the path as it was doubles the hold, up to [`LAST_HOLD`].
-pub(crate) const FIRST_HOLD: Duration = Duration::from_secs(60);
-
-/// The longest hold: as long as a silent row takes to age out of the
-/// client's table.
-pub(crate) const LAST_HOLD: Duration = Duration::from_secs(600);
-
-/// How long after a check that found the path's router silent and one
-/// other router alone answering the second check runs, whatever the hold:
-/// the row moves only when that one finds the same.
-pub(crate) const STRIKE_GAP: Duration = Duration::from_secs(60);
 
 /// A network and the router its rows name: one path the client checks.
 pub(crate) type PathKey = (u16, MacAddr);
@@ -69,51 +62,14 @@ impl PartialOrd for Rank {
     }
 }
 
-/// One path's state.
-#[derive(Debug)]
-struct Paced {
-    /// A cue came since the last check.
-    wanted: bool,
-    /// The next check runs no sooner.
-    due: Instant,
-    /// The hold after the next check.
-    hold: Duration,
-    /// The rank when last cued or checked, for eviction.
-    rank: Rank,
-    /// The first strike, when the last check found the router silent and
-    /// one other router alone answering: that router, and when the check
-    /// began.
-    strike: Option<Strike>,
-}
-
-/// A check that found a path's router silent and one other router alone
-/// answering its router query.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Strike {
-    /// The router that answered alone.
-    pub(crate) to: MacAddr,
-    /// When the check began: anything the old router carried from the
-    /// network since then clears the strike.
-    pub(crate) since: Instant,
-}
-
 /// The paths waiting for the client's check.
-#[derive(Debug, Default)]
-pub(super) struct RoutePaths {
-    paths: BTreeMap<PathKey, Paced>,
-}
+#[derive(Debug)]
+pub(super) struct RoutePaths(Pacing<PathKey, Rank>);
 
-/// What a check of a path decided, for its pacing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Checked {
-    /// The path stays, and a strike is cleared: the next check waits for a
-    /// cue and the hold.
-    Kept,
-    /// The first strike: the second check runs [`STRIKE_GAP`] later.
-    Struck(Strike),
-    /// The rows moved, or none goes through the path any more: it is
-    /// forgotten.
-    Ended,
+impl Default for RoutePaths {
+    fn default() -> Self {
+        Self(Pacing::new(MAX_PATHS))
+    }
 }
 
 /// The rows on `network` whose router is `router`.
@@ -175,66 +131,24 @@ impl DeviceTable {
     /// whole hold past their due, are forgotten first.
     pub(crate) fn due_paths(&mut self, now: Instant, limit: usize) -> Vec<PathKey> {
         let rows = &self.rows;
-        let paths = &mut self.route_paths.paths;
-        paths.retain(|(network, router), paced| {
-            let Some(current) = rank(rows, *network, router) else {
-                return false;
-            };
-            paced.rank = current;
-            paced.wanted || paced.due.checked_add(LAST_HOLD).is_none_or(|end| now < end)
-        });
-        let mut due: Vec<(&PathKey, &Paced)> = paths
-            .iter()
-            .filter(|(_, paced)| paced.wanted && paced.due <= now)
-            .collect();
-        due.sort_by_key(|(_, paced)| std::cmp::Reverse(paced.rank));
-        due.into_iter()
-            .take(limit)
-            .map(|(path, _)| path.clone())
-            .collect()
+        self.route_paths
+            .0
+            .due(now, limit, |(network, router)| rank(rows, *network, router))
     }
 
     /// When the next check is due: the earliest path with a cue waiting.
     pub(crate) fn next_path_due(&self) -> Option<Instant> {
-        self.route_paths
-            .paths
-            .values()
-            .filter(|paced| paced.wanted)
-            .map(|paced| paced.due)
-            .min()
+        self.route_paths.0.next_due()
     }
 
     /// The first strike `path` holds, if its last check made one.
     pub(crate) fn path_strike(&self, path: &PathKey) -> Option<Strike> {
-        self.route_paths
-            .paths
-            .get(path)
-            .and_then(|paced| paced.strike.clone())
+        self.route_paths.0.strike(path)
     }
 
     /// Record a check of `path` that ended at `now`.
     pub(crate) fn path_checked(&mut self, path: &PathKey, checked: Checked, now: Instant) {
-        let paths = &mut self.route_paths.paths;
-        match checked {
-            Checked::Ended => {
-                paths.remove(path);
-            }
-            Checked::Kept => {
-                if let Some(paced) = paths.get_mut(path) {
-                    paced.strike = None;
-                    paced.wanted = false;
-                    paced.due = now + paced.hold;
-                    paced.hold = (paced.hold * 2).min(LAST_HOLD);
-                }
-            }
-            Checked::Struck(strike) => {
-                if let Some(paced) = paths.get_mut(path) {
-                    paced.strike = Some(strike);
-                    paced.wanted = true;
-                    paced.due = now + STRIKE_GAP;
-                }
-            }
-        }
+        self.route_paths.0.checked(path, checked, now);
     }
 
     /// The station a check asks through `router`: of the rows on `network`
@@ -316,12 +230,10 @@ impl DeviceTable {
         };
         if let Some(row) = self.rows.get(&key)
             && row.device.mac_address != device.mac_address
-            && let Some(paced) = self
-                .route_paths
-                .paths
-                .get_mut(&(key.network, row.device.mac_address.clone()))
         {
-            paced.strike = None;
+            self.route_paths
+                .0
+                .clear_strike(&(key.network, row.device.mac_address.clone()));
         }
     }
 }
@@ -329,35 +241,7 @@ impl DeviceTable {
 impl RoutePaths {
     /// Mark `path`, ranked `rank`, for a check: at once when it is new.
     fn cue(&mut self, path: PathKey, rank: Rank) {
-        let now = now();
-        if let Some(paced) = self.paths.get_mut(&path) {
-            paced.wanted = true;
-            paced.rank = rank;
-            return;
-        }
-        if self.paths.len() >= MAX_PATHS {
-            let lowest = self
-                .paths
-                .iter()
-                .min_by_key(|(_, paced)| paced.rank)
-                .map(|(path, paced)| (path.clone(), paced.rank));
-            match lowest {
-                Some((lowest, below)) if below < rank => {
-                    self.paths.remove(&lowest);
-                }
-                _ => return,
-            }
-        }
-        self.paths.insert(
-            path,
-            Paced {
-                wanted: true,
-                due: now,
-                hold: FIRST_HOLD,
-                rank,
-                strike: None,
-            },
-        );
+        self.0.cue(path, rank, now());
     }
 }
 

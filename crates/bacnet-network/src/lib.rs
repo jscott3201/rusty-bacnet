@@ -5,6 +5,7 @@ pub mod network_number;
 pub mod priority_channel;
 pub mod response_route;
 pub mod router;
+pub mod router_checks;
 pub mod router_table;
 mod totals;
 
