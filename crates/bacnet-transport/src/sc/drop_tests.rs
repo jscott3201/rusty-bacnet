@@ -174,7 +174,7 @@ async fn sc_stop_through_a_shared_reference_fails_every_later_send() {
             .await,
     ] {
         assert!(
-            matches!(&sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected),
+            matches!(&sent, Err(Error::State(Lifecycle::Closed, _))),
             "{sent:?}"
         );
     }
@@ -189,10 +189,29 @@ async fn sc_stop_through_a_shared_reference_fails_every_later_send() {
 
 /// A start's error once the transport was stopped says so.
 fn stopped_start<T: std::fmt::Debug>(started: Result<T, Error>) -> bool {
-    let message = started
-        .expect_err("a stopped transport started")
-        .to_string();
-    message.contains("was stopped") && message.contains("cannot start again")
+    let error = started.expect_err("a stopped transport started");
+    let message = error.to_string();
+    matches!(error, Error::State(Lifecycle::Closed, _))
+        && message.contains("was stopped")
+        && message.contains("cannot start again")
+}
+
+/// A send before start is refused as one to a transport not running yet,
+/// which a start would let through (#1833): nothing was sent, and it is not
+/// the link's failure.
+#[tokio::test]
+async fn sc_send_before_start_is_refused_as_not_running() {
+    let (ws_client, _ws_hub) = LoopbackWebSocket::pair();
+    let transport = ScTransport::new(ws_client, [0x01; 6]).with_device_uuid([1; 16]);
+    for sent in [
+        transport.send_unicast(&[0x01, 0x00], &[0x20; 6]).await,
+        transport.send_broadcast(&[0x01, 0x00]).await,
+    ] {
+        assert!(
+            matches!(&sent, Err(Error::State(Lifecycle::NotRunning, _))),
+            "{sent:?}"
+        );
+    }
 }
 
 /// A stop before start lets go of the socket it was given, as a drop
@@ -244,7 +263,7 @@ async fn sc_abort_through_a_shared_reference_closes_the_hub_socket_without_a_goo
         transport.send_broadcast(&[0x01, 0x00]).await,
     ] {
         assert!(
-            matches!(&sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected),
+            matches!(&sent, Err(Error::State(Lifecycle::Closed, _))),
             "{sent:?}"
         );
     }
@@ -276,7 +295,7 @@ async fn sc_abort_off_the_runtime_beside_a_held_hub_slot_lets_go_once_it_is_free
     // Before the runtime runs anything: the socket is still in the slot.
     let sent = transport.send_unicast(&[0x01, 0x00], &[0x20; 6]).await;
     assert!(
-        matches!(&sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected),
+        matches!(&sent, Err(Error::State(Lifecycle::Closed, _))),
         "{sent:?}"
     );
     timeout(Duration::from_secs(1), async {

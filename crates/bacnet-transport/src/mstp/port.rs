@@ -228,10 +228,7 @@ impl<S: SerialPort> MstpTransport<S> {
     /// Queue an NPDU for the core, refusing it at once if it cannot be sent.
     fn enqueue(&self, destination: u8, npdu: &[u8]) -> Result<(), Error> {
         let Some(link) = &self.link else {
-            return Err(Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "MS/TP transport not started",
-            )));
+            return Err(not_started());
         };
         let result = link
             .queues
@@ -240,10 +237,10 @@ impl<S: SerialPort> MstpTransport<S> {
         counts.publish_queues(&link.queues);
         match result {
             Ok(()) => Ok(()),
-            Err(EnqueueError::Closed) => Err(Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "MS/TP transport is no longer running",
-            ))),
+            // Stopped, aborted, or the node's task ended: checked before the
+            // length, so a stopped port's refusal never draws a router's
+            // too-long reject.
+            Err(EnqueueError::Closed) => Err(no_longer_running()),
             // Longer than the port's frames carry (#1833): a router answers
             // it with reject reason 4, and a client may try a smaller one.
             Err(EnqueueError::Rejected(QueueRefusal::Oversize)) => {
@@ -265,6 +262,24 @@ impl<S: SerialPort> MstpTransport<S> {
             ))),
         }
     }
+}
+
+/// What a send before start gets (#1833): the transport can start, so
+/// [`Lifecycle::NotRunning`].
+#[cold]
+#[inline(never)]
+fn not_started() -> Error {
+    Error::state(Lifecycle::NotRunning, "MS/TP transport not started")
+}
+
+/// What a send gets once the node's queues closed (#1833): after a stop or
+/// an abort, or once the node's task ended on a serial failure, which it
+/// reported then. The transport doesn't start again, so
+/// [`Lifecycle::Closed`]; nothing of the send was attempted.
+#[cold]
+#[inline(never)]
+fn no_longer_running() -> Error {
+    Error::state(Lifecycle::Closed, "MS/TP transport is no longer running")
 }
 
 impl<S: SerialPort> TransportPort for MstpTransport<S> {

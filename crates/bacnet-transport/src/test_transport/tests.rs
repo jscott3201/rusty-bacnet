@@ -519,7 +519,8 @@ async fn sends_fail_between_a_stop_and_the_next_start() {
     transport.send_unicast(&[1, 0], &[2]).await.unwrap();
     let transport = Arc::new(transport);
     Arc::clone(&transport).stop().await.unwrap();
-    let stopped = |sent: Result<(), Error>| matches!(sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected);
+    let stopped =
+        |sent: Result<(), Error>| matches!(sent, Err(Error::State(Lifecycle::NotRunning, _)));
     assert!(stopped(transport.send_unicast(&[1, 0], &[2]).await));
     assert!(
         stopped(transport.send_broadcast(&[1, 0]).await),
@@ -550,14 +551,20 @@ async fn sends_fail_after_an_abort_until_the_next_start() {
     transport.abort();
     let sent = transport.send_unicast(&[1, 0], &[2]).await;
     assert!(
-        matches!(&sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected),
+        matches!(&sent, Err(Error::State(Lifecycle::NotRunning, _))),
         "{sent:?}"
     );
     assert!(received.recv().await.is_none());
     assert!(handle.sent().is_empty());
     assert_eq!((handle.stops(), handle.aborts()), (0, 1));
     let mut transport = Arc::into_inner(transport).unwrap();
-    assert!(transport.start().await.is_err(), "a start waits for a stop");
+    assert!(
+        matches!(
+            transport.start().await,
+            Err(Error::State(Lifecycle::AlreadyStarted, _))
+        ),
+        "a start waits for a stop"
+    );
     transport.stop().await.unwrap();
     transport.start().await.unwrap();
     transport.send_unicast(&[1, 0], &[2]).await.unwrap();

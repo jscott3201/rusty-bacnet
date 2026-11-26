@@ -53,9 +53,10 @@ pub enum BvlcExchangeError {
     /// was sent; a busy refusal may pass on a later try.
     Refused(ExchangeRefusal),
     /// The request failed on this side or the answer could not be read: the
-    /// transport is not started (or stopped while the request waited, which
-    /// fails the same way), the send failed, the request could not be
-    /// encoded or the response was malformed.
+    /// transport is not started, or stopped while the request waited, which
+    /// fails the same way (an [`Error::State`] of
+    /// [`Lifecycle::NotRunning`], #1833); the send failed, the request
+    /// could not be encoded or the response was malformed.
     Transport(Error),
 }
 

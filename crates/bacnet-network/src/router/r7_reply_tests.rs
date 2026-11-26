@@ -279,12 +279,12 @@ async fn r7_queued_reply_cancellation_and_both_owner_retirements_prevent_issuanc
             1 => {
                 network.seal_responses();
                 assert!(response.start().is_none());
-                assert!(send.await.is_err());
+                assert!(closed(send.await));
             }
             _ => {
                 drop(h);
                 assert!(response.start().is_none());
-                assert!(send.await.is_err());
+                assert!(closed(send.await));
             }
         }
         assert_eq!(issued_count.load(Ordering::SeqCst), 0);
@@ -313,11 +313,15 @@ async fn r7_full_queue_is_bounded_and_issuance_callback_runs_only_when_selected(
         assert!(poll_once(send.as_mut()).is_pending());
         sends.push(send);
     }
+    // A full queue refuses the reply as a full MS/TP queue does; it is not
+    // the route closing (#1833).
+    let refused = network
+        .send_response_apdu_on_issuance(issued(), &route, || panic!("full queue cannot issue"))
+        .await;
     assert!(
-        network
-            .send_response_apdu_on_issuance(issued(), &route, || panic!("full queue cannot issue"))
-            .await
-            .is_err()
+        matches!(&refused, Err(bacnet_types::error::Error::Transport(io))
+            if io.kind() == std::io::ErrorKind::WouldBlock),
+        "{refused:?}"
     );
     assert_eq!(count.load(Ordering::SeqCst), 0);
     for queued in h.drain(0) {
@@ -355,10 +359,24 @@ async fn r7_prompt_handoff_checks_both_network_and_router_lifetime() {
         } else {
             drop(h);
         }
+        let refused = network.encode_response_for_handoff(issued(), &route);
+        assert!(!seal_network || closed(refused.map(drop)), "sealed");
         assert!(
             network
                 .encode_response_for_handoff(issued(), &route)
                 .is_err()
         );
     }
+}
+
+/// Whether `sent` failed as a reply whose route or owner closed for good
+/// (#1833): a state of this side, with nothing sent.
+fn closed(sent: Result<(), bacnet_types::error::Error>) -> bool {
+    matches!(
+        sent,
+        Err(bacnet_types::error::Error::State(
+            bacnet_types::error::Lifecycle::Closed,
+            _
+        ))
+    )
 }

@@ -220,11 +220,14 @@ async fn a_routed_log_page_sends_every_request_to_the_station() {
     endpoint.stop().await.unwrap();
 }
 
+/// The B/IP link's state before start or after a stop (#1833): it starts
+/// again, so not running.
 fn not_started(error: BvlcExchangeError) {
     match error {
-        BvlcExchangeError::Transport(Error::Transport(io)) => {
-            assert_eq!(io.kind(), std::io::ErrorKind::NotConnected);
-        }
+        BvlcExchangeError::Transport(Error::State(
+            bacnet_types::error::Lifecycle::NotRunning,
+            _,
+        )) => {}
         other => panic!("not the not-started error: {other}"),
     }
 }

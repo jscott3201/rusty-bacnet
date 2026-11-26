@@ -681,13 +681,18 @@ async fn a_virtual_address_resolution_times_out_unanswered() {
     transport.stop().await.unwrap();
 }
 
-/// Before start there is nothing to resolve with.
+/// Before start there is nothing to resolve with: the lookup and the send
+/// are refused as the transport's state, not as a link failure (#1833).
 #[tokio::test]
 async fn resolving_needs_a_running_transport() {
+    use bacnet_types::error::Lifecycle;
     let transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(10));
     let peer = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 47808, 0, 0);
     let error = transport.resolve_virtual_address(peer).await.unwrap_err();
-    assert!(matches!(error, Error::Transport(e) if e.kind() == io::ErrorKind::NotConnected));
+    assert!(matches!(error, Error::State(Lifecycle::NotRunning, _)));
     let result = transport.send_unicast(NPDU, &PEER).await;
-    assert_eq!(kind(&result), Some(io::ErrorKind::NotConnected));
+    assert!(matches!(
+        result,
+        Err(Error::State(Lifecycle::NotRunning, _))
+    ));
 }

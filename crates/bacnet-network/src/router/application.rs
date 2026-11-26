@@ -96,8 +96,10 @@ const NPCI_ROOM: u16 = (MAX_NPDU - 1476) as u16;
 /// refuses there fails with the transport error the plan reports.
 ///
 /// A refusal from [`BACnetRouter::originate`] fails the send:
-/// [`OriginateError::TooLong`] as [`Error::SendTooLong`], every other one
-/// as [`Error::Transport`] carrying the [`OriginateFailure`], which
+/// [`OriginateError::TooLong`] as [`Error::SendTooLong`],
+/// [`OriginateFailure::Stopped`] as an [`Error::State`] of
+/// [`Lifecycle::Closed`] (#1833), and every other one as
+/// [`Error::Transport`] carrying the [`OriginateFailure`], which
 /// [`OriginateFailure::from_error`] gets back. A network the table lacks
 /// fails with [`OriginateError::NoRoute`] and starts a search for it, as
 /// `originate` does; once the router has learned the route, a retry goes.
@@ -123,7 +125,9 @@ const NPCI_ROOM: u16 = (MAX_NPDU - 1476) as u16;
 ///
 /// [`TransportPort::stop`] closes the port's queue. Stopping the router
 /// closes its local receiver, which closes the port's queue too, and every
-/// later send fails with [`OriginateFailure::Stopped`].
+/// later send fails with [`OriginateFailure::Stopped`]'s closed state. A
+/// stopped port or router is this side's own state, not a failure of a
+/// link: a client counts such a send as not attempted.
 ///
 /// ```no_run
 /// # use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort};
@@ -328,7 +332,7 @@ impl RouterApplicationPort {
     /// network, anything else originated.
     async fn send(&self, npdu: &[u8], broadcast: bool) -> Result<(), Error> {
         if self.stopped.load(std::sync::atomic::Ordering::Acquire) {
-            return Err(bacnet_transport::port::stopped());
+            return Err(bacnet_transport::port::stopped_for_good());
         }
         let npdu = Npdu::decode(npdu).map_err(|error| {
             Error::InvalidArgument(Refusal::text(format!("router application send: {error}")))
@@ -435,9 +439,9 @@ impl TransportPort for RouterApplicationPort {
     }
 
     /// Stop through a shared reference (#2617): every later send fails with
-    /// [`bacnet_transport::port::stopped`]'s error, and the port leaves the
-    /// router's feed. The router itself runs on. The port does not start
-    /// again.
+    /// [`bacnet_transport::port::stopped_for_good`]'s error, and the port
+    /// leaves the router's feed. The router itself runs on. The port does
+    /// not start again.
     async fn stop(&self) -> Result<(), Error> {
         self.stopped
             .store(true, std::sync::atomic::Ordering::Release);
@@ -523,16 +527,27 @@ fn failure_error(failure: OriginateFailure) -> Error {
         OriginateFailure::Refused(OriginateError::Busy) | OriginateFailure::QueueFull => {
             io::ErrorKind::WouldBlock
         }
-        OriginateFailure::Stopped => io::ErrorKind::NotConnected,
+        // This side's state, not a failure of a link (#1833).
+        OriginateFailure::Stopped => return router_stopped(),
         _ => io::ErrorKind::InvalidInput,
     };
     Error::Transport(io::Error::new(kind, failure))
 }
 
+/// A send through the application port after the router stopped: it
+/// doesn't start again, so [`Lifecycle::Closed`].
+#[cold]
+#[inline(never)]
+fn router_stopped() -> Error {
+    Error::state(Lifecycle::Closed, "the router has stopped")
+}
+
 impl OriginateFailure {
     /// The refusal behind `error`, when it is a send of a
     /// [`RouterApplicationPort`] that [`BACnetRouter::originate`] refused,
-    /// other than for length ([`Error::SendTooLong`]).
+    /// other than for length ([`Error::SendTooLong`]) or because the router
+    /// stopped ([`OriginateFailure::Stopped`], an [`Error::State`] of
+    /// [`Lifecycle::Closed`]).
     #[must_use]
     pub fn from_error(error: &Error) -> Option<Self> {
         match error {

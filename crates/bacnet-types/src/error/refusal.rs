@@ -28,11 +28,16 @@ use super::decode::{placeholder_count, write_label};
 /// a time (a lock, a lease, a seat) that another holder has is a cap of one
 /// reached, [`Error::LimitReached`](super::Error::LimitReached): the call
 /// may succeed once the holder lets go. And an I/O failure the operating
-/// system or a socket reported is `Error::Transport`, as is a send on a
-/// transport that has stopped.
+/// system or a socket reported is `Error::Transport`.
 ///
-/// The transport reports `AlreadyStarted`, `NotConnected` and `Closed`, and
-/// the network layer and the router's application port `AlreadyStarted`.
+/// A transport reports `AlreadyStarted` for a second start, `NotRunning`
+/// for a send before start or, when it can start again (B/IP, B/IPv6,
+/// Ethernet), after a stop, `Closed` for a send after the stop of one that
+/// can't (a loopback, BACnet/SC, MS/TP), and `NotConnected` while its hub
+/// or BBMD isn't known. Nothing of such a send was attempted. The network
+/// layer and the router's application port report `AlreadyStarted`, and
+/// the router's application port, its replies and the network layer's
+/// sealed responses `Closed`.
 /// The endpoint's session and ingress report all but `NotConnected`,
 /// deciding between `NotRunning`, `Stopping` and `Closed` from their own
 /// state. The server reports `Closed` once its stop has begun or a cleanup

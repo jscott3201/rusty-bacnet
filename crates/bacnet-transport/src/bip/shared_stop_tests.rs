@@ -18,9 +18,10 @@ use std::time::Duration;
 
 use super::*;
 
-/// The error kind every send after a stop fails with.
+/// The error every send after a stop fails with: the transport starts again,
+/// so it is not running (#1833).
 fn stopped(sent: &Result<(), Error>) -> bool {
-    matches!(sent, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::NotConnected)
+    matches!(sent, Err(Error::State(Lifecycle::NotRunning, _)))
 }
 
 /// A started transport on loopback, shared, its socket, watched but not
@@ -102,6 +103,29 @@ async fn a_stop_with_another_holder_alive_fails_every_later_send_and_frees_the_p
     assert!(rx.recv().await.is_none(), "the receiver ends");
     // Idempotent: a second stop finds nothing to do.
     other.stop().await.unwrap();
+}
+
+/// A send before start is refused as the state it finds, not running, as
+/// one after a stop is, and so is a second start while the transport runs
+/// (#1833): each is the transport's own refusal, with nothing sent.
+#[tokio::test]
+async fn a_send_before_start_and_a_second_start_are_state_refusals() {
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+    let (peer, mac) = peer();
+    for sent in [
+        transport.send_unicast(&[0x01, 0x00], &mac).await,
+        transport.send_broadcast(&[0x01, 0x00]).await,
+    ] {
+        assert!(stopped(&sent), "{sent:?}");
+    }
+    let _rx = transport.start().await.unwrap();
+    let again = transport.start().await;
+    assert!(
+        matches!(&again, Err(Error::State(Lifecycle::AlreadyStarted, _))),
+        "{again:?}"
+    );
+    assert!(received_nothing(&peer));
+    transport.stop().await.unwrap();
 }
 
 /// Two stops at once both succeed, and the second, which comes while the
@@ -279,7 +303,7 @@ async fn an_abort_fails_later_sends_and_a_start_waits_for_a_stop() {
         let mut transport = Arc::into_inner(transport).unwrap();
         let refused = transport.start().await;
         assert!(
-            matches!(&refused, Err(Error::Transport(io)) if io.kind() == std::io::ErrorKind::AlreadyExists),
+            matches!(&refused, Err(Error::State(Lifecycle::AlreadyStarted, _))),
             "{refused:?}"
         );
         transport.stop().await.unwrap();

@@ -17,12 +17,12 @@ impl<W: WebSocketPort> ScTransport<W> {
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
         if self.ws_shared.is_none() {
-            return Err(crate::direct_response::unavailable());
+            return Err(not_started());
         }
         // Aborted (#2617): nothing more goes out, whether or not the hub
         // socket has left its slot yet.
         if self.abort_mark.is_set() {
-            return Err(crate::port::stopped());
+            return Err(crate::port::stopped_for_good());
         }
         if mac.len() != 6 {
             return Err(Error::InvalidArgument(
@@ -56,7 +56,7 @@ impl<W: WebSocketPort> ScTransport<W> {
                     .lock()
                     .await
                     .clone()
-                    .ok_or_else(crate::port::stopped)?;
+                    .ok_or_else(crate::port::stopped_for_good)?;
                 direct
                     .discover_via_hub(dest_vmac, &hub, conn, self.connect_timeout_ms)
                     .await
@@ -100,18 +100,8 @@ impl<W: WebSocketPort> ScTransport<W> {
         npdu: &[u8],
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
-        let ws_shared = self.ws_shared.as_ref().ok_or_else(|| {
-            Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "BACnet/SC transport not started",
-            ))
-        })?;
-        let conn = self.connection.as_ref().ok_or_else(|| {
-            Error::Transport(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "BACnet/SC transport not started",
-            ))
-        })?;
+        let ws_shared = self.ws_shared.as_ref().ok_or_else(not_started)?;
+        let conn = self.connection.as_ref().ok_or_else(not_started)?;
 
         // Admission is atomic with socket publication. An admitted send owns
         // its Arc and may complete after retirement; it is not rolled back.
@@ -120,7 +110,7 @@ impl<W: WebSocketPort> ScTransport<W> {
         let (ws, hub_max_bvlc_length, msg) = {
             let ws = ws_shared.lock().await;
             let Some(ws) = ws.as_ref() else {
-                return Err(crate::port::stopped());
+                return Err(crate::port::stopped_for_good());
             };
             let mut c = conn.lock().await;
             if c.state != ScConnectionState::Connected {
@@ -151,4 +141,12 @@ impl<W: WebSocketPort> ScTransport<W> {
         }
         ws.send(&buf).await
     }
+}
+
+/// What a send before the transport started gets (#1833): it can start,
+/// so [`Lifecycle::NotRunning`]. Nothing was sent.
+#[cold]
+#[inline(never)]
+fn not_started() -> Error {
+    Error::state(Lifecycle::NotRunning, "BACnet/SC transport not started")
 }

@@ -631,9 +631,7 @@ async fn a_request_given_up_after_stop_leaves_the_status_clear() {
     transport.stop().await.unwrap();
     // It fails as a request after the stop does (#2612).
     match request.await.unwrap_err() {
-        BvlcExchangeError::Transport(Error::Transport(io)) => {
-            assert_eq!(io.kind(), std::io::ErrorKind::NotConnected);
-        }
+        BvlcExchangeError::Transport(Error::State(Lifecycle::NotRunning, _)) => {}
         other => panic!("not the not-started error: {other}"),
     }
     let snapshot = transport.bvlc_client_snapshot();

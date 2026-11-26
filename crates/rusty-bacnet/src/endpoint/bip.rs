@@ -74,14 +74,14 @@ async fn bvlc_tables(
 }
 
 /// A table read's failure. One that `close()` cut off, or that met the
-/// transport stopping, raises what a read after `close()` does (#2612).
+/// transport stopping, raises what a read after `close()` does (#2612): the
+/// B/IP transport reports both as not running (#1833).
 fn table_read_error(error: bacnet_transport::bip::BvlcExchangeError) -> PyErr {
     match &error {
-        bacnet_transport::bip::BvlcExchangeError::Transport(
-            bacnet_types::error::Error::Transport(io),
-        ) if io.kind() == std::io::ErrorKind::NotConnected => {
-            PyRuntimeError::new_err("endpoint not started")
-        }
+        bacnet_transport::bip::BvlcExchangeError::Transport(bacnet_types::error::Error::State(
+            bacnet_types::error::Lifecycle::NotRunning,
+            _,
+        )) => PyRuntimeError::new_err("endpoint not started"),
         _ => crate::errors::bvlc_exchange_err(error),
     }
 }

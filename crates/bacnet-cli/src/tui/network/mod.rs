@@ -212,13 +212,12 @@ mod tests {
         };
         assert!(matches!(probe_error(&success), Probe::Unreachable(_)));
         assert!(read_error(&success).starts_with("unexpected reply: "));
-        // What a request returns once its transport has stopped (#2612).
-        let local = BvlcExchangeError::Transport(bacnet_types::error::Error::Transport(
-            std::io::Error::new(std::io::ErrorKind::NotConnected, "Transport not started"),
-        ));
+        // What a request returns once its transport has stopped (#2612),
+        // its state since #1833.
+        let local = BvlcExchangeError::Transport(bacnet_transport::port::stopped());
         assert_eq!(
             probe_error(&local),
-            Probe::Unreachable("transport error: Transport not started".into())
+            Probe::Unreachable("transport stopped".into())
         );
         assert!(read_error(&local).starts_with("unreachable: "));
         let mac = mac("10.0.0.1:47809".parse().unwrap());
