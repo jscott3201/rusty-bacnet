@@ -2,6 +2,6 @@
 section: Security
 ---
 - **Wire:** An I-Am the client didn't ask for no longer changes the router
-  that carries its requests to an already known routed device; it starts a
-  paced check of the client's own, which moves the device only when the old
-  router stays silent and one other router alone claims the network (#2823).
+  for an already known routed device; it starts the client's own paced
+  check, which moves the device only if two checks a minute apart find the
+  old router silent and the same other router alone answering (#2823).

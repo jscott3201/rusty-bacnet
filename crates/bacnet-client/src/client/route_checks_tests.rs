@@ -215,6 +215,8 @@ pub(super) struct Site {
     pub(super) client: Arc<BACnetClient<TestTransport>>,
     inbound: mpsc::Sender<ReceivedNpdu>,
     pub(super) sent: SendLog,
+    /// What answers the checks, which a test may change as it goes.
+    pub(super) script: Arc<Mutex<Script>>,
 }
 
 impl Site {
@@ -228,13 +230,13 @@ impl Site {
     /// The client, with an empty table.
     pub(super) async fn empty(script: Script) -> Self {
         let (inbound, rx) = mpsc::channel(4096);
-        let script = Mutex::new(script);
-        let hook_inbound = inbound.clone();
+        let script = Arc::new(Mutex::new(script));
+        let (hook_script, hook_inbound) = (Arc::clone(&script), inbound.clone());
         let builder = TestTransport::builder()
             .local_mac(&[1])
             .inbound(rx)
             .on_send(move |frame| {
-                for (from, npdu) in script.lock().unwrap().replies(&frame) {
+                for (from, npdu) in hook_script.lock().unwrap().replies(&frame) {
                     hook_inbound.try_send(received(&from, npdu)).unwrap();
                 }
                 async { Ok(()) }
@@ -247,6 +249,7 @@ impl Site {
             client: Arc::new(client),
             inbound,
             sent,
+            script,
         }
     }
 
@@ -393,9 +396,10 @@ async fn an_answer_through_the_router_keeps_the_path() {
 
 /// The legitimate failover: the old router is gone and another took over.
 /// The device's I-Am through the new one cues the check; the Who-Is through
-/// the old router draws nothing, the new router alone answers the router
-/// query, and the row moves, reported as an update. Until then, requests
-/// keep going through the old router.
+/// the old router draws nothing and the new router alone answers the router
+/// query: a first strike, at 12 s. The second check, a minute later, finds
+/// the same, and at 84 s the row moves, reported as an update. Until then,
+/// requests keep going through the old router.
 #[tokio::test(start_paused = true)]
 async fn a_router_that_is_gone_is_relearned_by_asking() {
     const NEW: [u8; 1] = [8];
@@ -408,25 +412,25 @@ async fn a_router_that_is_gone_is_relearned_by_asking() {
     let mut events = site.client.device_events();
     site.hear(&NEW, i_am(&STATION, INSTANCE)).await;
     assert_eq!(site.router(), ROUTER);
-    sleep(WAIT).await;
+    sleep(2 * WAIT).await;
+    assert_eq!(site.router(), ROUTER, "moved on the first strike");
+    sleep(crate::discovery::STRIKE_GAP + WAIT).await;
     assert_eq!(
         site.router(),
         ROUTER,
-        "moved before the router query's answers were in"
+        "moved before the second router query's answers were in"
     );
     sleep(WAIT).await;
     assert_eq!(site.router(), NEW);
-    assert_eq!(
-        site.sent(),
-        [
-            Sent::Probe {
-                via: ROUTER.to_vec(),
-                network: NETWORK,
-                station: STATION.to_vec()
-            },
-            Sent::RouterQuery(NETWORK)
-        ]
-    );
+    let check = [
+        Sent::Probe {
+            via: ROUTER.to_vec(),
+            network: NETWORK,
+            station: STATION.to_vec(),
+        },
+        Sent::RouterQuery(NETWORK),
+    ];
+    assert_eq!(site.sent(), [check.clone(), check].concat());
     let event = events.try_recv().unwrap();
     assert_eq!(event.kind, DeviceEventKind::Updated);
     assert_eq!(event.device.mac_address.as_slice(), NEW);

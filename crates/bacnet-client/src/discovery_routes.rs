@@ -8,8 +8,8 @@
 //! takes the router from the first I-Am that makes the row, and a later one
 //! that arrives through another station changes nothing on that row: it
 //! marks the path for the client's own check (`client::route_checks`), and
-//! only an answer to a request of the client's own moves the row
-//! ([`DeviceTable::reroute`]).
+//! only answers to requests of the client's own, in two checks about a
+//! minute apart, move the row ([`DeviceTable::reroute`]).
 //!
 //! The paths waiting for a check, and each one's pacing, live here, under
 //! the table's lock, in one store of at most [`MAX_PATHS`]. A path is ranked
@@ -35,6 +35,11 @@ pub(crate) const FIRST_HOLD: Duration = Duration::from_secs(60);
 /// The longest hold: as long as a silent row takes to age out of the
 /// client's table.
 pub(crate) const LAST_HOLD: Duration = Duration::from_secs(600);
+
+/// How long after a check that found the path's router silent and one
+/// other router alone answering the second check runs, whatever the hold:
+/// the row moves only when that one finds the same.
+pub(crate) const STRIKE_GAP: Duration = Duration::from_secs(60);
 
 /// A network and the router its rows name: one path the client checks.
 pub(crate) type PathKey = (u16, MacAddr);
@@ -73,6 +78,21 @@ struct Paced {
     hold: Duration,
     /// The rank when last cued or checked, for eviction.
     rank: Rank,
+    /// The first strike, when the last check found the router silent and
+    /// one other router alone answering: that router, and when the check
+    /// began.
+    strike: Option<Strike>,
+}
+
+/// A check that found a path's router silent and one other router alone
+/// answering its router query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Strike {
+    /// The router that answered alone.
+    pub(crate) to: MacAddr,
+    /// When the check began: anything the old router carried from the
+    /// network since then clears the strike.
+    pub(crate) since: Instant,
 }
 
 /// The paths waiting for the client's check.
@@ -82,10 +102,13 @@ pub(super) struct RoutePaths {
 }
 
 /// What a check of a path decided, for its pacing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Checked {
-    /// The path stays: the next check waits for a cue and the hold.
+    /// The path stays, and a strike is cleared: the next check waits for a
+    /// cue and the hold.
     Kept,
+    /// The first strike: the second check runs [`STRIKE_GAP`] later.
+    Struck(Strike),
     /// The rows moved, or none goes through the path any more: it is
     /// forgotten.
     Ended,
@@ -162,7 +185,7 @@ impl DeviceTable {
             .iter()
             .filter(|(_, paced)| paced.wanted && paced.due <= now)
             .collect();
-        due.sort_by(|a, b| b.1.rank.cmp(&a.1.rank));
+        due.sort_by_key(|(_, paced)| std::cmp::Reverse(paced.rank));
         due.into_iter()
             .take(limit)
             .map(|(path, _)| path.clone())
@@ -179,6 +202,14 @@ impl DeviceTable {
             .min()
     }
 
+    /// The first strike `path` holds, if its last check made one.
+    pub(crate) fn path_strike(&self, path: &PathKey) -> Option<Strike> {
+        self.route_paths
+            .paths
+            .get(path)
+            .and_then(|paced| paced.strike.clone())
+    }
+
     /// Record a check of `path` that ended at `now`.
     pub(crate) fn path_checked(&mut self, path: &PathKey, checked: Checked, now: Instant) {
         let paths = &mut self.route_paths.paths;
@@ -188,9 +219,17 @@ impl DeviceTable {
             }
             Checked::Kept => {
                 if let Some(paced) = paths.get_mut(path) {
+                    paced.strike = None;
                     paced.wanted = false;
                     paced.due = now + paced.hold;
                     paced.hold = (paced.hold * 2).min(LAST_HOLD);
+                }
+            }
+            Checked::Struck(strike) => {
+                if let Some(paced) = paths.get_mut(path) {
+                    paced.strike = Some(strike);
+                    paced.wanted = true;
+                    paced.due = now + STRIKE_GAP;
                 }
             }
         }
@@ -239,7 +278,8 @@ impl DeviceTable {
 
     /// Every row on `network` that went through `from` goes through `to`
     /// now. Called only by the client's check, after its own requests showed
-    /// `from` silent and `to` alone answering its router query. Returns the
+    /// `from` silent and `to` alone answering its router query, twice, about
+    /// a minute apart. Returns the
     /// rows as they are now; nothing else on them changes.
     pub(crate) fn reroute(
         &mut self,
@@ -289,6 +329,7 @@ impl RoutePaths {
                 due: now,
                 hold: FIRST_HOLD,
                 rank,
+                strike: None,
             },
         );
     }

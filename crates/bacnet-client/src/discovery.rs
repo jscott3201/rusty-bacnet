@@ -183,17 +183,19 @@ impl Key {
 /// one a registration names. Once a row is known, no later frame moves its
 /// router (#2823): an I-Am naming the address through another station
 /// changes nothing on the row and marks its path for the client's own
-/// check, which moves the row only when its Who-Is through the old router
-/// draws nothing and one other router alone answers its router-discovery
-/// query. [`upsert`](Self::upsert) and `add_routed_device` set the router
-/// they are given.
+/// check. The row moves only when two checks about a minute apart each find
+/// its Who-Is through the old router unanswered, nothing else carried back
+/// through that router in between, and the same one other router alone
+/// answering its router-discovery query. [`upsert`](Self::upsert) and
+/// `add_routed_device` set the router they are given, at once.
 ///
 /// What stays open to any station on the link: a row's first sight, also
 /// after a row ages out ([`purge_stale`](Self::purge_stale)), takes the
 /// station its I-Am came through; and since any station can answer a
-/// broadcast router query, one that answers alone while the old router and
-/// its devices are silent is taken. Confirming a device before a write is
-/// #2824. The network number a Network-Number-Is teaches folds rows too.
+/// broadcast router query, one that answers alone in two windows a minute
+/// apart while the old router and its devices stay silent through both is
+/// taken. Confirming a device before a write is #2824. The network number
+/// a Network-Number-Is teaches folds rows too.
 ///
 /// An index maps each Device instance to the addresses whose rows claim it.
 /// Two or more addresses can claim one instance, and every one keeps its row:
@@ -542,9 +544,9 @@ pub(crate) use localize::Folded;
 
 #[path = "discovery_routes.rs"]
 mod routes;
+pub(crate) use routes::{Checked, PathKey, Strike};
 #[cfg(test)]
-pub(crate) use routes::FIRST_HOLD;
-pub(crate) use routes::{Checked, PathKey};
+pub(crate) use routes::{FIRST_HOLD, STRIKE_GAP};
 
 #[cfg(test)]
 #[path = "discovery_collision_tests.rs"]

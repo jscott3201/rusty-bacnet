@@ -11007,12 +11007,21 @@ heard from last through it (never the one the I-Am named), and any frame
 that router carries back from the network (an I-Am, a notification, an
 answer to a request) keeps the path. Only when nothing comes does it
 broadcast a Who-Is-Router-To-Network for the network: the old router
-among the answers keeps the path, and one other router alone takes over
-every row on the network that went through the old one, each reported
-`Updated`. No answer, several, or an answer the client may have lost (its
-report receiver fell behind, or its network layer's control queue turned
-a message away) change nothing. Each step waits the APDU timeout. A node
-that may not initiate (DeviceCommunicationControl) checks nothing.
+among the answers keeps the path, and so do no answer, several, or an
+answer the client may have lost (its report receiver fell behind, or its
+network layer's control queue turned a message away). One other router
+answering alone is a strike, and a second check runs a minute later,
+however long the path's hold had grown. Only if that one strikes too, with
+the same router and nothing carried back through the old one since the
+first began, does that router take over every row on the network that
+went through the old one, each reported `Updated`; anything else clears
+the strike. Each step waits the APDU timeout, so at the defaults a real
+router replacement is taken 84 seconds after the first I-Am through the
+new router. Until then requests to those devices go through the old
+router and end as on any silent path: after their retries, with
+`Error::Remote(RemoteError::Abort { reason: TSM_TIMEOUT })`, 24 seconds
+at the defaults. A node that may not initiate (DeviceCommunicationControl)
+checks nothing.
 
 The standard lets a node learn a router from any frame a network sends it
 (Clause 6.5.3) and authenticates none of them; the client learns a change
@@ -11021,9 +11030,10 @@ leaves to any station on the link: a row's first sight, which takes the
 station its I-Am came through, including after a row ages out of the
 table (ten silent minutes); the network number, learned from a
 Network-Number-Is, which folds routed rows on that network into local
-ones; and the router query itself, which any station can answer, so while
-the old router and its devices are silent a station that answers alone is
-taken (#2824 covers confirming a device before a write). On a site whose
+ones; and the router query itself, which any station can answer, so a
+station that answers it alone in two checks a minute apart, while the old
+router and its devices stay silent through both, is taken (#2824 covers
+confirming a device before a write). On a site whose
 routers never answer router queries, the path stays while the devices
 answer through it; when such a router is really replaced, its rows age out
 and the devices' next I-Ams through the new router make them again, or

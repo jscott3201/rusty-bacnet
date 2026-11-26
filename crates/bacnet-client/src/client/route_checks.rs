@@ -13,11 +13,21 @@
 //!    cannot send as the router, so it cannot fake that.
 //! 2. Only if nothing came, a broadcast Who-Is-Router-To-Network for the
 //!    network (Clause 6.6.3.2). The old router among the answers keeps the
-//!    path: the device is quiet, not the router gone. One other router
-//!    alone moves every row on the network that went through the old one to
-//!    it (`DeviceTable::reroute`). No answer, several, or an answer that
-//!    may have been lost (a lagging report receiver, or a network control
-//!    the layer's queue turned away during the wait) keep the path.
+//!    path: the device is quiet, not the router gone. No answer, several,
+//!    or an answer that may have been lost (a lagging report receiver, or a
+//!    network control the layer's queue turned away during the wait) keep
+//!    it too. One other router alone is a strike.
+//!
+//! The first strike schedules a second check a minute later, however
+//! far the path's hold had grown. Only when that one strikes too, with the
+//! same router and nothing carried back through the old one since the first
+//! began, does every row on the network that went through the old router
+//! move to the new one (`DeviceTable::reroute`). Anything else clears the
+//! strike, and the hold paces the path again. At the default 6 s APDU
+//! timeout a real failover is taken 84 s after the first I-Am through the
+//! new router: two checks of 12 s, a minute apart. Meanwhile requests go
+//! through the old router and end as on any silent path, with
+//! `RemoteError::Abort` (`TSM_TIMEOUT`) after their retries.
 //!
 //! A router that never answers router-discovery queries, as some older
 //! ones don't, keeps its rows for as long as its devices answer through
@@ -37,7 +47,7 @@ use super::device_events::TableNotices;
 use super::i_have::collect_until;
 use super::network_number::Discovery;
 use super::*;
-use crate::discovery::{Checked, PathKey};
+use crate::discovery::{Checked, PathKey, Strike};
 use bacnet_network::layer::{NetworkReport, QueueAdmissionCounters, ReceivedNetworkReport};
 use bacnet_npdu::NetworkMessageType;
 use tokio::sync::broadcast::error::RecvError;
@@ -56,8 +66,11 @@ pub(super) enum Found {
     /// The router still answers for the network, or no one other router
     /// alone does, or an answer may have been lost.
     Kept,
-    /// Another router alone answered for the network, and the rows that
-    /// went through the old one go through it now.
+    /// Another router alone answered for the network, the first time: the
+    /// second check decides.
+    Struck(Strike),
+    /// The same other router alone answered the second check too, and the
+    /// rows that went through the old one go through it now.
     Moved(MacAddr),
     /// No row on the network goes through the router any more.
     Gone,
@@ -124,6 +137,7 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
                 let found = self.check(discovery, &path, notices).await;
                 let checked = match found {
                     Found::Moved(_) | Found::Gone => Checked::Ended,
+                    Found::Struck(strike) => Checked::Struck(strike),
                     Found::Answered | Found::Kept | Found::Skipped => Checked::Kept,
                 };
                 discovery
@@ -139,16 +153,16 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
     async fn check(
         &self,
         discovery: &Discovery,
-        (network, router): &PathKey,
+        path: &PathKey,
         (device_tx, _): TableNotices<'_>,
     ) -> Found {
-        let network = *network;
-        let probe = {
+        let (network, router) = (path.0, &path.1);
+        let (probe, strike) = {
             let table = discovery.table.lock();
             if !table.routes_through(network, router) {
                 return Found::Gone;
             }
-            table.probe_target(network, router)
+            (table.probe_target(network, router), table.path_strike(path))
         };
         let Some(probe) = probe else {
             return Found::Skipped;
@@ -158,7 +172,10 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
         if discovery.asking.refusal().is_some() {
             return Found::Skipped;
         }
-        let since = crate::discovery::now();
+        let began = crate::discovery::now();
+        // A second check counts what the old router carried since the first
+        // began.
+        let since = strike.as_ref().map_or(began, |strike| strike.since);
         // Subscribed before the send, so no answer comes before the
         // receiver.
         let mut events = device_tx.subscribe();
@@ -211,15 +228,26 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
         if table.heard_through_since(network, router, since) {
             return Found::Answered;
         }
+        match strike {
+            None => {
+                return Found::Struck(Strike { to, since: began });
+            }
+            Some(first) if first.to != to => {
+                drop(table);
+                self.kept(network, router, "another router answered alone each time");
+                return Found::Kept;
+            }
+            Some(_) => {}
+        }
         let moved = table.reroute(network, router, &to);
         warn!(
             network,
             from = ?router,
             to = ?to,
             devices = moved.len(),
-            "requests to network {network} now go through another router: the old one carried \
-             no answer to this client's Who-Is and didn't answer its router query, which one \
-             other router alone answered"
+            "requests to network {network} now go through another router: in two checks a \
+             minute apart the old one carried no answer to this client's Who-Is or router \
+             query, and the same other router alone answered"
         );
         // Under the table's lock, as every device notice goes out.
         for device in moved {
@@ -346,3 +374,7 @@ mod tests;
 #[cfg(test)]
 #[path = "route_checks_attack_tests.rs"]
 mod attack_tests;
+
+#[cfg(test)]
+#[path = "route_checks_strike_tests.rs"]
+mod strike_tests;

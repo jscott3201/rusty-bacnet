@@ -22,7 +22,7 @@ use super::tests::{
     INSTANCE, NETWORK, OTHER, ROUTER, STATION, Script, Sent, Site, WAIT, i_am, i_am_on, npdu,
     proprietary_message, received,
 };
-use crate::discovery::{DiscoveredDevice, now};
+use crate::discovery::{DiscoveredDevice, STRIKE_GAP, now};
 
 fn router_at(site: &Site, network: u16, station: &[u8]) -> Vec<u8> {
     let table = site.client.device_table.lock();
@@ -228,8 +228,10 @@ async fn a_first_sight_forger_keeps_the_path_by_answering_the_probe() {
 }
 
 /// Item 6, a residual: on a site whose router never answers router
-/// queries, with the device quiet, a forger that answers the router query
-/// alone takes the path, as a router that really took over would.
+/// queries, with the device quiet, one check the forger answers alone
+/// moves nothing; a second, a minute later, that it answers alone too
+/// while the old router and its devices stay silent through both, takes
+/// the path, as a router that really took over would.
 #[tokio::test(start_paused = true)]
 async fn a_forger_answering_alone_takes_a_quiet_path_without_router_answers() {
     let site = Site::new(Script {
@@ -239,6 +241,8 @@ async fn a_forger_answering_alone_takes_a_quiet_path_without_router_answers() {
     .await;
     site.hear(&OTHER, i_am(&STATION, INSTANCE)).await;
     sleep(2 * WAIT + Duration::from_millis(1)).await;
+    assert_eq!(site.router(), ROUTER, "one answered check moved the path");
+    sleep(STRIKE_GAP + 2 * WAIT).await;
     assert_eq!(site.router(), OTHER);
     site.stop().await;
 }
