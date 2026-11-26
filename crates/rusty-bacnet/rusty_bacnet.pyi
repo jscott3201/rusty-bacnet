@@ -4017,9 +4017,10 @@ class Device:
 
     Made from an address (``"192.168.1.10"``, ``"mstp:5"``, ``"2:0x05"``, a
     ``discover()`` row) it is pinned there. Made from an instance (``1234``,
-    ``"2:1234"``) it follows the instance: when the device stops answering
-    at its address and one other address claims the instance, the handle
-    moves there. Its calls go to the device one at a time.
+    ``"2:1234"``) it follows the instance, from where a device confirmed it
+    to the client's own question: when the device stops answering at its
+    address and one other address claims the instance and answers as it,
+    the handle moves there. Its calls go to the device one at a time.
 
     An object is an ``ObjectIdentifier`` or text (``"ai:1"``,
     ``"analog-input:1"``); a property a ``PropertyIdentifier`` or text
@@ -6537,11 +6538,14 @@ class BACnetClient:
           routed station with no learned router is asked directly
           first;
         - an instance, ``1234`` (an int or text) or ``"2:1234"`` on network
-          2, gives a handle that follows the instance: the one address
-          claiming it, or the one that answers a Who-Is for it, sent where
-          ``resolve_scope`` says for a bare instance (this network alone by
-          default) and to the network named otherwise, waiting up to 3
-          seconds;
+          2, gives a handle that follows the instance, placed only where a
+          device confirmed it to the client's own question (#2824): each
+          address claiming it, or answering a Who-Is for it (sent where
+          ``resolve_scope`` says for a bare instance, this network alone by
+          default, and to the network named otherwise, waiting up to 3
+          seconds), is asked which device answers there, once: one read of
+          its Device object, unless it confirmed the instance before. An
+          I-Am confirms nothing, as anyone can send one;
         - a ``discover()`` row or a ``DiscoveredDevice`` pins the handle to
           its address, knowing its instance.
 
@@ -6550,9 +6554,11 @@ class BACnetClient:
         client's link can't reach raises ValueError, as does a local
         address on ``transport="router"``; an instance no address claims
         and none answered for, or a routed address with no router known,
-        ``BacnetLookupError``; an instance two or more addresses claim
-        ``BacnetAmbiguousDeviceError``, whose ``candidates`` are each a
-        target."""
+        ``BacnetLookupError``, and so does an instance whose one claim's
+        device didn't answer as it, asked (its ``at`` the address asked);
+        an instance two or more addresses claim, when none confirms it or
+        two or more might be it, ``BacnetAmbiguousDeviceError``, whose
+        ``candidates`` are each a target."""
         ...
 
     def read_property_multiple(

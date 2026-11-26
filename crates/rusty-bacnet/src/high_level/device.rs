@@ -120,9 +120,10 @@ async fn make(client: OpsClient, named: &Named) -> PyResult<OpsDevice> {
 ///
 /// Made from an address (`"192.168.1.10"`, `"mstp:5"`, `"2:0x05"`, a
 /// `discover()` row) it is pinned there. Made from an instance (`1234`,
-/// `"2:1234"`) it follows the instance: when the device stops answering at
-/// its address and one other address claims the instance, the handle
-/// moves there. Its calls go one at a time to the device, with the
+/// `"2:1234"`) it follows the instance, from where a device confirmed it to
+/// the client's own question (#2824): when the device stops answering at
+/// its address and one other address claims the instance and answers as
+/// it, the handle moves there. Its calls go one at a time to the device, with the
 /// client's other high-level calls to it.
 ///
 /// A handle belongs to its client. After the client's `stop()`, a call

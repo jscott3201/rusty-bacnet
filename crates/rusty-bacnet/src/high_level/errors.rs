@@ -107,19 +107,21 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
             ),
         ),
         OpsError::ObjectList { source, .. } => object_list(message, *source, style),
-        // A write through a following handle not sent (#2795): its
-        // addresses in the link's own form in the message, and as
-        // (network, MAC) in `at` and `candidate`, an unconfirmed hint kept
-        // out of `candidates`, which are real choices.
+        // A handle by instance its one claim didn't confirm (#2824), or a
+        // write through a following handle not sent (#2795): its addresses
+        // in the link's own form in the message, and as (network, MAC) in
+        // `at` (the address asked) and `candidate`, an unconfirmed hint
+        // kept out of `candidates`, which are real choices.
         OpsError::NotConfirmed {
             instance,
             at,
             candidate,
         } => {
             let mut text = format!(
-                "device {instance} isn't confirmed at {}, where the handle reaches it \
-                 (another device or none answers there, or no route to it is known), and a \
-                 write never goes elsewhere on its own",
+                "device {instance} isn't confirmed at {}: asked which device answers there, \
+                 it didn't answer as {instance} (silent, another device, or a refusal of the \
+                 question), or no route to it is known, and nothing goes to an address its \
+                 device hasn't confirmed",
                 at.styled(style)
             );
             if let Some(candidate) = &candidate {
@@ -128,7 +130,10 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
                     candidate.styled(style)
                 ));
             }
-            text.push_str(": read through the handle first, which looks for the device");
+            text.push_str(
+                ": read through a handle following it, which looks for the device, or name \
+                 the device by its address",
+            );
             lookup_error(
                 text,
                 Lookup {

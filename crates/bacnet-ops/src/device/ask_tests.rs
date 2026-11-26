@@ -117,7 +117,7 @@ async fn a_clone_that_sends_nothing_goes_by_the_announcements() {
 #[tokio::test(start_paused = true)]
 async fn a_late_duplicate_does_not_take_the_handle_on_a_missed_read() {
     let bus = Bus::new();
-    let (client, _) = client(&bus).await;
+    let (client, log) = client(&bus).await;
     let servers = vec![
         server(bus.port(2), N, "A").await,
         server(bus.port(3), N, "B").await,
@@ -150,10 +150,13 @@ async fn a_late_duplicate_does_not_take_the_handle_on_a_missed_read() {
     assert!(name_of(&device).await.is_err());
     assert_eq!(device.address(), at(2));
     assert!(events.try_recv().is_err(), "nothing moved");
-    assert!(matches!(
-        client.device(N).await,
-        Err(OpsError::Ambiguous { instance: N, .. })
-    ));
+    // A handle made now joins the others where they are, asking nothing:
+    // the client confirmed the device there, and its row still names it
+    // (#2824); the claim at station 3 moves none of them (#2795).
+    let before = log.len();
+    let again = client.device(N).await.unwrap();
+    assert_eq!(again.address(), at(2));
+    assert_eq!(log.len(), before, "nothing asked");
     stop(servers).await;
 }
 

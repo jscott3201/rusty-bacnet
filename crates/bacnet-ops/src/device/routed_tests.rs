@@ -446,9 +446,12 @@ async fn a_router_refusal_has_a_following_handle_ask_again() {
     let bus = Bus::new();
     bus.rejecter(9);
     let (client, sent) = client_on(bus.port(1)).await;
-    // Device 2002 is station 6 on network 3, heard through station 9.
+    // Device 2002 is station 6 on network 3, heard through station 9, and
+    // named so to an earlier question of the client's (#2824): the router
+    // refuses every request now.
     bus.i_am_from(9, Some((3, &mac(6))), 2002);
     settle().await;
+    client.remember(DeviceAddress::new(3, &mac(6)).unwrap(), 2002);
     let wide = client.with_resolve_scope(ResolveScope::Global);
     let device = wide.device(2002).await.unwrap();
     assert_eq!(device.address(), DeviceAddress::new(3, &mac(6)).unwrap());

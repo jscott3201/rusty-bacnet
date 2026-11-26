@@ -380,11 +380,14 @@ station 255 or a gateway's two-octet station, takes the suffix
 routed station with no learned router is asked directly
 first;
 - an instance, `1234` (an int or text) or `"2:1234"` on network
-2, gives a handle that follows the instance: the one address
-claiming it, or the one that answers a Who-Is for it, sent where
-`resolve_scope` says for a bare instance (this network alone by
-default) and to the network named otherwise, waiting up to 3
-seconds;
+2, gives a handle that follows the instance, placed only where a
+device confirmed it to the client's own question (#2824): each
+address claiming it, or answering a Who-Is for it (sent where
+`resolve_scope` says for a bare instance, this network alone by
+default, and to the network named otherwise, waiting up to 3
+seconds), is asked which device answers there, once: one read of
+its Device object, unless it confirmed the instance before. An
+I-Am confirms nothing, as anyone can send one;
 - a `discover()` row or a `DiscoveredDevice` pins the handle to
 its address, knowing its instance.
 
@@ -393,9 +396,11 @@ ValueError, when the call is made. On await: an address the
 client's link can't reach raises ValueError, as does a local
 address on `transport="router"`; an instance no address claims
 and none answered for, or a routed address with no router known,
-`BacnetLookupError`; an instance two or more addresses claim
-`BacnetAmbiguousDeviceError`, whose `candidates` are each a
-target.
+`BacnetLookupError`, and so does an instance whose one claim's
+device didn't answer as it, asked (its `at` the address asked);
+an instance two or more addresses claim, when none confirms it or
+two or more might be it, `BacnetAmbiguousDeviceError`, whose
+`candidates` are each a target.
 
 ### BACnetClient.read_property_multiple
 

@@ -89,30 +89,39 @@ pub enum OpsError {
         asked: Option<Scope>,
     },
     /// Two or more addresses claim the instance named, so which device is
-    /// meant is unknown. Nothing was sent. Name one of `candidates` by its
-    /// address instead.
+    /// meant is unknown: none of them confirmed it, asked which device
+    /// answers there, or two or more did or said nothing either way
+    /// (#2824). Nothing but those questions was sent. Name one of
+    /// `candidates` by its address instead.
     Ambiguous {
         /// The Device instance named.
         instance: u32,
-        /// Every address claiming it, ordered by network and then MAC.
+        /// Every address claiming it, or every one its question left open,
+        /// ordered by network and then MAC.
         candidates: Vec<DeviceAddress>,
     },
-    /// A write (or relinquish) through a handle following an instance was
-    /// refused before anything was sent (#2795): the device isn't taken for
-    /// the instance at the address the handle holds (its table row names
-    /// another device there, and asked, the device there is silent or
-    /// another; or no route to it is known), and a write never goes to
-    /// another address on its own. A read through the handle looks for the
-    /// device, asking its address first; a write after it goes where the
-    /// read moved the handle.
+    /// The device isn't confirmed as the instance at `at`, and nothing but
+    /// the question of which device answers there was sent. Either a handle
+    /// made from the instance found it claimed at that one address only and
+    /// the device there, asked, didn't confirm it (#2824: silent, another
+    /// device, or a refusal of the question); or a write (or relinquish)
+    /// through a handle following it was refused (#2795), as its table row
+    /// names another device at the address the handle holds and, asked, the
+    /// device there is silent or another, or no route to it is known, and a
+    /// write never goes to another address on its own. A read through a
+    /// following handle looks for the device, asking its address first; a
+    /// write after it goes where the read moved the handle. A handle made
+    /// from the address reaches whatever answers there.
     NotConfirmed {
-        /// The instance the handle follows.
+        /// The instance named.
         instance: u32,
-        /// The address the handle holds.
+        /// The address asked: the instance's one claim, or the place the
+        /// handle holds.
         at: DeviceAddress,
-        /// The one other address the discovery table has the instance at,
-        /// if one: an unconfirmed hint (the table takes I-Ams nobody asked
-        /// for), not asked.
+        /// For a handle's write, the one other address the discovery table
+        /// has the instance at, if one: an unconfirmed hint (the table
+        /// takes I-Ams nobody asked for), not asked. `None` for a handle's
+        /// first placement, whose one claim is `at`.
         candidate: Option<DeviceAddress>,
     },
     /// The device, or the way to it, didn't answer: the request timed out
@@ -413,14 +422,18 @@ impl fmt::Display for OpsError {
             } => {
                 write!(
                     f,
-                    "device {instance} isn't confirmed at {at}, where the handle reaches it \
-                     (another device or none answers there, or no route to it is known), \
-                     and a write never goes elsewhere on its own"
+                    "device {instance} isn't confirmed at {at}: asked which device answers \
+                     there, it didn't answer as {instance} (silent, another device, or a \
+                     refusal of the question), or no route to it is known, and nothing goes \
+                     to an address its device hasn't confirmed"
                 )?;
                 if let Some(candidate) = candidate {
                     write!(f, "; the discovery table has it at {candidate}")?;
                 }
-                f.write_str(": read through the handle first, which looks for the device")
+                f.write_str(
+                    ": read through a handle following it, which looks for the device, or \
+                     name the device by its address",
+                )
             }
             Self::Unreachable { source, .. } => write!(f, "{source}"),
             Self::Refused {

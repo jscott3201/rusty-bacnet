@@ -18,14 +18,28 @@
 //!   its network first from then on. Its instance, when a call needs it and the table doesn't say,
 //!   comes from one read of the Device object by the wildcard instance,
 //!   remembered by the client.
-//! - **From an instance** (`1234`, or `2:1234` on one network): one
-//!   address claiming it in the discovery table gives a handle that
-//!   follows the instance; none sends one Who-Is for it and waits
-//!   ([`Client::with_resolve_wait`]), to the network the target names, or
-//!   for a bare instance to the client's resolve scope, this network alone
-//!   by default ([`Client::with_resolve_scope`]), and a miss fails as
-//!   [`OpsError::UnknownDevice`] saying where it asked; two or more, before
-//!   or after that wait, fail with [`OpsError::Ambiguous`], listing them.
+//! - **From an instance** (`1234`, or `2:1234` on one network): a handle
+//!   that follows the instance, placed only where a device confirmed it to
+//!   the client's own question (#2824). Where the handles already
+//!   following it are, once confirmed, it joins them, sending nothing.
+//!   Otherwise each address claiming it in the discovery table (none: one
+//!   Who-Is for it and a wait, [`Client::with_resolve_wait`], to the
+//!   network the target names, or for a bare instance to the client's
+//!   resolve scope, this network alone by default,
+//!   [`Client::with_resolve_scope`], and a miss fails as
+//!   [`OpsError::UnknownDevice`] saying where it asked) is asked which
+//!   device answers there, all at once: one read of its Device object by
+//!   the wildcard instance, or, for a device refusing that, of the
+//!   instance's own Device object. An address whose device confirmed the
+//!   instance before (the same memory, forgotten the same way, as the
+//!   instance read for an address) isn't asked again. The handle goes to
+//!   the one address that confirms it, while no other is left open by an
+//!   unclear answer; one claim that doesn't fails as
+//!   [`OpsError::NotConfirmed`] naming it, and several that don't, or two
+//!   or more left open, as [`OpsError::Ambiguous`], listing them, with
+//!   nothing but those questions sent. An I-Am, even one answering the
+//!   client's own Who-Is, confirms nothing: nothing in it ties it to a
+//!   request.
 //! - **From a discovery result** ([`Discovered`]): pinned, knowing the
 //!   instance.
 //!
@@ -75,8 +89,13 @@
 //! misses one identity question (about 24 s at the default timers; about 3
 //! to 6 s for a routed address with no row) while another address names
 //! the instance, and later writes go to the new place. A routed device's
-//! path through its router is #2823, and a new handle's first resolution
-//! of an instance is #2824.
+//! path through its router is #2823. Nothing in BACnet/IP is
+//! authenticated, so a station that answers the client's question as the
+//! instance at its own address, while the device itself is absent, silent
+//! or hasn't announced itself, can't be told from the device having moved
+//! there: such a station is placed. With the device claiming the instance
+//! too and answering, the caller gets [`OpsError::Ambiguous`], never a
+//! silent choice.
 
 /// Evaluate `$body` with `$at` where the device is reached now
 /// ([`Device::target`]), and for a following handle whose request timed
@@ -126,9 +145,9 @@ use bacnet_transport::any::AnyTransport;
 use bacnet_transport::port::TransportPort;
 
 pub use self::address::DeviceAddress;
-pub(crate) use self::confirm::Answer;
+pub use self::confirm::{Answer, MAX_ASKED, identify, placed};
 pub(crate) use self::follow::{FollowKey, Followed};
-pub(crate) use self::follow::{Follows, keep_room};
+pub(crate) use self::follow::{Follows, Said, keep_room};
 pub use self::misses::MISS_MEMORY;
 pub(crate) use self::misses::StationMisses;
 pub(crate) use self::route::{path_to, router_for};
@@ -386,6 +405,9 @@ mod discover_tests;
 
 #[cfg(test)]
 mod find_tests;
+
+#[cfg(test)]
+mod first_contact_tests;
 
 #[cfg(test)]
 mod follow_tests;

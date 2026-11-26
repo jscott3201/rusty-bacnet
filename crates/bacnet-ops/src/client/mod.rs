@@ -70,7 +70,7 @@ pub use self::read::{ListRead, MAX_OBJECTS, ReadVia, Wanted};
 pub use self::routed_paths::{
     DEFAULT_ROUTED_PATH_MAX_NPDU, RoutedPath, RoutedPathStatus, RoutedPaths,
 };
-use crate::device::{ClientEvent, DeviceAddress, Follows};
+use crate::device::{ClientEvent, DeviceAddress, Follows, Said};
 use crate::format::Value;
 use crate::limits::RequestLimits;
 use crate::reading::Reading;
@@ -220,11 +220,12 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// `device::follow::REMEMBERED`).
     pub(crate) follows: Mutex<Follows>,
     /// The instances devices named for their address, from the one read by
-    /// the wildcard instance a handle made from an address needed (at most
+    /// the wildcard instance a handle made from an address needed, or
+    /// confirmed there to a handle's first placement (#2824; at most
     /// `device::follow::REMEMBERED`); one goes when the discovery table
     /// loses a row at its address, or a device there announces another
     /// instance.
-    pub(crate) instances: Mutex<HashMap<DeviceAddress, u32>>,
+    pub(crate) instances: Mutex<HashMap<DeviceAddress, Said>>,
     /// The stations on other networks a lookup by address found answering
     /// only a Who-Is to their network, or nothing
     /// ([`StationMisses`](crate::device::StationMisses)).

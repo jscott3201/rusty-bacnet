@@ -14,6 +14,12 @@
 //! instance's own Device object there counts only then. A write never
 //! moves them: it goes to their place while the device there is still
 //! taken for the instance, or nowhere.
+//!
+//! A handle made from an instance places itself only where a device
+//! confirmed the instance to the client's own question (#2824): the place
+//! it makes, or joins, is marked so, and joining a confirmed place costs
+//! nothing. A place a watch hub made from the table alone is joined once
+//! its device confirmed it.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -43,6 +49,24 @@ pub(crate) struct Place {
     /// When the last Who-Is for the instance went out after a timeout
     /// ([`Client::ask`]), on the discovery table's clock.
     asked: Option<Instant>,
+    /// A device confirmed the instance here, or where the place moved
+    /// from, to a question of the client's own (#2824): a handle's when it
+    /// was made, or a read's before a move. A watch hub's place made from
+    /// the discovery table alone isn't, until then.
+    confirmed: bool,
+}
+
+/// What the device at an address said of itself to one of the client's
+/// own questions (#2603, #2824).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Said {
+    /// The instance it answered for.
+    pub(crate) instance: u32,
+    /// It named itself so to a read by the wildcard instance; otherwise
+    /// it only showed it has that instance's Device object (it refuses the
+    /// wildcard), which confirms a handle's first placement there but
+    /// names nothing for the rest.
+    pub(crate) named: bool,
 }
 
 /// A [`Place`], shared by the handles following one instance on one
@@ -90,6 +114,16 @@ pub(super) enum Elsewhere {
     },
     /// Two or more other addresses claim it: every address claiming it.
     Contested(Vec<DeviceAddress>),
+}
+
+/// What a handle made for an instance does with the place the handles
+/// following it share ([`Client::joining`], #2824).
+pub(super) enum Joining {
+    /// Join it, as it is.
+    Join(Followed),
+    /// Be placed by asking the claims: with the live place's address, if
+    /// one, and what its device answered when asked already.
+    Ask(Option<(DeviceAddress, Option<Answer>)>),
 }
 
 impl Elsewhere {
@@ -142,7 +176,7 @@ impl<T: TransportPort + 'static> Device<T> {
         else {
             return Ok(here);
         };
-        if self.holds(&here, *instance).await || self.client.stays(&here, *instance).await {
+        if self.client.holds(&here, *instance).await || self.client.stays(&here, *instance).await {
             return Ok(here);
         }
         let key = self.client.key(*network, *instance);
@@ -177,7 +211,7 @@ impl<T: TransportPort + 'static> Device<T> {
         let Pin::Follows { instance, .. } = &self.pin else {
             return Ok(here);
         };
-        if self.holds(&here, *instance).await || self.client.stays(&here, *instance).await {
+        if self.client.holds(&here, *instance).await || self.client.stays(&here, *instance).await {
             return Ok(here);
         }
         Err(self.not_confirmed(here).await)
@@ -203,17 +237,6 @@ impl<T: TransportPort + 'static> Device<T> {
             at: here,
             candidate,
         }
-    }
-
-    /// Whether the handle's place `here` is still the instance's by what
-    /// the client holds, sending nothing: the discovery table has no other
-    /// device there, or the device there last named itself the instance
-    /// to the client.
-    async fn holds(&self, here: &DeviceAddress, instance: u32) -> bool {
-        here.row(self.client.low_level())
-            .await
-            .is_none_or(|row| row.object_identifier.instance_number() == instance)
-            || self.client.said(here) == Some(instance)
     }
 
     /// Where to send a read once more after `result` at `at`: for a
@@ -264,22 +287,98 @@ impl<T: TransportPort + 'static> Client<T> {
         (self.scope(network), instance)
     }
 
-    /// The shared place of the handles following `key`, which the
-    /// discovery table has at `address` now. Handles following it already
-    /// stay where they reach it: the table's word moves none of them, only
-    /// the device's answer to a request of theirs (#2795).
-    pub(super) fn follow(&self, key: FollowKey, address: DeviceAddress) -> Followed {
-        let mut follows = lock(&self.shared.follows);
-        if let Some(followed) = follows.get(&key).and_then(Weak::upgrade) {
-            return followed;
+    /// Whether a following handle's place `here` is still the instance's
+    /// by what the client holds, sending nothing: the discovery table has
+    /// no other device there, or the device there last named itself the
+    /// instance to the client.
+    pub(super) async fn holds(&self, here: &DeviceAddress, instance: u32) -> bool {
+        here.row(self.low_level())
+            .await
+            .is_none_or(|row| row.object_identifier.instance_number() == instance)
+            || self.said(here) == Some(instance)
+    }
+
+    /// What a handle made for `key`'s instance does with the place the
+    /// handles or a watch hub following it share (#2824). It joins a place
+    /// a handle's placement or a move confirmed, or whose device confirmed
+    /// the instance there to the client since, as the handles there send
+    /// their next read ([`Device::target`]): sending nothing while it holds
+    /// the instance ([`holds`](Self::holds)), else once the device there,
+    /// asked, still answers as it or says nothing of which it is. Claims
+    /// elsewhere in the discovery table move none of its handles, so they
+    /// don't stop a new one joining them (#2795). Otherwise the handle is
+    /// placed by asking, the place's address with the claims, and with
+    /// what its device answered already.
+    pub(super) async fn joining(&self, key: FollowKey) -> Joining {
+        let Some(followed) = self.live_place(key) else {
+            return Joining::Ask(None);
+        };
+        let instance = key.1;
+        let (here, confirmed) = {
+            let place = lock(&followed);
+            (self.localized(place.at.clone()), place.confirmed)
+        };
+        if !confirmed && self.confirmed_as(&here) != Some(instance) {
+            return Joining::Ask(Some((here, None)));
         }
-        let followed = Arc::new(Mutex::new(Place {
-            at: address,
-            asked: None,
-        }));
-        keep_room(&mut follows, |entry| entry.strong_count() > 0);
-        follows.insert(key, Arc::downgrade(&followed));
-        followed
+        if self.holds(&here, instance).await {
+            return Joining::Join(followed);
+        }
+        match self.which_at(&here, instance, left_silence).await {
+            Answer::Unclear | Answer::Failed => Joining::Join(followed),
+            answer if answer.confirms(instance) => Joining::Join(followed),
+            answer => Joining::Ask(Some((here, Some(answer)))),
+        }
+    }
+
+    /// The place the handles or a watch hub following `key` share, while
+    /// one holds it.
+    pub(super) fn live_place(&self, key: FollowKey) -> Option<Followed> {
+        lock(&self.shared.follows).get(&key).and_then(Weak::upgrade)
+    }
+
+    /// The place of the handles following `key`, at `address`, where its
+    /// device has just confirmed the instance (#2824), the live place's
+    /// address `asked` too. A live place still at `asked`, whose device
+    /// didn't confirm it, moves there, telling the events receivers, as a
+    /// read moves it once its own address was asked (#2795); one at
+    /// `address` is marked confirmed. One that went elsewhere meanwhile,
+    /// or appeared meanwhile, stays where it is, unasked, and this handle
+    /// joins it there.
+    pub(super) fn place_confirmed(
+        &self,
+        key: FollowKey,
+        address: DeviceAddress,
+        asked: Option<&DeviceAddress>,
+    ) -> Followed {
+        let held = {
+            let mut follows = lock(&self.shared.follows);
+            match follows.get(&key).and_then(Weak::upgrade) {
+                Some(followed) => followed,
+                None => {
+                    let followed = Arc::new(Mutex::new(Place {
+                        at: address,
+                        asked: None,
+                        confirmed: true,
+                    }));
+                    keep_room(&mut follows, |entry| entry.strong_count() > 0);
+                    follows.insert(key, Arc::downgrade(&followed));
+                    return followed;
+                }
+            }
+        };
+        let from = {
+            let mut place = lock(&held);
+            let from = self.localized(place.at.clone());
+            if from == address {
+                place.confirmed = true;
+            }
+            (from != address && Some(&from) == asked).then_some(from)
+        };
+        if let Some(from) = from {
+            self.move_to(key, &held, &from, address);
+        }
+        held
     }
 
     /// The place a watch hub follows `key`'s instance from (#2795): the one
@@ -320,6 +419,7 @@ impl<T: TransportPort + 'static> Client<T> {
         let followed = Arc::new(Mutex::new(Place {
             at: address,
             asked: None,
+            confirmed: false,
         }));
         keep_room(&mut follows, |entry| entry.strong_count() > 0);
         follows.insert(key, Arc::downgrade(&followed));
@@ -525,7 +625,8 @@ impl<T: TransportPort + 'static> Client<T> {
     /// events receivers, unless another handle moved them meanwhile: where
     /// they are now. Only once the device at `to` named the instance in an
     /// answer to the client: a handle's own ([`relocate`](Self::relocate),
-    /// [`Device::target`]) or a watch hub's (#2795).
+    /// [`Device::target`], a new handle's placement), or a watch hub's
+    /// (#2795), so the place is confirmed there (#2824).
     pub(crate) fn move_to(
         &self,
         key: FollowKey,
@@ -540,6 +641,7 @@ impl<T: TransportPort + 'static> Client<T> {
                 return now;
             }
             place.at = to.clone();
+            place.confirmed = true;
         }
         self.moved(key.1, from.clone(), to.clone());
         // Shared again by the next handle made for it, if none holds it.
@@ -595,16 +697,43 @@ impl<T: TransportPort + 'static> Client<T> {
 
     /// Remember that the device at `address` named itself `instance`.
     pub(super) fn remember(&self, address: DeviceAddress, instance: u32) {
+        self.note(address, instance, true);
+    }
+
+    /// Remember that the device at `address`, which refuses the wildcard
+    /// instance, has device `instance`'s Device object (#2824), unless it
+    /// named itself there.
+    pub(super) fn vouch(&self, address: DeviceAddress, instance: u32) {
+        self.note(address, instance, false);
+    }
+
+    fn note(&self, address: DeviceAddress, instance: u32, named: bool) {
         self.sweep();
         let mut instances = lock(&self.shared.instances);
+        if !named && instances.get(&address).is_some_and(|said| said.named) {
+            return;
+        }
         keep_room(&mut instances, |_| true);
-        instances.insert(address, instance);
+        instances.insert(address, Said { instance, named });
     }
 
     /// The instance the device at `address` named, as remembered.
     pub(super) fn remembered(&self, address: &DeviceAddress) -> Option<u32> {
         self.sweep();
-        lock(&self.shared.instances).get(address).copied()
+        lock(&self.shared.instances)
+            .get(address)
+            .filter(|said| said.named)
+            .map(|said| said.instance)
+    }
+
+    /// The instance the device at `address` confirmed to one of the
+    /// client's own questions, as remembered: named by the wildcard, or by
+    /// its Device object read by that instance (#2824).
+    pub(super) fn confirmed_as(&self, address: &DeviceAddress) -> Option<u32> {
+        self.sweep();
+        lock(&self.shared.instances)
+            .get(address)
+            .map(|said| said.instance)
     }
 
     /// Forget what the discovery table's changes may have made stale: the
@@ -648,7 +777,7 @@ impl<T: TransportPort + 'static> Client<T> {
             for (address, named) in &changed {
                 if instances
                     .get(address)
-                    .is_some_and(|remembered| Some(*remembered) != *named)
+                    .is_some_and(|said| Some(said.instance) != *named)
                 {
                     instances.remove(address);
                 }

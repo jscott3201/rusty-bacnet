@@ -16,9 +16,11 @@ use crate::client::Discover;
 
 /// From an address a handle is pinned, from an instance claimed once it
 /// follows, from a discovery result it is pinned and knows the instance;
-/// making any of them sends nothing, and each reads the device.
+/// making any of them sends nothing, but the first from the instance: it
+/// asks the device which it is, once (#2824: the I-Am answering the
+/// discovery confirms nothing). Each reads the device.
 #[tokio::test(start_paused = true)]
-async fn handles_from_each_source_send_nothing() {
+async fn handles_from_each_source_send_nothing_but_one_question() {
     let bus = Bus::new();
     let (client, sent) = client(&bus).await;
     let lab = server(bus.port(2), N, "A").await;
@@ -35,7 +37,7 @@ async fn handles_from_each_source_send_nothing() {
     let by_instance = client.device(N).await.unwrap();
     let by_instance_text = client.device("1001").await.unwrap();
     let by_found = client.device(&found[0]).await.unwrap();
-    assert_eq!(sent.len(), before, "making handles sent nothing");
+    assert_eq!(sent.len(), before + 1, "making handles sent one question");
     for (handle, follows) in [
         (&by_text, false),
         (&by_address, false),
@@ -209,12 +211,15 @@ async fn one_gate_per_address_however_named() {
     let lab = server(bus.port(2), N, "A").await;
     bus.i_am(2, N);
     settle().await;
-    let held = client.limits().gate(&at(2)).acquire_owned().await.unwrap();
-    let wait = Duration::from_secs(30);
-    for device in [
+    // Made before the gate is held: the handle by instance asks the device
+    // which it is first, at that gate (#2824).
+    let devices = [
         client.device(N).await.unwrap(),
         client.device("10.0.0.2:47808").await.unwrap(),
-    ] {
+    ];
+    let held = client.limits().gate(&at(2)).acquire_owned().await.unwrap();
+    let wait = Duration::from_secs(30);
+    for device in devices {
         let read = tokio::time::timeout(wait, name_of(&device)).await;
         assert!(read.is_err(), "{device:?} went past the gate");
     }
@@ -273,25 +278,34 @@ async fn two_answers_to_the_one_who_is_are_ambiguous() {
 }
 
 /// A second answer to the one Who-Is that comes a little after the first
-/// is heard too: the handle is refused as ambiguous (the reviewer's probe
-/// P9).
+/// is heard too (the reviewer's probe P9), and asked which device it is
+/// with the first (#2824): one answering as the instance makes the handle
+/// ambiguous; one that doesn't answer leaves it where the device does.
 #[tokio::test(start_paused = true)]
-async fn a_second_answer_a_little_later_is_ambiguous() {
-    let bus = Bus::new();
-    let (client, _) = client(&bus).await;
-    let lab = server(bus.port(2), N, "A").await;
-    let late = std::sync::Arc::clone(&bus);
-    let answer = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        late.i_am(3, N);
-    });
-    let error = client.device(N).await.unwrap_err();
-    assert!(
-        matches!(&error, OpsError::Ambiguous { instance: N, candidates } if candidates.len() == 2),
-        "{error}"
-    );
-    answer.await.unwrap();
-    stop(vec![lab]).await;
+async fn a_second_answer_a_little_later_is_asked_too() {
+    for answers in [true, false] {
+        let bus = Bus::new();
+        let (client, _) = client(&bus).await;
+        let mut servers = vec![server(bus.port(2), N, "A").await];
+        if answers {
+            servers.push(server(bus.port(3), N, "B").await);
+        }
+        let late = std::sync::Arc::clone(&bus);
+        let answer = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            late.i_am(3, N);
+        });
+        let made = client.device(N).await;
+        answer.await.unwrap();
+        match answers {
+            true => assert!(
+                matches!(&made, Err(OpsError::Ambiguous { instance: N, candidates }) if candidates.len() == 2),
+                "{made:?}"
+            ),
+            false => assert_eq!(made.unwrap().address(), at(2)),
+        }
+        stop(servers).await;
+    }
 }
 
 /// An address is checked against the link as a target written for it is:

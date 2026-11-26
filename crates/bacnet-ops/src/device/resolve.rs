@@ -12,6 +12,7 @@ use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::error::Error;
 use tokio::sync::broadcast::error::RecvError;
 
+use super::follow::Joining;
 use super::{Device, DeviceAddress, DeviceRef, Discovered, Duplicate, Pin};
 use crate::client::{Client, Discover, ResolveScope, Scope, lock};
 use crate::error::OpsError;
@@ -175,33 +176,48 @@ impl<T: TransportPort + 'static> Client<T> {
         network.map(|network| if Some(network) == own { 0 } else { network })
     }
 
-    /// A handle following `instance`, from the one address claiming it
-    /// (on `named` when the target names a network, network 0 for this
-    /// client's own), or the one that answers a Who-Is, so long as no other
-    /// answered it too.
+    /// A handle following `instance` (on `named` when the target names a
+    /// network, network 0 for this client's own), placed where a device
+    /// confirmed the instance to the client's own question (#2824): where
+    /// the handles already following it are, once confirmed there and
+    /// still the instance's ([`Client::joining`]); otherwise at the one
+    /// address claiming it (or the ones that answer a Who-Is for it, when
+    /// none does) whose device, asked which it is, confirms it
+    /// ([`Client::confirm`]), unless it confirmed it before. The place of
+    /// the handles or a watch hub already following it is asked as a claim
+    /// too, and moves when its device is ruled out and another confirms.
     async fn following(&self, instance: u32, named: Option<u16>) -> Result<Device<T>, OpsError> {
         let network = self.scope(named);
-        let claims = self.claims(instance, network).await;
-        let address = match claims.as_slice() {
-            [] => {
-                let row = self.find_instance(instance, named).await?;
-                let address = DeviceAddress::of(&row)
-                    .map(|address| self.localized(address))
-                    .ok_or_else(|| OpsError::from(unknown(instance, named)))?;
-                // A second device answers the one Who-Is a little after
-                // the first, not with it: `find_instance` listened on for
-                // SETTLE past the first answer, so one in that time is in
-                // the table now.
-                let claims = self.claims(instance, network).await;
-                if claims.len() > 1 {
-                    return Err(ambiguous(instance, &claims).into());
+        let key = (network, instance);
+        let at = match self.joining(key).await {
+            Joining::Join(at) => at,
+            Joining::Ask(live) => {
+                let held = live.as_ref().map(|(here, _)| here.clone());
+                let known = live.and_then(|(here, answer)| Some((here, answer?)));
+                let mut claims = self.claims(instance, network).await;
+                if let Some(held) = &held {
+                    claims.push(held.clone());
+                    claims.sort();
+                    claims.dedup();
                 }
-                address
+                if claims.is_empty() {
+                    // A second device answers the one Who-Is a little
+                    // after the first, not with it: `find_instance` listened
+                    // on for SETTLE past the first answer, so one in that
+                    // time is in the table now, and asked too.
+                    let row = self.find_instance(instance, named).await?;
+                    claims = self.claims(instance, network).await;
+                    if claims.is_empty() {
+                        let address = DeviceAddress::of(&row)
+                            .map(|address| self.localized(address))
+                            .ok_or_else(|| OpsError::from(unknown(instance, named)))?;
+                        claims.push(address);
+                    }
+                }
+                let address = self.confirm(instance, &claims, known.as_ref()).await?;
+                self.place_confirmed(key, address, held.as_ref())
             }
-            [address] => address.clone(),
-            _ => return Err(ambiguous(instance, &claims).into()),
         };
-        let at = self.follow((network, instance), address);
         Ok(Device {
             client: self.clone(),
             // As named: the follow key localizes it where it is used.
