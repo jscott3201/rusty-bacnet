@@ -87,7 +87,7 @@ fn configured_precedence_and_observed_refresh_expiry_are_deterministic() {
         .unwrap();
 
     assert_eq!(
-        table.observe_i_am_at(configured_device, UPDATED_PEER, None, now, no_broadcast,),
+        table.bind_found_at(configured_device, UPDATED_PEER, None, now, no_broadcast,),
         ObservationOutcome::ConfiguredPreserved
     );
     assert_eq!(
@@ -99,12 +99,12 @@ fn configured_precedence_and_observed_refresh_expiry_are_deterministic() {
     );
 
     assert_eq!(
-        table.observe_i_am_at(observed_device, LOCAL_PEER, None, now, no_broadcast),
+        table.bind_found_at(observed_device, LOCAL_PEER, None, now, no_broadcast),
         ObservationOutcome::Inserted
     );
     let refreshed_at = now + Duration::from_secs(30);
     assert_eq!(
-        table.observe_i_am_at(
+        table.bind_found_at(
             observed_device,
             UPDATED_PEER,
             None,
@@ -148,7 +148,7 @@ fn malformed_invalid_identity_and_broadcast_observations_do_not_mutate() {
     ];
     for (identifier, source, routed) in invalid_sources {
         assert_eq!(
-            table.observe_i_am_at(identifier, source, routed, now, test_broadcast),
+            table.bind_found_at(identifier, source, routed, now, test_broadcast),
             ObservationOutcome::RejectedInvalid
         );
     }
@@ -168,7 +168,7 @@ fn malformed_invalid_identity_and_broadcast_observations_do_not_mutate() {
         },
     ] {
         assert_eq!(
-            table.observe_i_am_at(
+            table.bind_found_at(
                 device(3),
                 ROUTER,
                 Some(&source_network),
@@ -183,7 +183,7 @@ fn malformed_invalid_identity_and_broadcast_observations_do_not_mutate() {
         mac_address: MacAddr::from_slice(FINAL_PEER),
     };
     assert_eq!(
-        table.observe_i_am_at(device(4), BROADCAST, Some(&routed), now, test_broadcast,),
+        table.bind_found_at(device(4), BROADCAST, Some(&routed), now, test_broadcast,),
         ObservationOutcome::RejectedInvalid
     );
     assert_eq!(table.len(), 0);
@@ -206,14 +206,14 @@ fn capacity_rejection_stale_reclamation_and_configured_retention_are_bounded() {
     let mut full = DeviceBindingTable::new();
     for instance in 0..MAX_DEVICE_BINDINGS as u32 {
         assert_eq!(
-            full.observe_i_am_at(device(instance), LOCAL_PEER, None, now, no_broadcast),
+            full.bind_found_at(device(instance), LOCAL_PEER, None, now, no_broadcast),
             ObservationOutcome::Inserted
         );
     }
     assert_eq!(full.len(), MAX_DEVICE_BINDINGS);
     let rejected = device(MAX_DEVICE_BINDINGS as u32);
     assert_eq!(
-        full.observe_i_am_at(rejected, LOCAL_PEER, None, now, no_broadcast),
+        full.bind_found_at(rejected, LOCAL_PEER, None, now, no_broadcast),
         ObservationOutcome::RejectedCapacity
     );
     assert_eq!(full.len(), MAX_DEVICE_BINDINGS);
@@ -232,13 +232,13 @@ fn capacity_rejection_stale_reclamation_and_configured_retention_are_bounded() {
         .unwrap();
     for instance in 1..MAX_DEVICE_BINDINGS as u32 {
         assert_eq!(
-            reclaiming.observe_i_am_at(device(instance), LOCAL_PEER, None, now, no_broadcast,),
+            reclaiming.bind_found_at(device(instance), LOCAL_PEER, None, now, no_broadcast,),
             ObservationOutcome::Inserted
         );
     }
     let after_expiry = now + OBSERVED_BINDING_TTL;
     assert_eq!(
-        reclaiming.observe_i_am_at(
+        reclaiming.bind_found_at(
             device(MAX_DEVICE_BINDINGS as u32 + 1),
             LOCAL_PEER,
             None,
@@ -302,9 +302,13 @@ fn received(
     }
 }
 
+/// An I-Am answering the server's own Who-Is binds its device, on this
+/// network or through a router; one it did not ask for binds nothing
+/// (#2825). Hearing an answer initiates nothing, so DISABLE_INITIATION
+/// leaves answers binding, but no check goes out while it holds, so an I-Am
+/// from another address moves nothing.
 #[tokio::test]
-async fn passive_local_and_routed_i_am_share_the_authority_and_disable_initiation_keeps_observing()
-{
+async fn i_ams_answering_the_servers_who_is_bind_and_disable_initiation_keeps_hearing() {
     let db = Arc::new(RwLock::new(ObjectDatabase::new()));
     let network = Arc::new(NetworkLayer::new(transport()));
     let config = ServerConfig::default();
@@ -314,39 +318,45 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_disable_initiatio
     let time_sync_limiter = Arc::new(TimeSyncLimiter::new(TimeSyncPolicy::default()));
     let local_device = device(100);
     let routed_device = device(101);
+    let services = || UnconfirmedServices {
+        db: Arc::clone(&db),
+        comm_state: Arc::clone(&comm_state),
+        device_bindings: Arc::clone(&bindings),
+        discovery_limiter: Arc::clone(&discovery_limiter),
+        time_sync_limiter: Arc::clone(&time_sync_limiter),
+        ..UnconfirmedServices::for_test(Arc::clone(&network), config.clone())
+    };
+    let hear = |request, source_mac: &'static [u8], source_network| {
+        let services = services();
+        async move {
+            BACnetServer::<TestTransport>::handle_unconfirmed_request(
+                &services,
+                request,
+                &received(source_mac, source_network),
+            )
+            .await;
+        }
+    };
+    let ask = |device| {
+        let bindings = Arc::clone(&bindings);
+        async move {
+            let mut table = bindings.write().await;
+            table.ask_for_test(device, Duration::from_secs(3));
+        }
+    };
 
-    BACnetServer::<TestTransport>::handle_unconfirmed_request(
-        &UnconfirmedServices {
-            db: Arc::clone(&db),
-            comm_state: Arc::clone(&comm_state),
-            device_bindings: Arc::clone(&bindings),
-            discovery_limiter: Arc::clone(&discovery_limiter),
-            time_sync_limiter: Arc::clone(&time_sync_limiter),
-            ..UnconfirmedServices::for_test(Arc::clone(&network), config.clone())
-        },
-        i_am_request(local_device),
-        &received(LOCAL_PEER, None),
-    )
-    .await;
-    BACnetServer::<TestTransport>::handle_unconfirmed_request(
-        &UnconfirmedServices {
-            db: Arc::clone(&db),
-            comm_state: Arc::clone(&comm_state),
-            device_bindings: Arc::clone(&bindings),
-            discovery_limiter: Arc::clone(&discovery_limiter),
-            time_sync_limiter: Arc::clone(&time_sync_limiter),
-            ..UnconfirmedServices::for_test(Arc::clone(&network), config.clone())
-        },
-        i_am_request(routed_device),
-        &received(
-            ROUTER,
-            Some(NpduAddress {
-                network: 200,
-                mac_address: MacAddr::from_slice(FINAL_PEER),
-            }),
-        ),
-    )
-    .await;
+    // Unasked, neither binds.
+    hear(i_am_request(local_device), LOCAL_PEER, None).await;
+    assert_eq!(bindings.read().await.len(), 0);
+
+    ask(local_device).await;
+    ask(routed_device).await;
+    hear(i_am_request(local_device), LOCAL_PEER, None).await;
+    let routed = NpduAddress {
+        network: 200,
+        mac_address: MacAddr::from_slice(FINAL_PEER),
+    };
+    hear(i_am_request(routed_device), ROUTER, Some(routed)).await;
 
     let now = Instant::now();
     let table = bindings.read().await;
@@ -369,66 +379,21 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_disable_initiatio
     ));
     drop(table);
 
-    BACnetServer::<TestTransport>::handle_unconfirmed_request(
-        &UnconfirmedServices {
-            db: Arc::clone(&db),
-            comm_state: Arc::clone(&comm_state),
-            device_bindings: Arc::clone(&bindings),
-            discovery_limiter: Arc::clone(&discovery_limiter),
-            time_sync_limiter: Arc::clone(&time_sync_limiter),
-            ..UnconfirmedServices::for_test(Arc::clone(&network), config.clone())
-        },
-        i_am_request(ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()),
-        &received(LOCAL_PEER, None),
-    )
-    .await;
-    BACnetServer::<TestTransport>::handle_unconfirmed_request(
-        &UnconfirmedServices {
-            db: Arc::clone(&db),
-            comm_state: Arc::clone(&comm_state),
-            device_bindings: Arc::clone(&bindings),
-            discovery_limiter: Arc::clone(&discovery_limiter),
-            time_sync_limiter: Arc::clone(&time_sync_limiter),
-            ..UnconfirmedServices::for_test(Arc::clone(&network), config.clone())
-        },
-        UnconfirmedRequestPdu {
-            service_choice: UnconfirmedServiceChoice::I_AM,
-            service_request: Bytes::from_static(&[0xFF]),
-        },
-        &received(LOCAL_PEER, None),
-    )
-    .await;
+    let analog = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
+    hear(i_am_request(analog), LOCAL_PEER, None).await;
+    let malformed = UnconfirmedRequestPdu {
+        service_choice: UnconfirmedServiceChoice::I_AM,
+        service_request: Bytes::from_static(&[0xFF]),
+    };
+    hear(malformed, LOCAL_PEER, None).await;
     assert_eq!(bindings.read().await.len(), 2);
 
-    // Observing an I-Am initiates nothing, so DISABLE_INITIATION leaves it on.
+    // A Who-Is out before DISABLE_INITIATION is still answered.
+    ask(device(102)).await;
     comm_state.set_for_test(DccState::DisableInitiation);
-    BACnetServer::<TestTransport>::handle_unconfirmed_request(
-        &UnconfirmedServices {
-            db: Arc::clone(&db),
-            comm_state: Arc::clone(&comm_state),
-            device_bindings: Arc::clone(&bindings),
-            discovery_limiter: Arc::clone(&discovery_limiter),
-            time_sync_limiter: Arc::clone(&time_sync_limiter),
-            ..UnconfirmedServices::for_test(Arc::clone(&network), config.clone())
-        },
-        i_am_request(local_device),
-        &received(UPDATED_PEER, None),
-    )
-    .await;
-    BACnetServer::<TestTransport>::handle_unconfirmed_request(
-        &UnconfirmedServices {
-            db: Arc::clone(&db),
-            comm_state: Arc::clone(&comm_state),
-            device_bindings: Arc::clone(&bindings),
-            discovery_limiter: Arc::clone(&discovery_limiter),
-            time_sync_limiter: Arc::clone(&time_sync_limiter),
-            ..UnconfirmedServices::for_test(Arc::clone(&network), config.clone())
-        },
-        i_am_request(device(102)),
-        &received(LOCAL_PEER, None),
-    )
-    .await;
-    assert_eq!(bindings.read().await.len(), 3, "DCC leaves insertion on");
+    hear(i_am_request(local_device), UPDATED_PEER, None).await;
+    hear(i_am_request(device(102)), LOCAL_PEER, None).await;
+    assert_eq!(bindings.read().await.len(), 3, "DCC leaves answers binding");
     assert!(matches!(
         bindings
             .read()
@@ -437,8 +402,12 @@ async fn passive_local_and_routed_i_am_share_the_authority_and_disable_initiatio
         DeviceResolution::ResolvedLocal {
             peer_mac,
             freshness: BindingFreshness::ObservedUntil(_),
-        } if peer_mac.as_slice() == UPDATED_PEER
+        } if peer_mac.as_slice() == LOCAL_PEER
     ));
+    assert!(
+        network.transport().sent().frames().is_empty(),
+        "no check goes out under DISABLE_INITIATION"
+    );
 }
 
 #[tokio::test]
@@ -470,8 +439,8 @@ fn who_is_scope_follows_the_last_observation_and_a_fruitless_probe_drops_it() {
             no_broadcast,
         )
         .unwrap();
-    table.observe_i_am_at(device(2), LOCAL_PEER, None, now, no_broadcast);
-    table.observe_i_am_at(device(3), ROUTER, Some(&routed), now, no_broadcast);
+    table.bind_found_at(device(2), LOCAL_PEER, None, now, no_broadcast);
+    table.bind_found_at(device(3), ROUTER, Some(&routed), now, no_broadcast);
     // A device never heard from is asked on every network; one last seen
     // here, or behind a router on network 100, is asked there.
     assert_eq!(table.who_is_scope(&device(4)), WhoIsScope::Global);
@@ -512,8 +481,8 @@ fn address_binding_list_drops_an_observation_once_it_is_stale() {
             no_broadcast,
         )
         .unwrap();
-    table.observe_i_am_at(device(3), LOCAL_PEER, None, heard, no_broadcast);
-    table.observe_i_am_at(device(4), ROUTER, Some(&routed), heard, no_broadcast);
+    table.bind_found_at(device(3), LOCAL_PEER, None, heard, no_broadcast);
+    table.bind_found_at(device(4), ROUTER, Some(&routed), heard, no_broadcast);
     let binding = |instance, network: u64, mac: &[u8]| {
         let mut encoded = BytesMut::new();
         bacnet_encoding::primitives::encode_app_object_id(&mut encoded, &device(instance));

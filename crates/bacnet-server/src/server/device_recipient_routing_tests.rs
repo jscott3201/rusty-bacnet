@@ -82,7 +82,7 @@ async fn configured_and_observed_routed_device_recipients_use_exact_router_and_f
                 .unwrap();
         } else {
             assert_eq!(
-                table.observe_i_am_at(
+                table.bind_found_at(
                     identifier,
                     ROUTER,
                     Some(&NpduAddress {
@@ -116,7 +116,7 @@ async fn unknown_stale_invalid_and_capacity_rejected_devices_emit_zero_frames() 
     let rejected = device(900_000);
     let mut table = DeviceBindingTable::new();
     assert_eq!(
-        table.observe_i_am_at(stale, LOCAL_PEER, None, now, |_| false),
+        table.bind_found_at(stale, LOCAL_PEER, None, now, |_| false),
         ObservationOutcome::Inserted
     );
     table
@@ -127,17 +127,17 @@ async fn unknown_stale_invalid_and_capacity_rejected_devices_emit_zero_frames() 
         .unwrap();
     for instance in 1000..1000 + MAX_DEVICE_BINDINGS as u32 - 2 {
         assert_eq!(
-            table.observe_i_am_at(device(instance), LOCAL_PEER, None, now, |_| false),
+            table.bind_found_at(device(instance), LOCAL_PEER, None, now, |_| false),
             ObservationOutcome::Inserted
         );
     }
     assert_eq!(table.len(), MAX_DEVICE_BINDINGS);
     assert_eq!(
-        table.observe_i_am_at(rejected, LOCAL_PEER, None, now, |_| false),
+        table.bind_found_at(rejected, LOCAL_PEER, None, now, |_| false),
         ObservationOutcome::RejectedCapacity
     );
     assert_eq!(
-        table.observe_i_am_at(stale, LOCAL_PEER, None, now - OBSERVED_BINDING_TTL, |_| {
+        table.bind_found_at(stale, LOCAL_PEER, None, now - OBSERVED_BINDING_TTL, |_| {
             false
         },),
         ObservationOutcome::Refreshed

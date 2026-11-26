@@ -6,15 +6,18 @@
 //! `device_recipient_unbound` when the device stays silent, or takes the
 //! notification when it answers; one that moved takes it at its new
 //! address, unless that address is a broadcast form on another network,
-//! which no confirmed request goes to (#2732).
+//! which no confirmed request goes to (#2732). A binding moves only once a
+//! check finds the old address silent and the new one answering (#2825).
 //!
-//! Each test binds Device 9 from its I-Am, leases every invoke ID, and has
-//! AV-1 alarm confirmed to Device 9 (unconfirmed to the peer named by
-//! address), so the alarm waits for an ID.
+//! Each test binds Device 9 as its answer to the server's own Who-Is would,
+//! leases every invoke ID, and has AV-1 alarm confirmed to Device 9
+//! (unconfirmed to the peer named by address), so the alarm waits for an
+//! ID.
 
 use super::*;
 use crate::server::device_bindings::OBSERVED_BINDING_TTL;
 use crate::server::notification_transactions::NotificationReservation;
+use crate::server::remote_write_discovery_tests::directed_who_is_sent;
 
 /// The MAC Device 9 answers from once it has moved.
 const MOVED: [u8; 6] = [10, 0, 0, 19, 0xBA, 0xC0];
@@ -34,8 +37,7 @@ fn sent_confirmed_to(h: &Harness, mac: &[u8]) -> bool {
 /// The server as above, AV-1's alarm waiting for an ID, and the leases.
 async fn waiting_for_an_id() -> (Harness, Vec<NotificationReservation>) {
     let mut h = start(true).await;
-    deliver(&h, &i_am(9), &DEVICE_9, None).await;
-    h.settle().await;
+    found(&h, 9, &DEVICE_9).await;
     let leases = h.server.notification_transactions.lease_every_invoke_id();
     h.write_pv(85.0, 0).await;
     until("the wait for an ID", || waited(&h) == 1).await;
@@ -94,13 +96,13 @@ async fn a_lapsed_binding_that_answers_the_who_is_takes_the_notification() {
     h.server.stop().await.unwrap();
 }
 
-/// Device 9 answers from another MAC during the wait: the notification goes
-/// there, not to the old address, with no Who-Is.
+/// Device 9 has moved during the wait, its old address silent: its I-Am
+/// from the new MAC cues a check, which asks both addresses straight, and
+/// its answer there moves the binding once the check's wait is over. The
+/// notification goes to the new address, with no broadcast Who-Is.
 #[tokio::test(start_paused = true)]
 async fn a_binding_moved_during_the_wait_takes_the_notification_there() {
-    let (mut h, mut leases) = waiting_for_an_id().await;
-    deliver(&h, &i_am(9), &MOVED, None).await;
-    h.settle().await;
+    let (mut h, mut leases) = moved_and_checked(None).await;
     drop(leases.pop());
     until("the notification", || sent_confirmed_to(&h, &MOVED)).await;
     assert!(!sent_confirmed_to(&h, &DEVICE_9));
@@ -110,18 +112,34 @@ async fn a_binding_moved_during_the_wait_takes_the_notification_there() {
     h.server.stop().await.unwrap();
 }
 
+/// The server waiting for an ID as above, then Device 9 heard from MOVED,
+/// relayed from `routed` when given: the check that cues asks the old
+/// address and MOVED, MOVED answers, and the check's wait passes.
+async fn moved_and_checked(routed: Option<NpduAddress>) -> (Harness, Vec<NotificationReservation>) {
+    let (h, leases) = waiting_for_an_id().await;
+    deliver(&h, &i_am(9), &MOVED, routed.clone()).await;
+    h.settle().await;
+    let asked: Vec<_> = directed_who_is_sent(&h)
+        .into_iter()
+        .map(|(mac, (_, who_is))| (mac, who_is))
+        .collect();
+    let to = |mac: &[u8]| (mac.to_vec(), targeted(9));
+    assert_eq!(asked, [to(&DEVICE_9), to(&MOVED)], "both addresses asked");
+    deliver(&h, &i_am(9), &MOVED, routed).await;
+    tokio::time::sleep(WAIT).await;
+    (h, leases)
+}
+
 /// Device 9 answers during the wait through a router from `5:0xFF`, a
 /// broadcast form there: the address actually used is checked, so the
 /// confirmed notification is skipped and counted, its ID given back.
 #[tokio::test(start_paused = true)]
 async fn a_binding_moved_to_a_broadcast_form_is_skipped_and_counted() {
-    let (mut h, mut leases) = waiting_for_an_id().await;
     let station = NpduAddress {
         network: 5,
         mac_address: MacAddr::from_slice(&[0xFF]),
     };
-    deliver(&h, &i_am(9), &MOVED, Some(station)).await;
-    h.settle().await;
+    let (mut h, mut leases) = moved_and_checked(Some(station)).await;
     drop(leases.pop());
     let skipped = || {
         h.server
@@ -172,8 +190,7 @@ async fn a_rerouted_notification_waits_again_uncounted_and_once() {
         add_av2(db, 1);
     })
     .await;
-    deliver(&h, &i_am(9), &DEVICE_9, None).await;
-    h.settle().await;
+    found(&h, 9, &DEVICE_9).await;
     let transactions = Arc::clone(&h.server.notification_transactions);
     let mut leases = transactions.lease_every_invoke_id();
     h.write_pv(85.0, 0).await;
@@ -190,6 +207,7 @@ async fn a_rerouted_notification_waits_again_uncounted_and_once() {
     deliver(&h, &i_am(9), &DEVICE_9, None).await;
     let second_wait = || transactions.waiting_for_ids() == 1;
     until("Device 9's second wait", second_wait).await;
+    // Unasked, this only cues a check of the binding (#2825).
     deliver(&h, &i_am(9), &MOVED, None).await;
     h.settle().await;
     drop(leases.pop());

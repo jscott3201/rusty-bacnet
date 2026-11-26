@@ -15,7 +15,7 @@ async fn malformed_requests_and_a_full_binding_table_warn_once_per_interval() {
         let mut table = bindings.write().await;
         let now = crate::runtime_clock::now();
         for instance in 0..MAX_DEVICE_BINDINGS as u32 {
-            table.observe_i_am_at(device(instance), LOCAL_PEER, None, now, no_broadcast);
+            table.bind_found_at(device(instance), LOCAL_PEER, None, now, no_broadcast);
         }
     }
     let services = UnconfirmedServices {
@@ -40,7 +40,12 @@ async fn malformed_requests_and_a_full_binding_table_warn_once_per_interval() {
             )
             .await;
         }
+        // An I-Am binds only as the answer to the server's own Who-Is.
         let fresh = device(MAX_DEVICE_BINDINGS as u32 + round);
+        bindings
+            .write()
+            .await
+            .ask_for_test(fresh, Duration::from_secs(3));
         BACnetServer::<TestTransport>::handle_unconfirmed_request(
             &services,
             i_am_request(fresh),

@@ -443,7 +443,7 @@ async fn retry_against_observed_binding(lapses_after_retry: Duration) -> Harness
         mac_address: MacAddr::from_slice(RECIPIENT),
     };
     assert_eq!(
-        bindings.observe_i_am_at(identifier, ROUTER_A, Some(&source), observed_at, |_| false),
+        bindings.bind_found_at(identifier, ROUTER_A, Some(&source), observed_at, |_| false),
         super::device_bindings::ObservationOutcome::Inserted
     );
     let harness = Harness::new_with_bindings(

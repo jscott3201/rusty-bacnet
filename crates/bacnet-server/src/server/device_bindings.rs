@@ -1,9 +1,10 @@
-use super::binding_probes::{BindingProbes, WhoIsScope};
+use super::binding_probes::{BindingProbes, Claim, WhoIsScope};
 use super::event_recipient_route::{BroadcastStation, RecipientRoute};
 use super::*;
 use bacnet_encoding::primitives::{
     encode_app_object_id, encode_app_octet_string, encode_app_unsigned,
 };
+use tokio::time::Instant as TokioInstant;
 
 /// Maximum number of configured and observed device bindings held by a server.
 pub(super) const MAX_DEVICE_BINDINGS: usize = 4096;
@@ -14,7 +15,7 @@ pub(super) const MAX_DEVICE_BINDINGS: usize = 4096;
 pub(super) const OBSERVED_BINDING_TTL: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum DeviceBindingTarget {
+pub(super) enum DeviceBindingTarget {
     Local {
         peer_mac: MacAddr,
     },
@@ -194,11 +195,14 @@ impl BindingFreshness {
     }
 }
 
+/// What recording an observation did to the table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ObservationOutcome {
     Inserted,
     Refreshed,
     ConfiguredPreserved,
+    /// The I-Am named no reachable device ([`DeviceBindingTable::bind_found_at`]).
+    #[cfg(test)]
     RejectedInvalid,
     RejectedCapacity,
 }
@@ -212,7 +216,14 @@ enum BindingEntry {
     },
 }
 
+#[path = "binding_checks.rs"]
+mod checks;
+pub(super) use checks::{Heard, IAmFrom, ask};
+
 /// The server's device bindings, behind one `RwLock`.
+///
+/// An observed binding comes only from an I-Am answering the server's own
+/// Who-Is, and an I-Am it did not ask for moves none ([`Heard`], #2825).
 ///
 /// Lock order: the database guard, when a caller holds one, comes first. A
 /// read of Device_Address_Binding takes this table's read guard under the
@@ -225,6 +236,9 @@ pub(super) struct DeviceBindingTable {
     /// Targeted Who-Is requests out or held off, kept under the same guard
     /// so an I-Am can wake the writes waiting on them (#1322).
     pub(super) probes: BindingProbes,
+    /// Checks of bound devices' addresses that I-Ams from other addresses
+    /// cued, out or held off (#2825).
+    checks: checks::BindingChecks,
 }
 
 impl DeviceBindingTable {
@@ -403,7 +417,25 @@ impl DeviceBindingTable {
         Ok(())
     }
 
-    pub(super) fn observe_i_am_at(
+    /// Put a Who-Is for `device` out now, as a write or notification with
+    /// no binding for it does, its answers counting for `wait`: for tests
+    /// whose I-Am then answers the server's own question.
+    #[cfg(test)]
+    pub(super) fn ask_for_test(&mut self, device: ObjectIdentifier, wait: Duration) {
+        use super::binding_probes::ProbeStep;
+        let now = TokioInstant::now();
+        if let ProbeStep::Send(probe) = self.probes.begin(device, now, wait) {
+            self.probes.sent(&device, probe.id(), now, wait);
+        }
+    }
+
+    /// Bind `device` where an I-Am from `source_mac`, relayed from
+    /// `source_network`, says it is, as an answer to the server's own
+    /// Who-Is would, whether or not one is out: for tests that start from a
+    /// device the server has found. The server's own path is
+    /// [`Self::hear_i_am_at`].
+    #[cfg(test)]
+    pub(super) fn bind_found_at(
         &mut self,
         device: ObjectIdentifier,
         source_mac: &[u8],
@@ -411,33 +443,9 @@ impl DeviceBindingTable {
         now: Instant,
         is_group: impl Fn(&[u8]) -> bool,
     ) -> ObservationOutcome {
-        if validate_device_identifier(device).is_err() {
+        let Some(target) = observed_target(device, source_mac, source_network, &is_group) else {
             return ObservationOutcome::RejectedInvalid;
-        }
-        let target = match source_network {
-            None => DeviceBindingTarget::Local {
-                peer_mac: MacAddr::from_slice(source_mac),
-            },
-            Some(source)
-                if (1..=0xFFFE).contains(&source.network) && !source.mac_address.is_empty() =>
-            {
-                // Unmarked: the I-Am says nothing of the address's link,
-                // so a device heard at a broadcast form there gets
-                // unconfirmed requests only, until a configured binding
-                // marked one station names it (#2738).
-                DeviceBindingTarget::Routed {
-                    network: source.network,
-                    final_mac: source.mac_address.clone(),
-                    router_mac: MacAddr::from_slice(source_mac),
-                    one_station: false,
-                }
-            }
-            Some(_) => return ObservationOutcome::RejectedInvalid,
         };
-        if !target_is_usable(&target, &is_group) {
-            return ObservationOutcome::RejectedInvalid;
-        }
-
         let outcome = self.record_observation(device, target, now);
         if matches!(
             outcome,
@@ -446,6 +454,28 @@ impl DeviceBindingTable {
             self.probes.answer(&device);
         }
         outcome
+    }
+
+    /// After `device`'s probe, once its wait is over: a lapsed binding whose
+    /// old address stayed silent while exactly one other address answered
+    /// moves there; one that drew no answer at all is dropped
+    /// ([`Self::forget_stale`]); one two addresses answered for stays as it
+    /// is, nothing decided, so the next look asks the same network again.
+    /// Every writer waiting on the probe calls it; each call after the
+    /// first finds the same and changes nothing more.
+    pub(super) fn after_probe(&mut self, device: &ObjectIdentifier, now: Instant) {
+        match self.probes.claim_after(device, TokioInstant::from_std(now)) {
+            Some(Claim::One(claimant, at)) => {
+                if matches!(
+                    self.entries.get(device),
+                    Some(BindingEntry::Observed { .. })
+                ) {
+                    self.record_observation(*device, claimant, at);
+                }
+            }
+            Some(Claim::None) => self.forget_stale(device, now),
+            Some(Claim::Contested) | None => {}
+        }
     }
 
     fn record_observation(
@@ -490,28 +520,23 @@ impl DeviceBindingTable {
 
     /// The Device object's Device_Address_Binding at `now` (Clause 12.11.34,
     /// #1369): one BACnetAddressBinding for each configured binding and each
-    /// I-Am observation younger than [`OBSERVED_BINDING_TTL`], devices found
-    /// by a targeted Who-Is included, in Device instance order. A binding on
+    /// device that answered the server's own targeted Who-Is less than
+    /// [`OBSERVED_BINDING_TTL`] ago (#2825), a check's move included, in
+    /// Device instance order. A binding on
     /// this network reads network 0 and the peer's MAC; a routed one reads
     /// its network and the device's MAC there, not the router's. A stale
     /// observation drops out here, with no sweep, as it stops routing.
     pub(crate) fn address_binding_list(&self, now: Instant) -> PropertyValue {
         let mut bindings: Vec<_> = self
             .entries
-            .iter()
-            .filter_map(|(device, entry)| {
-                let target = match entry {
-                    BindingEntry::Configured(target) => target,
-                    BindingEntry::Observed {
-                        target,
-                        observed_at,
-                    } => {
-                        if now.saturating_duration_since(*observed_at) >= OBSERVED_BINDING_TTL {
-                            return None;
-                        }
-                        target
-                    }
-                };
+            .keys()
+            .filter_map(|device| {
+                let (target, observed_at) = self.current(device, now)?;
+                if observed_at.is_some_and(|observed_at| {
+                    now.saturating_duration_since(observed_at) >= OBSERVED_BINDING_TTL
+                }) {
+                    return None;
+                }
                 Some((*device, target))
             })
             .collect();
@@ -542,16 +567,12 @@ impl DeviceBindingTable {
     /// came from while that observation is held, or every network for a
     /// device never heard from.
     pub(super) fn who_is_scope(&self, device: &ObjectIdentifier) -> WhoIsScope {
-        match self.entries.get(device) {
-            Some(BindingEntry::Observed {
-                target: DeviceBindingTarget::Local { .. },
-                ..
-            }) => WhoIsScope::Local,
-            Some(BindingEntry::Observed {
-                target: DeviceBindingTarget::Routed { network, .. },
-                ..
-            }) => WhoIsScope::Remote(*network),
-            Some(BindingEntry::Configured(_)) | None => WhoIsScope::Global,
+        match self.current(device, runtime_clock::now()) {
+            Some((DeviceBindingTarget::Local { .. }, Some(_))) => WhoIsScope::Local,
+            Some((DeviceBindingTarget::Routed { network, .. }, Some(_))) => {
+                WhoIsScope::Remote(*network)
+            }
+            Some((_, None)) | None => WhoIsScope::Global,
         }
     }
 
@@ -575,19 +596,16 @@ impl DeviceBindingTable {
         if device.object_type() != ObjectType::DEVICE {
             return DeviceResolution::Invalid;
         }
-        let (target, freshness) = match self.entries.get(device) {
-            Some(BindingEntry::Configured(target)) => (target, BindingFreshness::Configured),
-            Some(BindingEntry::Observed {
-                target,
-                observed_at,
-            }) => {
-                if now.saturating_duration_since(*observed_at) >= OBSERVED_BINDING_TTL {
+        let (target, freshness) = match self.current(device, now) {
+            Some((target, None)) => (target, BindingFreshness::Configured),
+            Some((target, Some(observed_at))) => {
+                if now.saturating_duration_since(observed_at) >= OBSERVED_BINDING_TTL {
                     return DeviceResolution::Stale;
                 }
                 (
                     target,
                     BindingFreshness::ObservedUntil(tokio::time::Instant::from_std(
-                        *observed_at + OBSERVED_BINDING_TTL,
+                        observed_at + OBSERVED_BINDING_TTL,
                     )),
                 )
             }
@@ -615,6 +633,39 @@ impl DeviceBindingTable {
             },
         }
     }
+}
+
+/// Where an I-Am from `source_mac`, relayed from `source_network` when
+/// routed, places Device `device`: `None` when it names no Device or no
+/// address this link can reach.
+fn observed_target(
+    device: ObjectIdentifier,
+    source_mac: &[u8],
+    source_network: Option<&NpduAddress>,
+    is_group: impl Fn(&[u8]) -> bool,
+) -> Option<DeviceBindingTarget> {
+    validate_device_identifier(device).ok()?;
+    let target = match source_network {
+        None => DeviceBindingTarget::Local {
+            peer_mac: MacAddr::from_slice(source_mac),
+        },
+        Some(source)
+            if (1..=0xFFFE).contains(&source.network) && !source.mac_address.is_empty() =>
+        {
+            // Unmarked: the I-Am says nothing of the address's link, so a
+            // device heard at a broadcast form there gets unconfirmed
+            // requests only, until a configured binding marked one station
+            // names it (#2738).
+            DeviceBindingTarget::Routed {
+                network: source.network,
+                final_mac: source.mac_address.clone(),
+                router_mac: MacAddr::from_slice(source_mac),
+                one_station: false,
+            }
+        }
+        Some(_) => return None,
+    };
+    target_is_usable(&target, is_group).then_some(target)
 }
 
 /// The MAC of `target` that is a group address of the link, the device's own

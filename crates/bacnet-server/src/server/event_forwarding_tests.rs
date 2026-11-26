@@ -273,12 +273,16 @@ impl Forwarding {
     /// I-Am handler does, and let what waited for it go out.
     pub(super) async fn hear_i_am(&self, instance: u32, mac: &[u8]) {
         let device = ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
-        self.services.device_bindings.write().await.observe_i_am_at(
+        self.services.device_bindings.write().await.hear_i_am_at(
             device,
-            mac,
-            None,
+            super::device_bindings::IAmFrom {
+                mac,
+                routed: None,
+                local_network: None,
+            },
             Instant::now(),
             |_| false,
+            None,
         );
         for _ in 0..16 {
             tokio::task::yield_now().await;

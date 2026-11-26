@@ -18,7 +18,7 @@ use super::super::{
 use super::LaneLockSpy;
 use crate::server::command_remote_write_tests::{deliver, device, disable_initiation};
 use crate::server::cov_wire_test_support::*;
-use crate::server::device_bindings::{DeviceResolution, ObservationOutcome};
+use crate::server::device_bindings::{DeviceResolution, Heard, IAmFrom};
 use crate::server::event_recipient_routing_tests::{address_recipient, destination_for};
 use crate::server::remote_write_discovery_tests::{
     everywhere, i_am, next_who_is, targeted, who_is_sent,
@@ -208,6 +208,14 @@ fn counted(h: &Harness) -> (u64, u64) {
         counters.device_recipient_unbound,
         counters.confirmed_unanswered,
     )
+}
+
+/// Bind Device `instance` at `mac` as its answer to the server's own
+/// Who-Is would (#2825).
+async fn found(h: &Harness, instance: u32, mac: &[u8]) {
+    let now = crate::runtime_clock::now();
+    let mut table = h.server.device_bindings.write().await;
+    table.bind_found_at(device(instance), mac, None, now, |_| false);
 }
 
 /// Whether no Who-Is has been sent since the last one taken.
@@ -590,8 +598,7 @@ async fn a_device_lane_held_for_an_invoke_id_leaves_another_device_looked_for() 
         add_av2(db, 1);
     })
     .await;
-    deliver(&h, &i_am(9), &DEVICE_9, None).await;
-    h.settle().await;
+    found(&h, 9, &DEVICE_9).await;
     let leases = h.server.notification_transactions.lease_every_invoke_id();
     let made = MAX_LANE_ENTRIES + 2;
     futures_util::future::join_all((0..made).map(|at| h.write_local(flip(at)))).await;
@@ -766,13 +773,18 @@ async fn an_i_am_queued_behind_the_start_of_the_wait_still_ends_it() {
     let answer = tokio::spawn(async move {
         let now = crate::runtime_clock::now();
         let mut table = answering.write().await;
-        table.observe_i_am_at(device(9), &DEVICE_9, None, now, |_| false)
+        let from = IAmFrom {
+            mac: &DEVICE_9,
+            routed: None,
+            local_network: None,
+        };
+        table.hear_i_am_at(device(9), from, now, |_| false, None)
     });
     for _ in 0..20 {
         tokio::task::yield_now().await;
     }
     drop(gate);
-    assert_eq!(answer.await.unwrap(), ObservationOutcome::Inserted);
+    assert_eq!(answer.await.unwrap(), Heard::Inserted);
     let started = Instant::now();
     let routed = lane.await.unwrap();
     assert!(
@@ -813,3 +825,6 @@ mod rebind;
 // Start-up Staging plans that alarm to silent devices (#2573).
 #[path = "event_lanes_start_tests.rs"]
 mod start_up;
+// An I-Am the server did not ask for moves no Device recipient (#2825).
+#[path = "event_lanes_claim_tests.rs"]
+mod claims;

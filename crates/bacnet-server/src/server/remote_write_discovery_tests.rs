@@ -52,8 +52,24 @@ pub(super) fn everywhere() -> Option<NpduAddress> {
     on_network(0xFFFF)
 }
 
-/// Take every Who-Is the server has broadcast.
+/// Take every Who-Is the server has broadcast: a probe's. A check's, sent
+/// straight to one station, stays for [`directed_who_is_sent`] (#2825).
 pub(super) fn who_is_sent(h: &Harness) -> Vec<WhoIs> {
+    take_who_is(h, true)
+        .into_iter()
+        .map(|(_, who_is)| who_is)
+        .collect()
+}
+
+/// Take every Who-Is the server has sent straight to one station, with
+/// that station: a check's (#2825).
+pub(super) fn directed_who_is_sent(h: &Harness) -> Vec<(Vec<u8>, WhoIs)> {
+    take_who_is(h, false)
+}
+
+/// Take every Who-Is the server has sent as a broadcast, or every one it
+/// sent straight to a station, with where it went.
+fn take_who_is(h: &Harness, broadcast: bool) -> Vec<(Vec<u8>, WhoIs)> {
     let log = h.server.test_network().transport().sent();
     let mut frames = log.lock();
     let mut taken = Vec::new();
@@ -61,11 +77,11 @@ pub(super) fn who_is_sent(h: &Harness) -> Vec<WhoIs> {
         let npdu = frame.decode_npdu();
         match decode_apdu(npdu.payload) {
             Ok(Apdu::UnconfirmedRequest(request))
-                if request.service_choice == UnconfirmedServiceChoice::WHO_IS =>
+                if request.service_choice == UnconfirmedServiceChoice::WHO_IS
+                    && frame.broadcast == broadcast =>
             {
-                assert!(frame.broadcast, "a Who-Is goes out as a broadcast");
                 let who_is = WhoIsRequest::decode(&request.service_request).unwrap();
-                taken.push((npdu.destination, who_is));
+                taken.push((frame.mac.to_vec(), (npdu.destination, who_is)));
                 false
             }
             _ => true,
@@ -136,7 +152,7 @@ async fn heard_long_ago(h: &Harness, routed: &NpduAddress) -> bool {
         eprintln!("skipped: the host's monotonic clock is younger than a stale binding");
         return false;
     };
-    h.server.device_bindings.write().await.observe_i_am_at(
+    h.server.device_bindings.write().await.bind_found_at(
         device(9),
         &PEER,
         Some(routed),
@@ -392,7 +408,11 @@ async fn stale_binding_on_this_network_by_number_is_asked_with_no_dnet() {
     }
     let write = start_write(&h, 9);
     assert_eq!(next_who_is(&h).await, (None, targeted(9)));
+    // The peer is another station than the one Device 9 was bound at, so
+    // its answer takes the binding once the wait is over with that one
+    // silent (#2825).
     deliver(&h, &i_am(9), &PEER, None).await;
+    tokio::time::sleep(WAIT).await;
     let invoke_id = remote_write(&h).await;
     let request = write_frame(&h);
     assert_eq!(request.mac.as_slice(), PEER);
@@ -412,3 +432,7 @@ async fn stop_during_a_who_is_wait_ends_the_run_with_nothing_made() {
     assert!(sent_writes(&h).is_empty());
     assert_eq!(h.server.notification_transactions.active_count(), 0);
 }
+
+// An I-Am the server did not ask for binds and moves nothing (#2825).
+#[path = "binding_claim_tests.rs"]
+mod binding_claims;

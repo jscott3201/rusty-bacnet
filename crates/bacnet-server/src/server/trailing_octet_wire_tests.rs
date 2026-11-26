@@ -472,6 +472,11 @@ async fn an_i_am_with_trailing_octets_binds_nothing() {
     };
     let device = |instance| ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
     let bindings = h.server.device_bindings.read().await.len();
+    // The server has asked for both, so a well-formed answer binds (#2825).
+    for instance in [1234, 1235] {
+        let mut table = h.server.device_bindings.write().await;
+        table.ask_for_test(device(instance), Duration::from_secs(3));
+    }
     // Device 1235 with a trailing octet, then a well-formed I-Am from 1234,
     // so a late bind of the first can't pass for the second's.
     unconfirmed(&h, i_am, &[&body(1235)[..], &[0x00]].concat()).await;

@@ -7585,8 +7585,15 @@ follow In_Process.
 
 A command whose `device_identifier` names another device goes there as a
 confirmed WriteProperty (#1180). The address comes from the server's device
-bindings: a `DeviceBinding` registered on the builder, or an I-Am the server
-heard in the last ten minutes. A binding never takes a group address of the
+bindings: a `DeviceBinding` registered on the builder, or an I-Am answering
+the server's own Who-Is in the last ten minutes (#2825). An I-Am the server did
+not ask for binds nothing; one naming a bound device from another address
+starts a check: a Who-Is for the device to the bound address and to the
+claimant, and the binding moves only if the bound address stays silent for the
+APDU timeout while the claimant answers. Both answering, or a third address
+claiming the device, keeps it; checks run at most once a minute per device, 64
+at once, none under DeviceCommunicationControl. A configured binding never
+moves. A binding never takes a group address of the
 link (`TransportPort::is_group_destination`), as the device's own MAC or as its
 router's: one registered so stops the server from starting, with an error
 naming the device and the address, and an I-Am from one binds nothing (#1493).
@@ -7601,8 +7608,11 @@ routed from, where a remote network numbered as this device's own counts as
 local. If that Who-Is draws nothing, the stale I-Am is dropped, so the
 device's next Who-Is goes global. The server then waits
 `ServerConfig::cov_retry_timeout_ms`, but never more than a minute (#1368),
-counted from the send, for the I-Am, which binds the device as any I-Am does,
-and the write goes ahead; with no I-Am by then the command fails and no
+counted from the send, for the I-Am, which binds the device, and the write
+goes ahead. For a stale binding, an answer from the old address binds at once,
+one from another address only at the end of the wait with the old one silent,
+and two from other addresses bind nothing (#2825). With no I-Am by then the
+command fails and no
 WriteProperty is sent. Writes that miss
 while that Who-Is is out share it and its wait. A device gets at most one
 Who-Is a minute, counted from when it went out, so a command naming it within
@@ -10327,8 +10337,9 @@ existing clock-dependent time-service filter. Both `Active_COV_Subscriptions`
 and `Active_COV_Multiple_Subscriptions` are present: the identity's Device
 gets live lists and other Devices get empty lists (#2227). Its `Device_Address_Binding`
 lists the server's device bindings at the time of the read (#1369): each
-configured `DeviceBinding` and each device whose I-Am arrived in the last ten
-minutes (a targeted Who-Is's answer included), in instance order, with network
+configured `DeviceBinding` and each device that answered the server's own
+targeted Who-Is in the last ten minutes (an I-Am it did not ask for lists
+nothing, #2825), in instance order, with network
 number 0 for a device on this network and the device's own MAC, not its
 router's, for one elsewhere. Other Devices read an empty list. Network RP,
 budgeted RPM, `read_local` and `generate_pics` share effective Device

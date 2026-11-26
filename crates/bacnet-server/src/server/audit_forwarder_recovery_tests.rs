@@ -53,7 +53,7 @@ async fn audit_forwarding_configuration_recovers_only_on_next_changed_batch() {
             PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw())
         );
         if observed {
-            f.server.device_bindings.write().await.observe_i_am_at(
+            f.server.device_bindings.write().await.bind_found_at(
                 oid(ObjectType::DEVICE, 20),
                 &[2],
                 None,

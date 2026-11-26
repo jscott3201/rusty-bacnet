@@ -6037,7 +6037,9 @@ until the list ends, and All_Writes_Successful then reads True only if every
 write succeeded. Zero, or an empty list, writes nothing. A command whose
 `device_identifier` names another device is sent there as a confirmed
 WriteProperty when the server has a binding for it, from `add_device_binding`
-or an I-Am heard in the last ten minutes. With neither, the server first
+or an answer to its own Who-Is in the last ten minutes; an I-Am it did not ask
+for binds nothing, and one naming a bound device from another address only
+starts a check of both addresses (#2825). With neither, the server first
 broadcasts one Who-Is for that device's instance alone, on every network or,
 for a device whose old I-Am it still holds, on the network that I-Am came
 from, and waits the APDU timeout (3 seconds) from the send for its I-Am,
@@ -6325,7 +6327,8 @@ storage_path=None, clear_written_config=False)` registers a Channel. A member is
 own Device is stored as the local reference it stands for, as it is when a
 peer writes the list. A member in another device keeps its Device and is
 written there with a confirmed WriteProperty when the server has a binding for
-it, from `add_device_binding` or an I-Am heard in the last ten minutes, or
+it, from `add_device_binding` or an answer to its own Who-Is in the last ten
+minutes, or
 finds one with a Who-Is first, as for a Command's remote action (see
 [Building Control](#building-control)). The server reads that member's
 property there first to learn its datatype and converts the value to it as for
@@ -7055,8 +7058,9 @@ evaluator, the one network reads use, so the result equals what a network
 rebuilt from its members, Device instance `4194303` names this server's
 Device, and the Device's Active_COV_Subscriptions lists the live
 subscriptions. Its Device_Address_Binding lists the server's device bindings
-(#1369): each `add_device_binding` and each device whose I-Am arrived in the
-last ten minutes, one `"address_binding"` element each (see the typed
+(#1369): each `add_device_binding` and each device that answered the
+server's own Who-Is in the last ten minutes, one `"address_binding"` element
+each (see the typed
 constructed values below). The value takes the
 [read result](#read-results) shape. An
 unknown object or property raises `BacnetProtocolError` with the error a

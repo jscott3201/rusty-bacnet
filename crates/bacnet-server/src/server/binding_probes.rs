@@ -8,8 +8,8 @@
 //! lifetime, the server asks for it ([`DeviceLookup`]): one Who-Is whose low
 //! and high limits are both the device's instance (Clause 16.10), then a
 //! bounded wait for the I-Am, the APDU timeout held to [`MAX_PROBE_WAIT`]. The
-//! I-Am lands in the binding table like any other and wakes everything
-//! waiting on the probe; with none by the
+//! I-Am that answers it binds the device and wakes everything waiting on the
+//! probe; with none by the
 //! deadline, the writes fail and the notifications are not sent. Below, a
 //! "write" stands for either.
 //!
@@ -36,8 +36,16 @@
 //!
 //! The probes live inside the binding table, under its lock, so finding no
 //! binding and starting a probe are one step an I-Am can't fall between.
+//!
+//! Only an I-Am heard while a probe for its device is out binds the device
+//! (#2825): one the server did not ask for binds nothing. For a device whose
+//! binding has lapsed, an I-Am from the address it was bound at answers the
+//! probe at once; one from another address is that address's claim
+//! ([`Claim`]), which binds the device there only once the wait is over
+//! with the old address silent and no third address heard
+//! ([`DeviceBindingTable::after_probe`]).
 
-use super::device_bindings::{DeviceBindingTable, DeviceResolution};
+use super::device_bindings::{DeviceBindingTable, DeviceBindingTarget, DeviceResolution};
 use super::*;
 use tokio::time::Instant as TokioInstant;
 
@@ -88,6 +96,19 @@ struct ProbeState {
     answered: bool,
 }
 
+/// What other addresses than a lapsed binding's answered a probe for its
+/// device (#2825).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) enum Claim {
+    /// None did.
+    #[default]
+    None,
+    /// One did, last at this instant.
+    One(DeviceBindingTarget, Instant),
+    /// More than one did: nothing is decided.
+    Contested,
+}
+
 /// One device's Who-Is.
 #[derive(Debug)]
 struct Probe {
@@ -98,6 +119,8 @@ struct Probe {
     /// When the writes waiting on it give up.
     deadline: TokioInstant,
     state: watch::Sender<ProbeState>,
+    /// What other addresses answered it ([`Claim`]).
+    claim: Claim,
 }
 
 impl Probe {
@@ -201,6 +224,7 @@ impl BindingProbes {
             sent: now,
             deadline,
             state,
+            claim: Claim::None,
         };
         let wait = probe.wait();
         self.probes.insert(device, probe);
@@ -229,6 +253,47 @@ impl BindingProbes {
     pub(super) fn withdraw(&mut self, device: &ObjectIdentifier, id: u64) {
         if self.probes.get(device).is_some_and(|probe| probe.id == id) {
             self.probes.remove(device);
+        }
+    }
+
+    /// Whether a Who-Is for `device` is out at `now`: an I-Am naming it now
+    /// answers the server's own question.
+    pub(super) fn asking_at(&self, device: &ObjectIdentifier, now: TokioInstant) -> bool {
+        self.probes
+            .get(device)
+            .is_some_and(|probe| now < probe.deadline)
+    }
+
+    /// `target` answered `device`'s probe at `at` from another address than
+    /// the device's lapsed binding: its claim, or, beside another
+    /// address's, a contest.
+    pub(super) fn claim(
+        &mut self,
+        device: &ObjectIdentifier,
+        target: DeviceBindingTarget,
+        at: Instant,
+    ) {
+        if let Some(probe) = self.probes.get_mut(device) {
+            probe.claim = match std::mem::take(&mut probe.claim) {
+                Claim::None => Claim::One(target, at),
+                Claim::One(first, _) if first == target => Claim::One(first, at),
+                Claim::One(..) | Claim::Contested => Claim::Contested,
+            };
+        }
+    }
+
+    /// The claims on `device`'s probe once its wait is over at `now`
+    /// ([`Claim::None`] once the probe is gone), or `None` while it is
+    /// still out: nothing is decided before then.
+    pub(super) fn claim_after(
+        &self,
+        device: &ObjectIdentifier,
+        now: TokioInstant,
+    ) -> Option<Claim> {
+        match self.probes.get(device) {
+            Some(probe) if now < probe.deadline => None,
+            Some(probe) => Some(probe.claim.clone()),
+            None => Some(Claim::None),
         }
     }
 
@@ -353,29 +418,33 @@ impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
     }
 
     /// What `device`'s probe found once its wait is over: the binding its
-    /// I-Am brought, or a miss. Nothing having answered where the device was
-    /// last seen, its stale observation is dropped, so its next Who-Is asks
-    /// every network instead.
+    /// I-Am brought, or a miss. A lapsed binding whose old address stayed
+    /// silent while one other address answered moves there; with nothing
+    /// heard at all, it is dropped, so the device's next Who-Is asks every
+    /// network instead ([`DeviceBindingTable::after_probe`]).
     pub(super) async fn found(
         &self,
         device: ObjectIdentifier,
     ) -> Result<DeviceResolution, LookupMiss> {
         let resolution = self.resolve(device).await;
-        if matches!(
-            resolution,
-            DeviceResolution::ResolvedLocal { .. } | DeviceResolution::ResolvedRouted { .. }
-        ) {
+        if is_bound(&resolution) {
             return Ok(resolution);
         }
         // A probe withdrawn before its Who-Is went out ends here too.
         if self.comm_state.initiation_restricted() {
             return Err(LookupMiss::Disabled);
         }
-        self.bindings
-            .write()
-            .await
-            .forget_stale(&device, runtime_clock::now());
-        Err(LookupMiss::Undiscovered)
+        let resolution = {
+            let mut table = self.bindings.write().await;
+            let now = runtime_clock::now();
+            table.after_probe(&device, now);
+            table.resolve_at(&device, now, |mac| self.is_group(mac))
+        };
+        if is_bound(&resolution) {
+            Ok(resolution)
+        } else {
+            Err(LookupMiss::Undiscovered)
+        }
     }
 
     /// Whether `mac` reaches a group of nodes on this link: no binding takes
@@ -390,20 +459,7 @@ impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
     /// DeviceCommunicationControl has restricted initiation since the probe
     /// started, nothing is sent, the probe is withdrawn and this is `false`.
     async fn who_is(&self, device: ObjectIdentifier, scope: WhoIsScope, probe: u64) -> bool {
-        let mut service = BytesMut::new();
-        WhoIsRequest {
-            range: Some(DeviceInstanceRange::device(device)),
-        }
-        .encode(&mut service);
-        let mut apdu = BytesMut::new();
-        encode_apdu(
-            &mut apdu,
-            &Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
-                service_choice: UnconfirmedServiceChoice::WHO_IS,
-                service_request: service.freeze(),
-            }),
-        )
-        .expect("valid APDU encoding");
+        let apdu = targeted_who_is(device);
         let scope = scope.localize(self.network.local_network_number().get());
         let priority = NetworkPriority::Normal;
         if self.comm_state.initiation_restricted() {
@@ -437,6 +493,34 @@ impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
         table.probes.sent(&device, probe, now, self.wait());
         true
     }
+}
+
+/// Whether `resolution` binds its device.
+fn is_bound(resolution: &DeviceResolution) -> bool {
+    matches!(
+        resolution,
+        DeviceResolution::ResolvedLocal { .. } | DeviceResolution::ResolvedRouted { .. }
+    )
+}
+
+/// A Who-Is whose low and high limits are both `device`'s instance
+/// (Clause 16.10), as an APDU.
+pub(super) fn targeted_who_is(device: ObjectIdentifier) -> BytesMut {
+    let mut service = BytesMut::new();
+    WhoIsRequest {
+        range: Some(DeviceInstanceRange::device(device)),
+    }
+    .encode(&mut service);
+    let mut apdu = BytesMut::new();
+    encode_apdu(
+        &mut apdu,
+        &Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
+            service_choice: UnconfirmedServiceChoice::WHO_IS,
+            service_request: service.freeze(),
+        }),
+    )
+    .expect("valid APDU encoding");
+    apdu
 }
 
 #[cfg(test)]

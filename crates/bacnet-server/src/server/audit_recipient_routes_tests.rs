@@ -401,7 +401,7 @@ async fn audit_source_correlation_uses_post_start_generic_route_eligibility() {
             })
         };
         let observed_remote = remote(11);
-        server.device_bindings.write().await.observe_i_am_at(
+        server.device_bindings.write().await.bind_found_at(
             observed,
             &[0x44],
             observed_remote.as_ref(),

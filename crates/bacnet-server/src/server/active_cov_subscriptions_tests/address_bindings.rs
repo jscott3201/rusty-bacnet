@@ -1,7 +1,8 @@
 //! The Device's Device_Address_Binding lists the server's device bindings
-//! (#1369, Clause 12.11.34): configured ones and I-Am observations under ten
-//! minutes old, read through the same request paths and sampling as the
-//! Device's COV lists.
+//! (#1369, Clause 12.11.34): configured ones and devices found by its own
+//! Who-Is under ten minutes ago, read through the same request paths and
+//! sampling as the Device's COV lists. An I-Am the server did not ask for
+//! lists nothing (#2825).
 use super::*;
 use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_services::read_range::{RangeSpec, ReadRangeAck, ReadRangeRequest};
@@ -40,8 +41,38 @@ fn decode(data: &[u8]) -> Vec<(ObjectIdentifier, u64, Vec<u8>)> {
 }
 
 /// Hear Device `instance`'s I-Am from `mac`, relayed from `source` when
-/// routed, and wait until the binding table holds it.
+/// routed, as the answer to a Who-Is the server has out for it, and wait
+/// until the binding table holds it.
 async fn hear(wire: &Wire, instance: u32, mac: &[u8], source: Option<NpduAddress>) {
+    wire.server
+        .device_bindings
+        .write()
+        .await
+        .ask_for_test(peer(instance), Duration::from_secs(3));
+    send_i_am(wire, instance, mac, source).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let resolution = wire.server.device_bindings.read().await.resolve_at(
+                &peer(instance),
+                runtime_clock::now(),
+                |_| false,
+            );
+            if !matches!(
+                resolution,
+                super::super::device_bindings::DeviceResolution::Unknown
+            ) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the I-Am binds the device");
+}
+
+/// Send Device `instance`'s I-Am from `mac`, relayed from `source` when
+/// routed.
+async fn send_i_am(wire: &Wire, instance: u32, mac: &[u8], source: Option<NpduAddress>) {
     let mut service = BytesMut::new();
     IAmRequest {
         object_identifier: peer(instance),
@@ -81,29 +112,15 @@ async fn hear(wire: &Wire, instance: u32, mac: &[u8], source: Option<NpduAddress
         })
         .await
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let resolution = wire.server.device_bindings.read().await.resolve_at(
-                &peer(instance),
-                runtime_clock::now(),
-                |_| false,
-            );
-            if !matches!(
-                resolution,
-                super::super::device_bindings::DeviceResolution::Unknown
-            ) {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    })
-    .await
-    .expect("the I-Am binds the device");
 }
 
 #[tokio::test(start_paused = true)]
 async fn an_i_am_heard_on_the_wire_is_listed_with_its_network() {
     let mut wire = Wire::start(ServerConfig::default()).await;
+    assert_eq!(wire.read(device(), BINDINGS, None).await, Ok(Vec::new()));
+    // One the server did not ask for lists nothing (#2825).
+    send_i_am(&wire, 8, &[0x0A, 0, 0, 8, 0xBA, 0xC0], None).await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
     assert_eq!(wire.read(device(), BINDINGS, None).await, Ok(Vec::new()));
 
     // Device 9 answers from this network, Device 7 from network 77 through
