@@ -227,12 +227,20 @@ impl TransportPort for LoopbackTransport {
         Some(DataLink::Loopback)
     }
 
+    /// A second start is refused: while this side runs, as already
+    /// started; once it stopped, as closed, since it doesn't start again
+    /// (#1833).
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
+        let stopped = self.stopped.load(Ordering::Acquire);
         self.self_rx.take().ok_or_else(|| {
-            Error::state(
-                Lifecycle::AlreadyStarted,
-                "loopback transport already started",
-            )
+            if stopped {
+                crate::port::stopped_for_good()
+            } else {
+                Error::state(
+                    Lifecycle::AlreadyStarted,
+                    "loopback transport already started",
+                )
+            }
         })
     }
 
@@ -342,6 +350,12 @@ mod tests {
         assert!(matches!(
             a.start().await,
             Err(Error::State(Lifecycle::AlreadyStarted, _))
+        ));
+        // Stopped, it doesn't start again: closed, as its sends say.
+        a.stop().await.unwrap();
+        assert!(matches!(
+            a.start().await,
+            Err(Error::State(Lifecycle::Closed, _))
         ));
     }
 

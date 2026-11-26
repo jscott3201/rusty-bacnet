@@ -7619,7 +7619,7 @@ except OSError as e:
 
 `errno` is the operating system's own code, so platforms differ: Windows can refuse a bind to a UDP port another socket holds with `errno.WSAEACCES` rather than `errno.EADDRINUSE`, so check both there. It is not narrowed to the `OSError` subclasses (`ConnectionRefusedError` and the like), so compare `errno` rather than the class. `list_serial_ports()` raises an `OSError` (or the subclass for the failure's kind) instead, not a `BacnetTransportError`.
 
-`BacnetStateError` derives from both `BacnetError` and `RuntimeError`, so `except RuntimeError` around a call catches it as it catches the bindings' own "not started" checks. Its `state` tells a call made too early or too late from a failure on the network, without reading the message:
+`BacnetStateError` derives from both `BacnetError` and `RuntimeError`, so `except RuntimeError` around a call catches it as it catches the bindings' own "not started" checks. Those checks (a call on a client, server, endpoint, router or hub not started yet, or already closing) still raise plain `RuntimeError` for now, without `state`; `except RuntimeError` catches both. A `BacnetStateError`'s `state` tells a call made too early or too late from a failure on the network, without reading the message:
 
 ```python
 from rusty_bacnet import BacnetStateError, BacnetTimeoutError

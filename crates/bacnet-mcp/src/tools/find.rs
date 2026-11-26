@@ -558,12 +558,14 @@ async fn search<T: TransportPort + 'static>(
                     remember(ctx, &device.address, *object, found.clone());
                     names = Some(found);
                 }
-                // The device stopped answering part way through its names:
-                // it is reported incomplete and the search moves on to the
-                // next device, with no cursor back to it, so a silent device
+                // The device stopped answering part way through its names,
+                // or the client's own link failed (stopped, say, #1833),
+                // which would fail every later read the same way: it is
+                // reported incomplete and the search moves on to the next
+                // device, with no cursor back to it, so a silent device
                 // doesn't make every later page wait out its timeout again.
                 // Search it alone (range) to try it again.
-                Err(error) if error.unreachable() => {
+                Err(error) if error.unreachable() || error.failed_locally() => {
                     if error.timed_out() {
                         call.timed_out();
                     }

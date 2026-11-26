@@ -94,7 +94,9 @@ pub(super) async fn point<T: TransportPort + 'static>(
             };
             match device.handle.read(wanted).await {
                 Ok(value) => vec![(property, Ok(value.raw))],
-                Err(error) if error.unreachable() => return Err(failed(error)),
+                Err(error) if error.unreachable() || error.failed_locally() => {
+                    return Err(failed(error));
+                }
                 Err(error) => vec![(property, Err(PropertyError::from(error)))],
             }
         }

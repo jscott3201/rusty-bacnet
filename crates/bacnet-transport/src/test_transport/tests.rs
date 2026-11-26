@@ -561,7 +561,7 @@ async fn sends_fail_after_an_abort_until_the_next_start() {
     assert!(
         matches!(
             transport.start().await,
-            Err(Error::State(Lifecycle::AlreadyStarted, _))
+            Err(Error::State(Lifecycle::Stopping, _))
         ),
         "a start waits for a stop"
     );

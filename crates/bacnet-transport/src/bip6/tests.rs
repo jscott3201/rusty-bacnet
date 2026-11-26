@@ -365,7 +365,18 @@ async fn bip6_abort_with_another_holder_alive_fails_later_sends_and_lets_go_of_t
     .expect("the socket closed");
     drop(other);
     let mut transport = std::sync::Arc::into_inner(transport).unwrap();
-    assert!(transport.start().await.is_err(), "a start waits for a stop");
+    // An abort's tasks wait for a stop to join them: stopping (#1833).
+    let refused = transport.start().await;
+    assert!(
+        matches!(
+            &refused,
+            Err(bacnet_types::error::Error::State(
+                bacnet_types::error::Lifecycle::Stopping,
+                _
+            ))
+        ),
+        "a start waits for a stop: {refused:?}"
+    );
     transport.stop().await.unwrap();
 }
 

@@ -225,6 +225,12 @@ async fn sc_stop_before_start_lets_go_of_the_socket() {
         .await
         .unwrap();
     assert!(closed.is_err(), "the socket closed");
+    // A send finds it closed for good, as the start does (#1833).
+    let sent = transport.send_unicast(&[0x01, 0x00], &[0x20; 6]).await;
+    assert!(
+        matches!(&sent, Err(Error::State(Lifecycle::Closed, _))),
+        "{sent:?}"
+    );
     assert!(stopped_start(transport.start().await));
 }
 

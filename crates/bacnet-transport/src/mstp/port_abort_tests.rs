@@ -72,6 +72,13 @@ async fn abort_releases_the_serial_port_and_leaves_the_task_to_a_stop() {
         lock(&transport.running).task.is_none(),
         "the stop joined it"
     );
+    // Its serial port gone, the transport doesn't start again: closed, as
+    // its sends say, not a second start (#1833).
+    let again = transport.start().await;
+    assert!(
+        matches!(&again, Err(Error::State(Lifecycle::Closed, _))),
+        "{again:?}"
+    );
 }
 
 /// On a dedicated thread, a stop after an abort waits for the thread, and

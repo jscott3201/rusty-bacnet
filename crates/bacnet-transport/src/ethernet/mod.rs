@@ -574,9 +574,10 @@ mod transport {
 
         async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
             if self.tasks.is_running() {
-                return Err(Error::state(
-                    Lifecycle::AlreadyStarted,
+                return Err(crate::stopping::start_refused(
+                    &self.stop_gate,
                     "Ethernet transport already started",
+                    "Ethernet transport aborted: stop it before starting again",
                 ));
             }
 

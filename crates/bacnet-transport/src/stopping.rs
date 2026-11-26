@@ -13,11 +13,29 @@
 //! a send path, and `start`, which has `&mut self`, reaches them through
 //! `get_mut`.
 
+use bacnet_types::error::{Error, Lifecycle};
 use bacnet_types::sync::MutexExt;
 use std::sync::{Mutex, MutexGuard};
 
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+
+/// A start refused while the transport still holds the tasks of its last
+/// run (#1833): [`Lifecycle::Stopping`] with `aborted` after an abort,
+/// which leaves them for a stop to join first, and
+/// [`Lifecycle::AlreadyStarted`] with `running` while it runs.
+#[cold]
+#[inline(never)]
+pub(crate) fn start_refused(
+    gate: &StopGate,
+    running: &'static str,
+    aborted: &'static str,
+) -> Error {
+    if gate.is_stopped() {
+        return Error::state(Lifecycle::Stopping, aborted);
+    }
+    Error::state(Lifecycle::AlreadyStarted, running)
+}
 
 /// One stop at a time, and every stop returns once the transport has
 /// stopped (see the module docs).

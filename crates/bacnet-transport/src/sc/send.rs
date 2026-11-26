@@ -17,7 +17,7 @@ impl<W: WebSocketPort> ScTransport<W> {
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
         if self.ws_shared.is_none() {
-            return Err(not_started());
+            return Err(not_started(&self.stop_gate));
         }
         // Aborted (#2617): nothing more goes out, whether or not the hub
         // socket has left its slot yet.
@@ -100,8 +100,14 @@ impl<W: WebSocketPort> ScTransport<W> {
         npdu: &[u8],
         data_attributes: &[DataAttribute],
     ) -> Result<(), Error> {
-        let ws_shared = self.ws_shared.as_ref().ok_or_else(not_started)?;
-        let conn = self.connection.as_ref().ok_or_else(not_started)?;
+        let ws_shared = self
+            .ws_shared
+            .as_ref()
+            .ok_or_else(|| not_started(&self.stop_gate))?;
+        let conn = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| not_started(&self.stop_gate))?;
 
         // Admission is atomic with socket publication. An admitted send owns
         // its Arc and may complete after retirement; it is not rolled back.
@@ -144,9 +150,14 @@ impl<W: WebSocketPort> ScTransport<W> {
 }
 
 /// What a send before the transport started gets (#1833): it can start,
-/// so [`Lifecycle::NotRunning`]. Nothing was sent.
+/// so [`Lifecycle::NotRunning`]; but once a stop came first it can't, so
+/// the stopped transport's [`Lifecycle::Closed`], as its start says.
+/// Nothing was sent.
 #[cold]
 #[inline(never)]
-fn not_started() -> Error {
+fn not_started(gate: &crate::stopping::StopGate) -> Error {
+    if gate.is_stopped() {
+        return crate::port::stopped_for_good();
+    }
     Error::state(Lifecycle::NotRunning, "BACnet/SC transport not started")
 }

@@ -303,7 +303,7 @@ async fn an_abort_fails_later_sends_and_a_start_waits_for_a_stop() {
         let mut transport = Arc::into_inner(transport).unwrap();
         let refused = transport.start().await;
         assert!(
-            matches!(&refused, Err(Error::State(Lifecycle::AlreadyStarted, _))),
+            matches!(&refused, Err(Error::State(Lifecycle::Stopping, _))),
             "{refused:?}"
         );
         transport.stop().await.unwrap();

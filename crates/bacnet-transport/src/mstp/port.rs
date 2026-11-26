@@ -272,6 +272,23 @@ fn not_started() -> Error {
     Error::state(Lifecycle::NotRunning, "MS/TP transport not started")
 }
 
+/// What a start gets once the serial port went with an earlier start's
+/// task (#1833): [`Lifecycle::AlreadyStarted`] while that node runs, and
+/// [`Lifecycle::Closed`] once it `ended`, since the transport doesn't start
+/// again.
+#[cold]
+#[inline(never)]
+fn started_refusal(ended: bool) -> Error {
+    if ended {
+        Error::state(
+            Lifecycle::Closed,
+            "MS/TP transport is no longer running: it does not start again",
+        )
+    } else {
+        Error::state(Lifecycle::AlreadyStarted, "MS/TP transport already started")
+    }
+}
+
 /// What a send gets once the node's queues closed (#1833): after a stop or
 /// an abort, or once the node's task ended on a serial failure, which it
 /// reported then. The transport doesn't start again, so
@@ -297,8 +314,14 @@ impl<S: SerialPort> TransportPort for MstpTransport<S> {
 
         let config = self.config.core_config()?;
         self.execution_mode.validate()?;
-        let not_started =
-            || Error::state(Lifecycle::AlreadyStarted, "MS/TP transport already started");
+        // The serial port went with the first start's task: running, that
+        // is a second start; once the node ended (a stop, an abort, a
+        // serial failure), the transport doesn't start again (#1833).
+        let ended = self
+            .link
+            .as_ref()
+            .is_some_and(|link| link.queues.is_closed());
+        let not_started = || started_refusal(ended);
         self.serial
             .as_ref()
             .ok_or_else(not_started)?

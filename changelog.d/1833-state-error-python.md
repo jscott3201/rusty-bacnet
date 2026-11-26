@@ -1,5 +1,5 @@
 ---
-section: Added
+section: Changed
 ---
 - **Breaking (Python API):** `BacnetStateError`, a `BacnetError` and a
   `RuntimeError` whose `state` names the lifecycle state, is raised for every

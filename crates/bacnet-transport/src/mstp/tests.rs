@@ -145,6 +145,14 @@ async fn transport_start_stop_and_sends_outside_a_run() {
     );
     transport.stop().await.unwrap();
     assert!(transport.send_broadcast(&[1, 0]).await.is_err());
+    // After the stop a start finds it closed, as its sends do (#1833).
+    assert!(
+        matches!(
+            transport.start().await,
+            Err(Error::State(Lifecycle::Closed, _))
+        ),
+        "a start after the stop"
+    );
 }
 
 /// A stop through a shared reference, with another holder alive (#2617):
@@ -209,6 +217,11 @@ async fn a_failed_read_ends_the_task_and_later_sends() {
     assert_eq!(diagnostics.snapshot().serial_read_errors, 1);
     let error = transport.send_broadcast(&[1, 0]).await.unwrap_err();
     assert!(matches!(error, Error::State(Lifecycle::Closed, _)));
+    // Its node ended with its serial port: no second start (#1833).
+    assert!(matches!(
+        transport.start().await,
+        Err(Error::State(Lifecycle::Closed, _))
+    ));
 }
 
 /// A port whose reads return nothing has reached its end of file: the third

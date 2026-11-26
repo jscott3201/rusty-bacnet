@@ -525,9 +525,10 @@ impl TransportPort for BipTransport {
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.registration_closed = true;
         if self.tasks.is_running() {
-            return Err(Error::state(
-                Lifecycle::AlreadyStarted,
+            return Err(crate::stopping::start_refused(
+                &self.stop_gate,
                 "BIP transport already started",
+                "BIP transport aborted: stop it before starting again",
             ));
         }
 

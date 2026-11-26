@@ -517,6 +517,34 @@ async fn a_device_silent_at_the_state_texts_costs_one_timeout() {
     lab.stop().await;
 }
 
+/// The client's own link stopping at the state texts ends their reading
+/// after the first refusal, as a silent device does, instead of asking for
+/// every object's texts and taking each for one with none (#1833): the
+/// records come back unnamed, and no timeout is counted.
+#[tokio::test(start_paused = true)]
+async fn a_link_stopped_at_the_state_texts_asks_once() {
+    let mut lab = Lab::start_site(Policy::default(), Duration::ZERO).await;
+    lab.agent.initialize().await;
+    // The counts, one page and the reference get through.
+    lab.stop_link_after(3 + 1 + 1);
+    let before = lab.sends().len();
+    let result = lab
+        .agent
+        .call(
+            "bacnet_read_trend",
+            json!({ "device": 1201, "object": "trend-log-multiple:1", "max_records": 5 }),
+        )
+        .await;
+    let body = ok(&result);
+    assert_eq!(body["pages"], json!(1), "{body}");
+    assert_eq!(lab.sends().len() - before, 3 + 1 + 1 + 1, "{body}");
+    assert_eq!(result["structuredContent"]["cost"]["timeouts"], json!(0));
+    let columns = &body["summary"]["columns"];
+    assert_eq!(columns[0]["state_texts"], Value::Null, "{body}");
+    assert_eq!(columns[1]["states"]["active"], json!(2), "{body}");
+    lab.stop().await;
+}
+
 /// A device that goes silent after its first page: the reference read
 /// times out, the page read comes back unnamed, and the cost counts the
 /// timeout (#2131). Read on, the next page times out too and counts again.

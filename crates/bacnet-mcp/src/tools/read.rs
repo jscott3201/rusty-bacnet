@@ -252,7 +252,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
             let element = PropertyRef::new(plan.object, property).at(index);
             let value = match device.handle.read(element).await {
                 Ok(value) => Ok(value),
-                Err(error) if error.unreachable() => {
+                Err(error) if error.unreachable() || error.failed_locally() => {
                     failed = Some(error);
                     break;
                 }

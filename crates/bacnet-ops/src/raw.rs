@@ -38,7 +38,7 @@ pub use crate::client::read::ListStop;
 pub use crate::inventory::read::{InventoryHalt, read_inventory};
 
 pub use crate::client::read::{
-    Halt, Reader, RpmFailure, rpm_failure, rpm_rows, timed_out, unreachable,
+    Halt, Reader, RpmFailure, failed_locally, rpm_failure, rpm_rows, timed_out, unreachable,
 };
 use crate::device::{DeviceAddress, path_to};
 use crate::limits::{RequestLimits, Turn};

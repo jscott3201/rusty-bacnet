@@ -136,6 +136,9 @@ fn rpm_request(npdu: &[u8]) -> Option<u8> {
 pub(crate) struct LinkFaults {
     /// Refuse every unicast send: nothing leaves (#2610).
     refuse: std::sync::atomic::AtomicBool,
+    /// Once this many frames have gone, refuse every unicast as a stopped
+    /// link does (#1833).
+    stop_after: Mutex<Option<usize>>,
     /// Answer each ReadPropertyMultiple with a Reject (unrecognized
     /// service), as a device without the service does (#2779).
     reject_rpm: std::sync::atomic::AtomicBool,
@@ -194,7 +197,13 @@ pub(crate) fn recording(
                 .push((Instant::now(), frame.mac.to_vec()));
             // A link that refuses to send: nothing leaves (#2610).
             let refused = !frame.broadcast && refuse.refuse.load(Relaxed);
+            let count = log.lock().unwrap().len();
+            let stop = *refuse.stop_after.lock().unwrap();
+            let stopped = !frame.broadcast && stop.is_some_and(|after| count > after);
             async move {
+                if stopped {
+                    return Err(bacnet_transport::port::stopped());
+                }
                 match refused {
                     true => Err(bacnet_types::error::Error::Encoding(
                         "the link refused the send".into(),
@@ -480,6 +489,13 @@ impl Lab {
     pub(crate) fn go_silent_after(&self, more: usize) {
         let sent = self.sent.lock().unwrap().len();
         *self.mute.lock().unwrap() = Some(sent + more);
+    }
+
+    /// Let `more` requests through from now, then refuse every unicast as
+    /// a stopped link does: each later request fails at once, unsent.
+    pub(crate) fn stop_link_after(&self, more: usize) {
+        let sent = self.sent.lock().unwrap().len();
+        *self.faults.stop_after.lock().unwrap() = Some(sent + more);
     }
 
     /// From now on the client's link refuses to send any unicast: each

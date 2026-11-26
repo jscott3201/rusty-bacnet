@@ -499,7 +499,7 @@ impl TransportPort for TestTransport {
         // As on a real link, a start after an abort waits for a stop.
         if self.stop_gate.is_aborted() {
             return Err(Error::state(
-                Lifecycle::AlreadyStarted,
+                Lifecycle::Stopping,
                 "test transport aborted: stop it before starting again",
             ));
         }

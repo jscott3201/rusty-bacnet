@@ -185,7 +185,7 @@ pub fn unreachable(error: &Error) -> bool {
 /// needs segments the client or the device can't use
 /// ([`Error::Segmentation`]), is not one: a smaller request may pass, so
 /// those fall back as an answer too large does ([`rpm_failure`]).
-pub(crate) fn failed_locally(error: &Error) -> bool {
+pub fn failed_locally(error: &Error) -> bool {
     matches!(
         error,
         Error::Encoding(_)
