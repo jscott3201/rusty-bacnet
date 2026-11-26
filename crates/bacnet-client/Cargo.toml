@@ -35,6 +35,9 @@ futures-util = { workspace = true }
 [features]
 ipv6 = ["bacnet-transport/ipv6"]
 sc-tls = ["bacnet-transport/sc-tls", "dep:tokio-rustls"]
+# Hooks for other crates' tests, not an application API:
+# `ClientOptions::with_number_window` (#2826).
+test-support = []
 
 [dev-dependencies]
 rcgen.workspace = true

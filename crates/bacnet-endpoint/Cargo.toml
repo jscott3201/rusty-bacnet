@@ -44,6 +44,9 @@ sc-tls = [
 ]
 
 [dev-dependencies]
+# A short What-Is-Network-Number window for the SC client's wall-clock wire
+# test (#2826).
+bacnet-client = { workspace = true, features = ["test-support"] }
 # The control-writer count, to tell a control's queued write from the
 # server's own tasks' (#2507).
 bacnet-server = { workspace = true, features = ["test-support"] }

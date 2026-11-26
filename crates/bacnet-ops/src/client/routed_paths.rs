@@ -148,7 +148,8 @@ fn source_name<S: serde::Serializer>(
 }
 
 /// The client's routed paths, its two counts of too-long rejects it did not
-/// believe, and its count of answers it refused for the path they came by
+/// believe, its count of answers it refused for the path they came by, and
+/// its count of network-number answers that decided nothing
 /// ([`Client::routed_paths`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RoutedPaths {
@@ -170,6 +171,15 @@ pub struct RoutedPaths {
     /// [`BACnetClient::off_path_answer_drops`](bacnet_client::client::BACnetClient::off_path_answer_drops)).
     /// A rise means a station is answering for other devices.
     pub off_path_answer_drops: u64,
+    /// Windows of answers to the client's What-Is-Network-Number that
+    /// decided nothing since start because the answers disagreed or may
+    /// have: they named two numbers, agreed on a network the client
+    /// reaches through a router that a router on its link answered it
+    /// routes to, or an answer may have been lost (#2826,
+    /// [`BACnetClient::network_number_disagreements`](bacnet_client::client::BACnetClient::network_number_disagreements)).
+    /// A rise means stations on the link claim different numbers for it,
+    /// or controls come faster than the client takes them.
+    pub network_number_disagreements: u64,
 }
 
 impl RoutedPaths {
@@ -200,6 +210,7 @@ impl RoutedPaths {
             too_long_reject_drops: client.too_long_reject_drops(),
             below_minimum_reject_drops: client.below_minimum_reject_drops(),
             off_path_answer_drops: client.off_path_answer_drops(),
+            network_number_disagreements: client.network_number_disagreements(),
         }
     }
 

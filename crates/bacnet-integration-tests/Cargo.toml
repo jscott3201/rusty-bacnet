@@ -32,6 +32,8 @@ bacnet-ops.workspace = true
 bacnet-transport = { workspace = true, features = ["test-support"] }
 # Fixed waits before a Network-Number-Is answer (network_number_answers).
 bacnet-network = { workspace = true, features = ["test-support"] }
+# A short What-Is-Network-Number window for the wall-clock wire tests (#2826).
+bacnet-client = { workspace = true, features = ["test-support"] }
 # The source a local write takes (`write::local::LocalCommandSource`).
 bacnet-device-core = { workspace = true, features = ["std"] }
 bacnet-mstp-codec.workspace = true

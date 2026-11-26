@@ -121,14 +121,14 @@ async fn an_admitted_directed_who_has_keeps_its_local_mac_after_a_number_change(
     let bus = Bus::new();
     let (client, sent) = client_on(bus.numbered_port(1)).await;
     let low = client.low_level();
-    bus.number_is(254, 5);
-    settle().await;
+    bus.taught(low, 254, 5).await;
     assert_eq!(low.network_number(), Some(5));
     let scope = Scope::Directed(bacnet_client::client::Station::remote(5, &mac(2)));
     let admitted = crate::client::find::station(low, &scope).unwrap();
-    bus.number_is(254, 6);
-    settle().await;
+    bus.taught(low, 254, 6).await;
     assert_eq!(low.network_number(), Some(6));
+    // Only what the Who-Has sends counts, not the client's questions.
+    sent.clear();
     scope
         .send_who_has(low, admitted, &WhoHasObject::Name("A".into()), None)
         .await
@@ -320,7 +320,9 @@ async fn learned_mid_wait(scope: Scope, raw: bool) -> Vec<super::DeviceAddress> 
     let bus = Bus::new();
     let (client, _sent) = client_on(bus.numbered_port(1)).await;
     let low = client.low_level();
-    let wait = Duration::from_millis(2000);
+    // Longer than the window for the answers to the client's question
+    // (#2826), so the number is learned during the wait.
+    let wait = Duration::from_secs(15);
     let search = async {
         if raw {
             let name = WhoHasObject::Name("near".into());
@@ -340,8 +342,7 @@ async fn learned_mid_wait(scope: Scope, raw: bool) -> Vec<super::DeviceAddress> 
         assert_eq!(low.network_number(), None, "the premise: not learned yet");
         bus.i_have(254, Some((1, &mac(2))), 2002, "near");
         settle().await;
-        bus.number_is(254, 1);
-        settle().await;
+        bus.taught(low, 254, 1).await;
         assert_eq!(low.network_number(), Some(1), "the router said");
         bus.i_have(2, None, 2002, "near");
     });

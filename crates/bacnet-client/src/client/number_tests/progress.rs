@@ -7,6 +7,9 @@ use bacnet_encoding::{
 use bacnet_types::{enums::ConfirmedServiceChoice, error::Error};
 use std::sync::Arc;
 
+/// The Number owner's broadcast held in its send (here the question an
+/// unasked announcement calls for, #2826) holds back neither a routed
+/// reject nor an answer.
 #[tokio::test]
 async fn client_number_held_egress_preserves_routed_reject_and_apdu_dispatch() {
     let (client, inbound, mut outbound, gates) = harness(true).await;
@@ -84,7 +87,9 @@ async fn client_number_held_egress_preserves_routed_reject_and_apdu_dispatch() {
         "Number send remains held during both results"
     );
     gates.release.add_permits(1);
-    reply(&mut outbound, 77).await;
+    // The held question goes; the number was not taken, so the question
+    // to the client alone gets no answer.
+    asked(&mut outbound).await;
     let mut client = Arc::try_unwrap(client).ok().unwrap();
     client.stop().await.unwrap();
 }
