@@ -380,7 +380,7 @@ async fn peer_admission_positive_validation_generic_bip_and_tiny_global() {
                 .map_err(Error::from)
                 .err()
                 .unwrap();
-            assert!(matches!(error, Error::Encoding(m) if m.contains(name)));
+            assert!(matches!(error, Error::InvalidConfig(m) if m.to_string().contains(name)));
             assert!(!started.load(Ordering::Acquire));
             let error = BACnetServer::bip_builder()
                 .interface(Ipv4Addr::LOCALHOST)
@@ -391,7 +391,7 @@ async fn peer_admission_positive_validation_generic_bip_and_tiny_global() {
                 .map_err(Error::from)
                 .err()
                 .unwrap();
-            assert!(matches!(error, Error::Encoding(m) if m.contains(name)));
+            assert!(matches!(error, Error::InvalidConfig(m) if m.to_string().contains(name)));
         }
     }
     let owner = RequestTasks::new(RequestAdmissionPolicy {

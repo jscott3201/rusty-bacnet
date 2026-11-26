@@ -268,9 +268,13 @@ impl<T: TransportPort + 'static> Inbound<T> for Seated<T> {
 }
 
 /// What a seated client's request or send fails with once its seat has
-/// closed, by its node's stop or the client's own.
+/// closed, by its node's stop or the client's own: closed for good, as a
+/// seat never opens again (#1833).
 pub(super) fn seat_closed() -> Error {
-    Error::Encoding("the client's seat has closed: its node or the client stopped".into())
+    Error::state(
+        Lifecycle::Closed,
+        "the client's seat has closed: its node or the client stopped",
+    )
 }
 
 impl<T: TransportPort> BACnetClient<T> {
@@ -479,9 +483,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             dcc,
             ..
         } = seat;
-        let hold = holds
-            .hold()
-            .ok_or_else(|| Error::Encoding("the seat's node is stopping".into()))?;
+        let hold = holds.hold().ok_or(Error::state(
+            Lifecycle::Stopping,
+            "the seat's node is stopping",
+        ))?;
         let inbound = Seated {
             held: HeldNetwork {
                 network,

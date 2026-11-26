@@ -2,7 +2,7 @@ use super::{BipServerBuilder, ServerBuilder, TransportPort};
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_services::device_mgmt::{MAX_PASSWORD_CHARS, password_fits};
 use bacnet_types::constructed::BACnetAddress;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 
 /// A source address length a DCC or time-sync restriction entry can hold and
 /// match: 1 to [`BACnetAddress::MAX_MAC_LEN`] octets. Every routed source and
@@ -72,8 +72,8 @@ impl DccSourceRestriction {
     /// 1..=65534. These are local configuration limits.
     pub fn new(sources: Vec<DccSource>) -> Result<Self, Error> {
         if sources.len() > 256 {
-            return Err(Error::Encoding(
-                "DCC source restriction allows at most 256 entries".into(),
+            return Err(Error::limit_reached(
+                "DCC source restriction allows at most 256 entries",
             ));
         }
         for source in &sources {
@@ -81,18 +81,18 @@ impl DccSourceRestriction {
                 DccSource::Direct(address) => address,
                 DccSource::Routed { network, address } => {
                     if !(1..=65534).contains(network) {
-                        return Err(Error::Encoding(
-                            "DCC routed source network must be 1..=65534".into(),
+                        return Err(Error::invalid_config(
+                            "DCC routed source network must be 1..=65534",
                         ));
                     }
                     address
                 }
             };
             if !address_length_fits(address.len()) {
-                return Err(Error::Encoding(format!(
-                    "DCC source address must contain 1..={} octets",
-                    BACnetAddress::MAX_MAC_LEN
-                )));
+                return Err(Error::InvalidConfig(
+                    Refusal::new("DCC source address must contain 1..={} octets")
+                        .with_value(BACnetAddress::MAX_MAC_LEN as u64),
+                ));
             }
         }
         Ok(Self(sources))
@@ -101,8 +101,8 @@ impl DccSourceRestriction {
     /// Reject a configured restriction unless password-required policy is explicit.
     pub fn validate_policy(&self, policy: DccPolicy) -> Result<(), Error> {
         if policy != DccPolicy::RequirePassword {
-            return Err(Error::Encoding(
-                "DCC source restriction requires RequirePassword policy".into(),
+            return Err(Error::invalid_config(
+                "DCC source restriction requires RequirePassword policy",
             ));
         }
         Ok(())
@@ -150,19 +150,25 @@ impl super::ServerConfig {
         // sent, so it would refuse every request (#2060). An empty one could
         // never match either: a request's empty password decodes as none
         // (#2094). Leave the password unset instead.
-        for (name, password) in [
-            ("dcc_password", &self.dcc_password),
-            ("reinit_password", &self.reinit_password),
+        for (password, empty, too_long) in [
+            (
+                &self.dcc_password,
+                "dcc_password is empty; leave it unset for no password",
+                "dcc_password exceeds the {}-character limit",
+            ),
+            (
+                &self.reinit_password,
+                "reinit_password is empty; leave it unset for no password",
+                "reinit_password exceeds the {}-character limit",
+            ),
         ] {
             if password.as_deref() == Some("") {
-                return Err(Error::Encoding(format!(
-                    "{name} is empty; leave it unset for no password"
-                )));
+                return Err(Error::invalid_config(empty));
             }
             if password.as_deref().is_some_and(|p| !password_fits(p)) {
-                return Err(Error::Encoding(format!(
-                    "{name} exceeds the {MAX_PASSWORD_CHARS}-character limit"
-                )));
+                return Err(Error::InvalidConfig(
+                    Refusal::new(too_long).with_value(MAX_PASSWORD_CHARS as u64),
+                ));
             }
         }
         if let Some(restriction) = &self.dcc_source_restriction {
@@ -192,8 +198,8 @@ impl DccPolicy {
     /// Validate operator configuration before transport startup or dialing.
     pub fn validate(self, password: &Option<String>) -> Result<(), Error> {
         if self == Self::RequirePassword && password.as_ref().is_none_or(String::is_empty) {
-            return Err(Error::Encoding(
-                "RequirePassword DCC policy requires a nonempty dcc_password".into(),
+            return Err(Error::invalid_config(
+                "RequirePassword DCC policy requires a nonempty dcc_password",
             ));
         }
         Ok(())

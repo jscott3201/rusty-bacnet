@@ -131,8 +131,8 @@ async fn a_refused_spawn_ends_the_read_with_the_shutdown_error() {
 
 /// A stop that begins just after the guard went to a waiting read's task,
 /// before the task has run: the task runs first and may send the read, the
-/// stop then cuts it off, and the read ends with the shutdown error,
-/// unrecorded. On the old path the parked caller owned the guard and the
+/// stop then cuts it off, and the read ends cut off as one that may have
+/// been sent (#1833), unrecorded. On the old path the parked caller owned the guard and the
 /// stop waited for it for ever.
 #[tokio::test(start_paused = true)]
 async fn a_stop_just_after_the_task_was_handed_the_guard() {
@@ -148,8 +148,7 @@ async fn a_stop_just_after_the_task_was_handed_the_guard() {
     bounded(endpoint.session.stop()).await.unwrap();
     assert!(matches!(
         bounded(parked).await,
-        Err(Error::State(bacnet_types::error::Lifecycle::Closed, message))
-            if message.to_string() == "endpoint shutdown"
+        Err(Error::RequestCutOff { sent: true })
     ));
     while let Ok(sent) = endpoint.sent.try_recv() {
         assert_eq!(sent.link, mac(PEER), "only the read itself, no record");

@@ -6,7 +6,7 @@ use bacnet_encoding::npdu::NpduAddress;
 use bacnet_network::layer::ReceivedApdu;
 use bacnet_objects::clock::ClockFrame;
 use bacnet_types::constructed::BACnetAddress;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bacnet_types::sync::MutexExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -35,21 +35,24 @@ pub enum TimeSyncSource {
 }
 
 impl TimeSyncSource {
-    fn validate(&self) -> Result<(), Error> {
+    /// The refusal of a source that can't be one: a configured entry's
+    /// [`Error::InvalidConfig`], a received request's
+    /// [`Error::InvalidArgument`] (#1833).
+    fn validate(&self) -> Result<(), Refusal> {
         let address = match self {
             Self::Direct(address) => address,
             Self::Routed { network, address } => {
                 if !(1..=65534).contains(network) {
-                    return Err(denied("source network must be 1..=65534"));
+                    return Err(Refusal::new("time sync: source network must be 1..=65534"));
                 }
                 address
             }
         };
         if !address_length_fits(address.len()) {
-            return Err(denied(&format!(
-                "source address must contain 1..={} octets",
-                BACnetAddress::MAX_MAC_LEN
-            )));
+            return Err(
+                Refusal::new("time sync: source address must contain 1..={} octets")
+                    .with_value(BACnetAddress::MAX_MAC_LEN as u64),
+            );
         }
         Ok(())
     }
@@ -81,7 +84,7 @@ impl TimeSyncSource {
             },
             None => Self::Direct(received.source_mac.to_vec()),
         };
-        source.validate()?;
+        source.validate().map_err(Error::InvalidArgument)?;
         Ok(source)
     }
 }
@@ -107,10 +110,12 @@ impl TimeSyncSourceRestriction {
     /// authentication guarantees.
     pub fn new(sources: Vec<TimeSyncSource>) -> Result<Self, Error> {
         if sources.len() > 256 {
-            return Err(denied("source restriction allows at most 256 entries"));
+            return Err(Error::limit_reached(
+                "time sync: source restriction allows at most 256 entries",
+            ));
         }
         for source in &sources {
-            source.validate()?;
+            source.validate().map_err(Error::InvalidConfig)?;
         }
         Ok(Self(sources))
     }
@@ -156,8 +161,8 @@ impl TimeSyncRateLimit {
             || self.max_per_second <= 0.0
             || self.burst_capacity == 0
         {
-            return Err(denied(
-                "rate must be positive and finite with a positive burst",
+            return Err(Error::invalid_config(
+                "time sync: rate must be positive and finite with a positive burst",
             ));
         }
         Ok(())
@@ -226,7 +231,9 @@ impl TimeSyncPolicy {
             limit.validate()?;
         }
         if !(1..=65536).contains(&self.max_sources) {
-            return Err(denied("max_sources must be 1..=65536"));
+            return Err(Error::invalid_config(
+                "time sync: max_sources must be 1..=65536",
+            ));
         }
         Ok(())
     }
@@ -274,10 +281,6 @@ impl super::ScServerBuilder {
     }
 }
 
-pub(super) fn denied(reason: &str) -> Error {
-    Error::Encoding(format!("time sync: {reason}"))
-}
-
 /// Compare in the request's time basis; no clock mutation or floating-point time.
 pub(super) fn step_hundredths(supplied: i128, is_utc: bool, frame: ClockFrame) -> Option<u128> {
     let local = super::clock::date_time_to_hundredths(frame.local_date, frame.local_time).ok()?;
@@ -296,9 +299,12 @@ pub(super) fn step_hundredths(supplied: i128, is_utc: bool, frame: ClockFrame) -
 
 pub(super) fn check_step(delta: Option<u128>, cap: Option<Duration>) -> Result<(), Error> {
     if let Some(cap) = cap {
-        let delta = delta.ok_or_else(|| denied("clock unreadable for step cap"))?;
+        // The configured cap can't be judged while the clock can't be read.
+        let delta = delta.ok_or(Error::invalid_config(
+            "time sync: clock unreadable for step cap",
+        ))?;
         if delta * 10_000_000 > cap.as_nanos() {
-            return Err(denied("step cap exceeded"));
+            return Err(Error::invalid_argument("time sync: step cap exceeded"));
         }
     }
     Ok(())
@@ -409,20 +415,20 @@ impl TimeSyncLimiter {
             .last_accepted
             .is_some_and(|last| now.saturating_duration_since(last) < policy.global_coalesce_window)
         {
-            return Err(denied("coalesced globally"));
+            return Err(Error::limit_reached("time sync: coalesced globally"));
         }
         state.global.refill(policy.global_rate, now);
         if !state.global.ready(policy.global_rate) {
-            return Err(denied("global rate limit"));
+            return Err(Error::limit_reached("time sync: global rate limit"));
         }
         if let Some(key) = &key {
             if let Some(source) = state.sources.get_mut(key) {
                 if now.saturating_duration_since(source.last_accepted) < policy.coalesce_window {
-                    return Err(denied("coalesced source"));
+                    return Err(Error::limit_reached("time sync: coalesced source"));
                 }
                 source.bucket.refill(policy.per_source_rate, now);
                 if !source.bucket.ready(policy.per_source_rate) {
-                    return Err(denied("source rate limit"));
+                    return Err(Error::limit_reached("time sync: source rate limit"));
                 }
             } else if state.sources.len() >= policy.max_sources {
                 state.sources.retain(|_, source| {
@@ -435,7 +441,7 @@ impl TimeSyncLimiter {
                             < policy.coalesce_window
                 });
                 if state.sources.len() >= policy.max_sources {
-                    return Err(denied("source table full"));
+                    return Err(Error::limit_reached("time sync: source table full"));
                 }
             }
         }

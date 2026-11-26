@@ -39,7 +39,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// [`write_local`](Self::write_local)'s Cancellation section describes (#2772).
     ///
     /// The future must be awaited inside a Tokio runtime, which the release
-    /// task needs: outside one it fails with [`Error::Encoding`] before
+    /// task needs: outside one it fails with [`Error::Unsupported`] before
     /// anything is staged or looked up, so an unknown object gets that error
     /// too, not UNKNOWN_OBJECT.
     ///

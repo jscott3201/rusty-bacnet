@@ -71,7 +71,7 @@ async fn assert_invalid_selection(selected: ObjectIdentifier) {
             panic!("startup accepted invalid selected Reporter {selected:?}");
         }
     };
-    assert!(matches!(error, Error::Encoding(_)), "{error:?}");
+    assert!(matches!(error, Error::InvalidConfig(_)), "{error:?}");
     assert!(!transport.started.load(Ordering::Acquire));
     assert!(transport.sent.lock().unwrap().is_empty());
 }

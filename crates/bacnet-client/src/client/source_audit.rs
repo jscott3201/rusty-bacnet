@@ -30,7 +30,6 @@ use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::AuditOperation;
 
 use super::pacing::{PaceGuard, PaceKey, Turn};
-use super::requests::request_cut_off;
 use super::segmentation_context::SegmentedRequestLimits;
 use super::source_audit_targets::{self, AuditTarget, AuditedOutcome, Decoded};
 use super::*;
@@ -141,11 +140,11 @@ impl AuditedRequest {
     ///
     /// # Errors
     ///
-    /// The error of a request cut off in flight, when the client's tasks end
-    /// first: its stop, or its node's stop or drop (#2720).
+    /// [`Error::RequestCutOff`] with `sent: false` when the client's tasks
+    /// end first: its stop, or its node's stop or drop (#2720).
     pub async fn turn_due(&mut self) -> Result<(), Error> {
         match &self.turn {
-            Some(turn) if !turn.due().await => Err(request_cut_off()),
+            Some(turn) if !turn.due().await => Err(super::requests::cut_off(false)),
             _ => Ok(()),
         }
     }
@@ -176,7 +175,7 @@ impl AuditedRequest {
         if let Some(turn) = self.turn.take() {
             let Some(pace) = turn.take().await else {
                 return AuditedOutcome {
-                    result: Err(request_cut_off()),
+                    result: Err(super::requests::cut_off(false)),
                     invoke_id: None,
                     attempted: false,
                     records: Vec::new(),
@@ -328,7 +327,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             // task, once it has its turn.
             return Box::pin(async move {
                 let _pace = match &turn {
-                    Some(turn) => turn.take().await.ok_or_else(request_cut_off)?,
+                    Some(turn) => turn
+                        .take()
+                        .await
+                        .ok_or_else(|| super::requests::cut_off(false))?,
                     None => PaceGuard::unpaced(),
                 };
                 run.await.0

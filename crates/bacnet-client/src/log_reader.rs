@@ -22,7 +22,7 @@ use bacnet_services::read_range::{
 };
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RangeError, Refusal};
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 
 use crate::client::{BACnetClient, ToStation};
@@ -231,10 +231,10 @@ impl SequenceSpace {
                     max: u64::from(u32::MAX),
                 })
             }
-            other => Err(Error::Encoding(format!(
+            other => Err(Error::InvalidArgument(Refusal::text(format!(
                 "a paged log read needs a Trend Log, Event Log, Trend Log Multiple or \
                  Audit Log, not {other}"
-            ))),
+            )))),
         }
     }
 
@@ -278,9 +278,12 @@ impl SequenceSpace {
     /// Total_Record_Count.
     pub(crate) fn window(self, record_count: u64, total: u64) -> Result<Window, Error> {
         if record_count > self.max || total > self.max {
-            return Err(Error::OutOfRange(format!(
-                "log counts {record_count} and {total} exceed the log's sequence range"
-            )));
+            // The static form of the same text (#1833).
+            return Err(
+                RangeError::new("log counts {} and {} exceed the log's sequence range")
+                    .with_values(record_count, total)
+                    .into(),
+            );
         }
         if record_count == 0 {
             return Ok(Window::Empty {
@@ -298,9 +301,10 @@ impl SequenceSpace {
 fn page_count(page_size: u16) -> Result<i32, Error> {
     match i16::try_from(page_size) {
         Ok(count @ 1..) => Ok(i32::from(count)),
-        _ => Err(Error::Encoding(format!(
-            "log page size must be 1..=32767, got {page_size}"
-        ))),
+        _ => Err(Error::InvalidArgument(
+            Refusal::new("log page size must be 1..=32767, got {}")
+                .with_value(u64::from(page_size)),
+        )),
     }
 }
 

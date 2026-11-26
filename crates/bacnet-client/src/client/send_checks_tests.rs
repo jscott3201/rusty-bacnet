@@ -49,9 +49,10 @@ fn a_confirmed_request_refuses_exactly_the_remote_broadcast_forms() {
 /// and that a remote broadcast takes only an unconfirmed request.
 #[test]
 fn a_remote_broadcast_refusal_says_which_form_and_what_to_use() {
-    let Err(Error::Encoding(text)) = check_remote_station(7, &[0xFF], false) else {
+    let Err(Error::InvalidArgument(text)) = check_remote_station(7, &[0xFF], false) else {
         panic!("refused");
     };
+    let text = text.to_string();
     assert!(
         text.contains("7:0xFF on network 7 is station 255"),
         "{text}"
@@ -81,9 +82,10 @@ fn a_remote_broadcast_refusal_says_which_form_and_what_to_use() {
         ),
     ];
     for (network, mac, expected) in decoded {
-        let Err(Error::Encoding(text)) = check_remote_station(network, mac, false) else {
+        let Err(Error::InvalidArgument(text)) = check_remote_station(network, mac, false) else {
             panic!("refused");
         };
+        let text = text.to_string();
         assert!(text.contains(expected), "{text}");
         // A two-octet form's hint names a gateway's two-octet station, not
         // ARCNET; the six-octet form names no mark, which can't lift it.

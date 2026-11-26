@@ -35,7 +35,11 @@ use super::decode::{placeholder_count, write_label};
 /// the network layer and the router's application port `AlreadyStarted`.
 /// The endpoint's session and ingress report all but `NotConnected`,
 /// deciding between `NotRunning`, `Stopping` and `Closed` from their own
-/// state; the server's and client's refusals move to this type after them.
+/// state. The server reports `Closed` once its stop has begun or a cleanup
+/// task failed, and the client `Stopping` while its seat's node stops and
+/// `Closed` once its seat or its coordinator has closed. A request the client's stop cut off is not a
+/// lifecycle state but its own outcome,
+/// [`Error::RequestCutOff`](super::Error::RequestCutOff).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Lifecycle {

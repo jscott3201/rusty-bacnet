@@ -535,8 +535,8 @@ async fn a_routed_read_through_a_group_router_is_refused_unsent() {
         stray[0].mac
     );
     assert!(
-        matches!(&refused, Err(Error::Encoding(message))
-            if message.contains("the router 0A:00:00:FF:BA:C0 is a broadcast or group address")),
+        matches!(&refused, Err(Error::InvalidArgument(message))
+            if message.to_string().contains("the router 0A:00:00:FF:BA:C0 is a broadcast or group address")),
         "{refused:?}"
     );
     assert_eq!(session.active_leases(), 0);

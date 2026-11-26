@@ -78,7 +78,14 @@ async fn segment_timeout_invalid_configuration_and_declaration_fail_before_io() 
         .map_err(Error::from)
         .err()
         .expect("invalid contract must fail");
-        assert!(matches!(error, Error::Encoding(_)), "{error:?}");
+        // The server's own refusal of a timeout four of which overflow
+        // (#1833); the identity's and the database's are bacnet-objects'
+        // text until #1833 reaches that crate.
+        if timeout == u64::MAX {
+            assert!(matches!(error, Error::InvalidConfig(_)), "{error:?}");
+        } else {
+            assert!(matches!(error, Error::Encoding(_)), "{error:?}");
+        }
     }
     // Checked multiplication and platform deadline representation are distinct.
     let timeout_ms = u64::MAX / 4;
@@ -121,7 +128,7 @@ async fn segment_timeout_builder_validation_precedes_transport_start_or_sc_dial(
             .map_err(Error::from)
             .err();
         for error in [generic, bip] {
-            assert!(matches!(error, Some(Error::Encoding(m)) if m.contains("segment")));
+            assert!(refused_for_segments(timeout, error));
         }
         #[cfg(feature = "sc-tls")]
         {
@@ -138,7 +145,7 @@ async fn segment_timeout_builder_validation_precedes_transport_start_or_sc_dial(
                 .await
                 .map_err(Error::from)
                 .err();
-            assert!(matches!(error, Some(Error::Encoding(m)) if m.contains("segment")));
+            assert!(refused_for_segments(timeout, error));
         }
     }
 }
@@ -243,4 +250,15 @@ async fn configured_segment_timeout_drives_real_server_response_ack_wait() {
     )
     .await;
     server.stop().await.unwrap();
+}
+
+/// Whether a build with segment timeout `timeout` failed for it: zero is
+/// the identity's refusal, bacnet-objects' text until #1833 reaches that
+/// crate; four of the largest overflow the server's own clock check (#1833).
+fn refused_for_segments(timeout: u64, error: Option<Error>) -> bool {
+    match error {
+        Some(Error::InvalidConfig(m)) => timeout == u64::MAX && m.to_string().contains("segment"),
+        Some(Error::Encoding(m)) => timeout == 0 && m.contains("segment"),
+        _ => false,
+    }
 }

@@ -32,6 +32,16 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+/// Where a decoded DeviceCommunicationControl request's enable-disable
+/// member starts: after the optional time-duration `[0]`, header and
+/// contents as the request carried them.
+fn enable_disable_at(service_data: &[u8]) -> usize {
+    match bacnet_encoding::tags::decode_tag(service_data, 0) {
+        Ok((tag, contents)) if tag.is_context(0) => contents + tag.length as usize,
+        _ => 0,
+    }
+}
+
 pub(crate) struct DccFailure {
     pub error: Error,
     pub outcome: crate::server::dcc_outcomes::DccOutcome,
@@ -77,8 +87,16 @@ pub(crate) fn validate_dcc(
     } else if request.enable_disable == EnableDisable::DISABLE_INITIATION {
         crate::server::DccState::DisableInitiation
     } else {
+        // A mode the service doesn't define: the peer's data, refused as
+        // out of range (#1833). It goes out as the Error PDU any refusal of
+        // a running service does, not a Reject.
         return Err(failure(
-            Error::Encoding("unknown EnableDisable value".into()),
+            bacnet_types::error::DecodeError::new(
+                bacnet_types::error::DecodingKind::OutOfRange,
+                enable_disable_at(service_data),
+                "unknown EnableDisable value",
+            )
+            .into(),
             DccOutcome::Malformed,
         ));
     };

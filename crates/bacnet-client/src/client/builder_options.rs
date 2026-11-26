@@ -356,3 +356,26 @@ impl ScClientBuilder {
         self
     }
 }
+
+impl ClientOptions {
+    /// Refuse a channel capacity outside 1 to its maximum, a value the
+    /// client keeps (#1833).
+    pub(super) fn validate(&self) -> Result<(), Error> {
+        let cov = "invalid cov-channel-capacity {}; expected 1..={}";
+        let event = "invalid event-channel-capacity {}; expected 1..={}";
+        for (label, capacity, max) in [
+            (cov, self.cov_channel_capacity, MAX_COV_CHANNEL_CAPACITY),
+            (
+                event,
+                self.event_channel_capacity,
+                MAX_EVENT_CHANNEL_CAPACITY,
+            ),
+        ] {
+            if !(1..=max).contains(&capacity) {
+                let refusal = Refusal::new(label).with_values(capacity as u64, max as u64);
+                return Err(Error::InvalidConfig(refusal));
+            }
+        }
+        Ok(())
+    }
+}

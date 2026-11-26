@@ -31,10 +31,10 @@ use tracing::error;
 
 /// The runtime a local change's post-commit task is spawned onto, checked
 /// before anything changes: outside one, the change fails with
-/// [`Error::Encoding`] and makes none.
+/// [`Error::Unsupported`] and makes none.
 pub(in crate::server) fn local_runtime() -> Result<tokio::runtime::Handle, Error> {
     tokio::runtime::Handle::try_current()
-        .map_err(|_| Error::Encoding("Local mutation requires a Tokio runtime".into()))
+        .map_err(|_| Error::unsupported("Local mutation requires a Tokio runtime"))
 }
 
 impl RequestTasks {

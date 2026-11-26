@@ -335,7 +335,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// would be were the work done in place.
     ///
     /// The future must be awaited inside a Tokio runtime, which the task is
-    /// spawned onto: outside one it fails with [`Error::Encoding`] before
+    /// spawned onto: outside one it fails with [`Error::Unsupported`] before
     /// anything is written.
     ///
     /// [`WriteProperty`]: bacnet_services::write_property::WritePropertyRequest

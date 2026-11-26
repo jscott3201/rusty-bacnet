@@ -675,10 +675,13 @@ pub(super) fn forwarded_npci_len(
 ) -> Result<u16, Error> {
     check_routed_dadr(dadr_len)?;
     if !routed_mac_fits(local_source_mac_len) {
-        return Err(Error::Encoding(format!(
-            "local source MAC address for routed forwarding must contain 1..={} octets",
-            bacnet_npdu::MAX_MAC_LEN
-        )));
+        // The client's own MAC, a value its link keeps.
+        return Err(Error::InvalidConfig(
+            Refusal::new(
+                "local source MAC address for routed forwarding must contain 1..={} octets",
+            )
+            .with_value(bacnet_npdu::MAX_MAC_LEN as u64),
+        ));
     }
     Ok(u16::try_from(9 + dadr_len + local_source_mac_len)
         .expect("two addresses within bacnet_npdu::MAX_MAC_LEN fit a u16"))
@@ -700,7 +703,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// A router MAC outside 1 to [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN)
     /// octets or a DNET outside 1..=65534 is refused with
-    /// [`Error::Encoding`], and so is a `max_npdu` that can carry no
+    /// [`Error::InvalidArgument`], and so is a `max_npdu` that can carry no
     /// request: one under the 50-octet minimum APDU plus the smallest NPCI a
     /// router adds to a request from this client, 10 octets and the
     /// client's own MAC (66 on B/IP, 61 on MS/TP). A limit under 228 octets
@@ -718,13 +721,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         check_remote_dnet(dnet)?;
         let smallest = smallest_usable_max_npdu(self.local_mac.len());
         if max_npdu < smallest {
-            return Err(Error::Encoding(format!(
+            return Err(Error::InvalidArgument(Refusal::text(format!(
                 "a routed path limit of {max_npdu} NPDU octets carries no request: after the \
                  {} octets of NPCI a router adds at the least, the APDU would be under the \
                  {}-octet minimum; give at least {smallest}",
                 smallest - bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE,
                 bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE,
-            )));
+            ))));
         }
         self.routed_path_limits
             .configure(router_mac, dnet, max_npdu)
@@ -755,13 +758,13 @@ pub(super) fn smallest_usable_max_npdu(local_mac_len: usize) -> u16 {
     bacnet_encoding::apdu::MINIMUM_MESSAGE_SIZE.saturating_add(npci)
 }
 
-/// A router MAC that [`routed_mac_fits`], or `Error::Encoding`.
+/// A router MAC that [`routed_mac_fits`], or [`Error::InvalidArgument`].
 fn check_router_mac(router_mac: &[u8]) -> Result<(), Error> {
     if !routed_mac_fits(router_mac.len()) {
-        return Err(Error::Encoding(format!(
-            "immediate router MAC address must contain 1..={} octets",
-            bacnet_npdu::MAX_MAC_LEN
-        )));
+        return Err(Error::InvalidArgument(
+            Refusal::new("immediate router MAC address must contain 1..={} octets")
+                .with_value(bacnet_npdu::MAX_MAC_LEN as u64),
+        ));
     }
     Ok(())
 }
@@ -775,7 +778,7 @@ fn check_router_mac(router_mac: &[u8]) -> Result<(), Error> {
 /// [`RoutedPathLimits::clear`].
 pub(super) fn check_remote_dnet(dnet: u16) -> Result<(), Error> {
     if dnet == 0 || dnet == u16::MAX {
-        return Err(Error::Encoding("routed DNET must be in 1..=65534".into()));
+        return Err(Error::invalid_argument("routed DNET must be in 1..=65534"));
     }
     Ok(())
 }
@@ -785,10 +788,10 @@ pub(super) fn check_remote_dnet(dnet: u16) -> Result<(), Error> {
 /// network address carries only unconfirmed requests (Clause 6.3).
 fn check_routed_dadr(dadr_len: usize) -> Result<(), Error> {
     if !routed_mac_fits(dadr_len) {
-        return Err(Error::Encoding(format!(
-            "routed destination MAC address must contain 1..={} octets",
-            bacnet_npdu::MAX_MAC_LEN
-        )));
+        return Err(Error::InvalidArgument(
+            Refusal::new("routed destination MAC address must contain 1..={} octets")
+                .with_value(bacnet_npdu::MAX_MAC_LEN as u64),
+        ));
     }
     Ok(())
 }

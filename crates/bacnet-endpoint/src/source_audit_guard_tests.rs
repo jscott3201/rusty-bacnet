@@ -287,8 +287,9 @@ async fn a_caller_gone_while_its_read_waits_for_the_database_sends_nothing() {
 /// A stop while the read of a caller that is never polled again waits for
 /// the database the application holds: the stop waits for the guard itself
 /// (to take its Reporter out), gets it once the application lets go, not
-/// after the read, and the read ends with the session's shutdown error,
-/// unsent and unrecorded.
+/// after the read, and the read ends cut off, unsent and unrecorded: its
+/// task, which the stop aborted, can't say it hadn't sent the read, so it
+/// is reported as one that may have been (#1833).
 #[tokio::test(start_paused = true)]
 async fn a_stop_ends_a_read_whose_caller_stopped_polling() {
     let mut endpoint = source(SessionRole::Both, false).await;
@@ -306,8 +307,7 @@ async fn a_stop_ends_a_read_whose_caller_stopped_polling() {
     bounded(stop).await.unwrap();
     assert!(matches!(
         bounded(parked).await,
-        Err(Error::State(bacnet_types::error::Lifecycle::Closed, message))
-            if message.to_string() == "endpoint shutdown"
+        Err(Error::RequestCutOff { sent: true })
     ));
     assert!(endpoint.sent.try_recv().is_err(), "nothing was sent");
 }

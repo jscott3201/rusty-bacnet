@@ -357,8 +357,9 @@ async fn a_waiting_request_ends_when_the_clients_tasks_end_and_claims_no_turn() 
         drop(inbound);
     };
     let (ended, ()) = tokio::join!(waiting, link_closes);
+    // Cut off while it waited for its turn: nothing of it left (#1833).
     assert!(
-        matches!(&ended, Err(Error::Encoding(message)) if message == "TSM response channel closed"),
+        matches!(&ended, Err(Error::RequestCutOff { sent: false })),
         "{ended:?}"
     );
     assert_eq!(Instant::now() - start, Duration::from_millis(1_020));
@@ -475,7 +476,9 @@ async fn an_interval_over_an_hour_is_refused() {
         .build()
         .await;
     match refused {
-        Err(Error::Encoding(message)) => assert!(message.contains("min-request-interval")),
+        Err(Error::InvalidConfig(message)) => {
+            assert!(message.to_string().contains("min-request-interval"))
+        }
         Err(other) => panic!("unexpected error {other:?}"),
         Ok(_) => panic!("an interval over an hour must be refused"),
     }

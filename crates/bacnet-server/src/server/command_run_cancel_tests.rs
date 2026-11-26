@@ -313,7 +313,7 @@ fn a_local_write_outside_a_tokio_runtime_fails_and_writes_nothing() {
     let mut write = write_local(&h, &target, PropertyValue::Real(70.0), None);
     let polled = write.as_mut().poll(&mut Context::from_waker(Waker::noop()));
     assert!(
-        matches!(polled, Poll::Ready(Err(Error::Encoding(_)))),
+        matches!(polled, Poll::Ready(Err(Error::Unsupported(_)))),
         "{polled:?}"
     );
     drop(write);
@@ -468,7 +468,7 @@ fn a_life_safety_rearm_outside_a_tokio_runtime_fails_and_changes_nothing() {
     let mut rearm = silence(&h, &point);
     let polled = rearm.as_mut().poll(&mut Context::from_waker(Waker::noop()));
     assert!(
-        matches!(polled, Poll::Ready(Err(Error::Encoding(_)))),
+        matches!(polled, Poll::Ready(Err(Error::Unsupported(_)))),
         "{polled:?}"
     );
     drop(rearm);

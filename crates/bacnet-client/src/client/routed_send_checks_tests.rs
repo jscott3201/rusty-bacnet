@@ -69,7 +69,7 @@ fn timed_out<T: std::fmt::Debug>(result: &Result<T, Error>) -> bool {
 }
 
 fn refused_with<T: std::fmt::Debug>(result: &Result<T, Error>, text: &str) -> bool {
-    matches!(result, Err(Error::Encoding(message)) if message.contains(text))
+    matches!(result, Err(Error::InvalidArgument(message)) if message.to_string().contains(text))
 }
 
 /// Each link's group routers, by its own rule, and one router that is a

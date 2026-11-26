@@ -1,4 +1,5 @@
 use super::{LengthBoundedBy, check_transmittable_length};
+use bacnet_types::error::Error;
 
 #[test]
 fn conformant_lengths_pass() {
@@ -35,6 +36,11 @@ fn the_error_names_the_binding_term() {
     assert!(
         peer_bound.to_string().contains("peer's advertised"),
         "peer is the binding term here, got: {peer_bound}"
+    );
+
+    assert!(
+        matches!(peer_bound, Error::InvalidConfig(_)),
+        "{peer_bound:?}"
     );
 
     let transport_bound =

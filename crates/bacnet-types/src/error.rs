@@ -115,6 +115,23 @@ impl fmt::Display for Initiation {
     }
 }
 
+/// [`Error::RequestCutOff`]'s text, which says whether the device may
+/// have carried the request out.
+struct CutOff {
+    sent: bool,
+}
+
+impl fmt::Display for CutOff {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the request ended without an answer: the client stopped ")?;
+        if self.sent {
+            f.write_str("while it waited, and the device may have carried it out")
+        } else {
+            f.write_str("before it was sent")
+        }
+    }
+}
+
 /// [`Error::AmbiguousDevice`]'s addresses, in the CLI's target grammar where
 /// it has a form for one: a routed station as `2:0x05`; on the local
 /// network, by the MAC's length, which names its link among this stack's
@@ -173,10 +190,15 @@ impl fmt::Display for Candidates<'_> {
 /// [`Error::InvalidArgument`], [`Error::Unsupported`],
 /// [`Error::LimitReached`]) is for a person to read and may change; a
 /// number or fact a caller acts on has a typed variant or field of its own,
-/// as [`Error::SendTooLong`] carries its length and limit. A value a
-/// component keeps (a builder setting, an option, a table it holds) that it
-/// refuses is [`Error::InvalidConfig`]; a value used for one call, or text
-/// parsed once, is [`Error::InvalidArgument`].
+/// as [`Error::SendTooLong`] carries its length and limit. What a component
+/// is built or started with (a value given to a builder's setter, an option,
+/// a table it is configured with, or a value made to configure it) that it
+/// refuses is [`Error::InvalidConfig`], wherever the check runs, even when the
+/// setter is the call that hands the value over. A value refused at the
+/// call that hands it to a component is [`Error::InvalidArgument`], even
+/// when the component would keep it (a device added to the client's table,
+/// a routed path's limit, a server's new clock zone), and so is text parsed
+/// once.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 // Clippy fails if the attribute above goes.
@@ -300,15 +322,18 @@ pub enum Error {
     #[error("{1}")]
     State(Lifecycle, Refusal),
 
-    /// A value the component would keep, refused before anything ran
-    /// (#1833): a builder setting, an option or a table, such as a timeout
-    /// outside its range or two modes that can't run together.
+    /// What the component is built or started with, refused (#1833): a
+    /// builder setting, an option, a table it is configured with or a value
+    /// made to configure it, such as a timeout outside its range or two
+    /// modes that can't run together.
     #[error("{0}")]
     InvalidConfig(Refusal),
 
-    /// A value used for one call, or text parsed once, refused before
-    /// anything was sent (#1833), such as an address or MAC of the wrong
-    /// form for the link, or a send's options the link can't carry.
+    /// A value refused at the call that hands it over, or text parsed once,
+    /// before anything was sent (#1833), such as an address or MAC of the
+    /// wrong form for the link, or a send's options the link can't carry.
+    /// It is so even when the component would keep the value, such as a
+    /// device added to the client's table.
     #[error("{0}")]
     InvalidArgument(Refusal),
 
@@ -406,11 +431,12 @@ pub enum Error {
         candidates: Box<[BACnetAddress]>,
     },
 
-    /// A request named a device the client can't place: no address in its
-    /// discovery table claims the instance, and none answered a Who-Is for
-    /// it, or no router is known for a remote network's station. Nothing
-    /// was sent to the device. Only with `std`, as for
-    /// [`Error::AmbiguousDevice`].
+    /// A request named a device that can't be placed: no address in the
+    /// client's discovery table claims the instance, and none answered a
+    /// Who-Is for it, or no router is known for a remote network's station,
+    /// as when a server's audit notification goes to a recipient whose
+    /// router it hasn't learned. Nothing was sent to the device. Only with
+    /// `std`, as for [`Error::AmbiguousDevice`].
     #[cfg(feature = "std")]
     #[error("device {device} is not known to the client; discover it first")]
     UnknownDevice {
@@ -451,6 +477,22 @@ pub enum Error {
         /// went out. `true`: the request went out before initiation was
         /// turned off, no answer came, and its retry was not sent, so the
         /// device may have carried it out.
+        sent: bool,
+    },
+
+    /// A confirmed request whose transaction its client ended under it
+    /// before an answer came (#2617, #2720, #1833): the client's own stop,
+    /// or the stop or drop of the endpoint or node it runs on, while the
+    /// request waited for its turn at the destination or for its answer.
+    /// It is that one transaction's outcome, not a lifecycle state of the
+    /// client: a call made after the stop gets its own refusal. No answer
+    /// will come for it.
+    #[error("{}", CutOff { sent: *.sent })]
+    RequestCutOff {
+        /// `false`: nothing of the request left, as it was still waiting
+        /// for its turn. `true`: the request, or some of its segments, may
+        /// have gone out, and the device may have carried it out, so a
+        /// write is not to be sent again blindly.
         sent: bool,
     },
 }

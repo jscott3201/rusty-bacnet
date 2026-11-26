@@ -47,8 +47,8 @@ async fn a_limit_that_can_carry_no_request_is_refused_at_configure_time() {
         for refused in [0, 1, smallest - 1] {
             let result = client.configure_routed_path_max_npdu(&ROUTER, DNET, refused);
             assert!(
-                matches!(&result, Err(Error::Encoding(message))
-                    if message.contains(&format!("give at least {smallest}"))),
+                matches!(&result, Err(Error::InvalidArgument(message))
+                    if message.to_string().contains(&format!("give at least {smallest}"))),
                 "{refused}: {result:?}"
             );
         }
@@ -204,7 +204,7 @@ async fn clearing_an_unknown_path_reserves_nothing() {
     );
     assert!(matches!(
         client.clear_routed_path_limit(&[], 300),
-        Err(Error::Encoding(_))
+        Err(Error::InvalidArgument(_))
     ));
     client.stop().await.unwrap();
 }

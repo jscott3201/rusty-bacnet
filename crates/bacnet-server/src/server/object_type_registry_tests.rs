@@ -114,7 +114,7 @@ fn a_type_registers_once() {
     let again = constructors.register::<Vendor, _>(vendor_type(), |_, _| {
         panic!("a refused registration is never called")
     });
-    assert!(matches!(again, Err(Error::Encoding(_))), "{again:?}");
+    assert!(matches!(again, Err(Error::InvalidConfig(_))), "{again:?}");
     // A built-in type registers once too, and its built-in constructor
     // doesn't count as a registration.
     constructors
@@ -182,7 +182,10 @@ fn device_and_network_port_never_register() {
         let refused = constructors.register::<Vendor, _>(kind, |_, _| {
             panic!("a refused registration is never called")
         });
-        assert!(matches!(refused, Err(Error::Encoding(_))), "{refused:?}");
+        assert!(
+            matches!(refused, Err(Error::InvalidConfig(_))),
+            "{refused:?}"
+        );
         assert!(!constructors.creates(kind), "{kind:?}");
     }
     assert_eq!(constructors.object_types().count(), 0);

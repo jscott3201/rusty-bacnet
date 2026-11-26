@@ -208,7 +208,7 @@ fn local_authorization_without_runtime_refuses_before_mutation() {
     let mut route = Box::pin(h.server.authorize_access_local(request(false), 42));
     assert!(matches!(
         route.as_mut().poll(&mut Context::from_waker(Waker::noop())),
-        Poll::Ready(Err(Error::Encoding(_)))
+        Poll::Ready(Err(Error::Unsupported(_)))
     ));
     drop(route);
     assert_eq!(runtime.block_on(snapshot(&h)), before);

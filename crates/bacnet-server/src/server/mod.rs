@@ -225,7 +225,7 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
     /// ([`StartError`]).
     pub async fn build(mut self) -> Result<BACnetServer<T>, StartError> {
         let Some(transport) = self.transport else {
-            let error = Error::Encoding("transport not set on ServerBuilder".into());
+            let error = Error::invalid_config("transport not set on ServerBuilder");
             return Err(StartError::new(error, self.db));
         };
         let db = crate::local_device::prepare_database(

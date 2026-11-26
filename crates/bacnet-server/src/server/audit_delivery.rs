@@ -114,7 +114,7 @@ pub(in crate::server) async fn deliver_observed<T: TransportPort + 'static>(
                     .send_apdu_routed(bytes, *net, mac, router, confirmed, NetworkPriority::Normal)
                     .await
             }
-            _ => Err(Error::Encoding("audit destination is unavailable".into())),
+            _ => Err(route.unplaced()),
         }
     };
     tokio::time::timeout_at(deadline, async {

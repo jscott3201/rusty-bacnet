@@ -18,17 +18,18 @@ impl ClientConfig {
         validate_max_apdu_length(self.max_apdu_length)?;
         validate_max_segments(self.max_segments)?;
         if self.segmentation.to_raw() > Segmentation::NO_SEGMENTATION.to_raw() {
-            return Err(Error::Encoding(format!(
-                "invalid segmentation {}; expected SEGMENTED_BOTH, SEGMENTED_TRANSMIT, \
-                 SEGMENTED_RECEIVE or NO_SEGMENTATION",
-                self.segmentation.to_raw()
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new(
+                    "invalid segmentation {}; expected SEGMENTED_BOTH, SEGMENTED_TRANSMIT, \
+                     SEGMENTED_RECEIVE or NO_SEGMENTATION",
+                )
+                .with_value(u64::from(self.segmentation.to_raw())),
+            ));
         }
         if self.apdu_segment_timeout_ms == Some(0) {
-            return Err(Error::Encoding(
+            return Err(Error::invalid_config(
                 "invalid apdu-segment-timeout 0 ms; expected a positive value, or none for the \
-                 APDU timeout"
-                    .into(),
+                 APDU timeout",
             ));
         }
         pacing::validate_interval_ms(self.min_request_interval_ms)
@@ -69,10 +70,10 @@ impl ClientConfig {
 
     pub(super) fn validate_window(&self) -> Result<(), Error> {
         if !(1..=127).contains(&self.proposed_window_size) {
-            return Err(Error::Encoding(format!(
-                "invalid proposed-window-size {}; expected 1..=127",
-                self.proposed_window_size
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new("invalid proposed-window-size {}; expected 1..=127")
+                    .with_value(u64::from(self.proposed_window_size)),
+            ));
         }
         Ok(())
     }

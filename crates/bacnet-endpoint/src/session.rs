@@ -1081,8 +1081,12 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             let Ok(runtime) = tokio::runtime::Handle::try_current() else {
                 return Err(task);
             };
+            // A pool the stop closed drops the task, and its caller hears
+            // of that from the task's end.
             match pool {
-                Some(pool) => pool.spawn(task),
+                Some(pool) => {
+                    let _ = pool.spawn(task);
+                }
                 None => drop(runtime.spawn(task)),
             }
             Ok(())

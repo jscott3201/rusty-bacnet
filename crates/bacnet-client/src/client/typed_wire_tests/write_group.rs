@@ -69,7 +69,7 @@ async fn write_group_is_refused_as_the_other_scoped_calls_are() {
     for network in [0, u16::MAX] {
         let refused = c.write_group(Broadcast::Network(network), &request).await;
         assert!(
-            matches!(&refused, Err(Error::Encoding(text)) if text.contains("Broadcast::Global")),
+            matches!(&refused, Err(Error::InvalidArgument(text)) if text.to_string().contains("Broadcast::Global")),
             "{refused:?}"
         );
     }
@@ -92,7 +92,7 @@ async fn write_group_is_refused_as_the_other_scoped_calls_are() {
         for result in results {
             if sealed {
                 assert!(
-                    matches!(&result, Err(Error::Encoding(text)) if text.contains("seat has closed")),
+                    matches!(&result, Err(Error::State(Lifecycle::Closed, text)) if text.to_string().contains("seat has closed")),
                     "{result:?}"
                 );
             } else {
