@@ -16,7 +16,7 @@ use super::test_lab::{Lab, SUBSCRIBE_COV, ai, settle};
 use super::*;
 
 /// Set the lab device's AI `instance` to `value`.
-async fn set(lab: &Lab, instance: u32, value: f32) {
+pub(super) async fn set(lab: &Lab, instance: u32, value: f32) {
     lab.server
         .set_present_value_local(&ai(instance), PropertyValue::Real(value))
         .await

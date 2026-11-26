@@ -1002,8 +1002,8 @@ and `pickle`.
 
 Properties:
 
-- `kind: Literal['refused', 'lifetime-refused', 'poll-only', 'no-answer', 'full', 'lapsed', 'missing', 'moved', 'replaced', 'foreign-sender', 'other']`: The reason: `"refused"` (the device refused the subscription; not asked again), `"lifetime-refused"` (the device refused the subscription's lifetime as longer than it takes; polled, not asked again: watch with a shorter one), `"poll-only"` (the watch polls every point, `subscribe=False`), `"no-answer"` (the first read or the subscription went unanswered), `"full"` (the device's subscription table was full) or `"lapsed"` (a renewal failed), each subscribed again after a backoff; `"missing"` (no router to a remote device's network is known); `"moved"` (the device answers at `to` now) or `"replaced"` (device `found` answers at the address now, not `watched`), either of which gives the point up; `"foreign-sender"` (its notifications name device `sender`, which can't be told from another device there, so it is polled). `"other"` for a reason this version doesn't name.
-- `error: Optional[str]`: The device's error, or the client's, as text, for `"refused"`, `"lifetime-refused"`, `"no-answer"`, `"full"` and `"lapsed"`; else None.
+- `kind: Literal['refused', 'poll-only', 'no-answer', 'full', 'lapsed', 'missing', 'moved', 'replaced', 'foreign-sender', 'other']`: The reason: `"refused"` (the device refused the subscription; not asked again), `"poll-only"` (the watch polls every point, `subscribe=False`), `"no-answer"` (the first read or the subscription went unanswered), `"full"` (the device's subscription table was full) or `"lapsed"` (a renewal failed), each subscribed again after a backoff; `"missing"` (no router to a remote device's network is known); `"moved"` (the device answers at `to` now) or `"replaced"` (device `found` answers at the address now, not `watched`), either of which gives the point up; `"foreign-sender"` (its notifications name device `sender`, which can't be told from another device there, so it is polled). `"other"` for a reason this version doesn't name.
+- `error: Optional[str]`: The device's error, or the client's, as text, for `"refused"`, `"no-answer"`, `"full"` and `"lapsed"`; else None.
 - `to: Optional[str]`: For `"moved"`: where the device answers now, as text `BACnetClient.device` reads back; else None.
 - `watched: Optional[int]`: For `"replaced"`: the instance an earlier answer named for the point; else None.
 - `found: Optional[int]`: For `"replaced"`: the instance the device at the address answers for now; else None.
@@ -1454,8 +1454,10 @@ outside 1 to 3600; a bool for either, and anything but a bool for
 and `BacnetLookupError` for a following handle whose device can't
 be placed, and `RuntimeError` when the client already runs
 watches of 256 different settings. Nothing is sent until the watch
-starts. A client from `endpoint.client()` leaves room in each
-renewal for a request on the default timers (6 s, 3 retries).
+starts. Each renewal leaves room for two requests with every retry
+on the client's own timers (its `apdu_timeout_ms`; for a client
+from `endpoint.client()`, the endpoint's `apdu_timeout_ms` and
+`apdu_retries`).
 
 ### Device.resolve_instance
 

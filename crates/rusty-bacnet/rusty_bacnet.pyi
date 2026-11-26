@@ -3646,7 +3646,6 @@ class WatchReason:
         self,
     ) -> Literal[
         "refused",
-        "lifetime-refused",
         "poll-only",
         "no-answer",
         "full",
@@ -3658,9 +3657,7 @@ class WatchReason:
         "other",
     ]:
         """The reason: ``"refused"`` (the device refused the subscription;
-        not asked again), ``"lifetime-refused"`` (the device refused the
-        subscription's lifetime as longer than it takes; polled, not asked
-        again: watch with a shorter one), ``"poll-only"`` (the watch polls
+        not asked again), ``"poll-only"`` (the watch polls
         every point, ``subscribe=False``), ``"no-answer"`` (the first read or the
         subscription went unanswered), ``"full"`` (the device's
         subscription table was full) or ``"lapsed"`` (a renewal failed),
@@ -3676,8 +3673,8 @@ class WatchReason:
     @property
     def error(self) -> Optional[str]:
         """The device's error, or the client's, as text, for
-        ``"refused"``, ``"lifetime-refused"``, ``"no-answer"``, ``"full"``
-        and ``"lapsed"``; else None."""
+        ``"refused"``, ``"no-answer"``, ``"full"`` and ``"lapsed"``; else
+        None."""
         ...
 
     @property
@@ -4270,8 +4267,10 @@ class Device:
         and ``BacnetLookupError`` for a following handle whose device can't
         be placed, and ``RuntimeError`` when the client already runs
         watches of 256 different settings. Nothing is sent until the watch
-        starts. A client from ``endpoint.client()`` leaves room in each
-        renewal for a request on the default timers (6 s, 3 retries)."""
+        starts. Each renewal leaves room for two requests with every retry
+        on the client's own timers (its ``apdu_timeout_ms``; for a client
+        from ``endpoint.client()``, the endpoint's ``apdu_timeout_ms`` and
+        ``apdu_retries``)."""
         ...
 
     def resolve_instance(self) -> Awaitable[int]:
@@ -6150,13 +6149,12 @@ class BACnetClient:
         write_policy: Optional[WritePolicy] = None,
         resolve_scope: Literal["local", "global"] | int | None = None,
         accept_complex_ack_for_simple_services: bool = False,
-        watch_lifetime: Optional[int] = None,
-        watch_poll_interval: Optional[float] = None,
-        watch_subscribe: Optional[bool] = None,
+        watch_lifetime: int = 300,
+        watch_poll_interval: float = 10.0,
+        watch_subscribe: bool = True,
     ) -> None:
-        """``watch_lifetime`` (default None, which is 300),
-        ``watch_poll_interval`` (default None, which is 10.0) and
-        ``watch_subscribe`` (default None, which is True): what a
+        """``watch_lifetime`` (default 300), ``watch_poll_interval`` (default
+        10.0) and ``watch_subscribe`` (default True): what a
         ``Device.watch`` takes unless it names its own ``lifetime``,
         ``poll_interval`` or ``subscribe`` (#2603). Watches with equal
         settings share their subscriptions. A lifetime is 1 to 28800 s

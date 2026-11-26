@@ -14,8 +14,10 @@
 //! lock; [`Watch::next`](super::Watch::next) takes a mark under the lock,
 //! builds the update without it, then checks the point's place and
 //! generation under it again before handing the update out. So a `next`
-//! begun after `remove` returned never yields the point, and one running
-//! beside it either returned it first or drops it.
+//! begun after `remove` returned never yields the point. A `next` already
+//! past that last check when the removal takes the lock still returns its
+//! update, which may be after `remove` returned: that update was handed
+//! out before the removal took effect.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -389,8 +391,9 @@ impl WatchControl {
 
     /// Stop watching `points` in this watch: the count it held. When this
     /// returns, no `next` begun after yields any of them, a change already
-    /// waiting included; a `next` running beside the call either returned
-    /// its update first or yields none. A point no other watch on the hub
+    /// waiting included. A `next` that had already passed its last check
+    /// when the removal took effect still returns that update, possibly
+    /// after this returns: it was handed out before the removal. A point no other watch on the hub
     /// holds stops there: its subscription is cancelled on the wire by the
     /// hub's scheduler, after this returns and without delaying it, best
     /// effort as when a watch is dropped; a point another watch holds goes

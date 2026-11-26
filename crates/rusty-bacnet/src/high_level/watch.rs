@@ -61,6 +61,10 @@ use crate::types::{PyObjectIdentifier, PyPropertyIdentifier};
 #[path = "watch_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "watch_prune_tests.rs"]
+mod prune_tests;
+
 /// Why a watch's iterator ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ended {
@@ -152,6 +156,18 @@ impl WatchShared {
         self.ended.get().copied()
     }
 
+    /// Stop watching `points` (as the hub keys them) in this watch: the
+    /// count it held. The hub's mailbox drops a change of theirs waiting,
+    /// then an update of theirs a cancelled `__anext__` put back is dropped
+    /// from the receiver's slot; one put back later is dropped as it comes
+    /// ([`Pruned`]). With the GIL held, so no Python code runs between.
+    fn remove_points(&self, py: Python<'_>, points: &[Point]) -> Result<usize, WatchError> {
+        let count = self.control.remove(points.iter())?;
+        self.stream
+            .purge(|object| Pruned::stale(py, &self.control, object));
+        Ok(count)
+    }
+
     /// Whether the watch still holds points.
     #[cfg(test)]
     pub(crate) fn watching(&self) -> bool {
@@ -206,26 +222,37 @@ impl Overrides {
     }
 }
 
-/// A client's watch settings from `BACnetClient`'s `watch_lifetime`,
-/// `watch_poll_interval` and `watch_subscribe` keywords, each as
-/// `Device.watch` takes it; None (or not given) for the default: 300 s,
-/// 10 s, True.
+/// `BACnetClient`'s `watch_lifetime` keyword (300 when not given): an int
+/// of seconds, 1 to 28800.
+pub(crate) fn watch_lifetime_arg(value: &Bound<'_, PyAny>) -> PyResult<u32> {
+    lifetime_arg("watch_lifetime", value).map(Lifetime::secs)
+}
+
+/// `BACnetClient`'s `watch_poll_interval` keyword (10.0 when not given): an
+/// int or float of seconds, 1 to 3600.
+pub(crate) fn watch_poll_arg(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    poll_arg("watch_poll_interval", value).map(|every| every.as_secs_f64())
+}
+
+/// `BACnetClient`'s `watch_subscribe` keyword (True when not given): a
+/// bool.
+pub(crate) fn watch_subscribe_arg(value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    subscribe_arg("watch_subscribe", value)
+}
+
+/// A client's watch settings from its `watch_*` keywords, each checked as
+/// it was taken.
 pub(crate) fn client_settings(
-    lifetime: Option<&Bound<'_, PyAny>>,
-    poll_interval: Option<&Bound<'_, PyAny>>,
-    subscribe: Option<&Bound<'_, PyAny>>,
+    lifetime: u32,
+    poll_interval: f64,
+    subscribe: bool,
 ) -> PyResult<WatchSettings> {
-    let mut settings = WatchSettings::default();
-    if let Some(lifetime) = given(lifetime) {
-        settings = settings.with_lifetime(lifetime_arg("watch_lifetime", lifetime)?);
-    }
-    if let Some(interval) = given(poll_interval) {
-        settings = settings.with_poll_every(poll_arg("watch_poll_interval", interval)?);
-    }
-    if let Some(subscribe) = given(subscribe) {
-        settings = settings.with_subscribe(subscribe_arg("watch_subscribe", subscribe)?);
-    }
-    Ok(settings)
+    let lifetime =
+        Lifetime::new(lifetime).map_err(|error| PyValueError::new_err(error.to_string()))?;
+    Ok(WatchSettings::default()
+        .with_lifetime(lifetime)
+        .with_poll_every(Duration::from_secs_f64(poll_interval))
+        .with_subscribe(subscribe))
 }
 
 /// `value`, unless it is None or not given.
@@ -575,32 +602,32 @@ impl PyWatch {
 
     /// Watch `points` too, at the watch's address, each in what
     /// `read_many` takes; those watched already are left as they are.
+    /// Done before this returns, as `remove` is, so an `add` and a
+    /// `remove` take effect in the order called, awaited or not.
     /// Awaitable: the count newly watched. Each new point is read, then
     /// subscribed (or polled) under the watch's settings; one another
     /// watch with the same settings holds joins its subscription.
-    /// Raised: TypeError or ValueError for a bad argument before the
-    /// Future is made; on await RuntimeError once the watch has ended, or
-    /// when the points would take the watch's hub past 4096 (nothing is
-    /// added then).
+    /// Raised when the call is made: TypeError or ValueError for a bad
+    /// argument, RuntimeError once the watch has ended or when the points
+    /// would take the watch's hub past 4096 (nothing is added then).
     fn add<'py>(&self, py: Python<'py>, points: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let wanted = points_arg(points)?;
         let added: Vec<Point> = wanted.iter().map(|p| point_at(&self.at, p)).collect();
-        let (control, list) = (self.shared.control.clone(), Arc::clone(&self.points));
-        let (ended, style) = (Arc::clone(&self.shared.ended), self.style);
-        future_into_py(py, async move {
-            // Held across the hub's change and the list's, which no await
-            // separates.
-            let mut list = list.locked();
-            let count = control
-                .add(added)
-                .map_err(|error| Self::changed_err(ended.get().copied(), error, style))?;
+        let count = {
+            // Held across the hub's change and the list's, so the two agree.
+            let mut list = self.points.locked();
+            let control = &self.shared.control;
+            // In the runtime: a new device's scheduler is a task.
+            let count = crate::py_async::in_runtime(|| control.add(added))
+                .map_err(|error| Self::changed_err(self.shared.ended_why(), error, self.style))?;
             for point in wanted {
                 if !list.contains(&point) {
                     list.push(point);
                 }
             }
-            Ok(count)
-        })
+            count
+        };
+        future_into_py(py, async move { Ok(count) })
     }
 
     /// Stop watching `points` in this watch, each in what `read_many`
@@ -618,20 +645,15 @@ impl PyWatch {
     ) -> PyResult<Bound<'py, PyAny>> {
         let wanted = points_arg(points)?;
         let removed: Vec<Point> = wanted.iter().map(|p| point_at(&self.at, p)).collect();
-        let control = &self.shared.control;
         let count = {
             let mut list = self.points.locked();
-            let count = control
-                .remove(removed.iter())
+            let count = self
+                .shared
+                .remove_points(py, &removed)
                 .map_err(|error| Self::changed_err(self.shared.ended_why(), error, self.style))?;
             list.retain(|point| !wanted.contains(point));
             count
         };
-        // An update a cancelled `__anext__` put back before the removal
-        // goes too; one put back later is dropped as it comes (`Pruned`).
-        self.shared
-            .stream
-            .purge(|object| Pruned::stale(py, control, object));
         future_into_py(py, async move { Ok(count) })
     }
 

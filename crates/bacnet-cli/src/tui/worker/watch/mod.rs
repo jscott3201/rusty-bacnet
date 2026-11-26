@@ -142,7 +142,6 @@ fn source_of(snapshot: &Snapshot, lifetime: u32) -> Option<Source> {
         }
         (Some(why), Some(hub::Source::Poll)) => Some(Source::Polled(match why {
             Why::Refused(error) => format!("COV refused: {error}"),
-            Why::LifetimeRefused(error) => format!("COV lifetime refused: {error}"),
             Why::ForeignSender { sender } => {
                 format!("notifications name device {sender}, which can't be told apart")
             }

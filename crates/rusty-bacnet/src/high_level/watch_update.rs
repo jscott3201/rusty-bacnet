@@ -285,11 +285,6 @@ impl PyWatchReason {
                 Some(error),
                 format!("the device refused the subscription: {error}"),
             ),
-            Why::LifetimeRefused(error) => reason(
-                "lifetime-refused",
-                Some(error),
-                format!("the device refused the subscription's lifetime: {error}"),
-            ),
             Why::PollOnly => reason("poll-only", None, "the watch polls every point".to_owned()),
             Why::NoAnswer(error) => reason(
                 "no-answer",
@@ -346,11 +341,9 @@ impl PyWatchReason {
 #[pymethods]
 impl PyWatchReason {
     /// The reason: `"refused"` (the device refused the subscription; not
-    /// asked again), `"lifetime-refused"` (the device refused the
-    /// subscription's lifetime as longer than it takes; polled, not asked
-    /// again: watch with a shorter one), `"poll-only"` (the watch polls
-    /// every point, `subscribe=False`), `"no-answer"` (the first read or the subscription
-    /// went unanswered), `"full"` (the device's subscription table was
+    /// asked again), `"poll-only"` (the watch polls every point,
+    /// `subscribe=False`), `"no-answer"` (the first read or the
+    /// subscription went unanswered), `"full"` (the device's subscription table was
     /// full) or `"lapsed"` (a renewal failed), each subscribed again after
     /// a backoff; `"missing"` (no router to a remote device's network is
     /// known); `"moved"` (the device answers at `to` now) or `"replaced"`
@@ -365,8 +358,7 @@ impl PyWatchReason {
     }
 
     /// The device's error, or the client's, as text, for `"refused"`,
-    /// `"lifetime-refused"`, `"no-answer"`, `"full"` and `"lapsed"`; else
-    /// None.
+    /// `"no-answer"`, `"full"` and `"lapsed"`; else None.
     #[getter]
     fn error(&self) -> Option<&str> {
         self.error.as_deref()

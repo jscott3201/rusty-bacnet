@@ -112,7 +112,7 @@ pub use self::control::WatchControl;
 pub use self::point::{Point, Watched, Why};
 pub use self::sample::Via;
 pub(crate) use self::settings::Pool;
-pub use self::settings::{DEFAULT_REQUEST_BUDGET, WatchSettings};
+pub use self::settings::WatchSettings;
 pub use self::stream::{MAX_WATCHED, Mark, State, Update, Watch};
 pub use self::support::CovSupport;
 pub(crate) use self::support::{CovMemory, services};
@@ -194,6 +194,8 @@ mod move_cue_tests;
 mod moves_tests;
 #[cfg(test)]
 mod naming_tests;
+#[cfg(test)]
+mod race_tests;
 #[cfg(test)]
 mod ranges_tests;
 #[cfg(test)]

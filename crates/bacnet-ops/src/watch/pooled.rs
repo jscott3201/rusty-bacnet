@@ -29,15 +29,17 @@ impl<T: TransportPort + 'static> Client<T> {
     /// Watch `points` under `settings`: a [`Watch`] streaming each point's
     /// [`Update`](super::Update)s.
     ///
-    /// The points go to the client's hub for `settings` (and this clone's
-    /// [`request_budget`](Self::request_budget)), made on first use and
-    /// shared by every watch of equal settings while any lives: a point two
-    /// such watches hold is one subscription. Each point is read once for
+    /// The points go to the client's hub for `settings`, made on first use
+    /// and shared by every watch of equal settings while any lives: a point
+    /// two such watches hold is one subscription. Each point is read once for
     /// its value, Status_Flags, Units, name and state texts, then, unless
     /// `settings` poll only, subscribed for its lifetime at a time, renewed
     /// before each lifetime ends; a point the device won't subscribe is
     /// polled with the device's other polled points, every `poll_every` at
-    /// most ([`WatchSettings::options`] says the rest). A device that
+    /// most (the [`hub`](super::hub) says the rest). Each renewal goes early
+    /// enough to leave room for two requests with every retry on the
+    /// low-level client's own timers ([`renewal_margin`](super::hub::renewal_margin)), at most
+    /// half the lifetime. A device that
     /// refuses the COV service itself is remembered by its address, and
     /// its later points are polled without asking. A point named twice, or
     /// one station named two ways, is watched once.
@@ -57,8 +59,11 @@ impl<T: TransportPort + 'static> Client<T> {
     /// the points would take the hub past [`MAX_WATCHED`](super::MAX_WATCHED)
     /// (nothing is watched then, and nothing sent),
     /// [`WatchError::NoRuntime`] outside a Tokio runtime, which the hub's
-    /// tasks need, and [`WatchError::Hubs`] when a hub for new settings
-    /// would be made while other hubs hold every range.
+    /// tasks need, [`WatchError::Hubs`] when a hub for new settings
+    /// would be made while other hubs hold every range, and
+    /// [`WatchError::Shut`] when the hub shuts down under the call
+    /// ([`shutdown_watches`](Self::shutdown_watches)); a call after makes a new
+    /// hub.
     pub fn watch_with(
         &self,
         points: impl IntoIterator<Item = Point>,
@@ -91,24 +96,10 @@ impl<T: TransportPort + 'static> Client<T> {
         clone
     }
 
-    /// How long one confirmed request takes with every retry on this
-    /// clone's low-level client, which a watch's renewals leave room for
-    /// ([`renewal_margin`](super::hub::renewal_margin)):
-    /// [`DEFAULT_REQUEST_BUDGET`](super::DEFAULT_REQUEST_BUDGET) for
-    /// [`Client::new`]'s, the APDU timeout times one more than the retries
-    /// for a connect builder's.
-    pub fn request_budget(&self) -> Duration {
-        self.request_budget
-    }
-
-    /// A clone of this client whose watches leave room for requests of
-    /// `budget`, for a low-level client built with other timers than the
-    /// defaults. The clone's alone, as
-    /// [`with_watch_settings`](Self::with_watch_settings) is.
-    pub fn with_request_budget(&self, budget: Duration) -> Self {
-        let mut clone = self.clone();
-        clone.request_budget = budget;
-        clone
+    /// How long one confirmed request takes with every retry on the
+    /// low-level client: its APDU timeout times one more than its retries.
+    pub(crate) fn request_budget(&self) -> Duration {
+        self.shared.request_budget
     }
 
     /// Shut down every hub the client's watches run on, as
@@ -143,14 +134,13 @@ impl<T: TransportPort + 'static> Client<T> {
         lock(&self.shared.ranges).release(range);
     }
 
-    /// The live hub of `settings` and this clone's request budget, or a new
-    /// one in the next free range over the client's base settings. Under
+    /// The live hub of `settings`, or a new one in the next free range over the client's base settings. Under
     /// the pool's lock, so two watches of new equal settings make one hub;
     /// the range is taken inside it (pool, then ranges).
     fn pooled_hub(&self, settings: &WatchSettings) -> Result<Hub<T>, WatchError> {
-        let budget = self.request_budget;
+        let budget = self.request_budget();
         let mut pool = lock(&self.shared.watch_pool);
-        pool.hub(settings, budget, || {
+        pool.hub(settings, || {
             let range = self.take_range().ok_or(WatchError::Hubs {
                 max: PROCESS_RANGES as usize,
             })?;

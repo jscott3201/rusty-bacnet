@@ -32,15 +32,12 @@ fn millis(duration: Duration) -> u64 {
 
 /// What every connect builder keeps besides the low-level builder: the
 /// request limits, where a handle by instance asks for its device, the
-/// priorities its writes may use, its watches' settings, and the timers
-/// its watches' renewals leave room for.
+/// priorities its writes may use, and its watches' settings.
 struct Kept {
     limits: RequestLimits,
     resolve_scope: ResolveScope,
     write_policy: WritePolicy,
     watch_settings: WatchSettings,
-    /// The APDU timeout and retries set on the low-level builder.
-    timer: (Duration, u8),
 }
 
 impl Default for Kept {
@@ -50,7 +47,6 @@ impl Default for Kept {
             resolve_scope: ResolveScope::default(),
             write_policy: WritePolicy::default(),
             watch_settings: WatchSettings::default(),
-            timer: (Duration::from_secs(6), 3),
         }
     }
 }
@@ -63,12 +59,10 @@ impl Kept {
 
     /// A client that wraps `low`, with these settings.
     fn wrap<T: TransportPort + 'static>(self, low: BACnetClient<T>) -> Client<T> {
-        let (timeout, retries) = self.timer;
         Client::new(Arc::new(low), Arc::new(self.limits))
             .with_resolve_scope(self.resolve_scope)
             .with_write_policy(self.write_policy)
             .with_watch_settings(self.watch_settings)
-            .with_request_budget(timeout * (u32::from(retries) + 1))
     }
 }
 
@@ -83,7 +77,6 @@ macro_rules! common_settings {
             #[must_use]
             pub fn apdu_timeout(mut self, timeout: Duration) -> Self {
                 self.builder = self.builder.apdu_timeout_ms(millis(timeout));
-                self.kept.timer.0 = timeout;
                 self
             }
 
@@ -92,7 +85,6 @@ macro_rules! common_settings {
             #[must_use]
             pub fn apdu_retries(mut self, retries: u8) -> Self {
                 self.builder = self.builder.apdu_retries(retries);
-                self.kept.timer.1 = retries;
                 self
             }
 
@@ -371,7 +363,6 @@ mod sc {
         /// other refused settings before any dial, then a hub that can't
         /// be reached or refuses the connection.
         pub async fn connect(self) -> Result<Client, OpsError> {
-            self.kept.check()?;
             self.kept.check()?;
             let low = Box::pin(self.builder.build_any()).await?;
             Ok(self.kept.wrap(low))

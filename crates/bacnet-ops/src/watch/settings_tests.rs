@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use super::control_tests::{hubs_gone, sent};
-use super::hub::{Lifetime, WatchOptions};
+use super::hub::{Backoff, Lifetime, WatchOptions};
 use super::stream_tests::{lab_device, next, pooled, until};
 use super::test_lab::{Lab, SUBSCRIBE_COV, ai, settle};
 use super::*;
@@ -120,11 +120,12 @@ async fn settings_a_hub_refuses_take_nothing() {
     lab.stop().await;
 }
 
-/// A device that refuses the subscription's lifetime is told apart from
-/// one without COV: the point is polled for that reason, and the service
-/// isn't remembered as refused, so the next point is asked.
+/// A device that refuses a subscription for its lifetime (a services-class
+/// value-out-of-range error) refuses that point, as any refusal but the
+/// service's own: polled and not asked again, and nothing is remembered of
+/// the device's COV service, so its next point is asked.
 #[tokio::test(start_paused = true)]
-async fn a_refused_lifetime_is_told_from_a_refused_service() {
+async fn a_refused_lifetime_refuses_the_point_not_the_service() {
     let lab = Lab::start(WatchOptions::default()).await;
     lab.quirks
         .short_lifetimes
@@ -133,7 +134,7 @@ async fn a_refused_lifetime_is_told_from_a_refused_service() {
     let mut watch = device.watch(["ai:1"]).unwrap();
     let update = until(&mut watch, |u| polled_for(u).is_some()).await;
     assert!(
-        matches!(polled_for(&update), Some(Why::LifetimeRefused(_))),
+        matches!(polled_for(&update), Some(Why::Refused(_))),
         "{update:?}"
     );
     assert_eq!(update.cov, CovSupport::Refused, "this point's subscription");
@@ -143,7 +144,7 @@ async fn a_refused_lifetime_is_told_from_a_refused_service() {
     watch.control().add([two.clone()]).unwrap();
     let update = until(&mut watch, |u| u.point == two && polled_for(u).is_some()).await;
     assert!(
-        matches!(polled_for(&update), Some(Why::LifetimeRefused(_))),
+        matches!(polled_for(&update), Some(Why::Refused(_))),
         "{update:?}"
     );
     assert_eq!(sent(&lab, SUBSCRIBE_COV) - before, 1, "asked again");
@@ -227,8 +228,11 @@ fn the_settings_make_the_hubs_options() {
     assert_eq!(settings.lifetime, Lifetime::DEFAULT);
     assert_eq!(settings.poll_every, Duration::from_secs(10));
     assert!(settings.subscribe);
-    let options = settings.options(DEFAULT_REQUEST_BUDGET);
+    // At the default timers (6 s, three retries) a request takes up to 24 s.
+    let options = settings.options(Duration::from_secs(24));
     assert_eq!(options.renewal_margin, Duration::from_secs(48));
+    // A COV retry waits 5 minutes, as the client hub's always did.
+    assert_eq!(options.retry_cov, Backoff::fixed(Duration::from_secs(300)));
     assert_eq!(options.max_points, MAX_WATCHED);
     assert!(options.subscribe);
     assert!(options.validate().is_ok());

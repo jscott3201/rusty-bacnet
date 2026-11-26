@@ -27,18 +27,12 @@ use super::hub::{
 };
 use super::stream::MAX_WATCHED;
 
-/// A confirmed request with every retry at the default timers (a 6 s APDU
-/// timeout, sent four times): what a watch's renewals leave room for
-/// unless the client says otherwise
-/// ([`Client::with_request_budget`](crate::Client::with_request_budget)).
-pub const DEFAULT_REQUEST_BUDGET: Duration = Duration::from_secs(24);
-
 /// A COV subscription's lifetime in seconds: never zero, so never the
 /// subscription that doesn't lapse, and at most [`MAX`](Self::MAX), eight
 /// hours, the longest every device is obliged to take (Clauses 13.14.1.1.4
 /// and 13.15.1.1.4). A device that takes no longer may refuse a longer
 /// one, and its point would then be polled for good
-/// ([`Why::LifetimeRefused`](super::Why::LifetimeRefused)).
+/// ([`Why::Refused`](super::Why::Refused)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Lifetime(pub(in crate::watch) NonZeroU32);
 
@@ -155,7 +149,9 @@ impl WatchSettings {
     /// [`WatchError::Settings`]: a poll interval below 1 s or above an
     /// hour.
     pub fn validate(&self) -> Result<(), WatchError> {
-        self.options(DEFAULT_REQUEST_BUDGET).validate()
+        // The request budget moves only the renewal margin, which stays
+        // inside the lifetime whatever it is.
+        self.options(Duration::ZERO).validate()
     }
 
     /// The hub's settings these make for a client whose requests take up
@@ -163,12 +159,12 @@ impl WatchSettings {
     /// lifetime, renewed early enough to cover that budget twice
     /// ([`renewal_margin`]); a device's polled points read together every
     /// `poll_every`, backing off to a minute (or `poll_every`, if longer)
-    /// when it stops answering; a point whose subscription went unanswered
-    /// or whose renewal failed polled for 30 s, doubling to 5 minutes,
-    /// before it is subscribed again; each point read for its value with
-    /// its Status_Flags, Units, name and state texts; every change
-    /// signalled; at most [`MAX_WATCHED`] points.
-    pub fn options(&self, request_budget: Duration) -> WatchOptions {
+    /// when it stops answering; a point whose subscription went unanswered,
+    /// met a full table, or whose renewal failed polled for 5 minutes before
+    /// it is subscribed again; each point read for its value with its
+    /// Status_Flags, Units, name and state texts; every change signalled;
+    /// at most [`MAX_WATCHED`] points.
+    pub(crate) fn options(&self, request_budget: Duration) -> WatchOptions {
         let poll_every = self.poll_every;
         WatchOptions {
             lifetime: self.lifetime,
@@ -179,10 +175,7 @@ impl WatchSettings {
                 first: poll_every,
                 longest: poll_every.max(Duration::from_secs(60)),
             },
-            retry_cov: Backoff {
-                first: Duration::from_secs(30),
-                longest: Duration::from_secs(300),
-            },
+            retry_cov: Backoff::fixed(Duration::from_secs(300)),
             missing: MissingDevice::Poll,
             reads: Reads::value(),
             coalesce: Duration::ZERO,
@@ -193,8 +186,8 @@ impl WatchSettings {
     }
 }
 
-/// The hubs a client's watches run on, one for each set of settings and
-/// request budget in use: weak, since each hub holds the client. Pruned
+/// The hubs a client's watches run on, one for each set of settings in
+/// use: weak, since each hub holds the client. Pruned
 /// as it is used. Only the client's pool lock guards it; that lock is
 /// taken before the client's ranges, never the other way, and held across
 /// no await.
@@ -204,7 +197,6 @@ pub(crate) struct Pool<T: TransportPort + 'static> {
 
 struct Pooled<T: TransportPort + 'static> {
     settings: WatchSettings,
-    budget: Duration,
     hub: Weak<Inner<T>>,
 }
 
@@ -213,19 +205,18 @@ impl<T: TransportPort + 'static> Pool<T> {
         Self { hubs: Vec::new() }
     }
 
-    /// The live hub of `settings` and `budget`, or the one `make` makes,
+    /// The live hub of `settings`, or the one `make` makes,
     /// kept for the next watch of the same.
     pub(crate) fn hub(
         &mut self,
         settings: &WatchSettings,
-        budget: Duration,
         make: impl FnOnce() -> Result<Hub<T>, WatchError>,
     ) -> Result<Hub<T>, WatchError> {
         self.hubs.retain(|pooled| pooled.hub.strong_count() > 0);
         let live = self
             .hubs
             .iter()
-            .filter(|pooled| pooled.settings == *settings && pooled.budget == budget)
+            .filter(|pooled| pooled.settings == *settings)
             .find_map(|pooled| pooled.hub.upgrade());
         if let Some(inner) = live {
             return Ok(Hub { inner });
@@ -233,7 +224,6 @@ impl<T: TransportPort + 'static> Pool<T> {
         let hub = make()?;
         self.hubs.push(Pooled {
             settings: settings.clone(),
-            budget,
             hub: Arc::downgrade(&hub.inner),
         });
         Ok(hub)

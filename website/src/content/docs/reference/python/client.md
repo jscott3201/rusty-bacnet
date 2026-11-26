@@ -136,15 +136,14 @@ def __init__(
     write_policy: Optional[WritePolicy] = None,
     resolve_scope: Literal["local", "global"] | int | None = None,
     accept_complex_ack_for_simple_services: bool = False,
-    watch_lifetime: Optional[int] = None,
-    watch_poll_interval: Optional[float] = None,
-    watch_subscribe: Optional[bool] = None,
+    watch_lifetime: int = 300,
+    watch_poll_interval: float = 10.0,
+    watch_subscribe: bool = True,
 ) -> None
 ```
 
-`watch_lifetime` (default None, which is 300),
-`watch_poll_interval` (default None, which is 10.0) and
-`watch_subscribe` (default None, which is True): what a
+`watch_lifetime` (default 300), `watch_poll_interval` (default
+10.0) and `watch_subscribe` (default True): what a
 `Device.watch` takes unless it names its own `lifetime`,
 `poll_interval` or `subscribe` (#2603). Watches with equal
 settings share their subscriptions. A lifetime is 1 to 28800 s

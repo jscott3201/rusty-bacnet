@@ -13201,10 +13201,7 @@ An `Update` (`#[non_exhaustive]`) carries:
 - `point`;
 - `state`, one `watch::State`: `Starting`, `Subscribed`, `Polled { why }`,
   `Unreachable { why }` or `Gone { why }`, where `why` is a `watch::Why`:
-  `Refused` (the device said no; not asked again), `LifetimeRefused` (the
-  device refused the subscription's lifetime, a services-class
-  value-out-of-range error, Clauses 13.14.1.3.1 and 13.15.1.3.1; not asked
-  again, and its COV service isn't taken as refused), `PollOnly` (the
+  `Refused` (the device said no; not asked again), `PollOnly` (the
   watch's settings poll every point), `NoAnswer` (the first read or the
   subscription had no answer), `Full` (its subscription table was full)
   and `Lapsed` (a renewal failed), each asked again after a backoff,
@@ -13237,12 +13234,14 @@ device takes it. A client's defaults are its connect builder's
 is bound when no hub takes them) or a clone's
 (`client.with_watch_settings(..)`, as `with_resolve_wait` is per clone);
 `client.watch(points)` uses them and `client.watch_with(points, &settings)`
-takes others for one watch. A renewal goes early enough to cover two of the
-client's request budgets (`client.request_budget()`: the builder's APDU
-timeout times one more than its retries, 24 s for `Client::new`'s;
-`with_request_budget` sets a clone's), at most half the lifetime.
+takes others for one watch. A renewal goes early enough to leave room for
+two requests with every retry on the low-level client's own timers
+(`BACnetClient::apdu_timeout()` times one more than `apdu_retries()`: 48 s
+before a five-minute lifetime ends at the default 6 s and three retries), at
+most half the lifetime. A subscription that went unanswered, met a full
+table or failed its renewal is asked for again after 5 minutes.
 
-**Hubs.** Watches with equal settings (and request budget) share one of the
+**Hubs.** Watches with equal settings share one of the
 client's pooled hubs: one subscription a point however many of them hold
 it; watches of other settings run on another hub, so no hub mixes two
 lifetimes. Each pooled hub is made on first use, with the client's base
@@ -13270,8 +13269,9 @@ update at once with where it stands. A point removed and added again is a
 new point of the watch: a new subscription with its own process
 identifier unless another watch held it meanwhile. `remove` returns how
 many it held, and once it returns no `next()` begun after yields any of
-them, a change already waiting included; a `next()` running beside it
-either returned its update first or yields none. The cancel of a point no
+them, a change already waiting included. A `next()` already past its last
+check when the removal takes effect still returns that update, possibly
+after `remove` returned: it was handed out before the removal. The cancel of a point no
 other watch holds goes from the hub's scheduler after `remove` returns,
 best effort, as on drop. A consumer that holds updates back (a buffer, a
 slot for one a cancelled read put back) asks `control.holds(update.mark())`

@@ -60,17 +60,10 @@ impl Started {
     }
 
     /// This client, its watches taking `settings` unless a watch names
-    /// others, their renewals leaving room for requests of `budget` (the
-    /// client's APDU timeout with its retries).
-    pub(super) fn with_watches(
-        mut self,
-        settings: bacnet_ops::WatchSettings,
-        budget: std::time::Duration,
-    ) -> Self {
-        self.high = self.high.map(|high| {
-            high.with_watch_settings(settings)
-                .with_request_budget(budget)
-        });
+    /// others. Their renewals leave room for the low-level client's own
+    /// timers, which the high-level client reads from it.
+    pub(super) fn with_watches(mut self, settings: bacnet_ops::WatchSettings) -> Self {
+        self.high = self.high.map(|high| high.with_watch_settings(settings));
         self
     }
 

@@ -556,9 +556,11 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
   at most 256 hubs at once, one for each set of settings in use (one still
   cancelling counts): a watch of a 257th raises `RuntimeError` until one
   ends.
-- Each renewal goes early enough to cover a request with its retries on
-  the client's `apdu_timeout_ms` (three retries); a client from
-  `endpoint.client()` leaves room for the default timers' (6 s).
+- Each renewal goes early enough to leave room for two requests with
+  every retry on the client's own timers: its `apdu_timeout_ms` with three
+  retries, or for a client from `endpoint.client()` the endpoint's
+  `apdu_timeout_ms` and `apdu_retries` (#2603). At the default 6 s that is
+  48 s before a five-minute lifetime ends.
 - The points are at the device's address now. A following handle whose
   device moves later is reported (`why.kind == "moved"`, `why.to`) rather
   than followed: watch again from the handle, which has moved. Another
@@ -602,7 +604,6 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
 | `.kind` | Fields | Meaning |
 |---------|--------|---------|
 | `"refused"` | `.error` | The device refused the subscription; polled, not asked again |
-| `"lifetime-refused"` | `.error` | The device refused the subscription's lifetime as longer than it takes; polled, not asked again: watch with a shorter one |
 | `"poll-only"` | | The watch polls every point (`subscribe=False`) |
 | `"no-answer"` | `.error` | The first read or the subscription went unanswered; asked again after a backoff |
 | `"full"` | `.error` | The device's subscription table was full; asked again after a backoff |
@@ -1995,9 +1996,9 @@ client = BACnetClient(
     router=None,                 # Keyword-only; a BACnetRouter, with transport="router"
     write_policy=None,           # Keyword-only; a WritePolicy for Device.write and relinquish: see "The write policy"
     resolve_scope=None,          # Keyword-only; "local" (None), "global" or a network: where device(1234) asks, see "Devices and targets"
-    watch_lifetime=None,         # Keyword-only; Device.watch's default COV lifetime, 1 to 28800 s (None: 300), see "Watching"
-    watch_poll_interval=None,    # Keyword-only; Device.watch's default poll interval, 1 to 3600 s (None: 10.0)
-    watch_subscribe=None,        # Keyword-only; False polls every point of a watch that doesn't say (None: True)
+    watch_lifetime=300,          # Keyword-only; Device.watch's default COV lifetime, 1 to 28800 s, see "Watching"
+    watch_poll_interval=10.0,    # Keyword-only; Device.watch's default poll interval, 1 to 3600 s
+    watch_subscribe=True,        # Keyword-only; False polls every point of a watch that doesn't say
     # MS/TP options (serial_port, mstp_*): see "MS/TP serial ports"
     # IPv6 options:
     ipv6_interface=None,         # IPv6 selected local address; None means ::

@@ -655,6 +655,18 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         &self.local_mac
     }
 
+    /// How long a confirmed request waits for its answer before it is sent
+    /// again or fails, as the builder set it.
+    pub fn apdu_timeout(&self) -> Duration {
+        Duration::from_millis(self.config.apdu_timeout_ms)
+    }
+
+    /// How many times a confirmed request is sent again before it fails, as
+    /// the builder set it.
+    pub fn apdu_retries(&self) -> u8 {
+        self.config.apdu_retries
+    }
+
     /// Current BACnet max-APDU bucket advertised by this client.
     ///
     /// Returns `0` if the live transport budget is below the smallest BACnet

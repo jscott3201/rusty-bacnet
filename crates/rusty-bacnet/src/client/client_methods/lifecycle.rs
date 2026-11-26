@@ -46,9 +46,9 @@ impl BACnetClient {
         write_policy=None,
         resolve_scope=None,
         accept_complex_ack_for_simple_services=false,
-        watch_lifetime=None,
-        watch_poll_interval=None,
-        watch_subscribe=None
+        watch_lifetime=300,
+        watch_poll_interval=10.0,
+        watch_subscribe=true
     ))]
     fn new(
         py: Python<'_>,
@@ -93,15 +93,15 @@ impl BACnetClient {
         write_policy: Option<PyRef<'_, crate::high_level::PyWritePolicy>>,
         resolve_scope: Option<Bound<'_, PyAny>>,
         accept_complex_ack_for_simple_services: bool,
-        watch_lifetime: Option<Bound<'_, PyAny>>,
-        watch_poll_interval: Option<Bound<'_, PyAny>>,
-        watch_subscribe: Option<Bound<'_, PyAny>>,
+        #[pyo3(from_py_with = crate::high_level::watch_lifetime_arg)] watch_lifetime: u32,
+        #[pyo3(from_py_with = crate::high_level::watch_poll_arg)] watch_poll_interval: f64,
+        #[pyo3(from_py_with = crate::high_level::watch_subscribe_arg)] watch_subscribe: bool,
     ) -> PyResult<Self> {
         let resolve_scope = crate::high_level::resolve_scope_arg(resolve_scope.as_ref())?;
         let watch_settings = crate::high_level::client_settings(
-            watch_lifetime.as_ref(),
-            watch_poll_interval.as_ref(),
-            watch_subscribe.as_ref(),
+            watch_lifetime,
+            watch_poll_interval,
+            watch_subscribe,
         )?;
         let router = crate::router::application::stack_router(
             transport,
@@ -394,12 +394,8 @@ impl BACnetClient {
                 }
             }
             .map_err(to_py_err)?;
-            // A request with its three retries, which a watch's renewals
-            // leave room for.
-            let budget = std::time::Duration::from_millis(timeout_ms) * 4;
             *slot = Some(
-                state::Started::new(c, write_policy, resolve_scope)
-                    .with_watches(watch_settings, budget),
+                state::Started::new(c, write_policy, resolve_scope).with_watches(watch_settings),
             );
             Ok(self_ref)
         })

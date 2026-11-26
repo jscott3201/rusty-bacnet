@@ -52,8 +52,6 @@ pub enum State {
     ///
     /// - [`Why::Refused`]: the device said no (or refused the service for
     ///   an earlier point); not asked again.
-    /// - [`Why::LifetimeRefused`]: the device refused the lifetime; not
-    ///   asked again.
     /// - [`Why::PollOnly`]: the watch's settings poll every point.
     /// - [`Why::ForeignSender`]: its notifications name a device that
     ///   can't be told from another at its address; subscribed again when

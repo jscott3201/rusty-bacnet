@@ -74,7 +74,7 @@ use crate::device::{ClientEvent, DeviceAddress, Follows};
 use crate::format::Value;
 use crate::limits::RequestLimits;
 use crate::reading::Reading;
-use crate::watch::{DEFAULT_REQUEST_BUDGET, WatchSettings};
+use crate::watch::WatchSettings;
 use crate::write::WritePolicy;
 
 #[cfg(doc)]
@@ -155,9 +155,8 @@ impl DeviceSummary {
 /// goes ([`with_resolve_scope`](Self::with_resolve_scope)); the
 /// priorities its handles may write at
 /// ([`with_write_policy`](Self::with_write_policy)); and the settings its
-/// watches take ([`with_watch_settings`](Self::with_watch_settings),
-/// [`with_request_budget`](Self::with_request_budget)), whose hubs every
-/// clone shares by settings ([`watch_with`](Self::watch_with)).
+/// watches take ([`with_watch_settings`](Self::with_watch_settings)), whose
+/// hubs every clone shares by settings ([`watch_with`](Self::watch_with)).
 ///
 /// What the client learns of a device it keeps by the device's address,
 /// for every handle and clone: that it refused ReadPropertyMultiple
@@ -191,9 +190,6 @@ pub struct Client<T: TransportPort + 'static = AnyTransport> {
     write_policy: WritePolicy,
     /// What this clone's watches take unless told otherwise.
     pub(crate) watch_settings: WatchSettings,
-    /// One confirmed request's time with its retries, which this clone's
-    /// watches' renewals leave room for.
-    pub(crate) request_budget: Duration,
 }
 
 /// What a [`Client`]'s clones share. Each std mutex is held only to look up
@@ -237,6 +233,10 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// instances announced at each address.
     pub(crate) changes: Mutex<broadcast::Receiver<DeviceEvent>>,
     pub(crate) events: broadcast::Sender<ClientEvent>,
+    /// One confirmed request's time with every retry on the low-level
+    /// client (its APDU timeout times one more than its retries), which a
+    /// watch's renewals leave room for.
+    pub(crate) request_budget: Duration,
 }
 
 impl<T: TransportPort + 'static> Clone for Client<T> {
@@ -247,7 +247,6 @@ impl<T: TransportPort + 'static> Clone for Client<T> {
             resolve_scope: self.resolve_scope,
             write_policy: self.write_policy,
             watch_settings: self.watch_settings.clone(),
-            request_budget: self.request_budget,
         }
     }
 }
@@ -262,6 +261,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// any other worker on the same low-level client).
     pub fn new(client: Arc<BACnetClient<T>>, limits: Arc<RequestLimits>) -> Self {
         let changes = Mutex::new(client.device_events());
+        let request_budget = client.apdu_timeout() * (u32::from(client.apdu_retries()) + 1);
         Self {
             shared: Arc::new(Shared {
                 client,
@@ -276,12 +276,12 @@ impl<T: TransportPort + 'static> Client<T> {
                 station_misses: Mutex::default(),
                 changes,
                 events: broadcast::channel(64).0,
+                request_budget,
             }),
             resolve_wait: Some(RESOLVE_WAIT),
             resolve_scope: ResolveScope::default(),
             write_policy: WritePolicy::default(),
             watch_settings: WatchSettings::default(),
-            request_budget: DEFAULT_REQUEST_BUDGET,
         }
     }
 
@@ -295,7 +295,6 @@ impl<T: TransportPort + 'static> Client<T> {
             resolve_scope: ResolveScope::default(),
             write_policy: WritePolicy::default(),
             watch_settings: WatchSettings::default(),
-            request_budget: DEFAULT_REQUEST_BUDGET,
         }
     }
 

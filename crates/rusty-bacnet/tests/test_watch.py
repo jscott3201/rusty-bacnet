@@ -415,9 +415,18 @@ class LimitTests(unittest.IsolatedAsyncioTestCase):
             # Equal settings still join a hub that runs.
             joined = await dev.watch(["ai:1"], subscribe=False, poll_interval=3000)
             await joined.close()
-            # A closed watch frees its hub once it was the hub's last.
+            # A closed watch frees its hub once it was the hub's last, its
+            # scheduler's task ended a moment after the close.
             await others.pop().close()
-            fresh = await dev.watch(["ai:1"], subscribe=False, poll_interval=2000)
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    fresh = await dev.watch(["ai:1"], subscribe=False, poll_interval=2000)
+                    break
+                except RuntimeError:
+                    if time.monotonic() > deadline:
+                        raise
+                    await asyncio.sleep(0.05)
             await fresh.close()
             for watch in same + others:
                 await watch.close()
@@ -509,6 +518,10 @@ class ArgumentTests(Lab):
         c = client()
         self.assertEqual((c.watch_lifetime, c.watch_poll_interval, c.watch_subscribe),
                          (300, 10.0, True))
+        parameters = inspect.signature(BACnetClient).parameters
+        self.assertEqual([parameters[name].default for name in
+                          ("watch_lifetime", "watch_poll_interval", "watch_subscribe")],
+                         [300, 10.0, True])
         c = client(watch_lifetime=28800, watch_poll_interval=2.5, watch_subscribe=False)
         self.assertEqual((c.watch_lifetime, c.watch_poll_interval, c.watch_subscribe),
                          (28800, 2.5, False))
@@ -588,6 +601,34 @@ class ChangeTests(Lab):
                 await watch.add(["ai:1"])
             with self.assertRaisesRegex(RuntimeError, "it was closed"):
                 await watch.remove(["ai:2"])
+
+    async def test_add_and_remove_take_effect_in_the_order_called(self) -> None:
+        async with client() as c:
+            dev = await c.device(self.address)
+            watch = await dev.watch(["ai:1"])
+            await next_where(watch, subscribed)
+            # Neither awaited before the other is called: each acts when called.
+            added = watch.add(["ai:2"])
+            self.assertEqual(len(watch), 2, "added before the await")
+            removed = watch.remove(["ai:2"])
+            self.assertEqual((await added, await removed), (1, 1))
+            self.assertEqual(watch.points, ((AI, PropertyIdentifier.PRESENT_VALUE, None),))
+            self.assertEqual(len(watch), 1)
+            await self.server.set_present_value_local(AI2, PropertyValue.real(5.0))
+            await self.server.set_present_value_local(AI, PropertyValue.real(6.0))
+            update = await next_where(watch, valued(6.0))
+            self.assertEqual(update.object_id, AI)
+            with self.assertRaises(TimeoutError):
+                while True:
+                    late = await asyncio.wait_for(anext(watch), 1)
+                    self.assertNotEqual(late.object_id, AI2)
+            await watch.close()
+            # An ended watch refuses either change when it is called, not
+            # when it is awaited.
+            for call in (watch.add, watch.remove):
+                with self.subTest(call=call.__name__):
+                    with self.assertRaisesRegex(RuntimeError, "it was closed"):
+                        call(["ai:2"])
 
     async def test_add_and_remove_refuse_bad_points_when_called(self) -> None:
         async with client() as c:
