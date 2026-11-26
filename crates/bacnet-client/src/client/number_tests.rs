@@ -22,6 +22,7 @@ mod folding;
 mod lifecycle;
 mod local_routes;
 mod progress;
+mod router_check;
 mod windows;
 
 /// Controls are taken in order; an unknown number answers nothing; each

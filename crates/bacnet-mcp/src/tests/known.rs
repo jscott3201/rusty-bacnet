@@ -52,8 +52,10 @@ pub(super) fn i_am_from(instance: u32, source: Option<NpduAddress>) -> BytesMut 
 /// Wait until `holds` is true of the lab, on the paused clock.
 /// Past the window in which the lab client takes the answers to its
 /// What-Is-Network-Number: the longest a node may hold its answer, 10 s,
-/// which outlasts its APDU timeout, and the 2 s margin (#2826).
-pub(super) const PAST_THE_WINDOW: Duration = Duration::from_millis(12_100);
+/// which outlasts its APDU timeout, the 2 s margin, and the router check
+/// after it, 1 s, when the client reaches the number through a router
+/// (#2826).
+pub(super) const PAST_THE_WINDOW: Duration = Duration::from_millis(13_100);
 
 pub(super) async fn until(lab: &Lab, holds: impl Fn(&Lab) -> bool, what: &str) {
     for _ in 0..1_000 {

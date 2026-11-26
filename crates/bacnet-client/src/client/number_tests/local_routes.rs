@@ -25,6 +25,7 @@ use bacnet_encoding::{
     apdu::{Apdu, ConfirmedRequest, SegmentAck, SimpleAck, decode_apdu, encode_apdu},
     npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu},
 };
+use bacnet_npdu::NetworkMessageType;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::MacAddr;
@@ -85,6 +86,17 @@ async fn learn(
     outbound: &mut mpsc::Receiver<Sent>,
 ) {
     teach(client, inbound, outbound, THIS_NETWORK, 0).await;
+    // With a routed row or path on this network the client checks that no
+    // router routes to it first, for its APDU timeout, 5 s (#2826).
+    tokio::time::sleep(Duration::from_millis(5_100)).await;
+    while let Ok(sent) = outbound.try_recv() {
+        let npdu = decode_npdu(sent.npdu).unwrap();
+        assert_eq!(
+            npdu.message_type,
+            Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK),
+            "only the router check went"
+        );
+    }
     // Asked of the client alone, it answers at once with what it holds.
     inject(inbound, QUERY, false).await;
     reply(outbound, THIS_NETWORK).await;
@@ -505,18 +517,27 @@ async fn with_the_number_unknown_a_relayed_answer_leaves_a_local_request_open() 
 /// relays with this network as its SNET still completes it at once, as it
 /// would have before the number was known. That answer is checked as any
 /// routed answer is (#2831): the same answer from another station on this
-/// link is dropped and counted first. The router answered the client's
-/// question before the request went; the number is taken when that
-/// question's window closes, two seconds after the request went.
+/// link is dropped and counted first. The router relayed the peer's
+/// I-Am back with this network's number, so the client holds a routed row
+/// on it, and answered the question that row drew; when the window
+/// closes the client checks that no router routes to the network (#2826),
+/// the request goes during the check, and the number is taken when the
+/// check ends, just before the request would time out.
 #[tokio::test(start_paused = true)]
 async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed_answer() {
     const STRANGER: [u8; 1] = [4];
     let (mut client, inbound, mut outbound) = client(false).await;
-    client.what_is_network_number(None).await.unwrap();
+    let echo = relayed_from(THIS_NETWORK, &PEER);
+    send_to_client(&inbound, &i_am(9), &ROUTER, echo).await;
     asked(&mut outbound).await;
     broadcast_from(&inbound, &number(THIS_NETWORK, 0), &ROUTER).await;
-    tokio::time::sleep(PAST_THE_WINDOW - Duration::from_millis(2_100)).await;
-    assert_eq!(client.network_number(), None, "the window is still open");
+    tokio::time::sleep(PAST_THE_WINDOW).await;
+    let check = decode_npdu(bounded(outbound.recv()).await.unwrap().npdu).unwrap();
+    assert_eq!(
+        check.message_type,
+        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
+    );
+    assert_eq!(client.network_number(), None, "the check is running");
     let peer = async {
         let sent = outbound.recv().await.unwrap();
         assert_eq!(sent.destination.as_slice(), ROUTER, "through the router");
@@ -526,7 +547,7 @@ async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed
             panic!("a confirmed request")
         };
         while client.network_number() != Some(THIS_NETWORK) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
         let relayed = relayed_from(THIS_NETWORK, &PEER);
         let ack = simple_ack(&request);

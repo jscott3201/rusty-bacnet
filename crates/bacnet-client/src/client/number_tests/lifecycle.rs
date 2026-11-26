@@ -81,6 +81,9 @@ async fn client_number_worker_queue_is_bounded_and_closes_on_abort() {
         collision_tx: client.device_collision_tx.clone(),
         link_returns: None,
         window: std::time::Duration::from_secs(5),
+        reports: client.network_report_tx.clone(),
+        paths: std::sync::Arc::clone(&client.routed_path_limits),
+        check_wait: std::time::Duration::from_secs(5),
     };
     let (tx, task) = network_number::spawn(&client.network, owner);
     tx.try_send(NumberControl::NumberIs {

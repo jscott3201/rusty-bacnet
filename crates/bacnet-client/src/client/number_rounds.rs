@@ -10,26 +10,36 @@
 //! answer them.
 //!
 //! The client now takes a number only from the answers to a
-//! What-Is-Network-Number of its own (Clause 6.4.19), and only when they
-//! agree:
+//! What-Is-Network-Number of its own (Clause 6.4.19):
 //!
 //! - Each question it sends opens a window ([`window_for`]): the client's
 //!   APDU timeout or the longest a node that is not a router may hold its
 //!   answer ([`ANSWER_DELAY_MAX`]), whichever is longer, and
 //!   [`ANSWER_MARGIN`] more. A Network-Number-Is heard in the window is an
 //!   answer. A router knows the number of every network it is attached to
-//!   (Clause 6.6.1) and has no leave to hold its answer back, so on a link
-//!   with a router, the router's answer is among them.
-//! - When the window closes, the answers flagged configured decide, or the
-//!   learned ones when no answer was flagged configured: one number among
-//!   them is applied by Clause 6.4.20's precedence, as every announcement
-//!   was before. Two or more decide nothing: the client keeps the number it
-//!   holds and counts the window
-//!   ([`BACnetClient::network_number_disagreements`](super::BACnetClient::network_number_disagreements)).
+//!   (Clause 6.6.1) and may not hold its answer back, so on a link with a
+//!   router that answers the message, its answer comes in the window unless
+//!   it is late or lost.
+//! - When the window closes, a number is taken only when every answer in it
+//!   named that number: two numbers decide nothing, whatever their flags.
+//!   That is stricter than Clause 6.4.20, under which a configured
+//!   announcement replaces a learned number (maintainer decision,
+//!   2026-11-26). The flags only set the quality of a number all the
+//!   answers agree on: configured when any was flagged so, by the clause's
+//!   precedence, which also keeps a learned answer from replacing a number
+//!   taken as configured.
 //! - A window in which the client may have lost an answer decides nothing
 //!   either: one the network layer's control queue or the Number owner's
 //!   own queue turned away, full, after the question went. What is lost
-//!   before those queues, in the socket's buffer or the link, is not seen.
+//!   before those queues, in the socket's buffer or on the link, is not
+//!   seen.
+//! - A number the client reaches through a router (it holds routed rows on
+//!   it, or a routed path to it) is taken only after the router check
+//!   (`number_check`): no router on this link may answer that it routes
+//!   there.
+//! - A window that decides nothing for two numbers, or that the router
+//!   check refuses, keeps what the client held and counts in
+//!   [`BACnetClient::network_number_disagreements`](super::BACnetClient::network_number_disagreements).
 //! - An announcement heard outside a window that names another number than
 //!   the client holds, unknown included, is a cue: the client asks, at once
 //!   the first time, then at most once per hold, which starts at a minute
@@ -38,14 +48,23 @@
 //!   question that goes takes the hold. One naming the number the client
 //!   holds changes no route and is applied as it comes.
 //!
-//! An honest site ends where it did, one window later: a router announcing
-//! its number at its start draws one question, and the router's answer is
-//! taken when the window closes. A station that announces another number
-//! now has to answer the question too, and a router on the link answers it
-//! with the real number, so the window decides nothing. Left open: a link
-//! where no station that knows the number answers the question (no router,
-//! or only routers older than the message), on which a station that
-//! answers alone still decides it.
+//! An honest site ends where it did, one window later, and one router check
+//! later still when the client reaches the number through a router (a
+//! router relaying local I-Ams back, #2572): a router announcing its number
+//! at its start draws one question, and the router's answer is taken when
+//! the window closes. A station that announces another number now has to
+//! answer the question too; a router on the link that answers it names the
+//! real number, and one that routes to the claimed number refuses it in the
+//! check. Left open, as a class: a link where no station that knows the
+//! number answers the question and no router routes to the claimed
+//! network (no router, or only routers older than the message), on which a
+//! station that answers alone still decides it; and an answer lost before
+//! the queues, which leaves a station's lone answer standing.
+//!
+//! This is the standalone client's rule. A client on an endpoint's seat
+//! holds its node's number, and the node, like the full server, still
+//! takes any announcement by Clause 6.4.20; a registered Network Port with
+//! a configured number takes none.
 
 use bacnet_network::network_number::ANSWER_DELAY_MAX;
 use tokio::time::{Duration, Instant, sleep_until};
@@ -80,8 +99,8 @@ pub(super) struct Question {
     pub(super) losses: u64,
 }
 
-/// The numbers heard at one flag in one window: the first, and whether
-/// another one came.
+/// The numbers heard in one window: the first, and whether another one
+/// came.
 #[derive(Debug, Default, Clone, Copy)]
 struct Votes {
     number: Option<u16>,
@@ -102,11 +121,11 @@ impl Votes {
 pub(super) enum Decision {
     /// Nobody answered.
     Unanswered,
-    /// The answers at the deciding flag named one number.
+    /// The answers all named one number.
     Agreed {
         /// The number they named.
         number: u16,
-        /// One when they were flagged configured.
+        /// One when any of them was flagged configured.
         flag: u8,
     },
     /// They named more than one.
@@ -123,24 +142,27 @@ struct Round {
     /// The losses before the earliest question the window holds answers
     /// to.
     baseline: u64,
-    configured: Votes,
-    learned: Votes,
+    /// The numbers heard, whatever their flags.
+    votes: Votes,
+    /// Whether any answer was flagged configured.
+    configured: bool,
 }
 
 impl Round {
-    /// What the answers decided, with `losses` lost by the close.
+    /// What the answers decided, with `losses` lost by the close. Two
+    /// numbers decide nothing whatever their flags (maintainer decision,
+    /// 2026-11-26), where Clause 6.4.20 would let a configured one win; the
+    /// flags only say which quality an agreed number takes.
     fn decide(&self, losses: u64) -> Decision {
-        let (votes, flag) = if self.configured.number.is_some() {
-            (self.configured, 1)
-        } else {
-            (self.learned, 0)
-        };
-        match votes.number {
+        match self.votes.number {
             // Two numbers heard disagree, whatever else was lost.
-            Some(_) if votes.split => Decision::Split,
+            Some(_) if self.votes.split => Decision::Split,
             _ if losses > self.baseline => Decision::Lost,
             None => Decision::Unanswered,
-            Some(number) => Decision::Agreed { number, flag },
+            Some(number) => Decision::Agreed {
+                number,
+                flag: u8::from(self.configured),
+            },
         }
     }
 }
@@ -203,15 +225,13 @@ impl Learning {
             let round = self.round.get_or_insert_with(|| Round {
                 closes,
                 baseline: losses,
-                configured: Votes::default(),
-                learned: Votes::default(),
+                votes: Votes::default(),
+                configured: false,
             });
             round.closes = round.closes.max(closes);
             round.baseline = round.baseline.min(losses);
-            match flag {
-                1 => round.configured.heard(number),
-                _ => round.learned.heard(number),
-            }
+            round.votes.heard(number);
+            round.configured |= flag == 1;
             return Heard::Answer;
         }
         if number == ours {

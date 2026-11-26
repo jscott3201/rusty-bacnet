@@ -71,13 +71,19 @@ pub(super) async fn open_site_with(numbers: bool, config: ClientConfig) -> Site 
 /// APDU timeout, the 2 s margin, and a little more (#2826).
 pub(super) const PAST_THE_WINDOW: Duration = Duration::from_millis(12_100);
 
+/// Past the router check after a window: the default APDU timeout, 6 s,
+/// and a little more (#2826).
+pub(super) const PAST_THE_CHECK: Duration = Duration::from_millis(6_100);
+
 impl Site {
     /// Have `ROUTER` answer the client's latest question, which went less
     /// than a window ago, with `network` and `flag`, and wait for the
-    /// window to close: the client then holds `network` (#2826).
+    /// window to close and for the router check that follows when the
+    /// client holds routed rows on `network`, which no router answers: the
+    /// client then holds `network` (#2826).
     pub(super) async fn answered(&self, network: u16, flag: u8) {
         broadcast_from(&self.inbound, &number(network, flag), &ROUTER).await;
-        tokio::time::sleep(PAST_THE_WINDOW).await;
+        tokio::time::sleep(PAST_THE_WINDOW + PAST_THE_CHECK).await;
         assert_eq!(self.client.network_number(), Some(network));
     }
 
@@ -352,9 +358,16 @@ async fn a_relayed_device_is_one_device_once_the_answer_comes() {
         vec![0x44, 0x42, 0xA0, 0x00, 0x00],
         None,
     );
+    // The routed row on this network had the client check that no router
+    // routes to it before taking it (#2826).
+    let check = site.sent.frame(1).decode_npdu();
+    assert_eq!(
+        check.message_type,
+        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
+    );
     let peer = async {
-        site.sent.wait_for_len(2).await;
-        let frame = site.sent.frame(1);
+        site.sent.wait_for_len(3).await;
+        let frame = site.sent.frame(2);
         assert_eq!(frame.mac.as_slice(), PEER, "to the device's own MAC");
         assert_eq!(frame.decode_npdu().destination, None, "with no DNET");
         let Apdu::ConfirmedRequest(request) = frame.apdu() else {

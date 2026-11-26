@@ -43,22 +43,23 @@ fn the_window_outlasts_a_held_answer() {
     );
 }
 
-/// Answers that agree decide; configured ones outrank learned ones, and a
-/// split among the deciding answers decides nothing.
+/// Answers that all name one number decide it, configured when any was
+/// flagged so; two numbers decide nothing, whatever their flags.
 #[test]
-fn a_window_takes_one_number_at_the_highest_flag_heard() {
+fn a_window_takes_a_number_only_when_every_answer_names_it() {
     let agreed = |number, flag| Decision::Agreed { number, flag };
     assert_eq!(window_of(&[]), Decision::Unanswered);
     assert_eq!(window_of(&[(7, 1)]), agreed(7, 1));
     assert_eq!(window_of(&[(7, 0), (7, 0)]), agreed(7, 0));
     assert_eq!(window_of(&[(7, 0), (7, 1)]), agreed(7, 1));
-    // A configured answer outranks learned ones that name another number.
-    assert_eq!(window_of(&[(8, 0), (7, 1), (8, 0)]), agreed(7, 1));
-    // Two numbers at the deciding flag decide nothing.
+    assert_eq!(window_of(&[(7, 1), (7, 0)]), agreed(7, 1));
+    // Two numbers decide nothing, a configured one against learned ones
+    // included.
+    assert_eq!(window_of(&[(8, 0), (7, 1), (8, 0)]), Decision::Split);
     assert_eq!(window_of(&[(7, 1), (5, 1)]), Decision::Split);
     assert_eq!(window_of(&[(7, 0), (5, 0)]), Decision::Split);
-    assert_eq!(window_of(&[(7, 1), (5, 0), (7, 1)]), agreed(7, 1));
-    assert_eq!(window_of(&[(7, 0), (5, 0), (7, 1)]), agreed(7, 1));
+    assert_eq!(window_of(&[(7, 1), (5, 0), (7, 1)]), Decision::Split);
+    assert_eq!(window_of(&[(7, 0), (5, 0), (7, 1)]), Decision::Split);
 }
 
 /// A control lost after the question went may have been an answer naming

@@ -79,6 +79,21 @@ impl DeviceTable {
         self.claims_of(instance).take(2).count()
     }
 
+    /// Whether the table holds a routed row on `network`: a device the
+    /// client reaches through a router there (#2826).
+    pub(crate) fn routes_on(&self, network: u16) -> bool {
+        let first = Key {
+            network,
+            mac: MacAddr::new(),
+        };
+        network != 0
+            && self
+                .rows
+                .range(first..)
+                .next()
+                .is_some_and(|(key, _)| key.network == network)
+    }
+
     /// Take `network` as the local network: each routed row on it is the
     /// local station at its remote MAC. Where that station has a local row
     /// the routed row is taken out, unless that row only holds the

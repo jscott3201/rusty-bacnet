@@ -286,27 +286,6 @@ pub(crate) fn new_coordinated_tsm(
 }
 
 impl ClientOptions {
-    /// How long the answers to the client's What-Is-Network-Number count
-    /// (#2826): see `network_number::window_for`.
-    pub(super) fn number_window(&self, config: &ClientConfig) -> Duration {
-        #[cfg(feature = "test-support")]
-        if let Some(window) = self.number_window {
-            return window;
-        }
-        network_number::window_for(Duration::from_millis(config.apdu_timeout_ms))
-    }
-
-    /// Test support: take the answers to the client's
-    /// What-Is-Network-Number for `window` after each question, in place of
-    /// the window its APDU timeout and the longest held answer set (#2826),
-    /// so a wire test on the wall clock learns a number in well under that.
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub fn with_number_window(mut self, window: Duration) -> Self {
-        self.number_window = Some(window);
-        self
-    }
-
     /// Set the COV notification broadcast channel capacity.
     pub fn with_cov_channel_capacity(mut self, capacity: usize) -> Self {
         self.cov_channel_capacity = capacity;
@@ -1182,3 +1161,4 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 mod number_tests;
 
 mod network_number;
+mod number_check;

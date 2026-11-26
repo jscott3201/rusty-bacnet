@@ -336,6 +336,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let (device_collision_tx, _) =
             broadcast::channel::<DeviceCollisionEvent>(DEVICE_EVENT_CHANNEL_CAPACITY);
         let device_collision_tx_dispatch = device_collision_tx.clone();
+        // Made ahead of the Number owner, whose router check listens to the
+        // reports and reads the routed paths (#2826).
+        let (network_report_tx, _) = broadcast::channel(NETWORK_REPORT_CHANNEL_CAPACITY);
+        let network_report_tx_dispatch = network_report_tx.clone();
+        let routed_path_limits = Arc::new(RoutedPathLimits::new(routed_path_quarantine_horizon(
+            &config,
+        )));
         let (number_tx, network_number_task) = if numbers {
             let owner = network_number::Owner {
                 discovery: Arc::clone(&device_table),
@@ -343,6 +350,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 collision_tx: device_collision_tx.clone(),
                 link_returns,
                 window: options.number_window(&config),
+                reports: network_report_tx.clone(),
+                paths: Arc::clone(&routed_path_limits),
+                check_wait: Duration::from_millis(config.apdu_timeout_ms),
             };
             let (tx, task) = inbound.spawn_number_owner(owner);
             (Some(tx), Some(task))
@@ -351,8 +361,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         };
         let (i_have_tx, _) = broadcast::channel::<ReceivedIHave>(I_HAVE_CHANNEL_CAPACITY);
         let i_have_tx_dispatch = i_have_tx.clone();
-        let (network_report_tx, _) = broadcast::channel(NETWORK_REPORT_CHANNEL_CAPACITY);
-        let network_report_tx_dispatch = network_report_tx.clone();
         let (routing_end, routing_ended) = tokio::sync::watch::channel(());
         let routing_query = Arc::new(routing_table::RoutingQueries::new(routing_ended));
         let routing_query_dispatch = Arc::clone(&routing_query);
@@ -365,9 +373,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         #[cfg(test)]
         let segmented_cleanup_dispatch = Arc::clone(&segmented_cleanup);
         let response_limits = ResponseLimits::from_config(&config);
-        let routed_path_limits = Arc::new(RoutedPathLimits::new(routed_path_quarantine_horizon(
-            &config,
-        )));
         let routed_path_limits_dispatch = Arc::clone(&routed_path_limits);
         let group_source_request_drops = Arc::new(AtomicU64::new(0));
         let group_source_drops_dispatch = Arc::clone(&group_source_request_drops);

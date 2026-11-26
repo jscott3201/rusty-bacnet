@@ -179,29 +179,34 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
-    /// The number of the network this client is on, once the answers to
-    /// one of its What-Is-Network-Number questions have agreed on it
+    /// The number of the network this client is on, once every answer to
+    /// one of its What-Is-Network-Number questions named it
     /// ([`Self::what_is_network_number`] asks, and the client asks by
     /// itself before its first Who-Is, when it first stores a routed
     /// device, #2572, and when an announcement it did not ask for names
-    /// another number, #2826). The answers count for one APDU timeout after
-    /// the question, so a number is known that long after the question that
-    /// drew it.
+    /// another number, #2826). The answers count for a window after the
+    /// question: the APDU timeout or the ten seconds a node that is not a
+    /// router may hold its answer, whichever is longer, and two more. A
+    /// number the client reaches through a router (routed rows or a routed
+    /// path on it) is taken one router check later, an APDU timeout, and
+    /// only when no router on this link answers that it routes there.
     /// `None` until then, and always on a link that takes no network number
     /// controls. A routed address naming this network is a station on this
-    /// one. A client on an endpoint's seat holds the number its node holds.
+    /// one. A client on an endpoint's seat holds the number its node holds,
+    /// which the node still takes from any announcement.
     pub fn network_number(&self) -> Option<u16> {
         self.network.local_network_number().get()
     }
 
-    /// How many times the answers to this client's What-Is-Network-Number
-    /// named more than one number, so the client kept what it held, a
-    /// number or none (#2826). Answers flagged configured outrank learned ones, so
-    /// only answers at the same flag disagree. A rise means two stations on
-    /// this link claim different numbers for it: a misconfigured router, or
-    /// a station announcing a number that is not this network's. Always
-    /// zero for a client on an endpoint's seat, whose node holds the
-    /// number.
+    /// How many windows of answers to this client's What-Is-Network-Number
+    /// decided nothing for a disagreement, so the client kept what it held,
+    /// a number or none (#2826): the answers named two numbers, whatever
+    /// their flags, or they agreed on a network the client reaches through
+    /// a router and a router on this link answered that it routes there,
+    /// or may have. A rise means stations on this link claim different
+    /// numbers for it: two routers configured apart, or a station
+    /// announcing a number that is not this network's. Always zero for a
+    /// client on an endpoint's seat, whose node holds the number.
     pub fn network_number_disagreements(&self) -> u64 {
         self.device_table.asking.disagreements()
     }

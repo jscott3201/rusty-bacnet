@@ -27,6 +27,9 @@ const FAR: [u8; 1] = [4];
 /// a node may hold its answer and the margin, with room to spare.
 const PAST_THE_WINDOW: Duration = Duration::from_secs(13);
 
+/// Past the router check after a window: the default APDU timeout.
+const PAST_THE_CHECK: Duration = Duration::from_secs(7);
+
 /// A client that holds Device 10 as routed through `ROUTER` at `FAR` on
 /// `REMOTE_NETWORK`, its question about the number gone unanswered.
 async fn holding_a_routed_device() -> Site {
@@ -160,33 +163,6 @@ async fn answers_that_disagree_decide_nothing_and_are_counted() {
     }
 }
 
-/// A site renumbered: the router announces its new number, flagged
-/// configured. The client asks; the router answers with the new number,
-/// and another node still holding the old one, as learned, answers with
-/// that. A configured answer outranks a learned one (Clause 6.4.20), so
-/// the client takes the new number.
-#[tokio::test(start_paused = true)]
-async fn a_configured_answer_outranks_a_learned_one() {
-    const NEW: u16 = THIS_NETWORK + 1;
-    let mut site = open_site(true).await;
-    taught(&site).await;
-    deliver_announcement(&site, NEW, 1, &ROUTER).await;
-    assert_eq!(questions(&site), 2, "asked about the new number");
-    deliver_announcement(&site, NEW, 1, &ROUTER).await;
-    deliver_announcement(&site, THIS_NETWORK, 0, &[5]).await;
-    tokio::time::sleep(PAST_THE_WINDOW).await;
-    assert_eq!(site.client.network_number(), Some(NEW));
-    assert_eq!(site.client.network_number_disagreements(), 0);
-    site.client.stop().await.unwrap();
-}
-
-/// Broadcast a Network-Number-Is naming `network` with `flag` from
-/// `source`, and give the client a turn.
-async fn deliver_announcement(site: &Site, network: u16, flag: u8, source: &[u8]) {
-    broadcast_from(&site.inbound, &number(network, flag), source).await;
-    tokio::time::sleep(Duration::from_millis(10)).await;
-}
-
 /// A stranger repeating its announcement, and the router repeating the
 /// real number, draw one question at once, then at most one per hold: a
 /// minute, then two. Each question's window holds both numbers, so none
@@ -209,9 +185,11 @@ async fn repeated_announcements_ask_once_per_hold() {
 }
 
 /// What is left (#2826): on a link where no station that knows the number
-/// answers the question (no router, or one older than the message), a
-/// station that answers it alone still decides the number. Here the
-/// stranger's announcement draws the question and its next one answers it.
+/// answers the question (no router, or one older than the message) and no
+/// router answers the client's router query for the number, a station
+/// that answers the question alone still decides it. Here the stranger's
+/// announcement draws the question and its next one answers it; the
+/// router check finds no router.
 #[tokio::test(start_paused = true)]
 async fn a_station_answering_the_question_alone_still_decides() {
     let mut site = holding_a_routed_device().await;
@@ -219,7 +197,7 @@ async fn a_station_answering_the_question_alone_still_decides() {
         inject(&site.inbound, &number(REMOTE_NETWORK, 1), true).await;
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    tokio::time::sleep(PAST_THE_WINDOW).await;
+    tokio::time::sleep(PAST_THE_WINDOW + PAST_THE_CHECK).await;
     assert_eq!(site.client.network_number(), Some(REMOTE_NETWORK));
     let device = site
         .client

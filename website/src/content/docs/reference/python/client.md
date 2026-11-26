@@ -869,6 +869,20 @@ relayed with this network's own number as SNET for a request sent
 straight to the device. A rise means a station is answering for
 other devices. RuntimeError before start and after stop.
 
+### BACnetClient.network_number_disagreements
+
+```python
+def network_number_disagreements(self) -> Awaitable[int]
+```
+
+How many windows of answers to the client's What-Is-Network-Number
+decided nothing since start (#2826), so it kept the number it held:
+the answers named two numbers, or agreed on a network the client
+reaches through a router that a router on its link answered it
+routes to. A rise means stations on the link claim different
+numbers for it. Always zero for an endpoint's client, whose endpoint
+holds the number. RuntimeError before start and after stop.
+
 ### BACnetClient.network_reports
 
 ```python

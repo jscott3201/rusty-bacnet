@@ -235,6 +235,12 @@ impl RoutedPathLimits {
         self.state().off_path_answers
     }
 
+    /// Whether the client holds a path to `dnet` through any router: one a
+    /// request took, or one a limit was set or learned for (#2826).
+    pub(super) fn has_path_to(&self, dnet: u16) -> bool {
+        self.state().entries.keys().any(|key| key.dnet == dnet)
+    }
+
     /// Counts an answer refused for the path it came by elsewhere than
     /// [`Self::answer_through`]: one relayed with this network as its SNET
     /// for a request sent straight to the station it names (#2831).
