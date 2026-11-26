@@ -215,6 +215,19 @@ impl<'a> Npdu<'a> {
     /// The checks run in the order the fields come, so a frame with several
     /// faults reports the first one. Reserved control bits are read past.
     pub fn decode(frame: &'a [u8]) -> Result<Self, DecodeError<'a>> {
+        Self::decode_inline(frame)
+    }
+
+    /// [`Self::decode`], always inlined into its caller: for the router
+    /// core's receive path, which decodes every frame a node takes. Inlined
+    /// there, the fields the path never reads fold away; called, the whole
+    /// result goes through memory. The compiler inlines [`Self::decode`]
+    /// only while the program calls it from one place, so a second caller
+    /// elsewhere moved it out of line and cost that path 94 instructions
+    /// per request in the counting harness (two frames, #2829). Every other
+    /// caller uses [`Self::decode`].
+    #[inline(always)]
+    pub fn decode_inline(frame: &'a [u8]) -> Result<Self, DecodeError<'a>> {
         let [version, control, ..] = *frame else {
             return Err(Malformed::Truncated.into());
         };
