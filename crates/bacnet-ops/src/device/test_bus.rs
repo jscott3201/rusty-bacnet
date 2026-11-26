@@ -76,6 +76,25 @@ pub(crate) async fn settle() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 }
 
+/// Wait out the window in which the bus client takes the answers to its
+/// What-Is-Network-Number (#2826): the longest a node may hold its answer,
+/// 10 s, which outlasts the client's 1 s APDU timeout, and 2 s more.
+pub(crate) async fn past_the_window() {
+    tokio::time::sleep(Duration::from_millis(12_100)).await;
+}
+
+/// Wait, for up to 20 s, until `low` holds its network's number: the
+/// window for the answers to its question, and the router check after it
+/// when it reaches that network through a router (#2826).
+pub(crate) async fn until_learned(low: &BACnetClient<TestTransport>) {
+    for _ in 0..200 {
+        if low.network_number().is_some() {
+            return;
+        }
+        settle().await;
+    }
+}
+
 pub(crate) async fn stop(servers: Vec<BACnetServer<TestTransport>>) {
     for mut server in servers {
         server.stop().await.unwrap();
@@ -411,6 +430,15 @@ impl Bus {
         };
         encode_npdu(&mut npdu, &frame).unwrap();
         self.deliver(&MacAddr::from_slice(&mac(n)), &npdu, None);
+    }
+
+    /// Teach `low` that this network is `number` the way the client takes
+    /// one (#2826): it asks, station `n` answers its question, and the
+    /// window for the answers closes.
+    pub(crate) async fn taught(&self, low: &BACnetClient<TestTransport>, n: u8, number: u16) {
+        low.what_is_network_number(None).await.unwrap();
+        self.number_is(n, number);
+        past_the_window().await;
     }
 
     /// Broadcast a Network-Number-Is from station `n`: this network is
