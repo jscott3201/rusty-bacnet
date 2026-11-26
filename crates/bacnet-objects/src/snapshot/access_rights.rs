@@ -38,7 +38,7 @@ use bacnet_types::constructed::{BACnetAccessRule, BACnetDeviceObjectReference};
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use super::SnapshotError;
+use super::PersistenceError;
 use super::framing;
 use crate::access_control::{AccessRightsSnapshot, MAX_ACCESS_RULES};
 
@@ -61,13 +61,13 @@ const WHAT: &str = "Access Rights file";
 
 /// The file octets for `snapshot`, saved for `object`.
 ///
-/// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) an array
+/// Refuses ([`OutOfRange`](super::PersistenceErrorKind::RefusedOnEncode)) an array
 /// of more than [`MAX_ACCESS_RULES`] rules, a Description past 16 KiB and
 /// octets past [`MAX_LEN`]: what [`decode`] would refuse.
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &AccessRightsSnapshot,
-) -> Result<Vec<u8>, SnapshotError> {
+) -> Result<Vec<u8>, PersistenceError> {
     encode_file(object, snapshot).map_err(|error| error.in_format("Access Rights snapshot"))
 }
 
@@ -81,14 +81,14 @@ pub fn encode(
 pub fn decode(
     object: ObjectIdentifier,
     octets: &[u8],
-) -> Result<AccessRightsSnapshot, SnapshotError> {
+) -> Result<AccessRightsSnapshot, PersistenceError> {
     decode_file(object, octets).map_err(|error| error.in_format("Access Rights file"))
 }
 
 fn encode_file(
     object: ObjectIdentifier,
     snapshot: &AccessRightsSnapshot,
-) -> Result<Vec<u8>, SnapshotError> {
+) -> Result<Vec<u8>, PersistenceError> {
     let mut body = BytesMut::new();
     for (tag, rules) in [
         (POSITIVE_TAG, &snapshot.positive_access_rules),
@@ -96,7 +96,7 @@ fn encode_file(
     ] {
         if let Some(rules) = rules {
             if rules.len() > MAX_ACCESS_RULES {
-                return Err(SnapshotError::out_of_range(
+                return Err(crate::snapshot::refused_on_encode(
                     "holds more rules than the object keeps",
                 ));
             }
@@ -122,19 +122,19 @@ fn encode_file(
         &body,
     )?;
     if octets.len() > MAX_LEN {
-        return Err(SnapshotError::out_of_range("is too large to save"));
+        return Err(crate::snapshot::refused_on_encode("is too large to save"));
     }
     Ok(octets)
 }
 
-fn undecodable() -> SnapshotError {
-    SnapshotError::damaged("holds an entry that does not decode")
+fn undecodable() -> PersistenceError {
+    crate::snapshot::damaged("holds an entry that does not decode")
 }
 
 fn decode_file(
     object: ObjectIdentifier,
     octets: &[u8],
-) -> Result<AccessRightsSnapshot, SnapshotError> {
+) -> Result<AccessRightsSnapshot, PersistenceError> {
     let (description, body) =
         framing::open_described(octets, (&MAGIC, &MAGIC_WITH_DESCRIPTION), MAX_LEN, object)?;
     let mut pos = 0;
@@ -167,7 +167,7 @@ fn decode_array(
     body: &[u8],
     pos: &mut usize,
     tag: u8,
-) -> Result<Option<Vec<BACnetAccessRule>>, SnapshotError> {
+) -> Result<Option<Vec<BACnetAccessRule>>, PersistenceError> {
     if !next_is_opening(body, *pos, tag).map_err(|_| undecodable())? {
         return Ok(None);
     }
@@ -181,7 +181,7 @@ fn decode_array(
             return Ok(Some(rules));
         }
         if rules.len() == MAX_ACCESS_RULES {
-            return Err(SnapshotError::damaged("holds more entries than the cap"));
+            return Err(crate::snapshot::damaged("holds more entries than the cap"));
         }
         let (rule, end) = decode_access_rule(body, at).map_err(|_| undecodable())?;
         rules.push(rule);
@@ -194,7 +194,7 @@ fn decode_array(
 fn decode_accompaniment(
     body: &[u8],
     pos: &mut usize,
-) -> Result<Option<BACnetDeviceObjectReference>, SnapshotError> {
+) -> Result<Option<BACnetDeviceObjectReference>, PersistenceError> {
     if !next_is_opening(body, *pos, ACCOMPANIMENT_TAG).map_err(|_| undecodable())? {
         return Ok(None);
     }

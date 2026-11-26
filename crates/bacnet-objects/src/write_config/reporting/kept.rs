@@ -457,8 +457,8 @@ pub(crate) fn attach<T: KeepsReporting>(
         None => ReportingWriteConfig::default(),
         Some(WriteConfigSnapshot::Reporting(saved)) => saved,
         Some(_) => {
-            return Err(bacnet_types::error::SnapshotError::new(
-                bacnet_types::error::SnapshotErrorKind::OtherObject,
+            return Err(bacnet_types::error::PersistenceError::new(
+                bacnet_types::error::PersistenceErrorKind::OtherObject,
                 "saved write configuration is not reporting settings",
             )
             .into());
@@ -474,7 +474,7 @@ pub(crate) fn attach<T: KeepsReporting>(
     let invalid = crate::snapshot::write_config::reporting_invalid(&saved)
         .or_else(|| parameter_format::invalid(oid.object_type(), &saved.algorithm));
     if let Some(reason) = invalid {
-        return Err(bacnet_types::error::SnapshotError::damaged(reason)
+        return Err(crate::snapshot::damaged(reason)
             .in_format("saved reporting settings")
             .into());
     }
@@ -482,7 +482,7 @@ pub(crate) fn attach<T: KeepsReporting>(
         .notify_type
         .is_some_and(|notify_type| !object.takes_notify_type(notify_type))
     {
-        return Err(bacnet_types::error::SnapshotError::damaged(
+        return Err(crate::snapshot::damaged(
             "saved reporting settings hold a Notify_Type this object refuses",
         )
         .into());

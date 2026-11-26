@@ -30,9 +30,9 @@ fn staged_saves(store: &Arc<Store>) -> StagedSaves<u32, u32> {
         "staged-test".into(),
         move |state: &u32| {
             if store.fail.load(Ordering::SeqCst) {
-                return Err(Error::from(
-                    bacnet_types::error::SnapshotError::backend_failed("storage refused"),
-                ));
+                return Err(Error::from(crate::snapshot::backend_failed(
+                    "storage refused",
+                )));
             }
             store.saved.lock().unwrap().push(*state);
             Ok(())

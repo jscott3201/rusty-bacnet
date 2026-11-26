@@ -38,9 +38,9 @@ impl LoadControlPersistence for Store {
         }
         self.attempts.fetch_add(1, Ordering::SeqCst);
         if self.fail.load(Ordering::SeqCst) {
-            return Err(Error::from(
-                bacnet_types::error::SnapshotError::backend_failed("the disk is full"),
-            ));
+            return Err(Error::from(crate::snapshot::backend_failed(
+                "the disk is full",
+            )));
         }
         self.saves.fetch_add(1, Ordering::SeqCst);
         *self.saved.lock().unwrap() = Some(snapshot.clone());

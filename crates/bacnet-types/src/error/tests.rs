@@ -335,8 +335,9 @@ fn only_a_decoding_error_becomes_a_reject() {
 }
 
 /// The error is 64 octets on a 64-bit host, its tag in [`DecodeError`]'s
-/// niche, with persisted state's [`SnapshotError`] beside it: removing the
-/// two owned-text variants (#1833) left it as it was, since the decoding
+/// niche, with persisted state's [`PersistenceError`] beside it, its
+/// context boxed so it is no wider than its static form: removing the two
+/// owned-text variants (#1833) left the error as it was, since the decoding
 /// error sets the size. A 32-bit target's 48 is checked in `decode.rs`.
 #[cfg(target_pointer_width = "64")]
 #[test]
@@ -344,7 +345,7 @@ fn the_error_is_64_octets_on_a_64_bit_host() {
     use core::mem::size_of;
     assert_eq!(size_of::<Error>(), 64);
     assert_eq!(size_of::<Result<()>>(), 64);
-    assert_eq!(size_of::<SnapshotError>(), 56);
+    assert_eq!(size_of::<PersistenceError>(), 56);
 }
 
 /// The static encoder and segmenter refusals take no Reject reason either

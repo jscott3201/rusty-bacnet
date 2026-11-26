@@ -35,7 +35,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use super::SnapshotError;
+use super::PersistenceError;
 use super::framing::{self, HEADER_LEN};
 use crate::object_profile::{
     MAX_TAGS, MAX_TAGS_SNAPSHOT_BYTES, TagsSnapshot, WrittenZone, check_tags, no_space_error,
@@ -61,13 +61,16 @@ pub const MAX_LEN: usize = MAX_TAGS_SNAPSHOT_BYTES;
 
 /// The file octets for `snapshot`, saved for `object`.
 ///
-/// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) Tags a
+/// Refuses ([`OutOfRange`](super::PersistenceErrorKind::RefusedOnEncode)) Tags a
 /// write would refuse (more than `MAX_TAGS`, a `;` in a name, a constructed
 /// value), a Description past 16 KiB, a UTC_Offset a write would refuse and
 /// octets past [`MAX_LEN`]: what [`decode`] would refuse.
-pub fn encode(object: ObjectIdentifier, snapshot: &TagsSnapshot) -> Result<Vec<u8>, SnapshotError> {
+pub fn encode(
+    object: ObjectIdentifier,
+    snapshot: &TagsSnapshot,
+) -> Result<Vec<u8>, PersistenceError> {
     encode_checked(object, snapshot).map_err(|_| {
-        SnapshotError::out_of_range(
+        crate::snapshot::refused_on_encode(
             "holds Tags or a Description a write would refuse, or too many octets",
         )
         .in_format("Tags snapshot")
@@ -81,7 +84,7 @@ pub fn encode(object: ObjectIdentifier, snapshot: &TagsSnapshot) -> Result<Vec<u
 /// (or octets after a 0), a tag that does not decode, Tags [`encode`] would
 /// refuse, a Description cut short, past 16 KiB or not UTF-8, or a zone a
 /// write would not leave.
-pub fn decode(object: ObjectIdentifier, octets: &[u8]) -> Result<TagsSnapshot, SnapshotError> {
+pub fn decode(object: ObjectIdentifier, octets: &[u8]) -> Result<TagsSnapshot, PersistenceError> {
     decode_file(object, octets).map_err(|error| error.in_format("Tags file"))
 }
 
@@ -209,7 +212,7 @@ pub(crate) fn fits_len(
     Ok(())
 }
 
-fn decode_file(object: ObjectIdentifier, octets: &[u8]) -> Result<TagsSnapshot, SnapshotError> {
+fn decode_file(object: ObjectIdentifier, octets: &[u8]) -> Result<TagsSnapshot, PersistenceError> {
     let zoned = octets.get(..MAGIC_WITH_ZONE.len()) == Some(&MAGIC_WITH_ZONE[..]);
     let (zone, description, body) = if zoned {
         let (_, body) = framing::open(octets, &MAGIC_WITH_ZONE, None, MAX_LEN, object)?;
@@ -228,8 +231,8 @@ fn decode_file(object: ObjectIdentifier, octets: &[u8]) -> Result<TagsSnapshot, 
     let tags = match body.split_first() {
         Some((0, [])) => None,
         Some((1, tags)) => Some(framing::decode_capped(tags, MAX_TAGS, decode_name_value)?),
-        None => return Err(SnapshotError::truncated("has no valid presence marker")),
-        _ => return Err(SnapshotError::damaged("has no valid presence marker")),
+        None => return Err(crate::snapshot::truncated("has no valid presence marker")),
+        _ => return Err(crate::snapshot::damaged("has no valid presence marker")),
     };
     let snapshot = TagsSnapshot {
         tags,
@@ -242,13 +245,13 @@ fn decode_file(object: ObjectIdentifier, octets: &[u8]) -> Result<TagsSnapshot, 
 
 /// Version 3's zone halves at the start of `body`, whether a Description
 /// follows them, and the rest.
-fn take_zone(body: &[u8]) -> Result<(WrittenZone, bool, &[u8]), SnapshotError> {
-    let short = || SnapshotError::truncated("ends inside its zone");
+fn take_zone(body: &[u8]) -> Result<(WrittenZone, bool, &[u8]), PersistenceError> {
+    let short = || crate::snapshot::truncated("ends inside its zone");
     let (&held, mut rest) = body.split_first().ok_or_else(short)?;
     if held & !(ZONE_OFFSET | ZONE_SUMMER | ZONE_DESCRIBED) != 0
         || held & (ZONE_OFFSET | ZONE_SUMMER) == 0
     {
-        return Err(SnapshotError::damaged("holds no valid zone marker"));
+        return Err(crate::snapshot::damaged("holds no valid zone marker"));
     }
     let mut zone = WrittenZone::default();
     if held & ZONE_OFFSET != 0 {
@@ -262,7 +265,7 @@ fn take_zone(body: &[u8]) -> Result<(WrittenZone, bool, &[u8]), SnapshotError> {
             0 => false,
             1 => true,
             _ => {
-                return Err(SnapshotError::damaged(
+                return Err(crate::snapshot::damaged(
                     "holds a daylight-saving octet past 1",
                 ));
             }
@@ -275,11 +278,13 @@ fn take_zone(body: &[u8]) -> Result<(WrittenZone, bool, &[u8]), SnapshotError> {
 /// Refuse loaded Tags, or a loaded Description, a write would refuse, as
 /// damage: the file backend's decode and a custom backend's load answer
 /// alike.
-pub(crate) fn check_loaded(snapshot: &TagsSnapshot) -> Result<(), SnapshotError> {
+pub(crate) fn check_loaded(snapshot: &TagsSnapshot) -> Result<(), PersistenceError> {
     fits(
         &snapshot.zone,
         snapshot.description.as_deref(),
         snapshot.tags.as_deref(),
     )
-    .map_err(|_| SnapshotError::damaged("holds Tags, a Description or a zone a write would refuse"))
+    .map_err(|_| {
+        crate::snapshot::damaged("holds Tags, a Description or a zone a write would refuse")
+    })
 }

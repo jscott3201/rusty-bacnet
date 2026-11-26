@@ -431,6 +431,6 @@ mod reporting {
         let storage = MemoryConfig::holding(WriteConfigSnapshot::Reporting(config));
         let built = AnalogInputObject::new(1, "AI", EngineeringUnits::DEGREES_CELSIUS)
             .and_then(|object| object.with_reporting_persistence(persistence(&storage)));
-        assert!(matches!(built, Err(Error::Persistence(refused)) if refused.is_damage()));
+        assert!(matches!(&built, Err(Error::Persistence(refused)) if refused.is_damage()));
     }
 }

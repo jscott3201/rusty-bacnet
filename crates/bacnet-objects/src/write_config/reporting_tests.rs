@@ -385,12 +385,12 @@ fn storage_holding_what_no_write_leaves_fails_the_build() {
     for (storage, kind, text) in [
         (
             timer,
-            bacnet_types::error::SnapshotErrorKind::OtherObject,
+            bacnet_types::error::PersistenceErrorKind::OtherObject,
             "saved write configuration is not reporting settings",
         ),
         (
             unknown,
-            bacnet_types::error::SnapshotErrorKind::Damaged,
+            bacnet_types::error::PersistenceErrorKind::Damaged,
             "saved reporting settings holds an unknown Notify_Type",
         ),
     ] {

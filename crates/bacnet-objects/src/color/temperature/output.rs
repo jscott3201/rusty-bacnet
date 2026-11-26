@@ -58,7 +58,7 @@ impl ColorTemperatureObject {
             {
                 Ok(Some(kelvin))
             }
-            Some(_) => Err(Error::from(bacnet_types::error::SnapshotError::damaged(
+            Some(_) => Err(Error::from(crate::snapshot::damaged(
                 "saved Color Temperature output is not a temperature the object can hold",
             ))),
         };

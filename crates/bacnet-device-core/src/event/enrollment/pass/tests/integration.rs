@@ -262,6 +262,9 @@ impl BACnetObject for ReferenceValueObject {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, bacnet_types::error::Error> {
+        // A failed read here is the object's own, not a protocol refusal:
+        // any local error the pass doesn't read as an answer does, and this
+        // one alloc-only builds have (#1833).
         if property == PropertyIdentifier::OBJECT_PROPERTY_REFERENCE {
             self.reference.clone().ok_or_else(|| {
                 bacnet_types::error::Error::state(
@@ -352,7 +355,10 @@ impl EnrollmentEval for ReferenceValueObject {
         self.state_write_count.fetch_add(1, Ordering::SeqCst);
         if !self.state_writable.load(Ordering::SeqCst) {
             return Err(bacnet_types::error::Error::from(
-                bacnet_types::error::SnapshotError::backend_failed("evaluation state write failed"),
+                bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::BackendFailed,
+                    "evaluation state write failed",
+                ),
             ));
         }
         self.inner.set_eval_state(state)
@@ -371,7 +377,10 @@ impl EnrollmentEval for ReferenceValueObject {
     ) -> Result<(), bacnet_types::error::Error> {
         if !self.source_writable.load(Ordering::SeqCst) {
             return Err(bacnet_types::error::Error::from(
-                bacnet_types::error::SnapshotError::backend_failed("source write failed"),
+                bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::BackendFailed,
+                    "source write failed",
+                ),
             ));
         }
         self.inner.set_eval_source(source)

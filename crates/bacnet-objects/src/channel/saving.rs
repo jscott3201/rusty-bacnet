@@ -63,8 +63,8 @@ impl ChannelObject {
             None => {}
             Some(WriteConfigSnapshot::Channel(saved)) => channel.restore(saved)?,
             Some(_) => {
-                return Err(bacnet_types::error::SnapshotError::new(
-                    bacnet_types::error::SnapshotErrorKind::OtherObject,
+                return Err(bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::OtherObject,
                     "saved write configuration is not a Channel's",
                 )
                 .into());
@@ -85,7 +85,7 @@ impl ChannelObject {
         if let Some(members) = saved.members {
             check_members(&members.references)?;
             if members.execution_delay.len() != members.references.len() {
-                return Err(bacnet_types::error::SnapshotError::damaged(
+                return Err(crate::snapshot::damaged(
                     "saved Channel members and delays differ in number",
                 )
                 .into());

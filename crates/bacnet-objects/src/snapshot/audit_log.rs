@@ -20,7 +20,7 @@
 use crate::prelude::*;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::SnapshotError;
+use super::PersistenceError;
 use crate::audit::AuditLogSnapshot;
 use crate::audit::persistence::codec;
 
@@ -39,13 +39,13 @@ pub const MAX_LEN: usize = codec::MAX_SNAPSHOT_BYTES;
 
 /// The slot octets for `snapshot`.
 ///
-/// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) a snapshot that
+/// Refuses ([`OutOfRange`](super::PersistenceErrorKind::RefusedOnEncode)) a snapshot that
 /// doesn't hold together, as [`decode`] would refuse it (a zero generation,
 /// more records than its capacity or than the Audit Log keeps, sequence
 /// numbers that don't run on to Total_Record_Count, receipts past their
 /// caps or repeated), a record past 1 MiB, a Description past 16 KiB, and a
 /// slot past [`MAX_LEN`].
-pub fn encode(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, SnapshotError> {
+pub fn encode(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, PersistenceError> {
     codec::encode(snapshot)
 }
 
@@ -56,7 +56,10 @@ pub fn encode(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, SnapshotError> {
 /// together), and a sound slot of another object or of a schema version
 /// this build doesn't read (any but [`OLDEST_VERSION`] to
 /// [`VERSION_WITH_DESCRIPTION`]).
-pub fn decode(object: ObjectIdentifier, octets: &[u8]) -> Result<AuditLogSnapshot, SnapshotError> {
+pub fn decode(
+    object: ObjectIdentifier,
+    octets: &[u8],
+) -> Result<AuditLogSnapshot, PersistenceError> {
     codec::decode(octets, object)
 }
 
@@ -71,7 +74,7 @@ pub struct NewestSlot {
     /// The snapshot.
     pub snapshot: AuditLogSnapshot,
     /// Each damaged slot passed over, by slot, for the backend to report.
-    pub passed_over: [Option<SnapshotError>; 2],
+    pub passed_over: [Option<PersistenceError>; 2],
 }
 
 /// Pick the snapshot to load for `object` from a two-slot store's slots,
@@ -90,13 +93,13 @@ pub struct NewestSlot {
 ///   reads a slot past the size cap, and reports it only when no slot it
 ///   read was damaged;
 /// - two slots of one generation that encode, in today's schema, to
-///   different octets ([`Damaged`](super::SnapshotErrorKind::Damaged)). Two slots
+///   different octets ([`Damaged`](super::PersistenceErrorKind::Damaged)). Two slots
 ///   that differ only in schema version, holding the same state, are one
 ///   snapshot.
 pub fn newest(
     object: ObjectIdentifier,
     slots: [Option<&[u8]>; 2],
-) -> Result<Option<NewestSlot>, SnapshotError> {
+) -> Result<Option<NewestSlot>, PersistenceError> {
     let mut newest: Option<NewestSlot> = None;
     let mut passed_over = [None, None];
     let mut damage = None;
@@ -107,14 +110,14 @@ pub fn newest(
         match decode(object, octets) {
             Err(error) if !error.is_damage() => return Err(error),
             Err(error) => {
+                damage = Some(error.clone());
                 passed_over[slot] = Some(error);
-                damage = Some(error);
             }
             Ok(snapshot) => match &newest {
                 Some(current) if current.generation > snapshot.generation => {}
                 Some(current) if current.generation == snapshot.generation => {
                     if encode(&snapshot)? != encode(&current.snapshot)? {
-                        return Err(SnapshotError::damaged(
+                        return Err(crate::snapshot::damaged(
                             "slots contain divergent snapshots at the same generation",
                         )
                         .in_format("AuditLog"));

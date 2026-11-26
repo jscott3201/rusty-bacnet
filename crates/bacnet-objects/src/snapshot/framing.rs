@@ -7,7 +7,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BufMut;
 
-use super::{SnapshotError, SnapshotErrorKind};
+use super::{PersistenceError, PersistenceErrorKind};
 use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
 
 /// The magic tag and the object identifier.
@@ -27,20 +27,21 @@ pub(crate) fn open<'a>(
     previous: Option<&[u8; 8]>,
     max_len: usize,
     object: ObjectIdentifier,
-) -> Result<(bool, &'a [u8]), SnapshotError> {
+) -> Result<(bool, &'a [u8]), PersistenceError> {
     if octets.len() > max_len {
-        return Err(SnapshotError::new(
-            SnapshotErrorKind::TooLarge,
+        return Err(PersistenceError::new(
+            PersistenceErrorKind::TooLarge,
             "is too large",
         ));
     }
-    let no_header = SnapshotError::new(SnapshotErrorKind::NotThisFormat, "has no valid header");
+    let no_header =
+        PersistenceError::new(PersistenceErrorKind::NotThisFormat, "has no valid header");
     let is_previous = match octets.get(..magic.len()) {
         Some(tag) if tag == magic => false,
         Some(tag) if previous.is_some_and(|previous| tag == previous) => true,
         Some(tag) if tag[..FAMILY_LEN] == magic[..FAMILY_LEN] => {
             return Err(version(&tag[FAMILY_LEN..]).map_or(no_header, |version| {
-                SnapshotError::new(SnapshotErrorKind::UnknownVersion(version), "")
+                PersistenceError::new(PersistenceErrorKind::UnknownVersion(version), "")
             }));
         }
         _ => return Err(no_header),
@@ -49,8 +50,8 @@ pub(crate) fn open<'a>(
         return Err(no_header);
     }
     if octets[magic.len()..HEADER_LEN] != object.encode() {
-        return Err(SnapshotError::new(
-            SnapshotErrorKind::OtherObject,
+        return Err(PersistenceError::new(
+            PersistenceErrorKind::OtherObject,
             "belongs to another object",
         ));
     }
@@ -89,7 +90,7 @@ pub(crate) fn seal_described(
     object: ObjectIdentifier,
     description: Option<&str>,
     body: &[u8],
-) -> Result<Vec<u8>, SnapshotError> {
+) -> Result<Vec<u8>, PersistenceError> {
     let Some(text) = description else {
         return Ok(seal(magic, object, body));
     };
@@ -107,7 +108,7 @@ pub(crate) fn open_described<'a>(
     (magic, described): (&[u8; 8], &[u8; 8]),
     max_len: usize,
     object: ObjectIdentifier,
-) -> Result<(Option<String>, &'a [u8]), SnapshotError> {
+) -> Result<(Option<String>, &'a [u8]), PersistenceError> {
     let (plain, body) = open(octets, described, Some(magic), max_len, object)?;
     if plain {
         return Ok((None, body));
@@ -118,9 +119,9 @@ pub(crate) fn open_described<'a>(
 
 /// Append a kept Description: its length in four big-endian octets, then
 /// its UTF-8, at most [`MAX_DESCRIPTION_OCTETS`].
-pub(crate) fn put_description(body: &mut impl BufMut, text: &str) -> Result<(), SnapshotError> {
+pub(crate) fn put_description(body: &mut impl BufMut, text: &str) -> Result<(), PersistenceError> {
     if text.len() > MAX_DESCRIPTION_OCTETS {
-        return Err(SnapshotError::out_of_range(
+        return Err(crate::snapshot::refused_on_encode(
             "holds a Description past its cap",
         ));
     }
@@ -131,20 +132,20 @@ pub(crate) fn put_description(body: &mut impl BufMut, text: &str) -> Result<(), 
 
 /// The Description [`put_description`] wrote at the start of `body`, and
 /// what follows it.
-pub(crate) fn take_description(body: &[u8]) -> Result<(String, &[u8]), SnapshotError> {
+pub(crate) fn take_description(body: &[u8]) -> Result<(String, &[u8]), PersistenceError> {
     let Some((length, rest)) = body.split_first_chunk::<4>() else {
-        return Err(SnapshotError::truncated("ends inside its Description"));
+        return Err(crate::snapshot::truncated("ends inside its Description"));
     };
     let length = usize::try_from(u32::from_be_bytes(*length))
         .ok()
         .filter(|length| *length <= MAX_DESCRIPTION_OCTETS)
-        .ok_or(SnapshotError::damaged("holds a Description past its cap"))?;
+        .ok_or(crate::snapshot::damaged("holds a Description past its cap"))?;
     if rest.len() < length {
-        return Err(SnapshotError::truncated("ends inside its Description"));
+        return Err(crate::snapshot::truncated("ends inside its Description"));
     }
     let (text, rest) = rest.split_at(length);
     let text = String::from_utf8(text.to_vec())
-        .map_err(|_| SnapshotError::damaged("holds a Description that isn't UTF-8"))?;
+        .map_err(|_| crate::snapshot::damaged("holds a Description that isn't UTF-8"))?;
     Ok((text, rest))
 }
 
@@ -154,15 +155,15 @@ pub(crate) fn decode_capped<T>(
     bytes: &[u8],
     cap: usize,
     decode: impl Fn(&[u8], usize) -> Result<(T, usize), Error>,
-) -> Result<Vec<T>, SnapshotError> {
+) -> Result<Vec<T>, PersistenceError> {
     let mut list = Vec::new();
     let mut offset = 0;
     while offset < bytes.len() {
         if list.len() == cap {
-            return Err(SnapshotError::damaged("holds more entries than the cap"));
+            return Err(crate::snapshot::damaged("holds more entries than the cap"));
         }
         let (element, next) = decode(bytes, offset)
-            .map_err(|_| SnapshotError::damaged("holds an entry that does not decode"))?;
+            .map_err(|_| crate::snapshot::damaged("holds an entry that does not decode"))?;
         list.push(element);
         offset = next;
     }

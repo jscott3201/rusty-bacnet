@@ -101,7 +101,8 @@ fn every_reject_reason_goes_out_unchanged() {
 #[test]
 fn local_refusals_go_out_as_the_text_they_replace() {
     use bacnet_types::error::{
-        DecodeError, DecodingKind, Lifecycle, RangeError, Refusal, SnapshotError,
+        DecodeError, DecodingKind, Lifecycle, PersistenceError, PersistenceErrorKind, RangeError,
+        Refusal,
     };
     let services = [
         ConfirmedServiceChoice::READ_PROPERTY,
@@ -128,9 +129,16 @@ fn local_refusals_go_out_as_the_text_they_replace() {
             )),
             // Persisted state (#1833): damage, an encode refusal and a
             // backend's failure, which were that text too.
-            Error::from(SnapshotError::damaged("checksum mismatch").in_format("Tags file")),
-            Error::from(SnapshotError::out_of_range("more entries than the cap")),
-            Error::from(SnapshotError::backend_failed(
+            Error::from(
+                PersistenceError::new(PersistenceErrorKind::Damaged, "checksum mismatch")
+                    .in_format("Tags file"),
+            ),
+            Error::from(PersistenceError::new(
+                PersistenceErrorKind::RefusedOnEncode,
+                "more entries than the cap",
+            )),
+            Error::from(PersistenceError::new(
+                PersistenceErrorKind::BackendFailed,
                 "save failed; its error was reported",
             )),
         ];

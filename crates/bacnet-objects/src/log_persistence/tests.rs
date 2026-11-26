@@ -91,9 +91,9 @@ impl<R: Clone + Send + Sync> LogPersistence<R> for MemoryLog<R> {
 
     fn commit(&self, snapshot: &LogSnapshot<R>) -> Result<(), Error> {
         if self.fail_next.swap(false, Ordering::SeqCst) {
-            return Err(Error::from(
-                bacnet_types::error::SnapshotError::backend_failed("injected commit failure"),
-            ));
+            return Err(Error::from(crate::snapshot::backend_failed(
+                "injected commit failure",
+            )));
         }
         *self.stored.lock().unwrap() = Some(snapshot.clone());
         self.commits.fetch_add(1, Ordering::SeqCst);
@@ -317,7 +317,7 @@ fn a_damaged_newer_slot_falls_back_to_the_older_one() {
     damage(&slot1);
     let error = LogPersistence::<BACnetLogRecord>::load(&store, oid).unwrap_err();
     assert!(
-        matches!(error, Error::Persistence(refused) if refused.is_damage()),
+        matches!(&error, Error::Persistence(refused) if refused.is_damage()),
         "{error:?}"
     );
 }
@@ -364,7 +364,7 @@ fn another_objects_or_an_unknown_schemas_slot_is_refused_without_falling_back() 
     let error = LogPersistence::<BACnetLogRecord>::load(&store, oid).unwrap_err();
     assert!(
         matches!(&error, Error::Persistence(refused)
-            if refused.kind() == bacnet_types::error::SnapshotErrorKind::OtherObject
+            if refused.kind() == bacnet_types::error::PersistenceErrorKind::OtherObject
                 && refused.to_string().contains("another object")),
         "{error:?}"
     );
@@ -378,7 +378,7 @@ fn another_objects_or_an_unknown_schemas_slot_is_refused_without_falling_back() 
     let error = LogPersistence::<BACnetLogRecord>::load(&store, oid).unwrap_err();
     assert!(
         matches!(&error, Error::Persistence(refused)
-            if refused.kind() == bacnet_types::error::SnapshotErrorKind::UnknownVersion(9)
+            if refused.kind() == bacnet_types::error::PersistenceErrorKind::UnknownVersion(9)
                 && refused.to_string().contains("schema version 9")),
         "{error:?}"
     );

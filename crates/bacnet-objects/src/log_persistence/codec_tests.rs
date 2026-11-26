@@ -127,7 +127,7 @@ fn a_record_longer_than_a_slot_element_is_never_written() {
     };
     match codec::encode(&snapshot).map_err(Error::from) {
         Err(Error::Persistence(refused))
-            if refused.kind() == bacnet_types::error::SnapshotErrorKind::OutOfRange =>
+            if refused.kind() == bacnet_types::error::PersistenceErrorKind::RefusedOnEncode =>
         {
             assert!(refused.to_string().contains("element length"), "{refused}")
         }

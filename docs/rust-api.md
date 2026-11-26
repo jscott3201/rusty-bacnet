@@ -383,15 +383,18 @@ alone; `Error::with_context` puts context in front and keeps the variant.
 `Error::state`, `Error::invalid_config`, `Error::invalid_argument`,
 `Error::unsupported` and `Error::limit_reached` build one from a static
 label. Every crate, the CLI and the bindings report their refusals this
-way, `bacnet-transport` its I/O failures as `Error::Transport` with the OS
-error kept as the source and an NPDU too long for the link as
-`Error::SendTooLong`. Persisted state that can't be loaded or saved is
-`Error::Persistence(SnapshotError)`: its `kind()` says whether the stored
-octets are damaged or cut short, a sound snapshot of another object or a
-version this build doesn't read, a snapshot refused as it is encoded, or a
-storage backend that failed, and `is_damage()` whether a backend keeping two
-copies falls back to the other; its text is static, so it is there in every
-build. There is no catch-all text variant: the untyped `Error::Encoding` and
+way. Any I/O the operating system reported is `Error::Transport`, with
+the OS error kept as the source: a socket's, a serial port's, and a storage
+file's, which the stack's own file backends return this way. An NPDU too
+long for the link is `Error::SendTooLong`. Persisted state is
+`Error::Persistence(PersistenceError)`: stored octets that are damaged or
+cut short, a sound snapshot of another object or of a version this build
+doesn't read, a snapshot refused as it is encoded, or a storage backend that
+failed with no OS error behind it. Its `kind()` says which, and
+`is_damage()` whether a backend keeping two copies falls back to the other.
+It is opaque, with static text in every build; with `std`,
+`Error::with_context` puts a path or other context in front and keeps the
+kind. There is no catch-all text variant: the untyped `Error::Encoding` and
 `Error::OutOfRange` are gone (#1833), and the codecs' own refusals are the
 static `Error::Encode`, `Error::Decoding` and `Error::Range`. An
 endpoint session or ingress that is not running says why with its
@@ -5406,7 +5409,7 @@ application sets them at each start.
   `persistence.save(oid, &WriteConfigSnapshot::Reporting(Default::default()))`.
   In a file, a
   bad value is damage, and a parameter this build doesn't keep for the
-  object's type is an unknown kind (`SnapshotErrorKind::UnknownKind(6)`,
+  object's type is an unknown kind (`PersistenceErrorKind::UnknownKind(6)`,
   `is_damage()` false): a later release may keep it, so a backend with two
   copies stops there instead of falling back to the older one.
 - **State_Text and Number_Of_States.** A Multi-state Input, Output or Value
@@ -6297,19 +6300,20 @@ framing, through the shared `bacnet-encoding` codecs.
 `alloc` alone, so storage an application brings (flash, EEPROM, a database
 row) keeps the same octets a hosted build does. Each format's module has
 `encode`, `decode`, its magic tag and its version as constants, and every
-refusal is a `SnapshotError` whose `kind()` names it: `Truncated`,
-`NotThisFormat`, `UnknownVersion`, `UnknownKind`, `OtherObject`, `TooLarge`,
-`Damaged`, or `OutOfRange` for a snapshot refused as it is encoded. It
-carries only static text, so reporting one needs no allocation. It lives in
-`bacnet_types::error` (this module re-exports it), and the storage traits
-return it as `Error::Persistence` (#1833); a backend of the application's
-own reports its own failure there with `SnapshotError::backend_failed`, of
-kind `BackendFailed`, which is not damage.
+refusal is a `bacnet_types::error::PersistenceError` whose `kind()` names
+it: `Truncated`, `NotThisFormat`, `UnknownVersion`, `UnknownKind`,
+`OtherObject`, `TooLarge`, `Damaged`, or `RefusedOnEncode` for a snapshot
+refused as it is encoded. Its text is static, so reporting one needs no
+allocation. The storage traits return it as `Error::Persistence` (#1833); a
+backend of the application's own reports its own failure there with
+`PersistenceError::new(PersistenceErrorKind::BackendFailed, detail)`, which
+is not damage, and an OS I/O failure as `Error::Transport`, as the file
+backends do.
 `is_damage()` says whether a two-slot backend should pass over that copy
 for the other one, and `snapshot::log::newest(object, [slot0, slot1])`
 makes `FileLogPersistence`'s whole choice between two slots, as
 `snapshot::audit_log::newest` does for `FileAuditLogPersistence`. `Error`
-implements `From<SnapshotError>`, the mapping the file backends use.
+implements `From<PersistenceError>`, the mapping the file backends use.
 
 | Module | Snapshot | Tag and versions | File backend |
 | --- | --- | --- | --- |
@@ -14062,8 +14066,8 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Unsupported(Refusal)` | Not offered on this platform, in this build, or by this kind of component |
 | `Error::LimitReached(Refusal)` | A resource cap reached: a full table, a counter run out, a one-holder resource another holds |
 | `Error::SendTooLong { length, limit }` | A send refused for its length before anything was written: an NPDU too long for B/IP, MS/TP or Ethernet, and BACnet/SC's NPDU and frame bounds (#1833). A router answers it with reject reason 4; the high-level client asks again with smaller requests |
-| `Error::Persistence(SnapshotError)` | Persisted state that couldn't be loaded or saved (#1833): `kind()` is `Truncated`, `NotThisFormat`, `TooLarge` or `Damaged` for stored octets no save wrote, `UnknownVersion`, `UnknownKind` or `OtherObject` for a sound snapshot this object must not take, `OutOfRange` for one refused as it is encoded (nothing written), and `BackendFailed` for storage that failed (a save that failed or panicked, a slot that changed while it was read). `is_damage()` is true for the first four only: a backend keeping two copies passes over that one for the other. A storage backend of the application's own reports its failure with `SnapshotError::backend_failed`. The Tags file backend reports a file it can't load as `Error::InvalidConfig`, its text naming the path. `bacnet-ops` counts it as failed locally; a server answers it SERVICES / OTHER |
-| `Error::Transport(io_error)` | Transport I/O failure, with the OS error as its source where one caused it: a socket's, a serial port's open, read or write, GPIO, the RS-485 ioctl, entropy (#1833), an SC dial's TLS handshake. A send this side's link didn't carry before its deadline (an endpoint's deadline-bound send, a server's audit forwarding) is one of kind `TimedOut`, not `Error::Timeout` (#1833). A stopped transport's send is `Error::State` |
+| `Error::Persistence(PersistenceError)` | Persisted state that couldn't be loaded or saved (#1833): `kind()` is `Truncated`, `NotThisFormat`, `TooLarge` or `Damaged` for stored octets no save wrote, `UnknownVersion`, `UnknownKind` or `OtherObject` for a sound snapshot this object must not take, `RefusedOnEncode` for one refused as it is encoded (nothing written), and `BackendFailed` for storage that failed with no OS error behind it (a save that failed or panicked, a slot that changed while it was read). `is_damage()` is true for the first four only: a backend keeping two copies passes over that one for the other. The type is opaque; a storage backend of the application's own builds one with `PersistenceError::new(kind, detail)`. With `std`, `Error::with_context` puts context in front and keeps the kind: the Tags file backend names its path this way. `bacnet-ops` counts it as failed locally; a server answers it SERVICES / OTHER |
+| `Error::Transport(io_error)` | I/O the operating system reported, with its error as the source: a socket's, a serial port's open, read or write, GPIO, the RS-485 ioctl, entropy (#1833), an SC dial's TLS handshake, and a storage file's, which the stack's file backends return this way. A send this side's link didn't carry before its deadline (an endpoint's deadline-bound send, a server's audit forwarding) is one of kind `TimedOut`, not `Error::Timeout` (#1833). A stopped transport's send is `Error::State` |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
 | `Error::RequestCutOff { sent }` | A request ended before an answer came because the client or its link stopped under it (#1833): the client's stop, its endpoint's or node's, or the link stopping after the request went out, refusing its retry or a later segment or dropping a B/IP BVLC management request's wait. `sent: false`: it was still waiting for its turn and nothing left. `sent: true`: it, or some of its segments, may have gone out and been carried out, so don't send a write again blindly. The text says which; an endpoint whose audited request's task its stop ended reports it with `sent: true` too. The source Audit records one with `sent: true`, its outcome unknown (COMMUNICATION, OTHER), and not one with `sent: false` |
 | `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles); `BACnetClient::resolve_device` and the calls that look a device up by its instance refuse an instance the table doesn't hold this way (#1833); a server's audit send to a recipient with no router known fails this way too, and counts as not sent |

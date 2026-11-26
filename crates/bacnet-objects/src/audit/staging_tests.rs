@@ -65,9 +65,9 @@ impl AuditLogPersistence for SlowPersistence {
             let _ = go.recv();
         }
         if self.fail.load(Ordering::SeqCst) {
-            return Err(Error::from(
-                bacnet_types::error::SnapshotError::backend_failed("injected commit failure"),
-            ));
+            return Err(Error::from(crate::snapshot::backend_failed(
+                "injected commit failure",
+            )));
         }
         *self.snapshot.lock().unwrap() = Some(snapshot.clone());
         self.commits.fetch_add(1, Ordering::SeqCst);

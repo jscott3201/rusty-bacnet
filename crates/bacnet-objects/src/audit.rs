@@ -179,8 +179,8 @@ impl AuditLogObject {
         let snapshot = match persistence.load(oid)? {
             Some(snapshot) => {
                 if snapshot.object_identifier != oid {
-                    return Err(bacnet_types::error::SnapshotError::new(
-                        bacnet_types::error::SnapshotErrorKind::OtherObject,
+                    return Err(bacnet_types::error::PersistenceError::new(
+                        bacnet_types::error::PersistenceErrorKind::OtherObject,
                         "AuditLog persisted identity does not match configuration",
                     )
                     .into());

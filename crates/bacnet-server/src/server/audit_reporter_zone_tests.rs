@@ -70,9 +70,10 @@ impl bacnet_objects::object_profile::TagsPersistence for Failing {
         _: ObjectIdentifier,
         _: &bacnet_objects::object_profile::TagsSnapshot,
     ) -> Result<(), Error> {
-        Err(Error::from(
-            bacnet_types::error::SnapshotError::backend_failed("storage unavailable"),
-        ))
+        Err(Error::from(bacnet_types::error::PersistenceError::new(
+            bacnet_types::error::PersistenceErrorKind::BackendFailed,
+            "storage unavailable",
+        )))
     }
 }
 

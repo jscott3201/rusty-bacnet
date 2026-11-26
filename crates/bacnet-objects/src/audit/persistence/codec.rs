@@ -29,7 +29,7 @@ use super::{AuditLogSnapshot, MAX_AUDIT_RECORDS};
 use crate::audit::receipt;
 use crate::durable::crc32;
 use crate::snapshot::framing;
-use crate::snapshot::{SnapshotError, SnapshotErrorKind};
+use crate::snapshot::{PersistenceError, PersistenceErrorKind};
 use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
 
 #[path = "receipt_codec.rs"]
@@ -55,8 +55,8 @@ pub(crate) const WHAT: &str = "AuditLog snapshot";
 
 /// The slot octets for `snapshot` in today's schema: version 4 for a
 /// snapshot holding a Description, version 3 for one without. Every refusal
-/// is [`OutOfRange`](SnapshotErrorKind::OutOfRange): nothing was stored.
-pub(crate) fn encode(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, SnapshotError> {
+/// is [`OutOfRange`](PersistenceErrorKind::RefusedOnEncode): nothing was stored.
+pub(crate) fn encode(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, PersistenceError> {
     let version = match snapshot.description {
         Some(_) => SCHEMA_VERSION_DESCRIBED,
         None => SCHEMA_VERSION,
@@ -69,24 +69,28 @@ pub(crate) fn encode(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, SnapshotErr
 pub(crate) fn encode_for_version(
     snapshot: &AuditLogSnapshot,
     version: u16,
-) -> Result<Vec<u8>, SnapshotError> {
-    encode_slot(snapshot, version).map_err(|error| error.refusing().in_format(WHAT))
+) -> Result<Vec<u8>, PersistenceError> {
+    encode_slot(snapshot, version).map_err(|error| {
+        error
+            .with_kind(crate::snapshot::PersistenceErrorKind::RefusedOnEncode)
+            .in_format(WHAT)
+    })
 }
 
-fn encode_slot(snapshot: &AuditLogSnapshot, version: u16) -> Result<Vec<u8>, SnapshotError> {
+fn encode_slot(snapshot: &AuditLogSnapshot, version: u16) -> Result<Vec<u8>, PersistenceError> {
     check(snapshot)?;
     if version == SCHEMA_VERSION_V1 && !snapshot.completed_receipts.is_empty() {
-        return Err(SnapshotError::out_of_range(
+        return Err(crate::snapshot::refused_on_encode(
             "in schema version 1 cannot hold completed receipts",
         ));
     }
     // Only version 4 holds a Description, and it always holds one.
     if (version == SCHEMA_VERSION_DESCRIBED) != snapshot.description.is_some() {
-        return Err(SnapshotError::out_of_range(
+        return Err(crate::snapshot::refused_on_encode(
             "holds a Description only in schema version 4",
         ));
     }
-    let too_long = SnapshotError::out_of_range("length exceeds the slot cap");
+    let too_long = || crate::snapshot::refused_on_encode("length exceeds the slot cap");
     // The header goes first, its payload length filled in at the end, so
     // the payload is written in place rather than copied in after (#2233).
     let mut data = Vec::new();
@@ -107,9 +111,9 @@ fn encode_slot(snapshot: &AuditLogSnapshot, version: u16) -> Result<Vec<u8>, Sna
             .len()
             .checked_add(8 + 4 + record.len())
             .and_then(|length| length.checked_add(TRAILER_LEN))
-            .ok_or(too_long)?;
+            .ok_or_else(too_long)?;
         if projected > MAX_SNAPSHOT_BYTES {
-            return Err(too_long);
+            return Err(too_long());
         }
         data.extend_from_slice(&result.sequence_number.to_be_bytes());
         data.extend_from_slice(&(record.len() as u32).to_be_bytes());
@@ -121,9 +125,9 @@ fn encode_slot(snapshot: &AuditLogSnapshot, version: u16) -> Result<Vec<u8>, Sna
     if let Some(text) = &snapshot.description {
         framing::put_description(&mut data, text)?;
     }
-    let total_len = data.len().checked_add(TRAILER_LEN).ok_or(too_long)?;
+    let total_len = data.len().checked_add(TRAILER_LEN).ok_or_else(too_long)?;
     if total_len > MAX_SNAPSHOT_BYTES {
-        return Err(too_long);
+        return Err(too_long());
     }
     let payload_len = (data.len() - HEADER_LEN) as u32;
     data[HEADER_LEN - 4..HEADER_LEN].copy_from_slice(&payload_len.to_be_bytes());
@@ -135,52 +139,55 @@ fn encode_slot(snapshot: &AuditLogSnapshot, version: u16) -> Result<Vec<u8>, Sna
 /// Read one slot's octets as a snapshot for `expected`.
 ///
 /// A slot that is damaged, or not a snapshot at all, fails with an error
-/// that [is damage](SnapshotError::is_damage): the other slot may still
+/// that [is damage](PersistenceError::is_damage): the other slot may still
 /// serve. A sound slot of another object, or of a schema version this build
 /// doesn't read, fails with one that isn't.
 pub(crate) fn decode(
     data: &[u8],
     expected: ObjectIdentifier,
-) -> Result<AuditLogSnapshot, SnapshotError> {
+) -> Result<AuditLogSnapshot, PersistenceError> {
     decode_slot(data, expected).map_err(|error| error.in_format(WHAT))
 }
 
-fn decode_slot(data: &[u8], expected: ObjectIdentifier) -> Result<AuditLogSnapshot, SnapshotError> {
+fn decode_slot(
+    data: &[u8],
+    expected: ObjectIdentifier,
+) -> Result<AuditLogSnapshot, PersistenceError> {
     verify_integrity(data)?;
     let version = u16::from_be_bytes([data[8], data[9]]);
     if !matches!(
         version,
         SCHEMA_VERSION_V1 | SCHEMA_VERSION_V2 | SCHEMA_VERSION | SCHEMA_VERSION_DESCRIBED
     ) {
-        return Err(SnapshotError::new(
-            SnapshotErrorKind::UnknownVersion(version),
+        return Err(PersistenceError::new(
+            PersistenceErrorKind::UnknownVersion(version),
             "",
         ));
     }
     let object_identifier = ObjectIdentifier::decode(&data[10..14])
-        .map_err(|_| SnapshotError::damaged("object identifier does not decode"))?;
+        .map_err(|_| crate::snapshot::damaged("object identifier does not decode"))?;
     if object_identifier != expected {
-        return Err(SnapshotError::new(
-            SnapshotErrorKind::OtherObject,
+        return Err(PersistenceError::new(
+            PersistenceErrorKind::OtherObject,
             "object identity does not match",
         ));
     }
     decode_payload(data, object_identifier, version)
 }
 
-pub(crate) fn verify_integrity(data: &[u8]) -> Result<(), SnapshotError> {
+pub(crate) fn verify_integrity(data: &[u8]) -> Result<(), PersistenceError> {
     if data.len() > MAX_SNAPSHOT_BYTES {
-        return Err(SnapshotError::new(
-            SnapshotErrorKind::TooLarge,
+        return Err(PersistenceError::new(
+            PersistenceErrorKind::TooLarge,
             "length exceeds the slot cap",
         ));
     }
     if data.len() < HEADER_LEN + TRAILER_LEN {
-        return Err(SnapshotError::truncated("is truncated"));
+        return Err(crate::snapshot::truncated("is truncated"));
     }
     if &data[..8] != MAGIC {
-        return Err(SnapshotError::new(
-            SnapshotErrorKind::NotThisFormat,
+        return Err(PersistenceError::new(
+            PersistenceErrorKind::NotThisFormat,
             "magic is invalid",
         ));
     }
@@ -189,19 +196,19 @@ pub(crate) fn verify_integrity(data: &[u8]) -> Result<(), SnapshotError> {
     let payload_len = u64::from(u32::from_be_bytes(data[22..26].try_into().unwrap()));
     let declared = (HEADER_LEN + TRAILER_LEN) as u64 + payload_len;
     if declared > data.len() as u64 {
-        return Err(SnapshotError::truncated(
+        return Err(crate::snapshot::truncated(
             "declared length does not match file length",
         ));
     }
     if declared != data.len() as u64 {
-        return Err(SnapshotError::damaged(
+        return Err(crate::snapshot::damaged(
             "declared length does not match file length",
         ));
     }
     let checksum_start = data.len() - TRAILER_LEN;
     let stored_checksum = u32::from_be_bytes(data[checksum_start..].try_into().unwrap());
     if crc32(&data[..checksum_start]) != stored_checksum {
-        return Err(SnapshotError::damaged("checksum is invalid"));
+        return Err(crate::snapshot::damaged("checksum is invalid"));
     }
     Ok(())
 }
@@ -210,23 +217,25 @@ fn decode_payload(
     data: &[u8],
     object_identifier: ObjectIdentifier,
     version: u16,
-) -> Result<AuditLogSnapshot, SnapshotError> {
+) -> Result<AuditLogSnapshot, PersistenceError> {
     let generation = u64::from_be_bytes(data[14..22].try_into().unwrap());
     if generation == 0 {
-        return Err(SnapshotError::damaged("generation must be nonzero"));
+        return Err(crate::snapshot::damaged("generation must be nonzero"));
     }
     let checksum_start = data.len() - TRAILER_LEN;
     let payload = &data[HEADER_LEN..checksum_start];
     let mut offset = 0;
     let capacity = take_u32(payload, &mut offset, "capacity")?;
     if capacity > MAX_AUDIT_RECORDS {
-        return Err(SnapshotError::damaged("persisted capacity exceeds the cap"));
+        return Err(crate::snapshot::damaged(
+            "persisted capacity exceeds the cap",
+        ));
     }
     let log_enable = match take(payload, &mut offset, 1, "log-enable")?[0] {
         0 => false,
         1 => true,
         _ => {
-            return Err(SnapshotError::damaged(
+            return Err(crate::snapshot::damaged(
                 "persisted log-enable is not Boolean",
             ));
         }
@@ -234,7 +243,7 @@ fn decode_payload(
     let total_record_count = take_u64(payload, &mut offset, "total-record-count")?;
     let record_count = take_u32(payload, &mut offset, "record-count")?;
     if record_count > capacity {
-        return Err(SnapshotError::damaged(
+        return Err(crate::snapshot::damaged(
             "persisted record count exceeds its capacity",
         ));
     }
@@ -246,13 +255,13 @@ fn decode_payload(
         let sequence_number = take_u64(payload, &mut offset, "sequence-number")?;
         let record_len = take_u32(payload, &mut offset, "record-length")? as usize;
         if record_len > MAX_RECORD_BYTES {
-            return Err(SnapshotError::damaged(
+            return Err(crate::snapshot::damaged(
                 "persisted record length exceeds the record cap",
             ));
         }
         let record_data = take(payload, &mut offset, record_len, "record")?;
         let mut record = decode_audit_log_record(record_data)
-            .map_err(|_| SnapshotError::damaged("record does not decode"))?;
+            .map_err(|_| crate::snapshot::damaged("record does not decode"))?;
         if version < SCHEMA_VERSION {
             restore_pre_v3_log_status(&mut record);
         }
@@ -275,7 +284,7 @@ fn decode_payload(
         None
     };
     if offset != payload.len() {
-        return Err(SnapshotError::damaged("payload has trailing bytes"));
+        return Err(crate::snapshot::damaged("payload has trailing bytes"));
     }
 
     let mut snapshot = AuditLogSnapshot {
@@ -296,7 +305,8 @@ fn decode_payload(
     if check(&snapshot).is_err() {
         drop_too_deep(&mut snapshot);
     }
-    check(&snapshot).map_err(SnapshotError::damaging)?;
+    check(&snapshot)
+        .map_err(|error| error.with_kind(crate::snapshot::PersistenceErrorKind::Damaged))?;
     Ok(snapshot)
 }
 
@@ -363,25 +373,31 @@ fn restore_pre_v3_log_status(record: &mut BACnetAuditLogRecord) {
 /// was just read: a nonzero generation, the capacity and record count
 /// within their caps, valid receipts, contiguous nonzero sequence numbers
 /// ending at Total_Record_Count, and a size that fits a slot. A cap or size
-/// is [`OutOfRange`](SnapshotErrorKind::OutOfRange) and an inconsistency
-/// [`Damaged`](SnapshotErrorKind::Damaged), as the log has always reported
+/// is [`OutOfRange`](PersistenceErrorKind::RefusedOnEncode) and an inconsistency
+/// [`Damaged`](PersistenceErrorKind::Damaged), as the log has always reported
 /// them; the codec relabels both for its direction.
-pub(crate) fn check(snapshot: &AuditLogSnapshot) -> Result<(), SnapshotError> {
-    let too_long = SnapshotError::out_of_range("length exceeds the slot cap");
+pub(crate) fn check(snapshot: &AuditLogSnapshot) -> Result<(), PersistenceError> {
+    let too_long = || crate::snapshot::refused_on_encode("length exceeds the slot cap");
     if snapshot.generation == 0 {
-        return Err(SnapshotError::out_of_range("generation must be nonzero"));
+        return Err(crate::snapshot::refused_on_encode(
+            "generation must be nonzero",
+        ));
     }
     if snapshot.capacity > MAX_AUDIT_RECORDS {
-        return Err(SnapshotError::out_of_range("capacity exceeds the cap"));
+        return Err(crate::snapshot::refused_on_encode(
+            "capacity exceeds the cap",
+        ));
     }
     if snapshot.records.len() > snapshot.capacity as usize {
-        return Err(SnapshotError::out_of_range(
+        return Err(crate::snapshot::refused_on_encode(
             "record count exceeds its capacity",
         ));
     }
     receipt::validate_receipts(&snapshot.completed_receipts).map_err(|error| match error {
-        Error::Range(_) => SnapshotError::out_of_range("holds completed receipts past their caps"),
-        _ => SnapshotError::damaged("holds a completed receipt key that is empty or repeated"),
+        Error::Range(_) => {
+            crate::snapshot::refused_on_encode("holds completed receipts past their caps")
+        }
+        _ => crate::snapshot::damaged("holds a completed receipt key that is empty or repeated"),
     })?;
     // A counted log may hold no records: one grown from Buffer_Size 0 keeps
     // its count with an empty ring (#1238).
@@ -391,7 +407,7 @@ pub(crate) fn check(snapshot: &AuditLogSnapshot) -> Result<(), SnapshotError> {
             .last()
             .is_some_and(|last| last.sequence_number != snapshot.total_record_count)
     {
-        return Err(SnapshotError::damaged(
+        return Err(crate::snapshot::damaged(
             "record identities do not match Total_Record_Count",
         ));
     }
@@ -402,7 +418,7 @@ pub(crate) fn check(snapshot: &AuditLogSnapshot) -> Result<(), SnapshotError> {
             pair[0].sequence_number + 1
         };
         if pair[0].sequence_number == 0 || pair[1].sequence_number != expected {
-            return Err(SnapshotError::damaged(
+            return Err(crate::snapshot::damaged(
                 "sequence identities are not contiguous",
             ));
         }
@@ -412,7 +428,7 @@ pub(crate) fn check(snapshot: &AuditLogSnapshot) -> Result<(), SnapshotError> {
         .first()
         .is_some_and(|first| first.sequence_number == 0)
     {
-        return Err(SnapshotError::damaged(
+        return Err(crate::snapshot::damaged(
             "sequence identities must be nonzero",
         ));
     }
@@ -423,9 +439,9 @@ pub(crate) fn check(snapshot: &AuditLogSnapshot) -> Result<(), SnapshotError> {
         let encoded_len = record_len(&result.record, &mut scratch)?;
         projected_len = projected_len
             .checked_add(8 + 4 + encoded_len)
-            .ok_or(too_long)?;
+            .ok_or_else(too_long)?;
         if projected_len > MAX_SNAPSHOT_BYTES {
-            return Err(too_long);
+            return Err(too_long());
         }
     }
     // An empty receipt list contributes no projected bytes here so every valid
@@ -436,18 +452,22 @@ pub(crate) fn check(snapshot: &AuditLogSnapshot) -> Result<(), SnapshotError> {
     } else {
         receipt_codec::checked_len(&snapshot.completed_receipts)?
     };
-    projected_len = projected_len.checked_add(receipt_len).ok_or(too_long)?;
+    projected_len = projected_len
+        .checked_add(receipt_len)
+        .ok_or_else(too_long)?;
     // A written Description: its length in four octets, then its text.
     if let Some(text) = &snapshot.description {
         if text.len() > MAX_DESCRIPTION_OCTETS {
-            return Err(SnapshotError::out_of_range(
+            return Err(crate::snapshot::refused_on_encode(
                 "holds a Description past its cap",
             ));
         }
-        projected_len = projected_len.checked_add(4 + text.len()).ok_or(too_long)?;
+        projected_len = projected_len
+            .checked_add(4 + text.len())
+            .ok_or_else(too_long)?;
     }
     if projected_len > MAX_SNAPSHOT_BYTES {
-        return Err(too_long);
+        return Err(too_long());
     }
     Ok(())
 }
@@ -460,19 +480,19 @@ fn record_buffer(count: usize) -> BytesMut {
 
 /// The encoded length of `record`, encoding it into `scratch`, which it
 /// clears first, so a caller checking many records reuses one buffer
-/// (#2233). Refuses ([`OutOfRange`](SnapshotErrorKind::OutOfRange)) a
+/// (#2233). Refuses ([`OutOfRange`](PersistenceErrorKind::RefusedOnEncode)) a
 /// record past the record cap or one that doesn't encode.
 pub(crate) fn record_len(
     record: &BACnetAuditLogRecord,
     scratch: &mut BytesMut,
-) -> Result<usize, SnapshotError> {
-    let too_long = SnapshotError::out_of_range("record length exceeds the record cap");
-    check_record_dynamic_size(record).ok_or(too_long)?;
+) -> Result<usize, PersistenceError> {
+    let too_long = || crate::snapshot::refused_on_encode("record length exceeds the record cap");
+    check_record_dynamic_size(record).ok_or_else(too_long)?;
     scratch.clear();
     encode_audit_log_record(record, scratch)
-        .map_err(|_| SnapshotError::out_of_range("record does not encode"))?;
+        .map_err(|_| crate::snapshot::refused_on_encode("record does not encode"))?;
     if scratch.len() > MAX_RECORD_BYTES {
-        return Err(too_long);
+        return Err(too_long());
     }
     Ok(scratch.len())
 }
@@ -513,23 +533,23 @@ fn take<'a>(
     offset: &mut usize,
     length: usize,
     field: &'static str,
-) -> Result<&'a [u8], SnapshotError> {
+) -> Result<&'a [u8], PersistenceError> {
     let end = offset
         .checked_add(length)
         .filter(|end| *end <= data.len())
-        .ok_or(SnapshotError::truncated("is truncated").in_field(field))?;
+        .ok_or(crate::snapshot::truncated("is truncated").in_field(field))?;
     let value = &data[*offset..end];
     *offset = end;
     Ok(value)
 }
 
-fn take_u32(data: &[u8], offset: &mut usize, field: &'static str) -> Result<u32, SnapshotError> {
+fn take_u32(data: &[u8], offset: &mut usize, field: &'static str) -> Result<u32, PersistenceError> {
     Ok(u32::from_be_bytes(
         take(data, offset, 4, field)?.try_into().unwrap(),
     ))
 }
 
-fn take_u64(data: &[u8], offset: &mut usize, field: &'static str) -> Result<u64, SnapshotError> {
+fn take_u64(data: &[u8], offset: &mut usize, field: &'static str) -> Result<u64, PersistenceError> {
     Ok(u64::from_be_bytes(
         take(data, offset, 8, field)?.try_into().unwrap(),
     ))

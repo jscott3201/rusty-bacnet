@@ -143,11 +143,15 @@ pub trait TagsPersistence: Send + Sync {
 /// The file holds what [`snapshot::tags::encode`] returns; that module
 /// documents the format.
 ///
-/// Its errors name the file's path (#2730), keeping their kind: a protocol
-/// error a write would get passes through as it is. A file saved for
-/// another object is refused naming the object it belongs to and the one
-/// loading it, and saying how to go on: remove or move the file, or give
-/// each object a path of its own.
+/// Its errors name the file's path (#2730) and keep their variant: an I/O
+/// failure is `Error::Transport`, and a file it can't load (damaged, cut
+/// short, or of a version this build doesn't read) is
+/// `Error::Persistence` with its kind (#1833), as for the other file
+/// backends. A protocol error a write would get passes through as it is.
+/// A file saved for another object is the one configuration mistake: the
+/// same path given to two objects. It is `Error::InvalidConfig`, naming the
+/// object it belongs to and the one loading it, and saying how to go on:
+/// remove or move the file, or give each object a path of its own.
 ///
 /// [`snapshot::tags::encode`]: crate::snapshot::tags::encode
 #[derive(Clone, Debug)]
@@ -183,19 +187,18 @@ impl FileTagsPersistence {
         self.file.path()
     }
 
-    /// `error`, its text naming the file (#2730). An I/O failure keeps its
-    /// kind. A file the object can't be built from (damaged, a version this
-    /// build doesn't read, or a snapshot refused as it is saved) is a
-    /// configuration refusal here, as another object's file is: a
-    /// persisted-state error's text is static (#1833) and can't name the
-    /// path, and this backend keeps one copy, so no fallback acts on whether
-    /// it is damage. A protocol error, which a write is answered with, is
-    /// left as it is.
+    /// `error`, its text naming the file (#2730), its variant and kind kept:
+    /// an I/O failure keeps its I/O kind, and persisted state (a damaged
+    /// file, a version this build doesn't read, a snapshot refused as it is
+    /// saved) keeps its own (#1833). A protocol error, which a write is
+    /// answered with, is left as it is.
     fn named(&self, error: Error) -> Error {
-        let at = |reason: &dyn core::fmt::Display| format!("{}: {reason}", self.path().display());
+        let path = self.path().display().to_string();
         match error {
-            Error::Transport(io) => Error::Transport(std::io::Error::new(io.kind(), at(&io))),
-            Error::Persistence(refused) => Error::InvalidConfig(Refusal::text(at(&refused))),
+            Error::Transport(io) => {
+                Error::Transport(std::io::Error::new(io.kind(), format!("{path}: {io}")))
+            }
+            persisted @ Error::Persistence(_) => persisted.with_context(&path),
             other => other,
         }
     }
@@ -225,7 +228,7 @@ impl TagsPersistence for FileTagsPersistence {
         format::decode(object, &octets)
             .map(Some)
             .map_err(|error| match error.kind() {
-                crate::snapshot::SnapshotErrorKind::OtherObject => {
+                crate::snapshot::PersistenceErrorKind::OtherObject => {
                     self.other_object(object, &octets)
                 }
                 _ => self.named(error.into()),

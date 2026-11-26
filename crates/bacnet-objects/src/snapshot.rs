@@ -11,14 +11,17 @@
 //!
 //! Each format has a module with `encode`, which returns the octets to
 //! store, and `decode`, which takes them back, plus its magic tag and
-//! version as constants. Both refuse with a [`SnapshotError`], whose
-//! [`kind`](SnapshotError::kind) says why: octets cut short, a version or
-//! kind this build doesn't read, a snapshot of another object, or a value
-//! no save writes, treated as damage. `decode` checks everything `encode`
-//! does, so whatever loads saves again. The stack's error carries it as
-//! `Error::Persistence`, which is what the storage traits return; a backend
-//! of the application's own reports its own failure there with
-//! [`SnapshotError::backend_failed`].
+//! version as constants. Both refuse with a
+//! [`PersistenceError`](bacnet_types::error::PersistenceError), whose
+//! [`kind`](bacnet_types::error::PersistenceError::kind) says why: octets
+//! cut short, a version or kind this build doesn't read, a snapshot of
+//! another object, or a value no save writes, treated as damage. `decode`
+//! checks everything `encode` does, so whatever loads saves again. The
+//! stack's error carries it as `Error::Persistence`, which is what the
+//! storage traits return; a backend of the application's own reports its
+//! own failure there with
+//! [`PersistenceError::new`](bacnet_types::error::PersistenceError::new), of
+//! kind `BackendFailed`.
 //!
 //! A backend that keeps two copies, as the log and Audit Log file backends
 //! keep two slots, gets the file backend's choice between them from
@@ -43,8 +46,8 @@
 //! Only a snapshot holding one is written that
 //! way, so a snapshot without one keeps the octets an earlier release wrote,
 //! and a release that predates the version refuses one with it as
-//! [`UnknownVersion`](SnapshotErrorKind::UnknownVersion) or
-//! [`UnknownKind`](SnapshotErrorKind::UnknownKind). A written event
+//! [`UnknownVersion`](PersistenceErrorKind::UnknownVersion) or
+//! [`UnknownKind`](PersistenceErrorKind::UnknownKind). A written event
 //! algorithm parameter (#2331) takes write configuration kind 6 the same
 //! way, a written Shed_Levels element (#2502) the Load Control's version
 //! 2, and a Device's written zone half (#2395) the Tags format's version 3.
@@ -53,8 +56,8 @@
 //! format and its version, then the four-octet identifier of the object the
 //! file belongs to. Their `encode` and `decode` take that object first. A
 //! newer version of a format's tag, or a kind this build doesn't know, is
-//! [`UnknownVersion`](SnapshotErrorKind::UnknownVersion) or
-//! [`UnknownKind`](SnapshotErrorKind::UnknownKind), never damage.
+//! [`UnknownVersion`](PersistenceErrorKind::UnknownVersion) or
+//! [`UnknownKind`](PersistenceErrorKind::UnknownKind), never damage.
 //!
 //! # Stability
 //!
@@ -64,8 +67,8 @@
 //! format version stops loading only in a release whose changelog carries a
 //! migration note saying so. A snapshot an older release can't read (a
 //! newer version or kind) is refused with
-//! [`UnknownVersion`](SnapshotErrorKind::UnknownVersion) or
-//! [`UnknownKind`](SnapshotErrorKind::UnknownKind) rather than loaded in
+//! [`UnknownVersion`](PersistenceErrorKind::UnknownVersion) or
+//! [`UnknownKind`](PersistenceErrorKind::UnknownKind) rather than loaded in
 //! part.
 //!
 //! The Rust snapshot types are ordinary API and follow the crate's usual
@@ -146,9 +149,29 @@ pub mod notification_forwarder;
 pub mod tags;
 pub mod write_config;
 
-// The codecs here return it; it lives in `bacnet-types` so the stack's
-// error carries it as `Error::Persistence` (#1833).
-pub use bacnet_types::error::{SnapshotError, SnapshotErrorKind};
+// The codecs here return the stack's persisted-state error (#1833); its
+// home is `bacnet_types::error`, so this crate names it from there.
+pub(crate) use bacnet_types::error::{PersistenceError, PersistenceErrorKind};
+
+/// Damage, described by `detail`: the codecs' shorthand.
+pub(crate) const fn damaged(detail: &'static str) -> PersistenceError {
+    PersistenceError::new(PersistenceErrorKind::Damaged, detail)
+}
+
+/// Octets that end early.
+pub(crate) const fn truncated(detail: &'static str) -> PersistenceError {
+    PersistenceError::new(PersistenceErrorKind::Truncated, detail)
+}
+
+/// A value the format can't keep, refused on encode.
+pub(crate) const fn refused_on_encode(detail: &'static str) -> PersistenceError {
+    PersistenceError::new(PersistenceErrorKind::RefusedOnEncode, detail)
+}
+
+/// A storage backend's failure, with no OS error behind it.
+pub(crate) const fn backend_failed(detail: &'static str) -> PersistenceError {
+    PersistenceError::new(PersistenceErrorKind::BackendFailed, detail)
+}
 
 #[cfg(test)]
 mod audit_log_tests;

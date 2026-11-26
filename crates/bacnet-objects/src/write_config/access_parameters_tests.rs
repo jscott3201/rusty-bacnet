@@ -503,7 +503,7 @@ fn a_stored_list_is_validated_as_a_write_of_it_is() {
                     }
                     Err(error) => {
                         assert!(
-                            matches!(error, Error::Persistence(refused) if refused.is_damage()),
+                            matches!(&error, Error::Persistence(refused) if refused.is_damage()),
                             "{error:?}"
                         );
                         refused += 1;

@@ -8,7 +8,7 @@
 use bacnet_types::enums::ObjectType;
 
 use super::parameters_tests::{encode, listed, oid, snapshot, with_tail};
-use super::{SnapshotErrorKind, write_config};
+use super::{PersistenceErrorKind, write_config};
 use crate::write_config::AlgorithmWriteConfig;
 
 /// One list row on one of the types that keep it: the type and the row's
@@ -61,7 +61,7 @@ impl Row {
         tail
     }
 
-    fn refusal(self, tail: &[u8]) -> SnapshotErrorKind {
+    fn refusal(self, tail: &[u8]) -> PersistenceErrorKind {
         write_config::decode(oid(self.kind), &with_tail(self.kind, tail))
             .unwrap_err()
             .kind()
@@ -143,10 +143,14 @@ fn the_cap_is_what_a_write_may_hold() {
         );
         let over = row.states(CAP + 1);
         let error = encode(row.kind, row.list(over.clone())).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{row:?}");
+        assert_eq!(
+            error.kind(),
+            PersistenceErrorKind::RefusedOnEncode,
+            "{row:?}"
+        );
         assert_eq!(
             row.refusal(&row.tail(CAP + 1, &over)),
-            SnapshotErrorKind::Damaged,
+            PersistenceErrorKind::Damaged,
             "{row:?}"
         );
     }
@@ -163,7 +167,7 @@ fn a_count_past_the_cap_is_refused_before_a_state_is_read() {
             for states in [&[][..], &some] {
                 assert_eq!(
                     row.refusal(&row.tail(count, states)),
-                    SnapshotErrorKind::Damaged,
+                    PersistenceErrorKind::Damaged,
                     "{row:?} count {count:#x}"
                 );
             }
@@ -181,23 +185,23 @@ fn a_count_the_file_does_not_match_is_refused() {
         for (count, states) in [(1, &[][..]), (3, &some[..2]), (CAP, &some[..1])] {
             assert_eq!(
                 row.refusal(&row.tail(count, states)),
-                SnapshotErrorKind::Truncated,
+                PersistenceErrorKind::Truncated,
                 "{row:?} count {count}"
             );
         }
         for (count, states) in [(0, &some[..1]), (2, &some[..])] {
             assert_eq!(
                 row.refusal(&row.tail(count, states)),
-                SnapshotErrorKind::Damaged,
+                PersistenceErrorKind::Damaged,
                 "{row:?} count {count}"
             );
         }
         // Part of a state is neither.
         let mut ragged = row.tail(2, &some[..2]);
         ragged.pop();
-        assert_eq!(row.refusal(&ragged), SnapshotErrorKind::Truncated);
+        assert_eq!(row.refusal(&ragged), PersistenceErrorKind::Truncated);
         ragged.extend_from_slice(&[2, 0]);
-        assert_eq!(row.refusal(&ragged), SnapshotErrorKind::Damaged);
+        assert_eq!(row.refusal(&ragged), PersistenceErrorKind::Damaged);
     }
 }
 
@@ -215,7 +219,7 @@ fn no_cut_reads_as_the_list_it_was_cut_from() {
         let mut long = octets.clone();
         long.extend_from_slice(&[0, 0, 0, 5]);
         let error = write_config::decode(oid(row.kind), &long).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "{row:?}");
+        assert_eq!(error.kind(), PersistenceErrorKind::Damaged, "{row:?}");
     }
 }
 
@@ -253,10 +257,14 @@ fn a_state_the_types_lists_do_not_take_is_refused() {
         for &bad in refused {
             for values in [vec![bad], vec![good, bad], vec![bad, good, good]] {
                 let error = encode(row.kind, row.list(values.clone())).unwrap_err();
-                assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{values:?}");
+                assert_eq!(
+                    error.kind(),
+                    PersistenceErrorKind::RefusedOnEncode,
+                    "{values:?}"
+                );
                 assert_eq!(
                     row.refusal(&row.tail(values.len() as u32, &values)),
-                    SnapshotErrorKind::Damaged,
+                    PersistenceErrorKind::Damaged,
                     "{row:?} {values:?}"
                 );
             }
@@ -299,11 +307,15 @@ fn a_list_is_read_under_its_own_types_rule() {
                 let error = decoded.unwrap_err();
                 assert_eq!(
                     error.kind(),
-                    SnapshotErrorKind::Damaged,
+                    PersistenceErrorKind::Damaged,
                     "{written_for}'s list read as {read_as}'s"
                 );
                 let error = encoded.unwrap_err();
-                assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{read_as}");
+                assert_eq!(
+                    error.kind(),
+                    PersistenceErrorKind::RefusedOnEncode,
+                    "{read_as}"
+                );
                 refused += 1;
             }
         }
@@ -317,7 +329,11 @@ fn a_list_is_read_under_its_own_types_rule() {
             listed(ObjectType::ACCESS_ZONE),
         ] {
             let tail = reader.tail(list.len() as u32, &list);
-            assert_eq!(reader.refusal(&tail), SnapshotErrorKind::Damaged, "{bit}");
+            assert_eq!(
+                reader.refusal(&tail),
+                PersistenceErrorKind::Damaged,
+                "{bit}"
+            );
         }
     }
 }

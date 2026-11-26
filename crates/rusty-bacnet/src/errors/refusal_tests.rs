@@ -3,7 +3,7 @@
 //! untyped error they replace did, whose text led with its prefix.
 
 use super::*;
-use bacnet_types::error::{Lifecycle, Refusal, SnapshotError};
+use bacnet_types::error::{Lifecycle, PersistenceError, PersistenceErrorKind, Refusal};
 
 /// Every lifecycle state raises `BacnetStateError` (also a `BacnetError`
 /// and a `RuntimeError`) with its text and the state's name in `state`;
@@ -68,9 +68,11 @@ fn local_refusals_raise_their_class_with_their_text() {
             // Persisted state (#1833), damaged or a backend's failure: the
             // base class too, as the untyped text it replaces was.
             Error::from(
-                SnapshotError::damaged("checksum mismatch").in_format("Notification Class file"),
+                PersistenceError::new(PersistenceErrorKind::Damaged, "checksum mismatch")
+                    .in_format("Notification Class file"),
             ),
-            Error::from(SnapshotError::backend_failed(
+            Error::from(PersistenceError::new(
+                PersistenceErrorKind::BackendFailed,
                 "persistence panicked during a save",
             )),
         ];

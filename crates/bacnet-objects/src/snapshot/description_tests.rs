@@ -5,7 +5,7 @@
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::{SnapshotErrorKind, write_config};
+use super::{PersistenceErrorKind, write_config};
 use crate::write_config::{
     ChannelWriteConfig, ReportingWriteConfig, TimerWriteConfig, WriteConfigSnapshot,
 };
@@ -107,7 +107,11 @@ fn a_description_past_its_cap_is_refused_both_ways() {
     let longer = format!("{longest}d");
     for (object, snapshot) in described(Some(&longer)) {
         let error = write_config::encode(object, &snapshot).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{object}");
+        assert_eq!(
+            error.kind(),
+            PersistenceErrorKind::RefusedOnEncode,
+            "{object}"
+        );
     }
     let [_, _, (object, snapshot)] = described(Some(&longest));
     let mut octets = write_config::encode(object, &snapshot).unwrap();
@@ -130,7 +134,7 @@ fn what_kind_5_refuses() {
         octets[at] = value;
         write_config::decode(object, &octets).unwrap_err().kind()
     };
-    assert_eq!(patched(17, 0xFF), SnapshotErrorKind::Damaged);
+    assert_eq!(patched(17, 0xFF), PersistenceErrorKind::Damaged);
     // The wrapped kind octet follows the five octets of "Lobby".
     let wrapped = 22;
     assert_eq!(octets[wrapped], write_config::KIND_TIMER);
@@ -138,13 +142,17 @@ fn what_kind_5_refuses() {
         write_config::KIND_TIMER_SET_ONLY,
         write_config::KIND_WITH_DESCRIPTION,
     ] {
-        assert_eq!(patched(wrapped, kind), SnapshotErrorKind::Damaged, "{kind}");
+        assert_eq!(
+            patched(wrapped, kind),
+            PersistenceErrorKind::Damaged,
+            "{kind}"
+        );
     }
     assert_eq!(
         patched(wrapped, write_config::KIND_CHANNEL),
-        SnapshotErrorKind::OtherObject
+        PersistenceErrorKind::OtherObject
     );
-    assert_eq!(patched(wrapped, 9), SnapshotErrorKind::UnknownKind(9));
+    assert_eq!(patched(wrapped, 9), PersistenceErrorKind::UnknownKind(9));
 
     // A whole kind 1 body (the set alone) wrapped, sealed afresh: only the
     // guard refuses it, since kind 1 on its own still decodes.
@@ -155,7 +163,7 @@ fn what_kind_5_refuses() {
     let set_only = super::framing::seal(&write_config::MAGIC, object, &body);
     assert_eq!(
         write_config::decode(object, &set_only).unwrap_err().kind(),
-        SnapshotErrorKind::Damaged
+        PersistenceErrorKind::Damaged
     );
     // The same body unwrapped is a kind 1 file that still loads.
     let plain = super::framing::seal(
@@ -181,6 +189,6 @@ fn every_cut_of_a_described_file_is_refused() {
         let mut longer = octets.clone();
         longer.push(0);
         let error = write_config::decode(object, &longer).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "{object}");
+        assert_eq!(error.kind(), PersistenceErrorKind::Damaged, "{object}");
     }
 }

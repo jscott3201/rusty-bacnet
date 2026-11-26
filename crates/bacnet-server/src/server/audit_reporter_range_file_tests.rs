@@ -182,7 +182,8 @@ async fn audit_reporter_range_file_execution_errors_exact_result_and_silent_unkn
         ),
         (
             || {
-                Error::from(bacnet_types::error::SnapshotError::backend_failed(
+                Error::from(bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::BackendFailed,
                     "execution failure",
                 ))
             },

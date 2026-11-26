@@ -148,9 +148,10 @@ async fn endpoint_records_accepted_reinitialize_requests_only() {
                 ErrorCode::CONFIGURATION_IN_PROGRESS,
             )),
             PANIC => panic!("reinitialize handler panic"),
-            _ => Err(Error::from(
-                bacnet_types::error::SnapshotError::backend_failed("disk full"),
-            )),
+            _ => Err(Error::from(bacnet_types::error::PersistenceError::new(
+                bacnet_types::error::PersistenceErrorKind::BackendFailed,
+                "disk full",
+            ))),
         })
         .reinit_password("pw");
     let mut session = session(db, SessionRole::Both, &sink).with_server(server);

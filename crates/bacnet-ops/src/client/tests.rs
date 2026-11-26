@@ -697,10 +697,16 @@ fn a_disabled_node_fails_locally() {
 /// error's text too. A link that failed a send is still unreachable.
 #[test]
 fn local_refusals_and_a_stopped_link_fail_locally() {
-    use bacnet_types::error::{Error, Lifecycle, SnapshotError};
+    use bacnet_types::error::{Error, Lifecycle, PersistenceError, PersistenceErrorKind};
     for error in [
-        Error::from(SnapshotError::backend_failed("storage unavailable")),
-        Error::from(SnapshotError::damaged("checksum mismatch")),
+        Error::from(PersistenceError::new(
+            PersistenceErrorKind::BackendFailed,
+            "storage unavailable",
+        )),
+        Error::from(PersistenceError::new(
+            PersistenceErrorKind::Damaged,
+            "checksum mismatch",
+        )),
         Error::state(
             Lifecycle::NotConnected,
             "BACnet/SC transport not in Connected state",

@@ -12,7 +12,8 @@
 //! [`Error::InvalidArgument`], [`Error::Unsupported`] and
 //! [`Error::LimitReached`], #1833) are there too, with a static
 //! [`Refusal`] whose owned text needs `std`, and so is persisted state
-//! ([`Error::Persistence`]), whose [`SnapshotError`] is static. A
+//! ([`Error::Persistence`]), whose [`PersistenceError`] owns context text
+//! only with `std`. A
 //! structured error's detail needs `alloc`; the variants for I/O and a
 //! client's lookups need `std`. There is no variant for text alone.
 
@@ -34,18 +35,18 @@ mod decode;
 mod encode;
 #[cfg(feature = "std")]
 mod network_reject;
+mod persistence;
 mod refusal;
 mod remote;
-mod snapshot;
 pub use decode::{DecodeError, DecodingKind, RangeError};
 pub use encode::{EncodeError, SegmentationError};
 #[cfg(feature = "std")]
 pub use network_reject::NetworkReject;
+pub use persistence::{PersistenceError, PersistenceErrorKind};
 pub use refusal::{Lifecycle, Refusal};
 #[cfg(feature = "alloc")]
 use remote::ProtocolText;
 pub use remote::RemoteError;
-pub use snapshot::{SnapshotError, SnapshotErrorKind};
 
 /// [`Error::LogNotAdvancing`]'s text.
 struct NotAdvancing {
@@ -222,10 +223,16 @@ impl fmt::Display for Candidates<'_> {
 ///   [`Error::Segmentation`] and [`Error::BufferTooShort`]; and a
 ///   well-formed answer that breaks a rule the client checks:
 ///   [`Error::ReadRangeViolation`], [`Error::LogNotAdvancing`].
-/// - The link's I/O, with the OS error as its source: `Error::Transport`.
-/// - Persisted state that couldn't be loaded or saved:
-///   [`Error::Persistence`], whose [`SnapshotError::kind`] and
-///   [`SnapshotError::is_damage`] say why.
+/// - I/O the operating system reported, with its error as the source:
+///   `Error::Transport`. That is any OS I/O: a socket's, a serial port's,
+///   and a storage file's, which the stack's own file backends return
+///   this way.
+/// - Persisted state: [`Error::Persistence`], for stored octets that are
+///   damaged, belong to another object or a version this build doesn't
+///   read, or were refused as they were encoded, and for a storage backend
+///   that failed with no OS error behind it. Its
+///   [`PersistenceError::kind`] and [`PersistenceError::is_damage`] say
+///   which.
 ///
 /// What a component is built or started with (a value given to a
 /// builder's setter, an option, a table it is configured with, or a value
@@ -237,8 +244,8 @@ impl fmt::Display for Candidates<'_> {
 /// clock zone), and so is text parsed once. There is no variant for text
 /// alone: an application's own code that returns this error (a storage
 /// backend, a hook, a transport) picks the variant for what failed, such as
-/// [`SnapshotError::backend_failed`] for its storage or a local refusal
-/// with `Refusal::text` (with `std`) where it names a run-time value.
+/// [`PersistenceError::new`] for its storage or a local refusal with
+/// `Refusal::text` (with `std`) where it names a run-time value.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 // Clippy fails if the attribute above goes.
@@ -394,13 +401,16 @@ pub enum Error {
     /// Persisted state that couldn't be loaded or saved (#1833): stored
     /// octets that are damaged or cut short, a sound snapshot saved for
     /// another object or by a build this one can't read, a snapshot refused
-    /// as it was encoded, or a storage backend that failed. The
-    /// [`SnapshotError`] says which by its [`kind`](SnapshotError::kind),
-    /// and [`is_damage`](SnapshotError::is_damage) says whether a backend
+    /// as it was encoded, or a storage backend that failed with no
+    /// operating-system error behind it (an OS I/O failure, a storage
+    /// file's included, is `Error::Transport`). The [`PersistenceError`]
+    /// says which by its [`kind`](PersistenceError::kind), and
+    /// [`is_damage`](PersistenceError::is_damage) says whether a backend
     /// that keeps two copies should pass over this one for the other. Its
-    /// text is static, so it exists in every build.
+    /// own text is static, so it exists in every build; with `std`,
+    /// [`Error::with_context`] can put a path or other context in front.
     #[error("{0}")]
-    Persistence(SnapshotError),
+    Persistence(PersistenceError),
 
     /// A value an encoder or validator refused, with a static label
     /// (#1802). The encoders and validators of `bacnet-encoding` and
@@ -572,8 +582,8 @@ impl From<RangeError> for Error {
     }
 }
 
-impl From<SnapshotError> for Error {
-    fn from(error: SnapshotError) -> Self {
+impl From<PersistenceError> for Error {
+    fn from(error: PersistenceError) -> Self {
         Self::Persistence(error)
     }
 }
@@ -960,8 +970,9 @@ impl Error {
     }
 
     /// This error with `context` and `: ` in front of its text, keeping its
-    /// variant, for a caller that says where a local refusal came from. Any
-    /// other error is returned as it is. Only with `std`.
+    /// variant, for a caller that says where a local refusal or persisted
+    /// state came from, such as a file's path; a persisted-state error keeps
+    /// its kind. Any other error is returned as it is. Only with `std`.
     #[cfg(feature = "std")]
     #[must_use]
     pub fn with_context(self, context: &str) -> Self {
@@ -971,6 +982,7 @@ impl Error {
             Self::InvalidArgument(refusal) => Self::InvalidArgument(refusal.with_context(context)),
             Self::Unsupported(refusal) => Self::Unsupported(refusal.with_context(context)),
             Self::LimitReached(refusal) => Self::LimitReached(refusal.with_context(context)),
+            Self::Persistence(refused) => Self::Persistence(refused.with_context(context)),
             other => other,
         }
     }

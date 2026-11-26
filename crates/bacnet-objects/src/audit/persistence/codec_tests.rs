@@ -76,7 +76,7 @@ fn patched(mut data: Vec<u8>, offset: usize, octets: &[u8]) -> Vec<u8> {
 fn assert_out_of_range(result: Result<impl core::fmt::Debug, Error>, needle: &str) {
     match result {
         Err(Error::Persistence(refused))
-            if refused.kind() == bacnet_types::error::SnapshotErrorKind::OutOfRange =>
+            if refused.kind() == bacnet_types::error::PersistenceErrorKind::RefusedOnEncode =>
         {
             assert!(refused.to_string().contains(needle), "{refused}")
         }
@@ -88,7 +88,7 @@ fn assert_out_of_range(result: Result<impl core::fmt::Debug, Error>, needle: &st
 fn assert_stored_refusal(result: Result<impl core::fmt::Debug, Error>, needle: &str) {
     match result {
         Err(Error::Persistence(refused))
-            if refused.kind() != bacnet_types::error::SnapshotErrorKind::OutOfRange =>
+            if refused.kind() != bacnet_types::error::PersistenceErrorKind::RefusedOnEncode =>
         {
             assert!(refused.to_string().contains(needle), "{refused}")
         }

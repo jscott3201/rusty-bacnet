@@ -63,8 +63,8 @@ impl TimerObject {
             None => TimerWriteConfig::default(),
             Some(WriteConfigSnapshot::Timer(saved)) => saved,
             Some(_) => {
-                return Err(bacnet_types::error::SnapshotError::new(
-                    bacnet_types::error::SnapshotErrorKind::OtherObject,
+                return Err(bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::OtherObject,
                     "saved write configuration is not a Timer's",
                 )
                 .into());

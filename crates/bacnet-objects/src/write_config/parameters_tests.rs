@@ -475,7 +475,7 @@ fn a_stored_parameter_is_validated_as_a_write_of_it_is() {
                 Ok(object) => assert_eq!(read(object.as_ref(), property), value),
                 Err(error) => {
                     assert!(
-                        matches!(error, Error::Persistence(refused) if refused.is_damage()),
+                        matches!(&error, Error::Persistence(refused) if refused.is_damage()),
                         "{error:?}"
                     );
                     refused += 1;
@@ -539,7 +539,7 @@ fn a_type_keeps_only_its_own_parameters() {
     for stored in stored.chain(more) {
         let built = try_alert(&holding(stored.clone()));
         assert!(
-            matches!(built, Err(Error::Persistence(refused)) if refused.is_damage()),
+            matches!(&built, Err(Error::Persistence(refused)) if refused.is_damage()),
             "{stored:?}"
         );
         let enrollment = EventEnrollmentObject::new(1, "EE", EventType::CHANGE_OF_STATE)
@@ -547,7 +547,7 @@ fn a_type_keeps_only_its_own_parameters() {
         match enrollment {
             Ok(_) => enrollment_takes += 1,
             Err(error) => assert!(
-                matches!(error, Error::Persistence(refused) if refused.is_damage()),
+                matches!(&error, Error::Persistence(refused) if refused.is_damage()),
                 "{error:?}"
             ),
         }

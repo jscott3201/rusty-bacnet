@@ -459,7 +459,8 @@ async fn audit_reporter_atomic_write_file_backend_mapping_and_unknown_outcome_si
                 true,
             ),
             (
-                Error::from(bacnet_types::error::SnapshotError::backend_failed(
+                Error::from(bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::BackendFailed,
                     "backend",
                 )),
                 true,

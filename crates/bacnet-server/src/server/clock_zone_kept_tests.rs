@@ -41,9 +41,10 @@ impl TagsPersistence for ZoneStore {
 
     fn save(&self, _: ObjectIdentifier, snapshot: &TagsSnapshot) -> Result<(), Error> {
         if self.fail.load(Ordering::SeqCst) {
-            return Err(Error::from(
-                bacnet_types::error::SnapshotError::backend_failed("storage unavailable"),
-            ));
+            return Err(Error::from(bacnet_types::error::PersistenceError::new(
+                bacnet_types::error::PersistenceErrorKind::BackendFailed,
+                "storage unavailable",
+            )));
         }
         *self.saved.lock().unwrap() = Some(snapshot.clone());
         self.saves.fetch_add(1, Ordering::SeqCst);

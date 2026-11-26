@@ -440,9 +440,10 @@ impl LoadControlPersistence for Store {
 
     fn save(&self, _: ObjectIdentifier, snapshot: &LoadControlSnapshot) -> Result<(), Error> {
         if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(Error::from(
-                bacnet_types::error::SnapshotError::backend_failed("the disk is full"),
-            ));
+            return Err(Error::from(bacnet_types::error::PersistenceError::new(
+                bacnet_types::error::PersistenceErrorKind::BackendFailed,
+                "the disk is full",
+            )));
         }
         *self.saved.lock().unwrap() = Some(snapshot.clone());
         Ok(())

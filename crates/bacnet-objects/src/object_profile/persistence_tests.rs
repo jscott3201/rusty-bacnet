@@ -265,9 +265,9 @@ fn refused_file_save_leaves_previous_snapshot_and_memory_only_has_no_byte_cap() 
     assert!(FileTagsPersistence::new("").is_err());
 }
 
-/// The file's errors name its path (#2730): a load and a save that can't
-/// reach it, keeping their I/O kind, and a damaged file, a configuration
-/// refusal here since only owned text can name the path (#1833). The error
+/// The file's errors name its path (#2730) and keep their variant: a load
+/// and a save that can't reach it keep their I/O kind, and a damaged file is
+/// persisted-state damage with the path as its context (#1833). The error
 /// a write would get for a snapshot past the cap passes through as it is.
 #[test]
 fn errors_name_the_path() {
@@ -275,7 +275,10 @@ fn errors_name_the_path() {
     let path = case.store.path().to_path_buf();
     std::fs::write(&path, b"not a Tags file").unwrap();
     let damaged = case.store.load(oid()).unwrap_err();
-    assert!(matches!(damaged, Error::InvalidConfig(_)), "{damaged:?}");
+    assert!(
+        matches!(&damaged, Error::Persistence(refused) if refused.is_damage()),
+        "{damaged:?}"
+    );
     std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
     let saved = case.store.save(oid(), &snapshot("lobby")).unwrap_err();

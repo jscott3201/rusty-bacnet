@@ -286,7 +286,8 @@ async fn audit_reporter_rp_execution_errors_map_result_but_unknown_outcomes_are_
         ),
         (
             || {
-                Error::from(bacnet_types::error::SnapshotError::backend_failed(
+                Error::from(bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::BackendFailed,
                     "executed service failure",
                 ))
             },
@@ -336,13 +337,15 @@ async fn audit_reporter_rpm_expanded_order_inline_errors_and_response_parity() {
     let mut fixture = server(read_reporter()).await;
     let mut plain = plain_server(read_reporter()).await;
     let reads = add_probe(&fixture, || {
-        Error::from(bacnet_types::error::SnapshotError::backend_failed(
+        Error::from(bacnet_types::error::PersistenceError::new(
+            bacnet_types::error::PersistenceErrorKind::BackendFailed,
             "mapped inline",
         ))
     })
     .await;
     add_probe(&plain, || {
-        Error::from(bacnet_types::error::SnapshotError::backend_failed(
+        Error::from(bacnet_types::error::PersistenceError::new(
+            bacnet_types::error::PersistenceErrorKind::BackendFailed,
             "mapped inline",
         ))
     })

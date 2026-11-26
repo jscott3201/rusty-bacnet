@@ -10,7 +10,7 @@ use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::tests::{DATE, at, oid, reseal};
-use super::{SnapshotErrorKind, audit_log};
+use super::{PersistenceErrorKind, audit_log};
 use crate::audit::persistence::codec::{SCHEMA_VERSION_V1, SCHEMA_VERSION_V2, encode_for_version};
 use crate::audit::{
     AuditLogSnapshot, CompletedAuditReceipt, MAX_AUDIT_RECEIPT_KEY_BYTES, MAX_AUDIT_RECORDS,
@@ -89,7 +89,7 @@ fn a_slot_refuses_with_the_kind_it_names() {
         let error = audit_log::decode(object, octets).unwrap_err();
         (error.kind(), error.is_damage())
     };
-    let truncated = (SnapshotErrorKind::Truncated, true);
+    let truncated = (PersistenceErrorKind::Truncated, true);
     assert_eq!(kind(&octets[..octets.len() - 1], object()), truncated);
     assert_eq!(kind(&octets[..20], object()), truncated);
     // An erased length field reads as cut short, never as an overflow.
@@ -98,18 +98,21 @@ fn a_slot_refuses_with_the_kind_it_names() {
     assert_eq!(kind(&erased, object()), truncated);
     let mut flipped = octets.clone();
     flipped[30] ^= 1;
-    assert_eq!(kind(&flipped, object()), (SnapshotErrorKind::Damaged, true));
+    assert_eq!(
+        kind(&flipped, object()),
+        (PersistenceErrorKind::Damaged, true)
+    );
     let mut newer = octets.clone();
     newer[8..10].copy_from_slice(&5u16.to_be_bytes());
     reseal(&mut newer);
     assert_eq!(
         kind(&newer, object()),
-        (SnapshotErrorKind::UnknownVersion(5), false)
+        (PersistenceErrorKind::UnknownVersion(5), false)
     );
     let other = oid(ObjectType::AUDIT_LOG, 3);
     assert_eq!(
         kind(&octets, other),
-        (SnapshotErrorKind::OtherObject, false)
+        (PersistenceErrorKind::OtherObject, false)
     );
     // A capacity past the cap, sealed: damage, not a refusal to save.
     let mut capacity = octets.clone();
@@ -117,11 +120,14 @@ fn a_slot_refuses_with_the_kind_it_names() {
     reseal(&mut capacity);
     assert_eq!(
         kind(&capacity, object()),
-        (SnapshotErrorKind::Damaged, true)
+        (PersistenceErrorKind::Damaged, true)
     );
     let mut huge = octets;
     huge.resize(audit_log::MAX_LEN + 1, 0);
-    assert_eq!(kind(&huge, object()), (SnapshotErrorKind::TooLarge, true));
+    assert_eq!(
+        kind(&huge, object()),
+        (PersistenceErrorKind::TooLarge, true)
+    );
 }
 
 #[test]
@@ -132,7 +138,7 @@ fn a_snapshot_that_does_not_hold_together_never_encodes() {
     gap.records[0].sequence_number = 4;
     for refused in [zero, gap] {
         let error = audit_log::encode(&refused).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+        assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
         assert!(!error.is_damage());
     }
 }
@@ -147,12 +153,16 @@ fn the_newer_slot_wins_and_damage_is_passed_over() {
     let cut = &four[..four.len() - 1];
     let chosen = newest([Some(cut), Some(&three)]).unwrap().unwrap();
     assert_eq!((chosen.slot, chosen.generation), (1, 3));
-    assert!(chosen.passed_over[0].is_some_and(|error| error.is_damage()));
+    assert!(
+        chosen.passed_over[0]
+            .as_ref()
+            .is_some_and(|error| error.is_damage())
+    );
     // Nothing sound: the damage, not an empty store.
     for slots in [[Some(cut), None], [Some(cut), Some(cut)]] {
         assert_eq!(
             newest(slots).unwrap_err().kind(),
-            SnapshotErrorKind::Truncated
+            PersistenceErrorKind::Truncated
         );
     }
     // A sound slot this build must not take stops the choice.
@@ -176,7 +186,7 @@ fn one_generation_twice_is_compared_as_version_3() {
     let chosen = newest([Some(&v3), Some(&v2)]).unwrap().unwrap();
     assert_eq!((chosen.slot, chosen.snapshot), (0, legacy));
     let error = newest([Some(&three), Some(&v3)]).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
+    assert_eq!(error.kind(), PersistenceErrorKind::Damaged);
     assert!(error.to_string().contains("same generation"), "{error}");
 }
 
@@ -201,7 +211,7 @@ fn a_receipt_key_at_the_cap_loads_and_one_past_it_does_not() {
     let checksum = crc32(&past[..end]);
     past[end..].copy_from_slice(&checksum.to_be_bytes());
     let error = audit_log::decode(object(), &past).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
+    assert_eq!(error.kind(), PersistenceErrorKind::Damaged);
 }
 
 /// A tie compares octets, not values: a NaN record matches itself, and
@@ -219,7 +229,7 @@ fn a_tie_compares_octets_not_values() {
     assert_eq!(chosen.slot, 0);
     let (negative, positive) = (with(-0.0), with(0.0));
     let error = newest([Some(&negative), Some(&positive)]).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
+    assert_eq!(error.kind(), PersistenceErrorKind::Damaged);
 }
 
 /// The file backend writes what `encode` returns, and loads a slot

@@ -75,7 +75,7 @@ fn a_refused_slot_0_is_reported_ahead_of_slot_1s_read_failure() {
     assert!(matches!(
         choose_slot([valid(elsewhere.clone()), io_failure()], oid()),
         Err(Error::Persistence(refused))
-            if refused.kind() == bacnet_types::error::SnapshotErrorKind::OtherObject
+            if refused.kind() == bacnet_types::error::PersistenceErrorKind::OtherObject
                 && refused.to_string().contains("object identity")
     ));
     assert!(matches!(
@@ -172,7 +172,7 @@ fn a_slot_past_the_size_cap_is_refused_and_its_valid_peer_still_loads() {
     assert!(matches!(
         storage.load(oid()),
         Err(Error::Persistence(refused))
-            if refused.kind() == bacnet_types::error::SnapshotErrorKind::TooLarge && refused.to_string().contains("exceeds")
+            if refused.kind() == bacnet_types::error::PersistenceErrorKind::TooLarge && refused.to_string().contains("exceeds")
     ));
 
     // Generation 2 lands in slot 0; slot 1 stays oversized and is passed over.

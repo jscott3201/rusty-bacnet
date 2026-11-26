@@ -36,7 +36,7 @@ use bytes::BytesMut;
 
 use super::{MAX_ELEMENT_BYTES, Reader, corrupt};
 use crate::log_persistence::LogReportingSettings;
-use crate::snapshot::SnapshotError;
+use crate::snapshot::PersistenceError;
 
 /// The most octets one Event_Message_Texts_Config string may take in a
 /// slot, so the three fit the room [`super::FIXED_ALLOWANCE`] keeps beside
@@ -63,7 +63,7 @@ const KNOWN: u16 = (1 << 9) - 1;
 pub(super) fn validate(
     kind: ObjectType,
     settings: &LogReportingSettings,
-) -> Result<(), SnapshotError> {
+) -> Result<(), PersistenceError> {
     let cov =
         settings.client_cov_increment.is_some() || settings.cov_resubscription_interval.is_some();
     if cov && kind != ObjectType::TREND_LOG {
@@ -92,7 +92,7 @@ pub(super) fn validate(
     if let Some(texts) = &settings.event_message_texts_config
         && texts.iter().any(|text| text.len() > MAX_TEXT_OCTETS)
     {
-        return Err(SnapshotError::out_of_range(
+        return Err(crate::snapshot::refused_on_encode(
             "holds an Event_Message_Texts_Config string past the 16 KiB a log keeps",
         ));
     }
@@ -108,7 +108,7 @@ pub(super) fn validate(
         .as_ref()
         .is_some_and(|text| text.len() > MAX_TEXT_OCTETS)
     {
-        return Err(SnapshotError::out_of_range(
+        return Err(crate::snapshot::refused_on_encode(
             "holds a Description past the 16 KiB a log keeps",
         ));
     }
@@ -190,7 +190,7 @@ fn put_octets(data: &mut Vec<u8>, octets: &[u8]) {
 pub(super) fn read(
     reader: &mut Reader<'_>,
     described: bool,
-) -> Result<LogReportingSettings, SnapshotError> {
+) -> Result<LogReportingSettings, PersistenceError> {
     let mask = u16::from_be_bytes(
         reader
             .take(2, "reporting presence")?
@@ -260,7 +260,7 @@ fn octets<'a>(
     reader: &mut Reader<'a>,
     field: &'static str,
     cap: usize,
-) -> Result<&'a [u8], SnapshotError> {
+) -> Result<&'a [u8], PersistenceError> {
     let length = reader.u32(field)? as usize;
     if length > cap {
         return Err(corrupt("is too long").in_field(field));

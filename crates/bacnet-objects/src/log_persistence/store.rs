@@ -178,8 +178,8 @@ impl<R: SnapshotRecord> LogStore<R> {
         let loaded = persistence.load(oid)?;
         if let Some(snapshot) = &loaded {
             if snapshot.object_identifier != oid {
-                return Err(bacnet_types::error::SnapshotError::new(
-                    bacnet_types::error::SnapshotErrorKind::OtherObject,
+                return Err(bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::OtherObject,
                     "log snapshot belongs to another object",
                 )
                 .into());

@@ -40,9 +40,7 @@ impl ColorOutputPersistence for Memory {
 
     fn save(&self, _object: ObjectIdentifier, snapshot: &ColorOutputSnapshot) -> Result<(), Error> {
         if self.fail.load(Ordering::SeqCst) {
-            return Err(Error::from(
-                bacnet_types::error::SnapshotError::backend_failed("refused"),
-            ));
+            return Err(Error::from(crate::snapshot::backend_failed("refused")));
         }
         self.saves.fetch_add(1, Ordering::SeqCst);
         *self.held.lock().unwrap() = Some(snapshot.clone());
