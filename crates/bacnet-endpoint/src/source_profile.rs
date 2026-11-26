@@ -152,9 +152,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// source Audit delivery to that Device (#2371), on any link, IPv4 B/IP
     /// included. Its records go with DNET/DADR through the router that
     /// reaches `network`, which the session learns only from its own router
-    /// query (Who-Is-Router-To-Network), when exactly one router answers it
-    /// (#2831); until then they go with the link's broadcast MAC (Clause
-    /// 6.5.3). A delivery through that router that is lost forgets nothing:
+    /// query (Who-Is-Router-To-Network), when the same one router alone
+    /// answers two of its queries a minute apart (#2831); until then they
+    /// go with the link's broadcast MAC (Clause 6.5.3). A delivery through that router that is lost forgets nothing:
     /// it starts the session's check of the router, and two checks a minute
     /// apart replace it. A confirmed record's answer comes back through the
     /// router, naming `network` and `mac` as its source. A failed delivery

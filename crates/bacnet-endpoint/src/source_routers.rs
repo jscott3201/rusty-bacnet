@@ -6,7 +6,8 @@
 //! requests follow (#2831): the first records to a network go with DNET/DADR
 //! and the link's broadcast MAC (Clause 6.5.3), and the session learns the
 //! network's router only from its own router query (Who-Is-Router-To-Network,
-//! Clause 6.4.1), when exactly one router answers it. No answer to a record,
+//! Clause 6.4.1), when the same one router alone answers two of its queries
+//! a minute apart. No answer to a record,
 //! no request from the network and no I-Am-Router-To-Network it did not ask
 //! for teaches one. A delivery through the router that is lost forgets
 //! nothing: it starts a check of the router, which moves the records to

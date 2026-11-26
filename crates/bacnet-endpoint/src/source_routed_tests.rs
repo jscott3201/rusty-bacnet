@@ -270,11 +270,16 @@ impl Site {
         }
     }
 
-    /// Wait until the session's router query has learned the router.
+    /// Wait until the session's router queries have learned the router: the
+    /// router alone answers two of them a minute apart, each waiting the
+    /// three seconds a step waits at least.
     async fn learns_the_router(&self) {
-        eventually(WAIT, "the router query learns the router", async || {
-            self.learned().is_some()
-        })
+        let two_queries = Duration::from_secs(70);
+        eventually(
+            two_queries,
+            "the router queries learn the router",
+            async || self.learned().is_some(),
+        )
         .await;
         assert_eq!(self.learned().as_deref(), Some(&ROUTER_NEAR[..]));
     }

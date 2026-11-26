@@ -9,9 +9,11 @@
 //! - **No router known:** the request goes with the link's broadcast
 //!   address (Clause 6.5.3) and the owner says so ([`RouterLearning::unrouted`]).
 //!   The learner then broadcasts its router query (Who-Is-Router-To-Network,
-//!   Clause 6.4.1) for the network, at once the first time, then paced, and
-//!   takes the router only when exactly one answers it and no answer may
-//!   have been lost.
+//!   Clause 6.4.1) for the network, at once the first time, then paced. It
+//!   takes a router only when the same one router alone answers two of its
+//!   queries a minute apart, no answer possibly lost; another single router
+//!   the second time starts over, and several, none or a possible loss
+//!   decide nothing. Requests keep going by broadcast meanwhile.
 //! - **A router known:** requests go through it. Silence does not forget
 //!   it. When a request through it draws no answer, the owner says so
 //!   ([`RouterLearning::silent`]) and the learner checks it: a Who-Is to
@@ -31,9 +33,18 @@
 //! initiation (Clause 16.1); the Who-Is of a check does not, so no known
 //! router is checked, or replaced, meanwhile.
 //!
-//! A station on the link that is the only one to answer the router query
-//! twice, a minute apart, while the known router carries nothing back is
-//! taken: the check can't tell it from a real replacement.
+//! A learner tracks at most 64 networks. When all are taken, a new one
+//! takes the place of the one used least recently, if that one has gone
+//! unused for an hour, so one-off recipients don't hold the room for good;
+//! otherwise requests to it go by broadcast and nothing is asked or
+//! learned for it. Each step waits the owner's APDU timeout, three seconds
+//! at least. A learner whose reports can't tell a lost answer sends no
+//! query: it could never decide.
+//!
+//! A station on the link that is the only one to answer two of the
+//! learner's queries a minute apart, while no router is known or while the
+//! known router carries nothing back, is taken: the learner can't tell it
+//! from a real router.
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -53,12 +64,20 @@ use crate::layer::{
 };
 use crate::router_checks::{Answer, Checked, Pacing, Routers, Step, Strike};
 
-/// The most networks a learner tracks. A network past it is never learned:
-/// requests to it keep going with the link's broadcast address.
-pub const MAX_NETWORKS: usize = 64;
+/// The most networks a learner tracks. A network past it is never learned
+/// while the others are in use: requests to it keep going with the link's
+/// broadcast address.
+pub(crate) const MAX_NETWORKS: usize = 64;
+
+/// How long a tracked network goes unused before a new one may take its
+/// place in a full learner.
+pub(crate) const IDLE: Duration = Duration::from_secs(3600);
+
+/// The shortest wait for a step's answers, whatever the owner's timeout.
+const MIN_WAIT: Duration = Duration::from_secs(3);
 
 /// The most checks one wake of [`RouterLearning::run`] runs.
-pub const CHECKS_PER_WAKE: usize = 4;
+const CHECKS_PER_WAKE: usize = 4;
 
 /// How many router reports wait for a slow learner before it misses some
 /// (and takes that query's answers as possibly lost).
@@ -83,7 +102,7 @@ pub struct RouterReports {
 impl RouterReports {
     /// Reports from a control queue whose turned-away controls `drops`
     /// counts: `None` when the owner can't know, which makes every query's
-    /// answers possibly lost, so nothing is ever learned from them.
+    /// answers possibly lost, so a learner on them asks nothing.
     pub fn new(drops: Option<QueueAdmissionCounters>) -> Self {
         Self {
             tx: broadcast::channel(REPORT_CAPACITY).0,
@@ -102,6 +121,12 @@ impl RouterReports {
         if let Some(report) = ReceivedNetworkReport::parse(control) {
             let _ = self.tx.send(report);
         }
+    }
+
+    /// Whether a query's answers can be told whole: the reports count what
+    /// the control queue turned away.
+    fn decides(&self) -> bool {
+        self.drops.is_some()
     }
 
     /// The controls turned away so far: `None` when the owner can't know.
@@ -125,6 +150,8 @@ struct Network {
     probe: Option<MacAddr>,
     /// When the network was first tracked.
     since: Instant,
+    /// When a request to the network last asked for its router.
+    used: Instant,
 }
 
 /// How much a network's check matters: one whose router is known first,
@@ -151,17 +178,29 @@ struct Book {
 }
 
 impl Book {
-    /// `network`'s entry, made while there is room.
+    /// `network`'s entry, used at `at`: made while there is room, or in the
+    /// place of the network used least recently once that one has gone
+    /// unused for [`IDLE`]. `None` while every other is in use.
     fn track(&mut self, network: u16, at: Instant) -> Option<&mut Network> {
-        if false {
-            return None;
+        if !self.networks.contains_key(&network) && self.networks.len() >= MAX_NETWORKS {
+            let idle = self
+                .networks
+                .iter()
+                .filter(|(_, entry)| at.saturating_duration_since(entry.used) >= IDLE)
+                .min_by_key(|(_, entry)| entry.used)
+                .map(|(dnet, _)| *dnet)?;
+            self.networks.remove(&idle);
+            self.pacing.remove(&idle);
         }
-        Some(self.networks.entry(network).or_insert(Network {
+        let entry = self.networks.entry(network).or_insert(Network {
             router: None,
             heard: None,
             probe: None,
             since: at,
-        }))
+            used: at,
+        });
+        entry.used = at;
+        Some(entry)
     }
 
     fn cue(&mut self, network: u16, at: Instant) {
@@ -207,13 +246,13 @@ impl RouterLearning {
         }
     }
 
-    /// The router requests to `network` go through, if one is known.
+    /// The router a request to `network` goes through, if one is known. A
+    /// request asking counts as the network's use.
     pub fn router(&self, network: u16) -> Option<MacAddr> {
-        self.book
-            .locked()
-            .networks
-            .get(&network)
-            .and_then(|entry| entry.router.clone())
+        let mut book = self.book.locked();
+        let entry = book.networks.get_mut(&network)?;
+        entry.used = now();
+        entry.router.clone()
     }
 
     /// A request to `network` went with the link's broadcast address for
@@ -276,10 +315,13 @@ impl RouterLearning {
 
     /// Run the checks as they fall due, for as long as the owner polls
     /// this: on `network`'s link, with the router answers `reports` shares
-    /// out, each step waiting `wait` (the owner's APDU timeout) for its
-    /// answers. `may_initiate` is whether the node may initiate requests
-    /// now (DeviceCommunicationControl). No lock is held across an await,
-    /// so the owner stops it by aborting its task at any point.
+    /// out, each step waiting `wait` (the owner's APDU timeout, three
+    /// seconds at least) for its answers. `may_initiate` is whether the
+    /// node may initiate requests now (DeviceCommunicationControl). Reports
+    /// that can't tell a lost answer ([`RouterReports::new`] with `None`)
+    /// could never decide, so then nothing is sent at all. No lock is held
+    /// across an await, so the owner stops it by aborting its task at any
+    /// point.
     pub async fn run<T: TransportPort + 'static>(
         &self,
         network: &NetworkLayer<T>,
@@ -287,6 +329,10 @@ impl RouterLearning {
         may_initiate: impl Fn() -> bool + Sync,
         wait: Duration,
     ) {
+        if !reports.decides() {
+            return std::future::pending().await;
+        }
+        let wait = wait.max(MIN_WAIT);
         loop {
             let due = self.book.locked().pacing.next_due();
             tokio::select! {
@@ -335,7 +381,7 @@ impl RouterLearning {
             )
         };
         let Some(old) = old else {
-            return self.learn(network, reports, wait, dnet).await;
+            return self.learn(network, reports, wait, dnet, strike).await;
         };
         // The Who-Is is a service the node initiates: none while it may not
         // (#2617), and with nothing asked, nothing moves.
@@ -401,15 +447,19 @@ impl RouterLearning {
         }
     }
 
-    /// Ask which router reaches `dnet`, none being known, and take it when
-    /// exactly one answers and nothing may have been lost.
+    /// Ask which router reaches `dnet`, none being known. One router alone
+    /// answering, with nothing possibly lost, is a first answer (`first`
+    /// holds it once taken); the same one alone answering again a minute
+    /// later is learned, and another one alone starts over.
     async fn learn<T: TransportPort + 'static>(
         &self,
         network: &NetworkLayer<T>,
         reports: &RouterReports,
         wait: Duration,
         dnet: u16,
+        first: Option<Strike>,
     ) -> Checked {
+        let began = now();
         let routers = match routers_to(network, reports, dnet, None, wait).await {
             Ok(Some(routers)) => routers,
             Ok(None) => {
@@ -424,13 +474,22 @@ impl RouterLearning {
                 return Checked::Kept;
             }
         };
-        let Answer::One(router) = routers.answer() else {
+        let Answer::One(to) = routers.answer() else {
             debug!(
                 network = dnet,
                 answers = routers.others.len(),
                 "no one router alone answered the router query; requests keep going by broadcast"
             );
             return Checked::Kept;
+        };
+        let router = match Strike::step(first.as_ref(), to.clone(), began, false) {
+            Step::Moved(router) => router,
+            // The first answer, or another router alone than the first one:
+            // a minute later the next query decides.
+            Step::Struck(_) | Step::Differs | Step::Answered => {
+                debug!(network = dnet, router = ?to, "one router alone answered the router query; the next one decides");
+                return Checked::Struck(Strike { to, since: began });
+            }
         };
         let mut book = self.book.locked();
         let Some(entry) = book.networks.get_mut(&dnet) else {
@@ -439,7 +498,11 @@ impl RouterLearning {
         entry.router = Some(router.clone());
         entry.heard = None;
         drop(book);
-        debug!(network = dnet, router = ?router, "learned the router to a network from the router query");
+        debug!(
+            network = dnet,
+            router = ?router,
+            "learned the router to a network: it alone answered two router queries a minute apart"
+        );
         Checked::Ended
     }
 }

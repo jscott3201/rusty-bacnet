@@ -238,7 +238,11 @@ pub(super) async fn start<T: TransportPort + 'static>(
 
 /// Own the Number controls. When one changes the published number, target
 /// Audit re-evaluates its recipient's route (#1460). Each control is offered
-/// to `router_reports` as well, for the server's router learning (#2831).
+/// to `router_reports` first, as it arrives, for the server's router
+/// learning (#2831): the Number work may wait on the database or a send,
+/// and a router's answer must not wait behind it past the query's window.
+/// Behind that hand-off the Number work has a queue as deep as the layer's,
+/// and a control that finds it full is dropped, as the layer's would be.
 pub(super) fn spawn_number_worker<T: TransportPort + 'static>(
     network: &Arc<NetworkLayer<T>>,
     db: &Arc<RwLock<ObjectDatabase>>,
@@ -253,34 +257,47 @@ pub(super) fn spawn_number_worker<T: TransportPort + 'static>(
             .publishing_to(network.local_network_number().clone());
     super::heap_futures::spawn_boxed(move || async move {
         use crate::network_number::NumberTurn;
-        loop {
-            // A control, or the answer a broadcast question left waiting
-            // (#2597).
-            let reply = match owner.next(&mut controls).await {
-                NumberTurn::Closed => break,
-                NumberTurn::Control(control) => {
-                    // The router announcements go to the router learning
-                    // too (#2831).
-                    router_reports.offer(&control);
-                    let before = network.local_network_number().get();
-                    let reply = owner.handle(control).await;
-                    if network.local_network_number().get() != before
-                        && let Some(audit) = audit.as_ref().and_then(std::sync::Weak::upgrade)
-                    {
-                        audit.number_changed();
-                    }
-                    reply
-                }
-                NumberTurn::Answer(answer) => answer,
-            };
-            if let Some(npdu) = reply
-                && let Err(error) = network.transport().send_broadcast(&npdu).await
-            {
-                tracing::debug!(%error, "Network-Number-Is broadcast failed");
+        let (queue, mut queued) = mpsc::channel(NUMBER_QUEUE);
+        // One task, both polled: the hand-off goes on while the Number work
+        // waits, and its end closes the Number work's queue.
+        let hand_off = async move {
+            while let Some(control) = controls.recv().await {
+                router_reports.offer(&control);
+                let _ = queue.try_send(control);
             }
-        }
+        };
+        let numbers = async {
+            loop {
+                // A control, or the answer a broadcast question left
+                // waiting (#2597).
+                let reply = match owner.next(&mut queued).await {
+                    NumberTurn::Closed => break,
+                    NumberTurn::Control(control) => {
+                        let before = network.local_network_number().get();
+                        let reply = owner.handle(control).await;
+                        if network.local_network_number().get() != before
+                            && let Some(audit) = audit.as_ref().and_then(std::sync::Weak::upgrade)
+                        {
+                            audit.number_changed();
+                        }
+                        reply
+                    }
+                    NumberTurn::Answer(answer) => answer,
+                };
+                if let Some(npdu) = reply
+                    && let Err(error) = network.transport().send_broadcast(&npdu).await
+                {
+                    tracing::debug!(%error, "Network-Number-Is broadcast failed");
+                }
+            }
+        };
+        tokio::join!(hand_off, numbers);
     })
 }
+
+/// The Number work's queue behind the router hand-off: as deep as the
+/// layer's control queue.
+const NUMBER_QUEUE: usize = 256;
 
 /// Resolve the Device's Max_APDU_Length_Accepted against the transport's
 /// receive capacity, once, at start.

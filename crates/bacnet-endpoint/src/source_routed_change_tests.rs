@@ -218,18 +218,27 @@ fn is_router_query(group: bool, npdu: &Npdu) -> bool {
 }
 
 impl Link {
-    /// Wait for the session's router query for network 7, answer it as the
-    /// one router to that network, and wait until the session takes it.
+    /// Answer the session's router queries for network 7 as the one router
+    /// to that network, the first and the one a minute later, and wait
+    /// until the session takes it.
     async fn answer_router_query(&mut self) {
-        while !self.queried {
-            let received = timeout(WAIT, self.rx.recv()).await.unwrap().unwrap();
-            let npdu = decode_npdu(received.npdu.clone()).unwrap();
-            self.queried = is_router_query(received.link_layer_group, &npdu);
-        }
-        // I-Am-Router-To-Network (Clause 6.4.2) for network 7.
-        self.send(&[0x01, 0x80, 0x01, 0, BOUND as u8], true).await;
-        // Decided at the end of the query's wait, the APDU timeout.
         let routers = self.routers();
+        for answer in 0..2 {
+            while !self.queried {
+                let next = timeout(Duration::from_secs(70), self.rx.recv());
+                let received = next.await.unwrap().unwrap();
+                let npdu = decode_npdu(received.npdu.clone()).unwrap();
+                self.queried = is_router_query(received.link_layer_group, &npdu);
+            }
+            self.queried = false;
+            // I-Am-Router-To-Network (Clause 6.4.2) for network 7.
+            self.send(&[0x01, 0x80, 0x01, 0, BOUND as u8], true).await;
+            if answer == 0 {
+                tokio::time::sleep(Duration::from_secs(7)).await;
+                assert_eq!(routers.router(BOUND), None, "one answer learns nothing yet");
+            }
+        }
+        // Decided at the end of the second query's wait, the APDU timeout.
         eventually(
             Duration::from_secs(7),
             "the answer teaches the router",
@@ -243,8 +252,8 @@ impl Link {
 /// A router announcement (I-Am-Router-To-Network) that the session did not
 /// ask for teaches nothing, whatever it lists. A record that goes by
 /// broadcast for want of a router has the session ask its router query, and
-/// the one router answering it is learned (#2831): the next record goes to
-/// it as a unicast, with DNET 7.
+/// the one router answering it alone twice, a minute apart, is learned
+/// (#2831): the next record goes to it as a unicast, with DNET 7.
 #[tokio::test(start_paused = true)]
 async fn only_the_answer_to_the_router_query_teaches_its_sender() {
     let mut link = Link::start(&[AuditOperation::DEVICE_RESET]).await;

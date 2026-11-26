@@ -9,8 +9,8 @@ const STRANGER: &[u8] = &[10, 0, 0, 9, 0xBA, 0xC0];
 
 /// Teach the harness ROUTER_A as the router to network 1000, as the
 /// server's own router query does (#2831).
-async fn learn_router_a(harness: &Harness) {
-    harness.learn_router(1000, ROUTER_A).await;
+fn learn_router_a(harness: &Harness) {
+    harness.learn_router(1000, ROUTER_A);
 }
 
 /// Once the router to the recipient's network is known, the notification
@@ -23,7 +23,7 @@ async fn a_strangers_answer_for_a_routed_recipient_completes_nothing() {
         60_000,
     )
     .await;
-    learn_router_a(&harness).await;
+    learn_router_a(&harness);
     harness.distribute().await;
     let unicasts = harness.unicast_frames();
     assert_eq!(unicasts.len(), 1);
@@ -84,7 +84,7 @@ async fn refused_answers_are_counted() {
         60_000,
     )
     .await;
-    learn_router_a(&harness).await;
+    learn_router_a(&harness);
     assert_eq!(harness.notification_transactions.off_path_answers(), 0);
     harness.distribute().await;
     let (_, request) = decode_confirmed(&harness.unicast_frames()[0].1);

@@ -5,8 +5,10 @@
 //!
 //! The standard leaves the way a node learns a network's router to the
 //! node (Clause 6.5.3), and none of the frames it could learn from is
-//! authenticated. So a router this stack uses is learned, and replaced,
-//! only from answers to queries of its own, by one rule:
+//! authenticated. So a router this stack uses is replaced, and on the
+//! server and endpoint also learned, only from answers to queries of its
+//! own (the client takes a device's first router from its first I-Am), by
+//! one rule:
 //!
 //! - **A router query** is broadcast on the local link for one network.
 //!   Each I-Am-Router-To-Network (Clause 6.4.2) from a station on this link
@@ -14,6 +16,10 @@
 //!   decides only when exactly one router answered it and no answer may
 //!   have been lost ([`Answer::One`]); several, none, or a possible loss
 //!   decide nothing.
+//! - **Learning a router** where none is known takes the same single router
+//!   answering two of the node's queries a minute apart ([`Strike::step`]
+//!   with no known router to hear from); another single router the second
+//!   time starts over, anything else decides nothing (`router_learning`).
 //! - **Replacing a known router** takes two checks a minute apart
 //!   ([`STRIKE_GAP`]), each finding the known router silent (to a request
 //!   through it and to the query) and the same one other router alone
@@ -325,13 +331,13 @@ impl<K: Ord + Clone, R: Ord + Copy> Pacing<K, R> {
     }
 
     /// Whether `key` is waiting for a check, or paced after one.
-    pub fn contains(&self, key: &K) -> bool {
+    pub(crate) fn contains(&self, key: &K) -> bool {
         self.keys.contains_key(key)
     }
 
-    /// Forget every key.
-    pub fn clear(&mut self) {
-        self.keys.clear();
+    /// Forget `key`.
+    pub(crate) fn remove(&mut self, key: &K) {
+        self.keys.remove(key);
     }
 }
 

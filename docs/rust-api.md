@@ -4385,9 +4385,11 @@ discovery table's routed paths. `router_learning::RouterLearning` drives it
 for the routers a server's or an endpoint session's own requests to other
 networks go through, and `RouterReports` hands the learners the router
 announcements (I-Am-Router-To-Network) a link receives, with the count of
-controls its queue turned away. Each learns and replaces a router only from
-answers to its own queries; see [Handled Services](#handled-services) for
-the server's use.
+controls its queue turned away. Each replaces a router only from answers to
+its own queries; the learner also learns a first one only that way, from
+the same router alone answering two queries a minute apart, where the
+client takes a device's first router from its first I-Am. See
+[Handled Services](#handled-services) for the server's use.
 
 ### A client on the router itself
 
@@ -12285,34 +12287,49 @@ learned and replaced only through the server's own router query
 - While no router is known for the recipient's network, every attempt goes
   with DNET/DADR and the link's broadcast address (Clause 6.5.3), and the
   server asks the query for that network: at once, then at most once per
-  hold, which starts at a minute and doubles to ten. Exactly one router
-  answering, with no answer possibly lost, is learned; several, none or a
-  possible loss teach nothing.
+  hold, which starts at a minute and doubles to ten. A router is learned
+  when the same one router alone answers two of these queries a minute
+  apart, no answer possibly lost: one minute plus two query waits after the
+  first routed notification (66 s at the default timeout), the
+  notifications going by broadcast meanwhile. Another single router the
+  second time starts over; several, none or a possible loss teach nothing.
 - A known router carries each notification's first attempt, and its retries
   go by local broadcast. A first attempt it leaves unanswered forgets
   nothing: it starts a check, a Who-Is to the recipient through the router
   and, only if nothing comes back through it, the query. The router changes
   only after two checks a minute apart each find it silent and the same one
   other router alone answering, with nothing carried back through it in
-  between: about 75 seconds after the first unanswered attempt at the
-  default 3 s timeout, the broadcast retries delivering meanwhile.
+  between: one minute plus five timeouts after the first unanswered attempt
+  was sent (its own timeout, then a Who-Is and a query wait in each check;
+  75 s at the default 3 s), the broadcast retries delivering meanwhile.
 - No answer to a notification, no request's source and no
   I-Am-Router-To-Network the server did not ask for teaches a router; an
   answer or an unconfirmed request (an I-Am among them) that the known
   router carries from its network only keeps it.
 - The query is a network message, so it goes out under DISABLE_INITIATION;
-  a check's Who-Is does not, so no known router is replaced meanwhile. The
-  server tracks up to 64 networks, and one past them stays on local
-  broadcast. On a link that doesn't take the local Number controls the
-  server hears no router answers and learns no router.
+  a check's Who-Is does not, so no known router is replaced meanwhile. Each
+  wait is the notification timeout (`cov_retry_timeout_ms`), three seconds
+  at least. The server tracks up to 64 networks; when all are taken, a new
+  one takes the place of the one used least recently once that has gone an
+  hour without a notification, and otherwise stays on local broadcast with
+  nothing asked for it. The router announcements reach the learning as they
+  arrive, ahead of the Number controls' own work. On a link that doesn't
+  take the local Number controls the server hears no router answers, so it
+  asks nothing and learns no router.
+- On a node, the seated server and the session's routed source Audit
+  bindings each learn their routers this way, apart: two learners, each
+  asking its own queries, even for one network.
 
 A routed answer completes a request the server sent through a router only
 when it arrives from that router; any other counts in
 `BACnetServer::off_path_answer_drops()`. An answer to an attempt sent by
-local broadcast may come through any station. Not covered: a station that
-is the only one to answer the query twice, a minute apart, while the real
-router carries nothing back; forwarded B/IP frames and B/IPv6 virtual
-addresses, whose link source is the sender's claim (#2837). The former
+local broadcast, every attempt while no router is known and every retry,
+may come through any station. Not covered: those broadcast attempts; a
+Device recipient bound from an I-Am, whose link source is its next hop
+(#2825); a station that is the only one to answer two of the server's
+queries a minute apart while no router is known, or while the known one
+carries nothing back; forwarded B/IP frames and B/IPv6 virtual addresses,
+whose link source is the sender's claim (#2837). The former
 public `ServerTsm` type and its unused transaction methods have been removed
 without a compatibility alias. `CovAckResult` remains available at its existing
 `bacnet_server::server` path. A refused confirmed request ends as
@@ -15489,7 +15506,8 @@ twice, directly or routed. Records go with DNET/DADR through the router to that
 network. The session learns the router only from its own router query, as the
 server does (see [Handled Services](#handled-services); #2831): while
 none is known a record goes with the link's broadcast MAC and the session asks
-which router reaches the network, taking it when exactly one answers. A
+which router reaches the network, taking it when the same one router alone
+answers two of its queries a minute apart. A
 delivery through the router that is lost starts a check of it and forgets
 nothing, so records keep going to it, and failing, until two checks a minute
 apart move them to the one other router answering. A confirmed

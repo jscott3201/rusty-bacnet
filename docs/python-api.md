@@ -8482,9 +8482,9 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
     CLI writes a routed target (`"2:0x05"` is station 5 on network 2). The
     network is 1 to 65534 and the MAC 1 to 18 octets, in the remote link's
     format. Records go through the router to that network, which the session
-    learns only from its own Who-Is-Router-To-Network, when exactly one router
-    answers it (#2831); until then they go with the link's broadcast
-    address. A failed delivery sets the Reporter's Reliability to
+    learns only from its own Who-Is-Router-To-Network, when the same one
+    router alone answers two of its queries a minute apart (#2831); until
+    then they go with the link's broadcast address. A failed delivery sets the Reporter's Reliability to
     COMMUNICATION_FAILURE as a direct one does. A `RoutedTarget` with no
     `router` names the same binding and can mark the address
     `one_station=True`, as the text can with a `":one-station"` suffix

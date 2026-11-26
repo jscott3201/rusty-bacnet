@@ -2,8 +2,9 @@
 section: Migration notes
 ---
 - **Server and endpoint routers (wire, #2831):** a remote network's router is
-  learned only from the node's own Who-Is-Router-To-Network, when exactly one
-  router answers; until then requests go by local broadcast. A replaced router
-  is taken about 1.5 minutes after the first unanswered request, retries going
-  by broadcast meanwhile. Where answers return through another router than the
-  requests take, the requests time out; watch `off_path_answer_drops`.
+  learned only when one router alone answers two of the node's
+  Who-Is-Router-To-Network queries a minute apart: 60 s plus two timeouts
+  after the first routed request. A replaced router is taken 60 s plus five
+  timeouts after the first unanswered one (75 s at 3 s). Requests go by
+  broadcast meanwhile. Answers through another router than the request's
+  time out (`off_path_answer_drops`).

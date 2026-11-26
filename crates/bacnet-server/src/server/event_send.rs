@@ -488,6 +488,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     _ => None,
                 };
                 let path = operation.path();
+                // Whether the first attempt went out through that router:
+                // only then is a retry, or no answer, its silence.
+                let through_sent = std::sync::atomic::AtomicBool::new(false);
                 let result = run_attempts(operation, result_rx, timeout, apdu_retries, |attempt| {
                     let first_attempt = first_attempt.take();
                     // DCC and the binding's lifetime are checked
@@ -509,7 +512,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let local_target = local_target.clone();
                     let remote = remote.clone();
                     let learned = learned.clone();
-                    let path = &path;
+                    let (path, through_sent) = (&path, &through_sent);
                     async move {
                         let _first_attempt = first_attempt;
                         if let Some(withdrawal) = withdrawn {
@@ -530,11 +533,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 // reaches the network; a first retry says the
                                 // known one stayed silent, which starts a check
                                 // of it and forgets nothing (#2831).
+                                let mut via_learned = false;
                                 let router = match (configured_router, &learned, attempt) {
                                     (Some(router), _, _) => Some(router),
-                                    (None, Some(router), 0) => Some(router.clone()),
+                                    (None, Some(router), 0) => {
+                                        via_learned = true;
+                                        Some(router.clone())
+                                    }
                                     (None, Some(silent), 1) => {
-                                        learned_routers.silent(dnet, silent, &dadr);
+                                        if through_sent.load(Ordering::Relaxed) {
+                                            learned_routers.silent(dnet, silent, &dadr);
+                                        }
                                         None
                                     }
                                     (None, None, 0) => {
@@ -548,7 +557,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 path.through(router.as_deref());
                                 match router {
                                     Some(router_mac) => {
-                                        network
+                                        let sent = network
                                             .send_apdu_routed(
                                                 &buf,
                                                 dnet,
@@ -557,7 +566,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                 true,
                                                 network_priority,
                                             )
-                                            .await
+                                            .await;
+                                        if via_learned && sent.is_ok() {
+                                            through_sent.store(true, Ordering::Relaxed);
+                                        }
+                                        sent
                                     }
                                     None => {
                                         network
@@ -603,6 +616,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         // known router that stayed silent starts its check
                         // here (#2831).
                         if apdu_retries == 0
+                            && through_sent.load(Ordering::Relaxed)
                             && let (Some(silent), Some((dnet, dadr, None))) = (&learned, &remote)
                         {
                             learned_routers.silent(*dnet, silent, dadr);

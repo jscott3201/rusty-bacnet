@@ -1,7 +1,7 @@
 ---
 section: Security
 ---
-- **Breaking (wire):** the server's and an endpoint's own requests to other
-  networks complete only through the router they went by, which is learned or
-  replaced only through the node's own router query, never from an answer or
-  announcement; refused answers count in `off_path_answer_drops` (#2831).
+- **Breaking (wire):** a request the server or an endpoint sends through a
+  router completes only from it, and routers are learned or replaced only
+  through the node's own router queries. Not covered: broadcast attempts,
+  #2825, a lone answerer of two queries, #2837 (#2831).

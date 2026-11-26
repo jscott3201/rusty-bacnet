@@ -4,84 +4,16 @@
 //! none is known the notifications go by local broadcast.
 
 use super::*;
-use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
-use bacnet_network::layer::{QueueAdmissionCounters, ReceivedNetworkControl};
-use bacnet_network::router_learning::RouterReports;
-use bacnet_npdu::NetworkMessageType;
 
 /// Another station on the link.
 const STRANGER: &[u8] = &[10, 0, 0, 9, 0xBA, 0xC0];
-/// The learner's wait for router answers in these tests.
-const LEARN_WAIT: Duration = Duration::from_millis(20);
-
-/// A router announcement (I-Am-Router-To-Network) from `router` on this
-/// link, listing `networks`.
-pub(super) fn announcement(router: &[u8], networks: &[u16]) -> ReceivedNetworkControl {
-    let payload: Vec<u8> = networks.iter().flat_map(|n| n.to_be_bytes()).collect();
-    let mut buf = BytesMut::new();
-    encode_npdu(
-        &mut buf,
-        &Npdu {
-            message_type: Some(NetworkMessageType::I_AM_ROUTER_TO_NETWORK),
-            payload: Bytes::from(payload),
-            ..Npdu::default()
-        },
-    )
-    .unwrap();
-    ReceivedNetworkControl {
-        npdu: decode_npdu(buf.freeze()).unwrap(),
-        source_mac: MacAddr::from_slice(router),
-        link_layer_group: true,
-        data_attributes: Vec::new(),
-        provenance: TransportProvenance::unverified(),
-        ingress_sequence: 1,
-    }
-}
-
-/// Whether `frame` is the server's router query for `network`.
-fn is_router_query(frame: &crate::server::test_transport::SentFrame, network: u16) -> bool {
-    let npdu = frame.decode_npdu();
-    frame.broadcast
-        && npdu.message_type == Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
-        && npdu.payload.as_ref() == network.to_be_bytes()
-}
-
-async fn until(what: &str, mut done: impl FnMut() -> bool) {
-    for _ in 0..2_000 {
-        if done() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(1)).await;
-    }
-    panic!("{what}");
-}
 
 impl Harness {
-    /// Learn `router` for `network` the one way the server does: its own
-    /// router query, which `router` alone answers. The learner runs for
-    /// this only, and the send log is cleared after.
-    pub(super) async fn learn_router(&self, network: u16, router: &[u8]) {
-        let reports = RouterReports::new(Some(QueueAdmissionCounters::default()));
-        let task = {
-            let (learning, link) = (Arc::clone(&self.learned_routers), Arc::clone(&self.network));
-            let reports = reports.clone();
-            tokio::spawn(async move { learning.run(&link, &reports, || true, LEARN_WAIT).await })
-        };
-        self.learned_routers.unrouted(network);
-        until("the router query", || {
-            self.sent
-                .broadcasts()
-                .iter()
-                .any(|frame| is_router_query(frame, network))
-        })
-        .await;
-        reports.offer(&announcement(router, &[network]));
-        until("the router learned", || {
-            self.learned_routers.router(network).is_some()
-        })
-        .await;
-        task.abort();
-        self.sent.clear();
+    /// Know `router` for `network` at once, as two of the server's router
+    /// queries a minute apart would have it (`router_replacement_tests`
+    /// runs the queries themselves).
+    pub(super) fn learn_router(&self, network: u16, router: &[u8]) {
+        self.learned_routers.learn_for_test(network, router);
         assert_eq!(
             self.learned_routers.router(network).as_deref(),
             Some(router)
@@ -123,7 +55,7 @@ async fn a_router_the_query_learned_carries_the_next_notification() {
         60_000,
     )
     .await;
-    harness.learn_router(1000, ROUTER_A).await;
+    harness.learn_router(1000, ROUTER_A);
     harness.distribute().await;
     assert!(harness.broadcast_frames().is_empty());
     let unicasts = harness.unicast_frames();
@@ -151,7 +83,7 @@ async fn silence_forgets_nothing_and_the_retry_goes_by_broadcast() {
         1_000,
     )
     .await;
-    harness.learn_router(1000, ROUTER_A).await;
+    harness.learn_router(1000, ROUTER_A);
     harness.distribute().await;
     let (_, request) = decode_confirmed(&harness.unicast_frames()[0].1);
     tokio::time::sleep(Duration::from_millis(1_001)).await;
@@ -182,7 +114,7 @@ async fn with_no_retries_a_silent_router_is_kept() {
     )
     .await;
     harness.notification_transactions.set_retries(0);
-    harness.learn_router(1000, ROUTER_A).await;
+    harness.learn_router(1000, ROUTER_A);
     harness.distribute().await;
     assert_eq!(harness.unicast_frames().len(), 1);
     tokio::time::sleep(Duration::from_millis(1_001)).await;
@@ -233,7 +165,7 @@ async fn a_strangers_answer_does_not_replace_a_known_router() {
         60_000,
     )
     .await;
-    harness.learn_router(1000, ROUTER_A).await;
+    harness.learn_router(1000, ROUTER_A);
     harness.distribute().await;
     let (_, request) = decode_confirmed(&harness.unicast_frames()[0].1);
     assert!(
@@ -250,4 +182,51 @@ async fn a_strangers_answer_does_not_replace_a_known_router() {
             .ack_routed(ROUTER_A, 1000, RECIPIENT, request.invoke_id)
             .await
     );
+}
+
+/// A first attempt through the known router whose send failed never
+/// reached it, so its retry says nothing of the router and starts no check;
+/// one that went out and drew no answer starts the check, a Who-Is to the
+/// recipient through the router.
+#[tokio::test(start_paused = true)]
+async fn only_an_attempt_that_went_out_through_the_router_starts_its_check() {
+    use bacnet_network::layer::QueueAdmissionCounters;
+    use bacnet_network::router_learning::RouterReports;
+    for went_out in [false, true] {
+        let harness = Harness::new(
+            vec![destination_for(address_recipient(1000, RECIPIENT), true)],
+            1_000,
+        )
+        .await;
+        harness.learn_router(1000, ROUTER_A);
+        let learner = {
+            let (learning, link) = (
+                Arc::clone(&harness.learned_routers),
+                Arc::clone(&harness.network),
+            );
+            let reports = RouterReports::new(Some(QueueAdmissionCounters::default()));
+            let wait = Duration::from_secs(3);
+            tokio::spawn(async move { learning.run(&link, &reports, || true, wait).await })
+        };
+        if !went_out {
+            harness.network.transport().handle().fail_next_send();
+        }
+        harness.distribute().await;
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        assert!(!harness.broadcast_frames().is_empty(), "the retry went");
+        let probes = harness
+            .unicast_frames()
+            .into_iter()
+            .filter(|(mac, frame)| {
+                mac.as_slice() == ROUTER_A
+                    && bacnet_encoding::npdu::decode_npdu(frame.clone())
+                        .unwrap()
+                        .payload
+                        .as_ref()
+                        == [0x10, 0x08]
+            })
+            .count();
+        assert_eq!(probes, usize::from(went_out), "went out: {went_out}");
+        learner.abort();
+    }
 }

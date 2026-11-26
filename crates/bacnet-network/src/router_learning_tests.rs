@@ -94,6 +94,22 @@ fn i_am() -> Bytes {
     )
 }
 
+/// A vendor's own network message, which reaches a layer's control queue
+/// and no report.
+fn proprietary_message() -> Bytes {
+    let mut buf = BytesMut::new();
+    encode_npdu(
+        &mut buf,
+        &Npdu {
+            message_type: Some(NetworkMessageType::from_raw(0x80)),
+            vendor_id: Some(999),
+            ..Npdu::default()
+        },
+    )
+    .unwrap();
+    buf.freeze()
+}
+
 fn announcement(networks: &[u16]) -> Bytes {
     let payload: Vec<u8> = networks.iter().flat_map(|n| n.to_be_bytes()).collect();
     let mut buf = BytesMut::new();
@@ -150,13 +166,27 @@ struct Site {
     task: JoinHandle<()>,
 }
 
+/// What the site's reports count as turned away.
+enum Counted {
+    /// Its own layer's control queue.
+    Own,
+    /// Nothing: the owner can't know.
+    Unknown,
+    /// Another queue's, which a test can overfill.
+    From(QueueAdmissionCounters),
+}
+
 impl Site {
     async fn new(script: Script) -> Self {
-        Self::with_reports(script, true).await
+        Self::with_reports(script, Counted::Own).await
     }
 
-    /// `counted`: whether the reports know what the control queue dropped.
-    async fn with_reports(script: Script, counted: bool) -> Self {
+    async fn with_reports(script: Script, counted: Counted) -> Self {
+        Self::with(script, counted, WAIT).await
+    }
+
+    /// The learner given `wait` as its owner's APDU timeout.
+    async fn with(script: Script, counted: Counted, wait: Duration) -> Self {
         let (inbound, rx) = mpsc::channel(4096);
         let script = Arc::new(std::sync::Mutex::new(script));
         let (hook_script, hook_inbound) = (Arc::clone(&script), inbound.clone());
@@ -179,7 +209,11 @@ impl Site {
             .unwrap();
         let mut apdus = network.start().await.unwrap();
         let network = Arc::new(network);
-        let reports = RouterReports::new(counted.then_some(drops));
+        let reports = RouterReports::new(match counted {
+            Counted::Own => Some(drops),
+            Counted::Unknown => None,
+            Counted::From(other) => Some(other),
+        });
         let learning = Arc::new(RouterLearning::new());
         let may_initiate = Arc::new(AtomicBool::new(true));
         let task = {
@@ -197,7 +231,7 @@ impl Site {
                         }
                     }
                 };
-                let run = learning.run(&network, &reports, || may.load(Ordering::Relaxed), WAIT);
+                let run = learning.run(&network, &reports, || may.load(Ordering::Relaxed), wait);
                 tokio::join!(pump, run);
             })
         };
@@ -211,8 +245,8 @@ impl Site {
         }
     }
 
-    /// A site whose learner knows [`OLD`] for [`DNET`], learned from its
-    /// own query; the send log starts empty.
+    /// A site whose learner knows [`OLD`] for [`DNET`], learned from two
+    /// of its own queries a minute apart; the send log starts empty.
     async fn learned() -> Self {
         let site = Self::new(Script {
             routers: vec![OLD.to_vec()],
@@ -220,8 +254,9 @@ impl Site {
         })
         .await;
         site.learning.unrouted(DNET);
-        sleep(WAIT + TICK).await;
+        sleep(STRIKE_GAP + 2 * WAIT + TICK).await;
         assert_eq!(site.router(), Some(MacAddr::from_slice(&OLD)));
+        assert_eq!(site.queries(), 2);
         site.script.locked().routers.clear();
         site.sent.clear();
         site
@@ -269,8 +304,10 @@ impl Drop for Site {
     }
 }
 
+/// One router alone answering one query learns nothing yet; the same one
+/// alone answering the next query, a minute later, is learned.
 #[tokio::test(start_paused = true)]
-async fn one_router_alone_answering_the_query_is_learned() {
+async fn one_router_alone_answering_two_queries_a_minute_apart_is_learned() {
     let site = Site::new(Script {
         routers: vec![OLD.to_vec()],
         ..Script::default()
@@ -281,10 +318,17 @@ async fn one_router_alone_answering_the_query_is_learned() {
     sleep(TICK).await;
     // Asked at once, by broadcast.
     assert_eq!(site.sent(), [Sent::RouterQuery(DNET)]);
+    sleep(WAIT).await;
+    assert_eq!(site.router(), None, "one answer learns nothing yet");
+    // The second query goes a minute after the first answer, with no cue.
+    sleep(STRIKE_GAP - TICK).await;
+    assert_eq!(site.queries(), 1);
+    sleep(2 * TICK).await;
+    assert_eq!(site.queries(), 2);
     assert_eq!(site.router(), None, "decided only at the end of the wait");
     sleep(WAIT).await;
     assert_eq!(site.router(), Some(MacAddr::from_slice(&OLD)));
-    assert_eq!(site.queries(), 1);
+    assert_eq!(site.queries(), 2);
 }
 
 #[tokio::test(start_paused = true)]
@@ -308,27 +352,70 @@ async fn several_routers_teach_nothing_and_the_query_is_paced() {
     site.learning.unrouted(DNET);
     sleep(TICK).await;
     assert_eq!(site.queries(), 2);
-    // One router left: the next query learns it.
+    // One router left: the next query is a first answer, and the one a
+    // minute later learns it.
     site.script.locked().routers = vec![NEW.to_vec()];
     sleep(2 * FIRST_HOLD).await;
     site.learning.unrouted(DNET);
     sleep(WAIT + TICK).await;
     assert_eq!(site.queries(), 3);
+    assert_eq!(site.router(), None);
+    sleep(STRIKE_GAP).await;
+    assert_eq!(site.queries(), 4);
     assert_eq!(site.router(), Some(MacAddr::from_slice(&NEW)));
 }
 
+/// Reports that can't tell a lost answer could never decide: the learner
+/// sends nothing at all.
 #[tokio::test(start_paused = true)]
-async fn answers_that_may_have_been_lost_teach_nothing() {
+async fn reports_that_cannot_tell_a_loss_send_no_query() {
     let site = Site::with_reports(
         Script {
             routers: vec![OLD.to_vec()],
             ..Script::default()
         },
-        false,
+        Counted::Unknown,
     )
     .await;
     site.learning.unrouted(DNET);
-    sleep(WAIT + TICK).await;
+    sleep(STRIKE_GAP + 2 * WAIT).await;
+    assert_eq!(site.sent.len(), 0, "{:?}", site.sent());
+    assert_eq!(site.router(), None);
+}
+
+/// A control turned away during the query's wait may have been an answer:
+/// the lone answer decides nothing, and no second query follows it.
+#[tokio::test(start_paused = true)]
+async fn a_possibly_lost_answer_teaches_nothing() {
+    let (lab_tx, lab_rx) = mpsc::channel(1024);
+    let mut lab = NetworkLayer::new(
+        TestTransport::builder()
+            .local_mac(&[0x50])
+            .inbound(lab_rx)
+            .build(),
+    );
+    let (_controls, drops) = lab
+        .enable_network_control_receiver_counting_drops()
+        .unwrap();
+    let mut decode = lab.start().await.unwrap();
+    let site = Site::with_reports(
+        Script {
+            routers: vec![OLD.to_vec()],
+            ..Script::default()
+        },
+        Counted::From(drops),
+    )
+    .await;
+    site.learning.unrouted(DNET);
+    sleep(Duration::from_secs(1)).await;
+    for _ in 0..300 {
+        lab_tx
+            .send(received(&[0x77], proprietary_message(), false))
+            .await
+            .unwrap();
+    }
+    let _ = decode.try_recv();
+    sleep(STRIKE_GAP + 2 * WAIT).await;
     assert_eq!(site.queries(), 1);
     assert_eq!(site.router(), None);
 }
@@ -533,3 +620,6 @@ async fn a_network_past_the_cap_is_never_asked_about() {
     assert!(!asked.contains(&last));
     assert_eq!(site.sent.len(), MAX_NETWORKS, "one query each");
 }
+
+#[path = "router_learning_first_tests.rs"]
+mod first;

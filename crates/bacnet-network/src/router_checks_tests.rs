@@ -210,6 +210,6 @@ fn a_key_left_alone_for_a_whole_last_hold_is_forgotten() {
     paced.checked(&2, Checked::Kept, at);
     paced.cue(2, 0, at);
     assert_eq!(paced.due(due + 2 * LAST_HOLD, 8, |_| Some(0)), [2]);
-    paced.clear();
+    paced.remove(&2);
     assert!(!paced.contains(&2));
 }

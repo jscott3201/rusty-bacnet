@@ -3,13 +3,15 @@
 //! the router announcements to its router learning, and a scripted link
 //! with two routers to network 1000.
 //!
-//! The first notification goes by local broadcast while no router is known,
-//! and the server's router query learns ROUTER_A. Then ROUTER_A goes away and
+//! The first notifications go by local broadcast while no router is known,
+//! and two of the server's router queries a minute apart learn ROUTER_A.
+//! Then ROUTER_A goes away and
 //! ROUTER_B carries the network's traffic: each notification's first
 //! attempt through ROUTER_A goes unanswered, its broadcast retry is carried
 //! by ROUTER_B and acknowledged, and two checks a minute apart move the
 //! router to ROUTER_B. A forged answer flood and a forged announcement flood
-//! from a third station change nothing.
+//! from a third station change nothing, and a stalled Number worker does not
+//! hold the router answers back.
 
 use super::*;
 use crate::server::clocked_test_database;
@@ -17,6 +19,7 @@ use crate::server::event_notifications_tests::local_broadcast_destination;
 use crate::server::test_transport::{BIP_LOCAL_MAC, SendLog, SentFrame, TestTransport};
 use bacnet_encoding::apdu::encode_apdu;
 use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
+use bacnet_network::router_checks::STRIKE_GAP;
 use bacnet_npdu::NetworkMessageType;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
@@ -169,6 +172,9 @@ fn i_am() -> Bytes {
 struct Wire {
     alive: StdMutex<[u8; 6]>,
     acked: StdMutex<Vec<u8>>,
+    /// While set, the server's Network-Number-Is sends wait at `gate`.
+    hold_numbers: std::sync::atomic::AtomicBool,
+    gate: tokio::sync::Semaphore,
 }
 
 impl Wire {
@@ -241,6 +247,8 @@ impl Site {
         let wire = Arc::new(Wire {
             alive: StdMutex::new(ROUTER_A),
             acked: StdMutex::default(),
+            hold_numbers: std::sync::atomic::AtomicBool::new(false),
+            gate: tokio::sync::Semaphore::new(0),
         });
         let (tx, rx) = mpsc::channel(1024);
         let (hook_wire, hook_tx) = (Arc::clone(&wire), tx.clone());
@@ -252,7 +260,15 @@ impl Site {
                 for (from, npdu, broadcast) in hook_wire.replies(&frame) {
                     hook_tx.try_send(received(&from, npdu, broadcast)).unwrap();
                 }
-                async { Ok(()) }
+                let wire = Arc::clone(&hook_wire);
+                async move {
+                    let number = frame.decode_npdu().message_type
+                        == Some(NetworkMessageType::NETWORK_NUMBER_IS);
+                    if number && wire.hold_numbers.load(Ordering::Relaxed) {
+                        wire.gate.acquire().await.unwrap().forget();
+                    }
+                    Ok(())
+                }
             })
             .build();
         let sent = transport.sent();
@@ -310,26 +326,37 @@ impl Site {
     async fn hear(&self, from: &[u8], npdu: Bytes, broadcast: bool) {
         self.tx.send(received(from, npdu, broadcast)).await.unwrap();
     }
+
+    /// The first notification, by broadcast, and the two router queries a
+    /// minute apart that learn ROUTER_A.
+    async fn learn(&mut self) {
+        self.transition().await;
+        tokio::time::sleep(STRIKE_GAP + 2 * TIMEOUT + Duration::from_millis(100)).await;
+        assert_eq!(self.router().as_deref(), Some(&ROUTER_A[..]));
+    }
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_replaced_router_is_taken_after_two_checks_with_broadcast_delivery_meanwhile() {
     let mut site = Site::start().await;
-    // No router known: the notification goes by broadcast, and the query
-    // learns ROUTER_A, the one router answering it.
+    // No router known: the notification goes by broadcast, and so does the
+    // next one while ROUTER_A has answered one router query alone; its
+    // answer to the next query, a minute later, has it learned.
     site.transition().await;
-    assert_eq!(
-        site.count(|sent| matches!(sent, Sent::Notification { via: None, .. })),
-        1
-    );
+    let broadcasts =
+        |site: &Site| site.count(|sent| matches!(sent, Sent::Notification { via: None, .. }));
+    assert_eq!(broadcasts(&site), 1);
     assert_eq!(site.count(|sent| *sent == Sent::RouterQuery), 1);
     assert_eq!(site.wire.acked.lock().unwrap().len(), 1);
-    assert_eq!(
-        site.router(),
-        None,
-        "decided at the end of the query's wait"
-    );
     tokio::time::sleep(TIMEOUT + Duration::from_millis(100)).await;
+    assert_eq!(site.router(), None, "one answer learns nothing yet");
+    site.transition().await;
+    assert_eq!(broadcasts(&site), 2, "delivered by broadcast meanwhile");
+    assert_eq!(site.wire.acked.lock().unwrap().len(), 2);
+    tokio::time::sleep(STRIKE_GAP).await;
+    assert_eq!(site.count(|sent| *sent == Sent::RouterQuery), 2);
+    assert_eq!(site.router(), None);
+    tokio::time::sleep(TIMEOUT).await;
     assert_eq!(site.router().as_deref(), Some(&ROUTER_A[..]));
     site.transition().await;
     assert!(matches!(
@@ -361,7 +388,7 @@ async fn a_replaced_router_is_taken_after_two_checks_with_broadcast_delivery_mea
             site.count(|sent| matches!(sent, Sent::Probe { .. })),
             site.count(|sent| *sent == Sent::RouterQuery)
         ),
-        (1, 2)
+        (1, 3)
     );
     tokio::time::sleep(Duration::from_secs(60) + 2 * TIMEOUT).await;
     assert_eq!(site.router().as_deref(), Some(&ROUTER_B[..]));
@@ -381,9 +408,7 @@ async fn a_replaced_router_is_taken_after_two_checks_with_broadcast_delivery_mea
 #[tokio::test(start_paused = true)]
 async fn forged_answer_and_announcement_floods_change_nothing() {
     let mut site = Site::start().await;
-    site.transition().await;
-    tokio::time::sleep(TIMEOUT + Duration::from_millis(100)).await;
-    assert_eq!(site.router().as_deref(), Some(&ROUTER_A[..]));
+    site.learn().await;
     let frames_before = site.sent.len();
     for second in 0..3_600u32 {
         let invoke_id = (second % 256) as u8;
@@ -413,5 +438,35 @@ async fn forged_answer_and_announcement_floods_change_nothing() {
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert_eq!(site.server.notification_transactions.active_count(), 0);
     assert_eq!(site.router().as_deref(), Some(&ROUTER_A[..]));
+    site.server.stop().await.unwrap();
+}
+
+/// The server's Number worker stalls in a send of its own (a Network-Number-Is
+/// it owes a What-Is-Network-Number) while its router queries are out: the
+/// router announcements still reach the router learning as they arrive, not
+/// after the stall, so the router is learned all the same.
+#[tokio::test(start_paused = true)]
+async fn a_stalled_number_worker_holds_no_router_answer_back() {
+    let mut site = Site::start().await;
+    // The server learns its network's number from a configured
+    // Network-Number-Is, then owes a direct question its answer, whose send
+    // the wire holds from here on.
+    site.hear(&FORGER, Bytes::from_static(&[1, 0x80, 0x13, 0, 7, 1]), true)
+        .await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    site.wire.hold_numbers.store(true, Ordering::Relaxed);
+    site.hear(&FORGER, Bytes::from_static(&[1, 0x80, 0x12]), false)
+        .await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(
+        site.sent
+            .frames()
+            .iter()
+            .any(|frame| frame.decode_npdu().message_type
+                == Some(NetworkMessageType::NETWORK_NUMBER_IS)),
+        "the Number worker's answer is held in its send"
+    );
+    site.learn().await;
+    site.wire.gate.add_permits(1);
     site.server.stop().await.unwrap();
 }
