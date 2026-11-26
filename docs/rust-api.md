@@ -13176,16 +13176,23 @@ the `futures_core::Stream` it also is. It is the one way an application
 watches; `watch::hub` is the layer under it. A point comes from a handle:
 `device.point("ai:1")`, `device.point("bv:3 pv")` or
 `device.point("ao:2 priority-array[8]")`, in the grammar `Device::read`
-takes. It names its device by the handle's `DeviceAddress`, so two devices
-sharing an instance are two points, and one station named two ways is one.
-A Present_Value is watched by SubscribeCOV on its object; any other
-property, or an element, by SubscribeCOVProperty.
+takes, and `device.watch(["ai:1", "bv:3 pv"])` is shorthand for a watch of
+those. A point names its device by the handle's `DeviceAddress`, so two
+devices sharing an instance are two points, and one station named two
+ways is one. A Present_Value is watched by SubscribeCOV on its object; any
+other property, or an element, by SubscribeCOVProperty.
 
 ```rust
 use bacnet_ops::watch::{State, Why};
 
 let ahu = client.device("192.168.1.10").await?;
 let mut watch = client.watch([ahu.point("ai:1")?, ahu.point("bv:3 pv")?])?;
+let control = watch.control();
+tokio::spawn(async move {
+    // From another task, while the loop below awaits the next update.
+    control.add([ahu.point("av:3")?])?;
+    Ok::<_, bacnet_ops::OpsError>(())
+});
 while let Some(u) = watch.next().await {
     let text = u.value.as_ref().map_or("-", |v| v.text.as_str());
     match &u.state {
@@ -13203,12 +13210,13 @@ An `Update` (`#[non_exhaustive]`) carries:
 - `point`;
 - `state`, one `watch::State`: `Starting`, `Subscribed`, `Polled { why }`,
   `Unreachable { why }` or `Gone { why }`, where `why` is a `watch::Why`:
-  `Refused` (the device said no; not asked again), `NoAnswer` (the first
-  read or the subscription had no answer), `Full` (its subscription table
-  was full) and `Lapsed` (a renewal failed), each asked again after a
-  backoff, `Missing` for a remote address with no router known,
-  `Moved { to }`, or `Replaced { watched, found }` (another device answers
-  at the point's address now);
+  `Refused` (the device said no; not asked again), `PollOnly` (the
+  watch's settings poll every point), `NoAnswer` (the first read or the
+  subscription had no answer), `Full` (its subscription table was full)
+  and `Lapsed` (a renewal failed), each asked again after a backoff,
+  `Missing` for a remote address with no router known, `Moved { to }`, or
+  `Replaced { watched, found }` (another device answers at the point's
+  address now);
 - `value` (a `Value`, an object watch's Present_Value, named by the units
   and state texts the first read had) and `error`: `value` alone is
   current; both together, a value read earlier while the latest read
@@ -13218,36 +13226,86 @@ An `Update` (`#[non_exhaustive]`) carries:
   `via` (`Via::First`, `Notification` or `Poll`) and `updated` (a
   `SystemTime`, by the wall clock, which an application shows, logs or
   hands on; `elapsed()` is the value's age);
-- `cov`, a `CovSupport`.
+- `cov`, a `CovSupport`;
+- and `mark()`, which of the watch's points it was taken for (see below).
 
-The points share the client's own hub, made on first use and kept while a
-watch holds a point, in one range of subscriber process identifiers for
-the client's life, with the client's base settings whichever clone calls:
-one subscription a point however many watches hold it, five minutes at a
-time and renewed before it ends; a point the device won't subscribe is
-polled with the device's other polled points, every 10 s at most; at most
-`watch::MAX_WATCHED` (4096) points, those still cancelling included.
-`OpsError::Watch(WatchError::Full { .. })` refuses points that would pass
-it, taking none and sending nothing, and `WatchError::NoRuntime` a call
-outside a Tokio runtime.
+**Settings (#2603).** A watch takes `WatchSettings { lifetime, poll_every,
+subscribe }` (`#[non_exhaustive]`; build one from `WatchSettings::default()`
+with `with_lifetime`, `with_poll_every` and `with_subscribe`): each
+subscription's `hub::Lifetime` (1 s to `Lifetime::MAX`, 28,800 s, the
+longest every device must take, Clauses 13.14.1.1.4 and 13.15.1.1.4;
+`Lifetime::new` refuses anything else with `WatchError::Settings`), the
+least time between two polls of a device (1 s to an hour), and whether to
+subscribe at all (`false` polls every point, `Why::PollOnly`). The default
+is five-minute subscriptions, polls at most every 10 s, COV where the
+device takes it. A client's defaults are its connect builder's
+(`Client::bip().watch_settings(..)`, refused by `connect` before anything
+is bound when no hub takes them) or a clone's
+(`client.with_watch_settings(..)`, as `with_resolve_wait` is per clone);
+`client.watch(points)` uses them and `client.watch_with(points, &settings)`
+takes others for one watch. A renewal goes early enough to leave room for
+two requests with every retry on the low-level client's own timers
+(`BACnetClient::apdu_timeout()` times one more than `apdu_retries()`: 48 s
+before a five-minute lifetime ends at the default 6 s and three retries), at
+most half the lifetime. A subscription that went unanswered, met a full
+table or failed its renewal is asked for again after 5 minutes.
 
-A front end that picks its own settings makes a `watch::hub::Hub` with
-its `WatchOptions` and takes a `Watch` from it with `Hub::stream(points)`:
-the same updates, refused with `WatchError::Full` past its `max_points`
-or `WatchError::Shut` once `Hub::shutdown` has run. The Python bindings
-run one such hub per watch, which their client's stop shuts down (#2561).
+**Hubs.** Watches with equal settings share one of the
+client's pooled hubs: one subscription a point however many of them hold
+it; watches of other settings run on another hub, so no hub mixes two
+lifetimes. Each pooled hub is made on first use, with the client's base
+settings whichever clone calls, and takes a range of subscriber process
+identifiers from the client's 256; it lives while a watch on it lives or one
+of its tasks runs (a cancel included), then gives its range back. A hub
+watches at most `watch::MAX_WATCHED` (4096) points, those still cancelling
+included. `OpsError::Watch(WatchError::Full { .. })` refuses points that
+would pass it, taking none and sending nothing; `WatchError::Settings`
+settings `WatchSettings::validate` refuses; `WatchError::Hubs` a watch of
+new settings while every range is held; and `WatchError::NoRuntime` a call
+outside a Tokio runtime. `client.shutdown_watches(wait)` shuts every pooled
+hub at once, as `Hub::shutdown` does, and is what the Python client's stop
+runs: a watch made after makes a new hub. Dropping the `Client` changes
+nothing: each hub holds a clone while a watch on it lives.
+
+**Changing a live watch.** `watch.control()` gives a `WatchControl`
+(`Clone + Send + Sync`) whose `add(points)` and `remove(&points)` change the
+points from any task while another awaits `next()`. `add` is all or none
+(`WatchError::Full` past the hub's 4096) and returns how many points were
+new: a point the watch holds already is left as it is. A point no other
+watch on the hub holds starts as at any watch, its first update from a
+fresh read; one another watch holds joins its subscription, its first
+update at once with where it stands. A point removed and added again is a
+new point of the watch: a new subscription with its own process
+identifier unless another watch held it meanwhile. `remove` returns how
+many it held, and once it returns no `next()` begun after yields any of
+them, a change already waiting included. A `next()` already past its last
+check when the removal takes effect still returns that update, possibly
+after `remove` returned: it was handed out before the removal. The cancel of a point no
+other watch holds goes from the hub's scheduler after `remove` returns,
+best effort, as on drop. A consumer that holds updates back (a buffer, a
+slot for one a cancelled read put back) asks `control.holds(update.mark())`
+before handing one out: false once its point was removed, even if added
+again. `control.close(wait)` ends the watch at once (its stream gives
+`None`) and waits up to `wait` for the cancels of the points no other watch
+holds. Once the watch has ended (dropped, closed, its stream ended, or its
+hub shut down) the control's calls return `WatchError::Closed`.
+
+A front end that picks its own hub settings makes a `watch::hub::Hub` with
+its `WatchOptions` (`subscribe` included) and takes a `Watch` from it with
+`Hub::stream(points)`: the same updates, refused with `WatchError::Full`
+past its `max_points` or `WatchError::Shut` once `Hub::shutdown` has run.
 Each hub alive on a client holds a range of subscriber process
 identifiers of its own, so no two share an identifier and neither's
 cancel can end the other's subscription: `Hub::new` takes the next free
 range of 256, going round from the one taken last, so a range given back
 is taken again only after the other free ones, and the hub gives it back
 once it is gone, its last clone dropped and its tasks ended, cancels
-included; the client's own hub keeps its range for the client's life.
-`Hub::new` returns `WatchError::Hubs` when every range is held,
+included. `Hub::new` returns `WatchError::Hubs` when every range is held,
 `WatchError::NoRuntime` outside a Tokio runtime and
-`WatchError::Settings` for options `WatchOptions::validate` refuses,
-taking nothing. `Hub::watch` and `Hub::stream` start a device's
-scheduler task, so they panic outside a Tokio runtime.
+`WatchError::Settings` (a `Refusal`, text for a person) for options
+`WatchOptions::validate` refuses, taking nothing. `Hub::watch` and
+`Hub::stream` start a device's scheduler task, so they panic outside a
+Tokio runtime.
 
 The latest value of each point wins: a consumer that falls behind gets one
 update a point with its latest value and state (`Watch::folded` counts the
@@ -13258,8 +13316,10 @@ request that made it, without a lifetime, through the device's gate. A
 device in its poll backoff, or one that leaves a cancel unanswered, is
 sent no more cancels, whose subscriptions lapse with their lifetimes, so
 dropping a silent device's points costs at most one cancel's wait. A
-polled point stops being polled. A non-empty watch never ends on its own:
-drop it to stop.
+polled point stops being polled. A watch's stream ends once it has no
+point and no control lives to add one, once it is closed, and at once when
+its hub shuts down (updates still waiting then are dropped); otherwise it
+never ends on its own: drop it to stop.
 
 A device that stops answering (a poll or a first read fails; a point whose
 renewal failed goes to the next poll) is looked for: the one other address
@@ -13357,7 +13417,7 @@ watched device, the claim is ignored: a stray or forged I-Am ends nothing.
 Not answered, the device is unreachable, as for any unanswered request.
 The first claim is asked at once, the next after 60 s, the wait doubling
 up to a lifetime and staying there: at most four asks in the first seven
-minutes and then one a lifetime (twelve an hour for a client's own hub),
+minutes and then one a lifetime (twelve an hour at the default lifetime),
 however many frames come. Meanwhile the points carry a note saying a
 claim waits. While an ask runs (it goes first in the device's queue), a
 start answered while the table named another instance, and polls

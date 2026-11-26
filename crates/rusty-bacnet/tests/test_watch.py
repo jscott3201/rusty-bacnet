@@ -399,18 +399,37 @@ class EndTests(Lab):
 
 
 class LimitTests(unittest.IsolatedAsyncioTestCase):
-    async def test_a_client_holds_at_most_256_live_watches(self) -> None:
+    async def test_equal_settings_share_a_hub_and_256_settings_fill_the_client(self) -> None:
         server = await plant()
         self.addAsyncCleanup(cleanup, server.stop)
         async with client() as c:
             dev = await c.device(await server.local_address())
-            watches = [await dev.watch(["ai:1"], poll_interval=3600) for _ in range(256)]
-            with self.assertRaisesRegex(RuntimeError, "256 live watches on one client"):
-                await dev.watch(["ai:1"])
-            # A closed watch frees its place at once.
-            await watches.pop().close()
-            again = await dev.watch(["ai:1"])
-            await again.close()
+            # Watches of equal settings share one hub, however many.
+            same = [await dev.watch(["ai:1"], subscribe=False) for _ in range(300)]
+            # Each other set of settings takes a hub of its own: 255 more
+            # fill the client's 256 ranges of subscriber process identifiers.
+            others = [await dev.watch(["ai:1"], subscribe=False, poll_interval=3000 + n)
+                      for n in range(255)]
+            with self.assertRaisesRegex(RuntimeError, "256 watches with different settings"):
+                await dev.watch(["ai:1"], subscribe=False, poll_interval=2000)
+            # Equal settings still join a hub that runs.
+            joined = await dev.watch(["ai:1"], subscribe=False, poll_interval=3000)
+            await joined.close()
+            # A closed watch frees its hub once it was the hub's last, its
+            # scheduler's task ended a moment after the close.
+            await others.pop().close()
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    fresh = await dev.watch(["ai:1"], subscribe=False, poll_interval=2000)
+                    break
+                except RuntimeError:
+                    if time.monotonic() > deadline:
+                        raise
+                    await asyncio.sleep(0.05)
+            await fresh.close()
+            for watch in same + others:
+                await watch.close()
 
 
 class StepTests(Lab):
@@ -470,6 +489,11 @@ class ArgumentTests(Lab):
                 ({"poll_interval": 3601}, ValueError, "poll_interval is 1"),
                 ({"poll_interval": "1"}, TypeError, "number of seconds"),
                 ({"poll_interval": False}, TypeError, "number of seconds"),
+                # Eight hours at most: the longest every device must take.
+                ({"lifetime": 28801}, ValueError, "lifetime is 1 to 28800 seconds"),
+                ({"lifetime": 2**32}, ValueError, "lifetime is 1 to 28800 seconds"),
+                ({"subscribe": 1}, TypeError, "subscribe is a bool"),
+                ({"subscribe": "no"}, TypeError, "subscribe is a bool"),
             ):
                 with self.subTest(keywords=keywords):
                     with self.assertRaisesRegex(error, text):
@@ -478,6 +502,29 @@ class ArgumentTests(Lab):
                 dev.watch(["ai:1"], 300)  # keyword only
             # Nothing was sent for any of them.
             self.assertEqual(self.relay.count(SUBSCRIBE_COV), 0)
+
+    def test_the_client_refuses_watch_settings_when_made(self) -> None:
+        for keywords, error, text in (
+            ({"watch_lifetime": 0}, ValueError, "watch_lifetime is 1 to 28800"),
+            ({"watch_lifetime": 28801}, ValueError, "watch_lifetime is 1 to 28800"),
+            ({"watch_lifetime": 1.5}, TypeError, "watch_lifetime is an int"),
+            ({"watch_poll_interval": 0.5}, ValueError, "watch_poll_interval is 1"),
+            ({"watch_poll_interval": True}, TypeError, "watch_poll_interval is a number"),
+            ({"watch_subscribe": 0}, TypeError, "watch_subscribe is a bool"),
+        ):
+            with self.subTest(keywords=keywords):
+                with self.assertRaisesRegex(error, text):
+                    client(**keywords)
+        c = client()
+        self.assertEqual((c.watch_lifetime, c.watch_poll_interval, c.watch_subscribe),
+                         (300, 10.0, True))
+        parameters = inspect.signature(BACnetClient).parameters
+        self.assertEqual([parameters[name].default for name in
+                          ("watch_lifetime", "watch_poll_interval", "watch_subscribe")],
+                         [300, 10.0, True])
+        c = client(watch_lifetime=28800, watch_poll_interval=2.5, watch_subscribe=False)
+        self.assertEqual((c.watch_lifetime, c.watch_poll_interval, c.watch_subscribe),
+                         (28800, 2.5, False))
 
     async def test_a_watch_and_its_updates_refuse_copy_and_pickle(self) -> None:
         self.relay.refuse_cov = True
@@ -503,6 +550,159 @@ class ArgumentTests(Lab):
             await dev.watch(["ai:1"])
 
 
+class ChangeTests(Lab):
+    """Adding and removing points on a live watch, and its settings
+    (#2603)."""
+
+    async def test_add_and_remove_while_another_task_iterates(self) -> None:
+        async with client() as c:
+            dev = await c.device(self.address)
+            watch = await dev.watch(["ai:1"])
+            await next_where(watch, subscribed)
+            removed = False
+            late = []
+
+            async def read() -> None:
+                while True:
+                    # Whether the removal had returned before this step began.
+                    after = removed
+                    update = await anext(watch)
+                    if after and update.object_id == AI:
+                        late.append(update)
+                    if update.object_id == AI2 and update.value is not None \
+                            and update.value.value.value == -1.0:
+                        return
+
+            reader = asyncio.ensure_future(read())
+            self.assertEqual(await watch.add(["ai:2", "ai:1"]), 1, "ai:1 is held already")
+            self.assertEqual(watch.points, (
+                (AI, PropertyIdentifier.PRESENT_VALUE, None),
+                (AI2, PropertyIdentifier.PRESENT_VALUE, None),
+            ))
+            self.assertEqual(len(watch), 2)
+            await until(lambda: self.relay.count(SUBSCRIBE_COV) >= 2, 10, "ai:2 subscribed")
+            for step in range(5):
+                await self.server.set_present_value_local(AI, PropertyValue.real(step))
+                await self.server.set_present_value_local(AI2, PropertyValue.real(step))
+            self.assertEqual(await watch.remove(["ai:1"]), 1)
+            removed = True
+            self.assertEqual(await watch.remove(["ai:1"]), 0, "held no more")
+            self.assertEqual(watch.points, ((AI2, PropertyIdentifier.PRESENT_VALUE, None),))
+            for step in range(5):
+                await self.server.set_present_value_local(AI, PropertyValue.real(50 + step))
+            await self.server.set_present_value_local(AI2, PropertyValue.real(-1.0))
+            await asyncio.wait_for(reader, 15)
+            self.assertEqual(late, [], "an update of a removed point")
+            # ai:1's subscription was cancelled, ai:2's stays.
+            await until(lambda: self.relay.count(SUBSCRIBE_COV) >= 3, 10, "the cancel")
+            self.assertEqual(await active(self.server), 1)
+            await watch.close()
+            with self.assertRaisesRegex(RuntimeError, "it was closed"):
+                await watch.add(["ai:1"])
+            with self.assertRaisesRegex(RuntimeError, "it was closed"):
+                await watch.remove(["ai:2"])
+
+    async def test_add_and_remove_take_effect_in_the_order_called(self) -> None:
+        async with client() as c:
+            dev = await c.device(self.address)
+            watch = await dev.watch(["ai:1"])
+            await next_where(watch, subscribed)
+            # Neither awaited before the other is called: each acts when called.
+            added = watch.add(["ai:2"])
+            self.assertEqual(len(watch), 2, "added before the await")
+            removed = watch.remove(["ai:2"])
+            self.assertEqual((await added, await removed), (1, 1))
+            self.assertEqual(watch.points, ((AI, PropertyIdentifier.PRESENT_VALUE, None),))
+            self.assertEqual(len(watch), 1)
+            await self.server.set_present_value_local(AI2, PropertyValue.real(5.0))
+            await self.server.set_present_value_local(AI, PropertyValue.real(6.0))
+            update = await next_where(watch, valued(6.0))
+            self.assertEqual(update.object_id, AI)
+            with self.assertRaises(TimeoutError):
+                while True:
+                    late = await asyncio.wait_for(anext(watch), 1)
+                    self.assertNotEqual(late.object_id, AI2)
+            await watch.close()
+            # An ended watch refuses either change when it is called, not
+            # when it is awaited.
+            for call in (watch.add, watch.remove):
+                with self.subTest(call=call.__name__):
+                    with self.assertRaisesRegex(RuntimeError, "it was closed"):
+                        call(["ai:2"])
+
+    async def test_add_and_remove_refuse_bad_points_when_called(self) -> None:
+        async with client() as c:
+            dev = await c.device(self.address)
+            watch = await dev.watch(["ai:1"])
+            for points, error, text in (
+                ("ai:2", TypeError, "put one in a list"),
+                (b"ai:2", TypeError, "not bytes: put one in a list"),
+                (bytearray(b"ai:2"), TypeError, "not bytearray: put one in a list"),
+                ([], ValueError, "points is empty"),
+                (["ai:1 all"], ValueError, "names many properties"),
+            ):
+                for call in (watch.add, watch.remove):
+                    with self.subTest(call=call.__name__, points=str(points)):
+                        with self.assertRaisesRegex(error, text):
+                            call(points)
+            await watch.close()
+
+    async def test_a_point_removed_and_added_again_is_read_afresh(self) -> None:
+        async with client() as c:
+            dev = await c.device(self.address)
+            watch = await dev.watch(["ai:1"])
+            await next_where(watch, subscribed)
+            await watch.remove([AI])
+            await until(self._none_active, 10, "the cancel")
+            await self.server.set_present_value_local(AI, PropertyValue.real(61.0))
+            await watch.add([AI])
+            first = await asyncio.wait_for(anext(watch), 10)
+            self.assertEqual(first.value.value.value, 61.0)
+            self.assertIn(first.via, ("read", "cov"))
+            await next_where(watch, subscribed)
+            await watch.close()
+
+    async def _none_active(self) -> bool:
+        return await active(self.server) == 0
+
+    async def test_polling_only_sends_no_subscription(self) -> None:
+        async with client(watch_subscribe=False, watch_poll_interval=1) as c:
+            dev = await c.device(self.address)
+            watch = await dev.watch(["ai:1"])
+            self.assertEqual((watch.subscribe, watch.poll_interval), (False, 1.0))
+            polled = await next_where(watch, lambda u: u.state == "polled")
+            self.assertEqual(polled.why.kind, "poll-only")
+            self.assertIsNone(polled.why.error)
+            await self.server.set_present_value_local(AI, PropertyValue.real(36.0))
+            update = await next_where(watch, valued(36.0))
+            self.assertEqual(update.via, "poll")
+            # This watch subscribes, whatever the client's default.
+            other = await dev.watch(["ai:2"], subscribe=True)
+            self.assertTrue(other.subscribe)
+            await next_where(other, subscribed)
+            await other.close()
+            await watch.close()
+        self.assertEqual(self.relay.count(SUBSCRIBE_COV), 2, "ai:2's and its cancel")
+
+    async def test_watches_of_equal_settings_share_a_subscription(self) -> None:
+        async with client(watch_lifetime=120) as c:
+            dev = await c.device(self.address)
+            first = await dev.watch(["ai:1"])
+            second = await dev.watch(["ai:1"], lifetime=120)
+            self.assertEqual((first.lifetime, second.lifetime), (120, 120))
+            await next_where(first, subscribed)
+            await next_where(second, subscribed)
+            self.assertEqual(self.relay.count(SUBSCRIBE_COV), 1, "one subscription")
+            self.assertEqual(await active(self.server), 1)
+            # Closing one leaves the other's.
+            await first.close()
+            self.assertEqual(await active(self.server), 1)
+            await self.server.set_present_value_local(AI, PropertyValue.real(44.0))
+            await next_where(second, valued(44.0))
+            await second.close()
+            self.assertEqual(await active(self.server), 0)
+
+
 class StubParityTests(unittest.TestCase):
     CLASSES = ("Watch", "WatchUpdate", "WatchReason")
 
@@ -524,10 +724,14 @@ class StubParityTests(unittest.TestCase):
 
     def test_the_device_call_matches_the_stub(self) -> None:
         runtime = runtime_parameters(Device.watch)
-        self.assertEqual([n for n, _ in runtime], ["points", "lifetime", "poll_interval"])
+        self.assertEqual([n for n, _ in runtime],
+                         ["points", "lifetime", "poll_interval", "subscribe"])
         self.assertEqual(runtime, stub_parameters(stub_method("Device", "watch")))
         defaults = {n: p.default for n, p in inspect.signature(Device.watch).parameters.items()}
-        self.assertEqual((defaults["lifetime"], defaults["poll_interval"]), (300, 10.0))
+        # None: the client's watch_* settings.
+        self.assertEqual(
+            (defaults["lifetime"], defaults["poll_interval"], defaults["subscribe"]),
+            (None, None, None))
         # On the handle only: the client has no second spelling.
         self.assertFalse(hasattr(BACnetClient, "watch"))
 

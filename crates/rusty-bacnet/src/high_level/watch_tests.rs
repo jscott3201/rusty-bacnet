@@ -44,7 +44,7 @@ impl Probe {
     fn next<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let ended = Arc::clone(&self.ended);
         let why = move || ended.get().copied().unwrap_or(Ended::Closed);
-        step(py, &self.stream, why, |item| item)
+        step(py, &self.stream, why, |item| item, |put_back| put_back)
     }
 
     /// End the stream as the client's stop does.

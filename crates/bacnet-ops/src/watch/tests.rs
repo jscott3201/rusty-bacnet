@@ -63,11 +63,23 @@ async fn two_leases_share_one_subscription_until_the_last_goes() {
 }
 
 /// No lifetime-0 subscription can be built: the type refuses zero (the
-/// `bacnet` tool's class table calls zero a write, `bacnet_tool::class`).
+/// `bacnet` tool's class table calls zero a write, `bacnet_tool::class`),
+/// and nothing past eight hours, the longest every device takes (#2603).
 #[test]
-fn no_lifetime_is_indefinite() {
-    assert!(Lifetime::new(0).is_none());
+fn no_lifetime_is_indefinite_or_past_eight_hours() {
+    assert!(matches!(Lifetime::new(0), Err(WatchError::Settings(_))));
     assert_eq!(Lifetime::new(1).unwrap().secs(), 1);
+    assert_eq!(Lifetime::new(28_800).unwrap(), Lifetime::MAX);
+    for secs in [28_801, 86_400, u32::MAX] {
+        let refused = Lifetime::new(secs).unwrap_err();
+        assert!(matches!(refused, WatchError::Settings(_)), "{refused:?}");
+        assert_eq!(
+            refused.to_string(),
+            format!(
+                "the watch settings are refused: a COV lifetime is 1 to 28800 seconds, not {secs}"
+            )
+        );
+    }
     let fast = WatchOptions {
         poll_every: Duration::from_secs(9),
         ..WatchOptions::default()

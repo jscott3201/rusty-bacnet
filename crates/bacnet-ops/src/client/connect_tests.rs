@@ -48,11 +48,16 @@ async fn a_bip_client_connects_and_reads_over_loopback() {
         .limits(RequestLimits::new(50))
         .resolve_scope(ResolveScope::Network(5))
         .write_policy(WritePolicy::default().allow_priorities([Priority::CRITICAL_EQUIPMENT]))
+        .watch_settings(WatchSettings::default().with_subscribe(false))
         .connect()
         .await
         .unwrap();
     assert_eq!(client.resolve_scope(), ResolveScope::Network(5));
     assert!(client.write_policy().allows(Priority::CRITICAL_EQUIPMENT));
+    assert!(!client.watch_settings().subscribe, "the builder's");
+    // A 2 s timeout sent twice, from the low-level client's own timers:
+    // what the watches' renewals leave room for.
+    assert_eq!(client.request_budget(), Duration::from_secs(4));
     let device: Device = client.device(address.as_str()).await.unwrap();
     assert_eq!(device.resolve_instance().await.unwrap(), 2560);
     let ai = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
@@ -91,6 +96,59 @@ async fn a_builder_client_resolves_locally_by_default() {
         .unwrap();
     assert_eq!(client.resolve_scope(), ResolveScope::Local);
     assert_eq!(client.write_policy(), WritePolicy::default());
+    assert_eq!(client.watch_settings(), &WatchSettings::default());
+    // The default timers: 6 s, sent four times.
+    assert_eq!(client.request_budget(), Duration::from_secs(24));
+}
+
+/// A client's watches leave room in each renewal for its own timers: a
+/// low-level client built with a 20 s timeout and three retries takes up
+/// to 80 s a request, so a five-minute subscription renews 150 s before it
+/// ends (two such requests, at most half the lifetime), not the 48 s the
+/// default timers leave.
+#[tokio::test]
+async fn a_watch_renews_early_enough_for_the_clients_own_timers() {
+    let low = BACnetClient::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .apdu_timeout_ms(20_000)
+        .apdu_retries(3)
+        .build()
+        .await
+        .unwrap();
+    assert_eq!(low.apdu_timeout(), Duration::from_secs(20));
+    assert_eq!(low.apdu_retries(), 3);
+    let client: Client<BipTransport> = Client::over(low);
+    assert_eq!(client.request_budget(), Duration::from_secs(80));
+    let watch = client.watch([]).unwrap();
+    let control = watch.control();
+    let hubs = client.shared.watch_pool.lock().unwrap().drain();
+    assert_eq!(hubs.len(), 1);
+    assert_eq!(hubs[0].options().renewal_margin, Duration::from_secs(150));
+    drop((hubs, control, watch));
+}
+
+/// Watch settings no hub takes are refused by `connect`, before anything
+/// is bound: a poll interval past an hour.
+#[tokio::test]
+async fn a_builder_refuses_watch_settings_before_binding() {
+    let slow = WatchSettings::default().with_poll_every(Duration::from_secs(3601));
+    let Err(refused) = Client::bip()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .watch_settings(slow)
+        .connect()
+        .await
+    else {
+        panic!("refused watch settings connected");
+    };
+    assert!(
+        matches!(
+            refused,
+            OpsError::Watch(crate::watch::WatchError::Settings(_))
+        ),
+        "{refused:?}"
+    );
 }
 
 /// The B/IPv6 builder takes its settings and makes a connect future;

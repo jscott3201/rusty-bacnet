@@ -57,11 +57,13 @@ class ScReconnectOptionsTests(unittest.TestCase):
 
     def test_client_keyword_is_appended_and_sc_only(self):
         parameters = inspect.signature(BACnetClient).parameters
-        self.assertEqual(list(parameters)[-9:], ["reconnect", "sc_npdu_per_origin_limit",
-                                                 "sc_failover_hub", "sc_connect_timeout_ms",
-                                                 "sc_control_rate_limit", "router",
-                                                 "write_policy", "resolve_scope",
-                                                 "accept_complex_ack_for_simple_services"])
+        self.assertEqual(list(parameters)[-12:], ["reconnect", "sc_npdu_per_origin_limit",
+                                                  "sc_failover_hub", "sc_connect_timeout_ms",
+                                                  "sc_control_rate_limit", "router",
+                                                  "write_policy", "resolve_scope",
+                                                  "accept_complex_ack_for_simple_services",
+                                                  "watch_lifetime", "watch_poll_interval",
+                                                  "watch_subscribe"])
         self.assertEqual(parameters["reconnect"].kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertIsNone(parameters["reconnect"].default)
         for transport in ["bip", "ipv6", "mstp", "unknown"]:

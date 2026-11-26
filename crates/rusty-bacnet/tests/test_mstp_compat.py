@@ -75,6 +75,7 @@ CLIENT_KEYWORD_ONLY = MSTP_KEYWORD_ONLY + [
     "bbmd", "foreign_device", "multicast", "reconnect", "sc_npdu_per_origin_limit", "sc_failover_hub",
     "sc_connect_timeout_ms", "sc_control_rate_limit", "router", "write_policy",
     "resolve_scope", "accept_complex_ack_for_simple_services",
+    "watch_lifetime", "watch_poll_interval", "watch_subscribe",
 ]
 SERVER_KEYWORD_ONLY = ["mutation_policy", "dcc_policy", "dcc_source_restriction", "dcc_disable_rate_limit"] + MSTP_KEYWORD_ONLY + [
     "max_confirmed_in_flight", "max_unconfirmed_in_flight",

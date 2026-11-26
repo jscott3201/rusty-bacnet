@@ -72,4 +72,25 @@ impl BACnetClient {
     fn write_policy(&self) -> PyWritePolicy {
         PyWritePolicy(self.write_policy)
     }
+
+    /// The COV lifetime of a `Device.watch` that names none, in seconds,
+    /// as `watch_lifetime=` set it.
+    #[getter]
+    fn watch_lifetime(&self) -> u32 {
+        self.watch_settings.lifetime.secs()
+    }
+
+    /// The poll interval of a `Device.watch` that names none, in seconds,
+    /// as `watch_poll_interval=` set it.
+    #[getter]
+    fn watch_poll_interval(&self) -> f64 {
+        self.watch_settings.poll_every.as_secs_f64()
+    }
+
+    /// Whether a `Device.watch` that doesn't say subscribes its points for
+    /// COV (False: polls them), as `watch_subscribe=` set it.
+    #[getter]
+    fn watch_subscribe(&self) -> bool {
+        self.watch_settings.subscribe
+    }
 }

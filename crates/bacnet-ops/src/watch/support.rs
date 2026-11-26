@@ -285,6 +285,11 @@ mod tests {
         assert!(!refuses_service(&Error::Timeout(
             std::time::Duration::from_secs(1)
         )));
+        // A lifetime out of the device's range is the point's own refusal.
+        assert!(!refuses_service(&error(
+            ErrorClass::SERVICES,
+            ErrorCode::VALUE_OUT_OF_RANGE
+        )));
     }
 
     /// Protocol_Services_Supported's bits name the two COV services.

@@ -243,6 +243,45 @@ fn a_full_slot_keeps_the_older_item_and_counts_the_newer() {
     });
 }
 
+/// A purge drops the item waiting in the slot only when it is stale, and
+/// counts it neither missed nor delivered (#2603): the next read takes the
+/// channel's next item, or the kept one first.
+#[tokio::test]
+async fn a_purge_drops_a_stale_item_and_keeps_another() {
+    Python::initialize();
+    let (tx, rx) = broadcast::channel(4);
+    let stream = LossyReceiver::new(rx);
+    for item in [1u32, 2, 3] {
+        tx.send(item).unwrap();
+    }
+    for _ in 0..2 {
+        let (next, hook) = stream.next();
+        let Some(Next::Fresh(item)) = next.await else {
+            panic!("an item from the channel");
+        };
+        Python::attach(|py| {
+            hook.put_back(py, item.into_py_any(py).unwrap(), Via::BeforeDelivery);
+            hook.settled();
+            let stale = |object: &Py<PyAny>| object.extract::<u32>(py).unwrap() == 1;
+            stream.purge(stale);
+        });
+        if item == 1 {
+            // Dropped: the channel's next item comes.
+            continue;
+        }
+        let (next, hook) = stream.next();
+        match next.await {
+            Some(Next::Again(object)) => {
+                Python::attach(|py| assert_eq!(object.extract::<u32>(py).unwrap(), 2));
+            }
+            _ => panic!("the kept item first"),
+        }
+        hook.settled();
+    }
+    assert_eq!(fresh(&stream).await, Some(3));
+    assert_eq!(stream.missed(), 0);
+}
+
 /// A Python iterator over a `u32` channel the test feeds from Python.
 #[pyclass(frozen)]
 struct Probe {

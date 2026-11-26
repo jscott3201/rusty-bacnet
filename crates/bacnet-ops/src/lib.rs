@@ -87,7 +87,7 @@ pub use error::OpsError;
 pub use format::{PropertyError, Value};
 pub use inventory::{Inventory, InventoryOptions, PointRecord, PointRecords};
 pub use reading::{IntoObject, IntoProperty, ObjectRead, PropertyRef, Reading, Readings};
-pub use watch::{CovSupport, Update, Watch};
+pub use watch::{CovSupport, Update, Watch, WatchControl, WatchSettings};
 pub use write::{
     IntoWriteValue, Priority, PriorityView, WriteDenied, WritePolicy, WritePreview, Written,
 };

@@ -89,6 +89,10 @@ pub enum Why {
     /// again ([`CovSupport::Refused`](super::CovSupport::Refused)). Not
     /// asked again.
     Refused(String),
+    /// The watch's settings poll every point
+    /// ([`WatchSettings::subscribe`](super::WatchSettings::subscribe) is
+    /// false): no subscription is asked for.
+    PollOnly,
     /// The first read or the subscription had no answer, with the error:
     /// subscribed again after a backoff.
     NoAnswer(String),

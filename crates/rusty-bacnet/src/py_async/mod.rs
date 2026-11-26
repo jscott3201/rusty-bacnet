@@ -116,6 +116,14 @@ pub(crate) fn spawn_cleanup(future: impl Future<Output = ()> + Send + 'static) {
     runtime().spawn(future);
 }
 
+/// Run `f` now, on the calling thread, inside the bindings' runtime: for a
+/// synchronous call that starts tasks (a watch's `add` starts a device's
+/// scheduler). `f` must not block on the runtime.
+pub(crate) fn in_runtime<R>(f: impl FnOnce() -> R) -> R {
+    let _entered = runtime().enter();
+    f()
+}
+
 /// Run `fut` on the bindings' runtime and return an asyncio future, on the
 /// running event loop, that resolves to its output.
 ///

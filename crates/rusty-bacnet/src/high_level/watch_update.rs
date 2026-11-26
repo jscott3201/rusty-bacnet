@@ -6,7 +6,7 @@
 use bacnet_ops::format::{Floats, StateTexts, ValueFormat};
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::target::AddressStyle;
-use bacnet_ops::watch::{State, Update, Via, Why};
+use bacnet_ops::watch::{Mark, State, Update, Via, Why};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, StatusFlags};
 use pyo3::prelude::*;
@@ -72,6 +72,9 @@ pub(crate) struct PyWatchUpdate {
     via: Option<&'static str>,
     timestamp: Option<f64>,
     cov_support: &'static str,
+    /// Which of its watch's points it was taken for, so one put back after
+    /// its point's removal is dropped.
+    mark: Mark,
 }
 
 impl PyWatchUpdate {
@@ -118,7 +121,13 @@ impl PyWatchUpdate {
             via: update.via.map(via_name),
             timestamp: update.updated.map(crate::frames::posix_seconds),
             cov_support: cov_label(update.cov),
+            mark: update.mark(),
         })
+    }
+
+    /// Which of its watch's points it was taken for.
+    pub(super) fn mark(&self) -> Mark {
+        self.mark
     }
 }
 
@@ -276,6 +285,7 @@ impl PyWatchReason {
                 Some(error),
                 format!("the device refused the subscription: {error}"),
             ),
+            Why::PollOnly => reason("poll-only", None, "the watch polls every point".to_owned()),
             Why::NoAnswer(error) => reason(
                 "no-answer",
                 Some(error),
@@ -331,8 +341,9 @@ impl PyWatchReason {
 #[pymethods]
 impl PyWatchReason {
     /// The reason: `"refused"` (the device refused the subscription; not
-    /// asked again), `"no-answer"` (the first read or the subscription
-    /// went unanswered), `"full"` (the device's subscription table was
+    /// asked again), `"poll-only"` (the watch polls every point,
+    /// `subscribe=False`), `"no-answer"` (the first read or the
+    /// subscription went unanswered), `"full"` (the device's subscription table was
     /// full) or `"lapsed"` (a renewal failed), each subscribed again after
     /// a backoff; `"missing"` (no router to a remote device's network is
     /// known); `"moved"` (the device answers at `to` now) or `"replaced"`

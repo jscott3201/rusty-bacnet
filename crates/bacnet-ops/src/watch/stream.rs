@@ -1,56 +1,40 @@
 //! [`Watch`]: an application's watch of many points, a stream of
-//! [`Update`]s ([`Client::watch`]).
+//! [`Update`]s ([`Client::watch`](crate::Client::watch)).
 //!
-//! A watch holds one lease a point on its client's own hub, made on first
-//! use and kept while any watch holds a point. Each signalled change of a
-//! point marks it in the watch's mailbox, at most once however many
-//! changes come before the watch takes it, and wakes the watch once the
-//! point's lock is let go; the update is built from the point's latest
+//! A watch holds one lease a point on its hub (a client's pooled hub, or
+//! one a front end runs). Each signalled change of a point marks it in the
+//! watch's mailbox ([`control`](super::control)), at most once however
+//! many changes come before the watch takes it, and wakes the watch once
+//! the point's lock is let go; the update is built from the point's latest
 //! snapshot when the watch takes it. So a slow consumer gets the latest
 //! value of each point, never a queue of old ones, and the mailbox never
 //! holds more than one mark a point; the hub never waits for a watch, so a
 //! slow one holds up no other.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Waker};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use bacnet_transport::port::TransportPort;
 use bacnet_types::bitstring::status_flags_from_bacnet;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::{PropertyValue, StatusFlags};
+use bacnet_types::sync::MutexExt;
 use futures_core::Stream;
 
-use super::hub::{
-    self, Hub, Inner, Lease, MissingDevice, PROCESS_RANGES, Reads, Snapshot, Source, WatchOptions,
-};
+use super::control::{Core, Listener, Port, Taken, WatchControl};
+use super::hub::{self, Hub, Lease, Snapshot, Source};
 use super::sample::Via;
+use super::shared::Shared;
 use super::support::CovSupport;
 use super::{Point, WatchError, Why};
-use crate::client::{Client, lock};
-use crate::error::OpsError;
 use crate::format::{Floats, PropertyError, RawRow, StateTexts, Value, ValueFormat, units};
 
-/// The most points a client's own hub watches at once, every watch on the
-/// client together, those still cancelling included.
+/// The most points one of a client's pooled hubs watches at once, every
+/// watch on it together, those still cancelling included.
 pub const MAX_WATCHED: usize = 4096;
-
-/// The settings of a client's own hub: five-minute subscriptions renewed
-/// before they lapse; a device's polled points read together, every 10 s
-/// at most, backing off to a minute when it stops answering; a point read
-/// for its value with its Status_Flags, its Units, name and state texts;
-/// every change signalled at once.
-fn settings() -> WatchOptions {
-    WatchOptions {
-        reads: Reads::value(),
-        coalesce: Duration::ZERO,
-        missing: MissingDevice::Poll,
-        max_points: MAX_WATCHED,
-        ..WatchOptions::default()
-    }
-}
 
 /// How a watched point's watch goes, with the reason when it isn't
 /// subscribed. One `match` says what to do: wait, read on, or watch the
@@ -63,11 +47,12 @@ pub enum State {
     /// Subscribed: values come as COV notifications, the subscription
     /// renewed before each lifetime ends.
     Subscribed,
-    /// Polled, with the device's other polled points, every 10 s at most,
-    /// because of `why`:
+    /// Polled, with the device's other polled points, every `poll_every`
+    /// at most ([`WatchSettings`](super::WatchSettings)), because of `why`:
     ///
     /// - [`Why::Refused`]: the device said no (or refused the service for
     ///   an earlier point); not asked again.
+    /// - [`Why::PollOnly`]: the watch's settings poll every point.
     /// - [`Why::ForeignSender`]: its notifications name a device that
     ///   can't be told from another at its address; subscribed again when
     ///   the point starts again.
@@ -103,6 +88,8 @@ pub enum State {
 
 impl State {
     /// The application's state of a point the hub reports as `snapshot`.
+    /// A stopped point is never handed out: its hub shut down, which ends
+    /// the watch first, or no watch holds it.
     fn of(snapshot: &Snapshot) -> Self {
         let why = snapshot.why.clone();
         match (snapshot.state, snapshot.source, why) {
@@ -161,14 +148,42 @@ pub struct Update {
     pub updated: Option<SystemTime>,
     /// What is known of this point's COV subscription.
     pub cov: CovSupport,
+    /// The point's place in its watch when the update was taken.
+    mark: Mark,
+}
+
+/// Which of its watch's points an [`Update`] was taken for: the point's
+/// place in the watch, and that place's generation, which a removal moves
+/// on ([`Update::mark`]). A consumer that holds updates back (a buffer, a
+/// slot for one a cancelled read put back) asks
+/// [`WatchControl::holds`] before handing one out: false once its point
+/// was removed, even if added again, so nothing of a removed point gets
+/// out after the removal returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Mark {
+    pub(super) index: usize,
+    pub(super) generation: u64,
+}
+
+impl Update {
+    /// Which of its watch's points this update was taken for.
+    pub fn mark(&self) -> Mark {
+        self.mark
+    }
 }
 
 /// A watch of many points: a [`Stream`] of their [`Update`]s.
 ///
-/// Made by [`Client::watch`]. Each point is watched once however many
-/// watches hold it: one COV subscription, renewed before its lifetime
-/// ends, or, where the device refuses COV, a poll that reads all of a
-/// device's polled points together.
+/// Made by [`Client::watch`](crate::Client::watch) (or
+/// [`watch_with`](crate::Client::watch_with), or
+/// [`Device::watch`](crate::Device::watch)). Each point is watched once
+/// however many watches on the hub hold it: one COV subscription, renewed
+/// before its lifetime ends, or, where the device refuses COV, a poll that
+/// reads all of a device's polled points together.
+///
+/// **Changing the set.** [`control`](Self::control) gives a
+/// [`WatchControl`] that adds and removes points from any task while
+/// another awaits [`next`](Self::next).
 ///
 /// **Back-pressure.** The latest value of each point wins: a consumer
 /// that falls behind gets one update a point with its latest value and
@@ -183,44 +198,62 @@ pub struct Update {
 /// gate. A device in its backoff, or one that leaves a cancel unanswered,
 /// is sent no further cancels: those subscriptions end with their
 /// lifetimes. A polled point is no longer polled, and nothing is sent for
-/// it.
+/// it. [`WatchControl::close`] does the same and waits for the cancels.
 ///
-/// **Ending.** The stream of a watch of no points ends at once. Any other
-/// never ends on its own: a point given up ([`State::Gone`]) sends its last
-/// update and stays, taking nothing more from its address while its old
-/// subscription lapses, and starts again if its device comes back there.
-/// Drop the watch to stop.
+/// **Ending.** The stream ends (`None`, and `None` from then on) once the
+/// watch has no point and no control lives to add one, once it is closed,
+/// and at once when its hub shuts down
+/// ([`Client::shutdown_watches`](crate::Client::shutdown_watches),
+/// [`Hub::shutdown`]): updates still waiting then are dropped, since the
+/// hub watches nothing more. Otherwise it never ends on its own: a point
+/// given up ([`State::Gone`]) sends its last update and stays, taking
+/// nothing more from its address while its old subscription lapses, and
+/// starts again if its device comes back there.
 pub struct Watch {
-    leases: Vec<Lease>,
-    mailbox: Arc<Mailbox>,
+    core: Arc<Core>,
 }
 
 impl Watch {
-    /// The points watched, in the order named, each once, with its
-    /// device's address as the hub keys it.
-    pub fn points(&self) -> impl Iterator<Item = &Point> + '_ {
-        self.leases.iter().map(|lease| &lease.shared.point)
+    /// The points watched, in the order of their places: as named, each
+    /// once, with its device's address as the hub keys it; an added point
+    /// takes a removed one's place when one is free.
+    pub fn points(&self) -> Vec<Point> {
+        self.core.points()
     }
 
     /// Changes folded into a later update of the same point because this
     /// watch hadn't taken the earlier one yet.
     pub fn folded(&self) -> u64 {
-        lock(&self.mailbox.state).folded
+        self.core.folded()
+    }
+
+    /// A handle that adds points to this watch and removes them while
+    /// another task awaits [`next`](Self::next).
+    pub fn control(&self) -> WatchControl {
+        self.core.control()
     }
 
     /// The next update, as the [`Stream`] gives it, without a stream
-    /// adapter: `None` at once for a watch of no points, else an update
-    /// whenever one comes. Cancel safe: an update leaves the mailbox only
-    /// on the poll that returns it, so a dropped call loses none.
+    /// adapter: `None` once the watch has ended (see the type's docs),
+    /// else an update whenever one comes. Cancel safe: an update leaves the
+    /// mailbox only on the poll that returns it, so a dropped call loses
+    /// none.
     pub async fn next(&mut self) -> Option<Update> {
         std::future::poll_fn(|cx| Pin::new(&mut *self).poll_next(cx)).await
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        // The leases go once the core's lock is let go.
+        drop(self.core.end());
     }
 }
 
 impl std::fmt::Debug for Watch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Watch")
-            .field("points", &self.leases.len())
+            .field("points", &self.core.points().len())
             .finish()
     }
 }
@@ -229,93 +262,46 @@ impl Stream for Watch {
     type Item = Update;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Update>> {
-        let this = self.get_mut();
-        if this.leases.is_empty() {
-            return Poll::Ready(None);
-        }
-        let index = {
-            let mut state = lock(&this.mailbox.state);
-            match state.queue.pop_front() {
-                Some(index) => {
-                    state.queued[index] = false;
-                    index
-                }
-                None => {
-                    // Under the lock a post takes too: none slips between.
-                    state.waker = Some(cx.waker().clone());
-                    return Poll::Pending;
-                }
+        let core = &self.get_mut().core;
+        loop {
+            let (index, generation, shared) = match core.take(cx.waker()) {
+                Taken::Ended => return Poll::Ready(None),
+                Taken::Wait => return Poll::Pending,
+                Taken::Point(index, generation, shared) => (index, generation, shared),
+            };
+            // Built outside the core's lock (it takes the entry's), then
+            // handed out only if the point is still this watch's: a removal
+            // meanwhile drops it.
+            let mark = Mark { index, generation };
+            let update = update(&shared, mark);
+            if core.holds(mark) {
+                return Poll::Ready(Some(update));
             }
-        };
-        Poll::Ready(Some(update(&this.leases[index])))
-    }
-}
-
-/// A watch's mailbox: the points changed since it last took them, each
-/// once, in the order they changed.
-pub(super) struct Mailbox {
-    state: Mutex<MailState>,
-}
-
-struct MailState {
-    queue: VecDeque<usize>,
-    queued: Vec<bool>,
-    folded: u64,
-    waker: Option<Waker>,
-}
-
-/// One watch's place among a point's listeners: its mailbox, and the
-/// point's index in that watch.
-pub(crate) struct Listener {
-    mailbox: Weak<Mailbox>,
-    index: usize,
-}
-
-impl Listener {
-    /// Mark the point changed in the watch, adding the watch's waker to
-    /// `wakers` for the caller to wake once its lock is let go; false once
-    /// the watch is gone.
-    pub(super) fn post(&self, wakers: &mut Vec<Waker>) -> bool {
-        let Some(mailbox) = self.mailbox.upgrade() else {
-            return false;
-        };
-        let mut state = lock(&mailbox.state);
-        if state.queued[self.index] {
-            state.folded += 1;
-        } else {
-            state.queued[self.index] = true;
-            state.queue.push_back(self.index);
-            wakers.extend(state.waker.take());
         }
-        true
     }
 }
 
-impl Lease {
-    /// Tell `listener` of every change signalled from now on, and of where
-    /// the point stands now if it has changed before.
-    fn listen(&self, listener: Listener) {
-        let mut state = self.shared.lock();
-        state
-            .listeners
-            .retain(|held| held.mailbox.strong_count() > 0);
-        let mut wakers = Vec::new();
-        if state.snapshot.seq > 0 {
-            listener.post(&mut wakers);
-        }
-        state.listeners.push(listener);
-        drop(state);
-        wakers.into_iter().for_each(Waker::wake);
+/// Tell `listener` of every change of `shared` signalled from now on, and
+/// of where the point stands now if it has changed before.
+pub(super) fn listen(shared: &Shared, listener: Listener) {
+    let mut state = shared.lock();
+    state.listeners.retain(Listener::alive);
+    let mut wakers = Vec::new();
+    if state.snapshot.seq > 0 {
+        listener.post(&mut wakers);
     }
+    state.listeners.push(listener);
+    drop(state);
+    wakers.into_iter().for_each(Waker::wake);
 }
 
-/// `lease`'s point as it stands: its value from the latest rows, named by
+/// `shared`'s point as it stands: its value from the latest rows, named by
 /// the units and state texts among them.
-fn update(lease: &Lease) -> Update {
-    let point = lease.shared.point.clone();
+fn update(shared: &Shared, mark: Mark) -> Update {
+    let point = shared.point.clone();
     let (property, _) = point.property();
     let (rows, via, state, cov, failure, updated) = {
-        let entry = lease.shared.lock();
+        let entry = shared.lock();
         let snapshot = &entry.snapshot;
         (
             snapshot.rows.clone(),
@@ -340,6 +326,7 @@ fn update(lease: &Lease) -> Update {
         via,
         updated,
         cov,
+        mark,
     }
 }
 
@@ -364,105 +351,30 @@ fn status_flags(rows: &[RawRow]) -> Option<StatusFlags> {
     }
 }
 
-/// What a client keeps of its own hub: the hub while any watch holds a
-/// point, weak since the hub holds the client, and the range of subscriber
-/// process identifiers every one of its hubs takes, the same for the
-/// client's life so no re-made hub ever takes another hub's.
-pub(crate) struct OwnHub<T: TransportPort + 'static> {
-    pub(in crate::watch) hub: Weak<Inner<T>>,
-    range: Option<u32>,
-}
-
-impl<T: TransportPort + 'static> OwnHub<T> {
-    pub(crate) fn new() -> Self {
-        Self {
-            hub: Weak::new(),
-            range: None,
-        }
-    }
-}
-
-impl<T: TransportPort + 'static> Client<T> {
-    /// Watch `points`, from [`Device::point`](crate::Device::point): a
-    /// [`Watch`] streaming each point's [`Update`]s.
-    ///
-    /// The points go to this client's own hub, made on first use and
-    /// shared by every watch on the client: a point two watches hold is
-    /// one subscription. Each is read once for its value, Status_Flags,
-    /// Units, name and state texts, then subscribed for five minutes at a
-    /// time, renewed before each lifetime ends; a point the device won't
-    /// subscribe is polled with the device's other polled points, every
-    /// 10 s at most. A device that refuses the COV service itself is
-    /// remembered by its address, and its later points are polled without
-    /// asking. A point named twice, or one station named two ways, is
-    /// watched once.
-    ///
-    /// The hub works with the client's base settings, whichever clone
-    /// calls: a following handle's device that stops answering is looked
-    /// for with [`RESOLVE_WAIT`](crate::client::RESOLVE_WAIT), as by a
-    /// clone [`Client::new`] made.
-    ///
-    /// # Errors
-    ///
-    /// [`OpsError::Watch`]: [`WatchError::Full`] when the points would take
-    /// the client's hub past [`MAX_WATCHED`] (nothing is watched then, and
-    /// nothing sent), [`WatchError::NoRuntime`] outside a Tokio runtime,
-    /// which the hub's tasks need, and [`WatchError::Hubs`] when the
-    /// client's own hub is first made while other hubs hold every range.
-    pub fn watch(&self, points: impl IntoIterator<Item = Point>) -> Result<Watch, OpsError> {
-        if tokio::runtime::Handle::try_current().is_err() {
-            return Err(OpsError::Watch(WatchError::NoRuntime));
-        }
-        let hub = self.own_hub().map_err(OpsError::Watch)?;
-        hub.stream(points).map_err(OpsError::Watch)
+impl<T: TransportPort + 'static> Port for Hub<T> {
+    fn keyed(&self, point: Point) -> Point {
+        Hub::keyed(self, point)
     }
 
-    /// The next range of subscriber process identifiers no live hub on
-    /// this client holds, going round from the one taken last, now held until [`release_range`](Self::release_range);
-    /// `None` when every one is held.
-    pub(crate) fn take_range(&self) -> Option<u32> {
-        lock(&self.shared.ranges).take()
-    }
-
-    /// Give back `range`: its hub is gone.
-    pub(crate) fn release_range(&self, range: u32) {
-        lock(&self.shared.ranges).release(range);
-    }
-
-    /// This client's own hub: the one its watches share while any holds a
-    /// point, or a new one in the client's own range, taken the first time
-    /// and kept for the client's life, over the client's base settings.
-    fn own_hub(&self) -> Result<Hub<T>, WatchError> {
-        let mut own = lock(&self.shared.hub);
-        if let Some(inner) = own.hub.upgrade() {
-            return Ok(Hub { inner });
-        }
-        let range = match own.range {
-            Some(range) => range,
-            None => self.take_range().ok_or(WatchError::Hubs {
-                max: PROCESS_RANGES as usize,
-            })?,
-        };
-        own.range = Some(range);
-        let hub = Hub::in_range(self.base(), settings(), range, false);
-        own.hub = Arc::downgrade(&hub.inner);
-        Ok(hub)
+    fn watch_all(&self, points: Vec<Point>) -> Result<Vec<Lease>, WatchError> {
+        Hub::watch_all(self, points)
     }
 }
 
 impl<T: TransportPort + 'static> Hub<T> {
     /// Watch `points` on this hub: a [`Watch`] streaming each point's
-    /// [`Update`]s, as [`Client::watch`] gives on the client's own hub, for
-    /// a front end that runs a hub of its own settings (the Python
-    /// bindings' watches, each on a hub of its own, which their client's
-    /// stop shuts down with [`shutdown`](Self::shutdown)). A point named
-    /// twice, or one station named two ways, is watched once.
+    /// [`Update`]s, as [`Client::watch`](crate::Client::watch) gives on a
+    /// client's pooled hub, for a front end that runs a hub of its own
+    /// settings. A point named twice, or one station named two ways, is
+    /// watched once. The watch holds the hub while it lives; the hub's
+    /// [`shutdown`](Self::shutdown) ends it.
     ///
     /// # Errors
     ///
     /// [`WatchError::Full`] when the points would take the hub past
-    /// [`WatchOptions::max_points`] (nothing is watched then, and nothing
-    /// sent), and [`WatchError::Shut`] once the hub has shut down.
+    /// [`WatchOptions::max_points`](hub::WatchOptions::max_points)
+    /// (nothing is watched then, and nothing sent), and
+    /// [`WatchError::Shut`] once the hub has shut down.
     ///
     /// # Panics
     ///
@@ -476,36 +388,51 @@ impl<T: TransportPort + 'static> Hub<T> {
             .filter(|point| seen.insert(point.clone()))
             .collect();
         let leases = self.watch_all(named)?;
-        let mailbox = Arc::new(Mailbox {
-            state: Mutex::new(MailState {
-                queue: VecDeque::with_capacity(leases.len()),
-                queued: vec![false; leases.len()],
-                folded: 0,
-                waker: None,
-            }),
-        });
-        for (index, lease) in leases.iter().enumerate() {
-            lease.listen(Listener {
-                mailbox: Arc::downgrade(&mailbox),
-                index,
-            });
+        let port: Arc<dyn Port> = Arc::new(self.clone());
+        let core = Core::new(port);
+        let Ok((taken, _)) = core.take_in(leases) else {
+            unreachable!("a new watch hasn't ended");
+        };
+        for (shared, listener) in taken {
+            listen(&shared, listener);
         }
-        Ok(Watch { leases, mailbox })
+        let registry = &self.inner.registry;
+        {
+            let mut watches = registry.watches.locked();
+            watches.retain(|watch| watch.strong_count() > 0);
+            watches.push(Arc::downgrade(&core));
+        }
+        // A shutdown that took the list before this watch joined it: the
+        // watch ends here instead.
+        if registry.table().shut {
+            end(&core);
+        }
+        Ok(Watch { core })
     }
 }
 
-impl From<WatchError> for OpsError {
-    fn from(error: WatchError) -> Self {
-        Self::Watch(error)
+/// End `core`'s watch, its hub having shut down: its stream ends, and what
+/// it held goes once its lock is let go.
+pub(super) fn end(core: &Core) {
+    let left = core.end();
+    if let Some(waker) = left.waker {
+        waker.wake();
+    }
+}
+
+/// End every watch in `watches`: their hub has shut down.
+pub(super) fn end_all(watches: Vec<Weak<Core>>) {
+    for core in watches.iter().filter_map(Weak::upgrade) {
+        end(&core);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::watch::WatchSettings;
 
     #[test]
-    fn the_client_hub_settings_are_valid() {
-        assert!(settings().validate().is_ok());
+    fn the_default_settings_are_valid() {
+        assert!(WatchSettings::default().validate().is_ok());
     }
 }
