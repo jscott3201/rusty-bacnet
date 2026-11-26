@@ -15,7 +15,10 @@
 //! [`kind`](SnapshotError::kind) says why: octets cut short, a version or
 //! kind this build doesn't read, a snapshot of another object, or a value
 //! no save writes, treated as damage. `decode` checks everything `encode`
-//! does, so whatever loads saves again.
+//! does, so whatever loads saves again. The stack's error carries it as
+//! `Error::Persistence`, which is what the storage traits return; a backend
+//! of the application's own reports its own failure there with
+//! [`SnapshotError::backend_failed`].
 //!
 //! A backend that keeps two copies, as the log and Audit Log file backends
 //! keep two slots, gets the file backend's choice between them from
@@ -135,7 +138,6 @@
 pub mod access_rights;
 pub mod audit_log;
 pub mod color;
-mod error;
 pub(crate) mod framing;
 pub mod load_control;
 pub mod log;
@@ -144,7 +146,9 @@ pub mod notification_forwarder;
 pub mod tags;
 pub mod write_config;
 
-pub use error::{SnapshotError, SnapshotErrorKind};
+// The codecs here return it; it lives in `bacnet-types` so the stack's
+// error carries it as `Error::Persistence` (#1833).
+pub use bacnet_types::error::{SnapshotError, SnapshotErrorKind};
 
 #[cfg(test)]
 mod audit_log_tests;

@@ -455,8 +455,9 @@ mod file_backends {
         };
         let error = store.save(object, &bad).unwrap_err();
         assert!(
-            matches!(&error, bacnet_types::error::Error::OutOfRange(message)
-                if message.starts_with("Color output snapshot")),
+            matches!(&error, bacnet_types::error::Error::Persistence(refused)
+                if refused.kind() == bacnet_types::error::SnapshotErrorKind::OutOfRange
+                    && refused.to_string().starts_with("Color output snapshot")),
             "{error:?}"
         );
         assert_eq!(std::fs::read(&path).unwrap(), before);

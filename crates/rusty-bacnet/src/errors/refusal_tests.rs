@@ -3,7 +3,7 @@
 //! untyped error they replace did, whose text led with its prefix.
 
 use super::*;
-use bacnet_types::error::{Lifecycle, Refusal};
+use bacnet_types::error::{Lifecycle, Refusal, SnapshotError};
 
 /// Every lifecycle state raises `BacnetStateError` (also a `BacnetError`
 /// and a `RuntimeError`) with its text and the state's name in `state`;
@@ -65,6 +65,14 @@ fn local_refusals_raise_their_class_with_their_text() {
             Error::LimitReached(
                 Refusal::new("A router needs 1 to {} ports, not {}").with_values(255, 256),
             ),
+            // Persisted state (#1833), damaged or a backend's failure: the
+            // base class too, as the untyped text it replaces was.
+            Error::from(
+                SnapshotError::damaged("checksum mismatch").in_format("Notification Class file"),
+            ),
+            Error::from(SnapshotError::backend_failed(
+                "persistence panicked during a save",
+            )),
         ];
         for error in refusals {
             let text = error.to_string();

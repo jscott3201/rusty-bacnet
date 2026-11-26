@@ -183,14 +183,19 @@ impl FileTagsPersistence {
         self.file.path()
     }
 
-    /// `error`, its text naming the file. The kind stays, and a protocol
-    /// error, which a write is answered with, is left as it is.
+    /// `error`, its text naming the file (#2730). An I/O failure keeps its
+    /// kind. A file the object can't be built from (damaged, a version this
+    /// build doesn't read, or a snapshot refused as it is saved) is a
+    /// configuration refusal here, as another object's file is: a
+    /// persisted-state error's text is static (#1833) and can't name the
+    /// path, and this backend keeps one copy, so no fallback acts on whether
+    /// it is damage. A protocol error, which a write is answered with, is
+    /// left as it is.
     fn named(&self, error: Error) -> Error {
         let at = |reason: &dyn core::fmt::Display| format!("{}: {reason}", self.path().display());
         match error {
             Error::Transport(io) => Error::Transport(std::io::Error::new(io.kind(), at(&io))),
-            Error::Encoding(reason) => Error::Encoding(at(&reason)),
-            Error::OutOfRange(reason) => Error::OutOfRange(at(&reason)),
+            Error::Persistence(refused) => Error::InvalidConfig(Refusal::text(at(&refused))),
             other => other,
         }
     }

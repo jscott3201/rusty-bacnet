@@ -74,7 +74,9 @@ fn a_refused_slot_0_is_reported_ahead_of_slot_1s_read_failure() {
     elsewhere.object_identifier = ObjectIdentifier::new(ObjectType::AUDIT_LOG, 2).unwrap();
     assert!(matches!(
         choose_slot([valid(elsewhere.clone()), io_failure()], oid()),
-        Err(Error::Encoding(message)) if message.contains("object identity")
+        Err(Error::Persistence(refused))
+            if refused.kind() == bacnet_types::error::SnapshotErrorKind::OtherObject
+                && refused.to_string().contains("object identity")
     ));
     assert!(matches!(
         choose_slot([io_failure(), valid(elsewhere)], oid()),
@@ -94,7 +96,8 @@ fn audit_slot_selection_requires_identical_same_generation_snapshots() {
     divergent.log_enable = false;
     assert!(matches!(
         choose_slot([valid(snapshot()), valid(divergent)], oid()),
-        Err(Error::Encoding(message)) if message.contains("same generation")
+        Err(Error::Persistence(refused))
+            if refused.is_damage() && refused.to_string().contains("same generation")
     ));
 }
 
@@ -168,7 +171,8 @@ fn a_slot_past_the_size_cap_is_refused_and_its_valid_peer_still_loads() {
     drop(oversized);
     assert!(matches!(
         storage.load(oid()),
-        Err(Error::Encoding(message)) if message.contains("exceeds")
+        Err(Error::Persistence(refused))
+            if refused.kind() == bacnet_types::error::SnapshotErrorKind::TooLarge && refused.to_string().contains("exceeds")
     ));
 
     // Generation 2 lands in slot 0; slot 1 stays oversized and is passed over.

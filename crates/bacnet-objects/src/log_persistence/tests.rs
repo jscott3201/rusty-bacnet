@@ -314,7 +314,10 @@ fn a_damaged_newer_slot_falls_back_to_the_older_one() {
     // With both damaged there is nothing to load.
     damage(&slot1);
     let error = LogPersistence::<BACnetLogRecord>::load(&store, oid).unwrap_err();
-    assert!(matches!(error, Error::Encoding(_)), "{error:?}");
+    assert!(
+        matches!(error, Error::Persistence(refused) if refused.is_damage()),
+        "{error:?}"
+    );
 }
 
 /// Rewrite a slot's checksum after editing it, so only the edit is wrong.
@@ -358,7 +361,9 @@ fn another_objects_or_an_unknown_schemas_slot_is_refused_without_falling_back() 
     store.commit(&other).unwrap();
     let error = LogPersistence::<BACnetLogRecord>::load(&store, oid).unwrap_err();
     assert!(
-        matches!(&error, Error::Encoding(message) if message.contains("another object")),
+        matches!(&error, Error::Persistence(refused)
+            if refused.kind() == bacnet_types::error::SnapshotErrorKind::OtherObject
+                && refused.to_string().contains("another object")),
         "{error:?}"
     );
 
@@ -370,7 +375,9 @@ fn another_objects_or_an_unknown_schemas_slot_is_refused_without_falling_back() 
     std::fs::write(&slot0, data).unwrap();
     let error = LogPersistence::<BACnetLogRecord>::load(&store, oid).unwrap_err();
     assert!(
-        matches!(&error, Error::Encoding(message) if message.contains("schema version 9")),
+        matches!(&error, Error::Persistence(refused)
+            if refused.kind() == bacnet_types::error::SnapshotErrorKind::UnknownVersion(9)
+                && refused.to_string().contains("schema version 9")),
         "{error:?}"
     );
 }
@@ -392,7 +399,8 @@ fn slots_disagreeing_at_one_generation_are_refused() {
     assert!(slot0.exists());
     let error = LogPersistence::<BACnetLogRecord>::load(&store, oid).unwrap_err();
     assert!(
-        matches!(&error, Error::Encoding(message) if message.contains("one generation")),
+        matches!(&error, Error::Persistence(refused)
+            if refused.is_damage() && refused.to_string().contains("one generation")),
         "{error:?}"
     );
 }
@@ -482,7 +490,8 @@ fn a_crafted_record_count_is_refused_before_anything_is_reserved() {
     std::fs::write(&slot1, data).unwrap();
     let error = LogPersistence::<BACnetEventLogRecord>::load(&store, oid).unwrap_err();
     assert!(
-        matches!(&error, Error::Encoding(message) if message.contains("count is too large")),
+        matches!(&error, Error::Persistence(refused)
+            if refused.is_damage() && refused.to_string().contains("count is too large")),
         "{error:?}"
     );
 }

@@ -57,9 +57,10 @@ pub(crate) fn written(value: &PropertyValue) -> Result<String, Error> {
 /// Refuse a saved Description no write leaves: one past [`MAX_OCTETS`].
 pub(crate) fn check_saved(description: Option<&str>) -> Result<(), Error> {
     match description {
-        Some(text) if text.len() > MAX_OCTETS => {
-            Err(Error::invalid_config("saved Description is past its cap"))
-        }
+        Some(text) if text.len() > MAX_OCTETS => Err(bacnet_types::error::SnapshotError::damaged(
+            "saved Description is past its cap",
+        )
+        .into()),
         _ => Ok(()),
     }
 }

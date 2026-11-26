@@ -92,15 +92,17 @@ fn every_reject_reason_goes_out_unchanged() {
     }
 }
 
-/// Every kind of error the server's own refusals now take (#1833) goes out
-/// as the untyped text it replaces did: an Error PDU with SERVICES / OTHER,
+/// Every kind of error the server's own refusals now take (#1833), and
+/// persisted state, goes out as the untyped text it replaces did: an Error PDU with SERVICES / OTHER,
 /// the plain one and each Clause 21 production alike. A refusal is never a
 /// syntax fault of the request, so `into_request_reject` leaves each as it
 /// is; only a decoding error becomes a Reject there, which is why a site
 /// typed as `Decoding` is one no request decode passes through.
 #[test]
 fn local_refusals_go_out_as_the_text_they_replace() {
-    use bacnet_types::error::{DecodeError, DecodingKind, Lifecycle, RangeError, Refusal};
+    use bacnet_types::error::{
+        DecodeError, DecodingKind, Lifecycle, RangeError, Refusal, SnapshotError,
+    };
     let services = [
         ConfirmedServiceChoice::READ_PROPERTY,
         ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL,
@@ -123,6 +125,13 @@ fn local_refusals_go_out_as_the_text_they_replace() {
                 DecodingKind::OutOfRange,
                 0,
                 "unknown EnableDisable value",
+            )),
+            // Persisted state (#1833): damage, an encode refusal and a
+            // backend's failure, which were that text too.
+            Error::from(SnapshotError::damaged("checksum mismatch").in_format("Tags file")),
+            Error::from(SnapshotError::out_of_range("more entries than the cap")),
+            Error::from(SnapshotError::backend_failed(
+                "save failed; its error was reported",
             )),
         ];
         for state in [

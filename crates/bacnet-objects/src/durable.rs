@@ -440,9 +440,10 @@ impl SaveTicket {
                 if ok {
                     Ok(())
                 } else {
-                    Err(Error::Encoding(
-                        "save failed; its error was reported".into(),
-                    ))
+                    Err(bacnet_types::error::SnapshotError::backend_failed(
+                        "save failed; its error was reported",
+                    )
+                    .into())
                 }
             }
             Outcome::Pending => unreachable!("the event is set only after the outcome"),

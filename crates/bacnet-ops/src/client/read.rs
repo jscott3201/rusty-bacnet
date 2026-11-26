@@ -176,6 +176,8 @@ pub fn unreachable(error: &Error) -> bool {
 ///   request before an answer came (the client's own stop, its node's, or
 ///   the link's after the request went out). With `sent: true` it **may
 ///   already have left**, and the device may have carried it out.
+/// - [`Error::Persistence`]: this side's own stored state failed to load or
+///   save (#1833). No answer of the device's.
 ///
 /// So a failure here is not "never sent", and nothing may send again on the
 /// strength of one: reads only stop on it, since the client, not the
@@ -201,6 +203,7 @@ pub fn failed_locally(error: &Error) -> bool {
             | Error::RoutedPathCapacityExceeded { .. }
             | Error::InitiationDisabled { .. }
             | Error::RequestCutOff { .. }
+            | Error::Persistence(_)
     )
 }
 

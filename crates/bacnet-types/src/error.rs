@@ -34,6 +34,7 @@ mod encode;
 mod network_reject;
 mod refusal;
 mod remote;
+mod snapshot;
 pub use decode::{DecodeError, DecodingKind, RangeError};
 pub use encode::{EncodeError, SegmentationError};
 #[cfg(feature = "std")]
@@ -42,6 +43,7 @@ pub use refusal::{Lifecycle, Refusal};
 #[cfg(feature = "alloc")]
 use remote::ProtocolText;
 pub use remote::RemoteError;
+pub use snapshot::{SnapshotError, SnapshotErrorKind};
 
 /// [`Error::LogNotAdvancing`]'s text.
 struct NotAdvancing {
@@ -354,6 +356,17 @@ pub enum Error {
     #[error("{0}")]
     LimitReached(Refusal),
 
+    /// Persisted state that couldn't be loaded or saved (#1833): stored
+    /// octets that are damaged or cut short, a sound snapshot saved for
+    /// another object or by a build this one can't read, a snapshot refused
+    /// as it was encoded, or a storage backend that failed. The
+    /// [`SnapshotError`] says which by its [`kind`](SnapshotError::kind),
+    /// and [`is_damage`](SnapshotError::is_damage) says whether a backend
+    /// that keeps two copies should pass over this one for the other. Its
+    /// text is static, so it exists in every build.
+    #[error("{0}")]
+    Persistence(SnapshotError),
+
     /// Error encoding a PDU, with a formatted message. Only with `alloc`;
     /// [`Error::Encode`] is the static form, which the codec crates return.
     #[cfg(feature = "alloc")]
@@ -533,6 +546,12 @@ impl From<SegmentationError> for Error {
 impl From<RangeError> for Error {
     fn from(error: RangeError) -> Self {
         Self::Range(error)
+    }
+}
+
+impl From<SnapshotError> for Error {
+    fn from(error: SnapshotError) -> Self {
+        Self::Persistence(error)
     }
 }
 
