@@ -93,6 +93,8 @@ mod configured_name_tests;
 #[cfg(test)]
 mod foreign_retarget_tests;
 #[cfg(test)]
+mod forwarded_content_tests;
+#[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
 mod group_delivery_tests;

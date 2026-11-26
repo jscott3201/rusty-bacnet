@@ -1506,7 +1506,11 @@ unspecified address, port 0 or the node itself), which gets no NAK (#1622); a
 Forwarded-NPDU from outside a BBMD's BDT; a Forwarded-NPDU a foreign device
 takes from no one but its BBMD by unicast, the one way a BBMD hands it the
 network's broadcasts (`forwarded_untrusted`, #1622; a node in normal mode
-takes one from any sender); and an NPDU the network-layer
+takes one from any sender); a Forwarded-NPDU for this link whose APDU is an
+answer to a confirmed request or a confirmed request, which no broadcast
+carries, so that a station naming another as the forward's origin can't
+answer for it (`forwarded_not_broadcast`, #2829; a BBMD still forwards it);
+and an NPDU the network-layer
 channel couldn't take because it was full or, once the network layer stopped
 reading, closed. Each drop counts once, and the totals survive a restart. A
 header that fails to decode and a malformed BVLC response, which used to log a
@@ -1652,7 +1656,9 @@ Length; an unknown function; a payload that doesn't fit its function; a
 destination VMAC that isn't this node's; a function that doesn't fit the
 address it was sent to; a Forwarded-NPDU or Forwarded-Address-Resolution
 from an untrusted path; a Forwarded-NPDU whose NPDU is too short or
-malformed; an origin or asker address unusable without a scope ID; a request
+malformed, or for this link carries an answer to a confirmed request or a
+confirmed request, as on B/IP (`forwarded_not_broadcast`, #2829); an origin
+or asker address unusable without a scope ID; a request
 from an unanswerable source or this node's own address; this node's own
 echo, a Forwarded-NPDU that names it as the origin included; a frame from
 another address that names this node's VMAC as its sender's, and an NPDU
