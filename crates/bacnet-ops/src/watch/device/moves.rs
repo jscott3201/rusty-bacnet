@@ -63,7 +63,7 @@ use bacnet_transport::port::TransportPort;
 use tokio::time::Instant;
 
 use super::super::hub::Phase;
-use super::super::jobs::{self, Answer};
+use super::super::jobs::{self, Answer, Skipped};
 use super::super::{Binding, Why};
 use super::follow::follows_to;
 use super::identity::{Pace, give_up};
@@ -350,7 +350,7 @@ impl<T: TransportPort + 'static> Device<T> {
     /// addresses that may be the device when its place was settled
     /// (#2824): nothing confirms it there, so nothing it answered is taken
     /// or subscribed, and the point is given up as unconfirmed.
-    pub(super) fn unconfirmed(&mut self, process: u32, ambiguous: bool) {
+    pub(super) fn unconfirmed(&mut self, process: u32, why: Skipped) {
         let seq = &self.inner.registry.seq;
         let at = &self.address;
         let Some(row) = self.rows.get_mut(&process) else {
@@ -364,12 +364,16 @@ impl<T: TransportPort + 'static> Device<T> {
             self.finish(row);
             return;
         }
-        let note = match ambiguous {
-            true => format!(
+        let note = match why {
+            Skipped::Ambiguous => format!(
                 "two or more addresses claiming device {instance} answer as it, or may, so \
                  which one it is isn't confirmed; watch it by its address"
             ),
-            false => format!(
+            Skipped::Unsent => format!(
+                "the Who-Is for device {instance} couldn't be sent, so its place at {at} isn't \
+                 confirmed; watch it again once the link is back, or by its address"
+            ),
+            Skipped::Unconfirmed | Skipped::Elsewhere => format!(
                 "the device at {at} refuses the read that names it, so device {instance} can't \
                  be confirmed there; watch it by its address"
             ),

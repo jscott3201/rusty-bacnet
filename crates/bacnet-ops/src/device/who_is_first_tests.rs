@@ -7,6 +7,7 @@
 
 use std::time::Duration;
 
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
 use tokio::time::Instant;
@@ -187,4 +188,70 @@ async fn the_low_level_placement_keeps_the_rule() {
         }
         stop(servers).await;
     }
+}
+
+/// Two handles for one instance made at once, the first cancelled while
+/// its Who-Is settles: a turn marks its Who-Is shared only once the settle
+/// time is over, so the second sends its own and gives it the settle time.
+/// The device at station 2 missed the first Who-Is and answers the second,
+/// and with the responder at station 3 both answer as N: ambiguous, rather
+/// than placed at station 3 on a settle cut short.
+#[tokio::test(start_paused = true)]
+async fn a_resolution_cancelled_while_it_settles_shares_no_who_is() {
+    let (bus, client, sent, servers) = lab_with(true, true).await;
+    bus.i_am(3, N);
+    settle().await;
+    bus.silence(2);
+    let place = |client: Client<TestTransport>| async move {
+        client.device(N).await.map(|device| device.address())
+    };
+    let first = tokio::spawn(place(client.clone()));
+    let second = tokio::spawn(place(client.clone()));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(who_is(&sent), 1, "the first's");
+    first.abort();
+    bus.unsilence(2);
+    assert!(first.await.unwrap_err().is_cancelled());
+    let second = second.await.unwrap();
+    assert!(
+        matches!(
+            &second,
+            Err(OpsError::Ambiguous { candidates, .. }) if *candidates == [at(2), at(3)]
+        ),
+        "{second:?}"
+    );
+    assert_eq!(who_is(&sent), 2, "the second's own");
+    stop(servers).await;
+}
+
+/// A Who-Is the link fails to send places nothing: a handle by instance and
+/// the low-level placement both fail with the link's error, and no claim is
+/// asked anything.
+#[tokio::test(start_paused = true)]
+async fn a_who_is_the_link_cannot_send_places_nothing() {
+    use crate::Scope;
+    use crate::device::{Look, place_instance};
+    use crate::limits::RequestLimits;
+    let (bus, client, sent, servers) = lab_with(true, false).await;
+    bus.i_am(2, N);
+    settle().await;
+    client.low_level().transport().handle().fail_next_send();
+    let error = client.device(N).await.unwrap_err();
+    assert!(matches!(&error, OpsError::Client(_)), "{error:?}");
+    client.low_level().transport().handle().fail_next_send();
+    let look = Look {
+        scope: Scope::Local,
+        wait: RESOLVE_WAIT,
+    };
+    let limits = RequestLimits::new(0);
+    let placement = place_instance(client.low_level(), &limits, N, None, Some(look), &|_| None)
+        .await
+        .unwrap();
+    assert!(
+        matches!(&placement.placed, Err(OpsError::Client(_))),
+        "{placement:?}"
+    );
+    assert!(placement.asked.is_empty(), "{placement:?}");
+    assert_eq!(requests(&sent, READ, 2), 0, "nothing asked");
+    stop(servers).await;
 }

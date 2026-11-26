@@ -519,8 +519,10 @@ impl<T: TransportPort + 'static> Device<T> {
         if self.started_elsewhere(process, &started) {
             return;
         }
-        if let Some(skipped @ (Skipped::Unconfirmed | Skipped::Ambiguous)) = started.skipped {
-            self.unconfirmed(process, skipped == Skipped::Ambiguous);
+        if let Some(skipped @ (Skipped::Unconfirmed | Skipped::Ambiguous | Skipped::Unsent)) =
+            started.skipped
+        {
+            self.unconfirmed(process, skipped);
             return;
         }
         let missing = self.inner.options.missing;

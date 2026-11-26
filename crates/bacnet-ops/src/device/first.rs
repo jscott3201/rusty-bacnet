@@ -26,12 +26,14 @@ use crate::client::{Client, ResolveScope, Scope, lock};
 use crate::error::OpsError;
 
 /// The turns of the resolutions of each instance, by follow key, while one
-/// runs or waits: the time the last Who-Is for it went out, which a
-/// resolution that waited meanwhile shares rather than sending its own.
+/// runs or waits: the time the last Who-Is for it went out, once its
+/// settle time was over, which a resolution that waited meanwhile shares
+/// rather than sending its own.
 pub(crate) type Resolving = HashMap<FollowKey, Weak<tokio::sync::Mutex<Option<Instant>>>>;
 
 /// A resolution's turn for its instance: the time the last Who-Is for it
-/// went out, set by the resolution that sends one.
+/// went out, set by the resolution that sent one once its settle time is
+/// over, so one cancelled before that leaves the next its own.
 pub(super) type Turn = OwnedMutexGuard<Option<Instant>>;
 
 /// Where a watch hub's following point stands after its place is settled
@@ -46,6 +48,9 @@ pub(crate) enum Settled {
     Open,
     /// Two or more addresses may be the device: none is watched as it.
     Ambiguous,
+    /// The Who-Is for the instance couldn't be sent: nothing settled the
+    /// place, so nothing is watched there.
+    Unsent,
 }
 
 impl<T: TransportPort + 'static> Client<T> {
@@ -210,17 +215,8 @@ impl<T: TransportPort + 'static> Client<T> {
         let known = live.and_then(|(here, answer)| Some((here, answer?)));
         let mut claims = self.claims_and(instance, network, held.as_ref()).await;
         if !self.any_registered(&claims, instance).await {
-            // Shared: a resolution of the same instance sent one while this
-            // one waited its turn.
-            let shared = turn.is_some_and(|sent| sent >= since);
-            if claims.is_empty() && !shared {
-                **turn = Some(now());
-                self.find_instance(instance, named).await?;
-            } else if !shared && self.resolve_wait().is_some() {
-                **turn = Some(now());
-                self.who_is_for(instance, network).await?;
-                tokio::time::sleep(SETTLE).await;
-            }
+            self.look_once((key, named), claims.is_empty(), (turn, since))
+                .await?;
             claims = self.claims_and(instance, network, held.as_ref()).await;
         }
         if claims.is_empty() {
@@ -228,6 +224,46 @@ impl<T: TransportPort + 'static> Client<T> {
         }
         let (placed, asked) = self.confirm(instance, &claims, known.as_ref()).await;
         placed.map(|address| (address, asked))
+    }
+
+    /// One Who-Is for `key`'s instance (named on `named`) and its answers'
+    /// settle time, or with no claim (`unclaimed`) the resolve wait for a
+    /// first answer ([`Client::find_instance`]); nothing when a resolution
+    /// of the instance that ran while this one waited its `turn` (since
+    /// `since`) did so already, or for a clone that sends no Who-Is
+    /// ([`Client::with_resolve_wait`]). The turn records when the Who-Is
+    /// went only once its settle time is over: a resolution cancelled
+    /// before that leaves the next to send its own.
+    ///
+    /// # Errors
+    ///
+    /// The send's own, when the Who-Is couldn't be sent: no claim is asked
+    /// then. With no claim, [`OpsError::UnknownDevice`] when nothing
+    /// answered.
+    async fn look_once(
+        &self,
+        (key, named): (FollowKey, Option<u16>),
+        unclaimed: bool,
+        (turn, since): (&mut Turn, Instant),
+    ) -> Result<(), OpsError> {
+        // Shared: a resolution of the same instance sent one, and gave it
+        // its settle time, while this one waited its turn.
+        if turn.is_some_and(|sent| sent >= since) || self.resolve_wait().is_none() {
+            return Ok(());
+        }
+        let (network, instance) = key;
+        let sent = now();
+        if unclaimed {
+            let found = self.find_instance(instance, named).await;
+            if matches!(found, Ok(_) | Err(OpsError::UnknownDevice { .. })) {
+                **turn = Some(sent);
+            }
+            return found.map(drop);
+        }
+        self.who_is_for(instance, network).await?;
+        tokio::time::sleep(SETTLE).await;
+        **turn = Some(sent);
+        Ok(())
     }
 
     /// The claims to `instance` on `network`, with `held` among them.
@@ -266,7 +302,9 @@ impl<T: TransportPort + 'static> Client<T> {
     /// another device; two or more claims are asked as a handle's first
     /// placement asks them, and the place is marked confirmed when its own
     /// device confirms the instance. A place is never moved by this: the
-    /// hub's own reads move its points.
+    /// hub's own reads move its points. It counts as settled only once
+    /// this ends: a start cancelled meanwhile leaves the next to settle it.
+    /// A Who-Is that couldn't be sent settles nothing ([`Settled::Unsent`]).
     pub(crate) async fn settle_place(&self, key: FollowKey, here: &DeviceAddress) -> Settled {
         let since = now();
         let mut turn = self.resolving(key).await;
@@ -282,29 +320,33 @@ impl<T: TransportPort + 'static> Client<T> {
         let Some(place) = self.live_place(key) else {
             return Settled::Open;
         };
-        if std::mem::replace(&mut lock(&place).settled, true) {
+        if lock(&place).settled {
             return Settled::Open;
         }
         let (network, instance) = key;
         let claims = self.claims_and(instance, network, Some(here)).await;
-        let registered = self.any_registered(&claims, instance).await;
-        if !registered && !turn.is_some_and(|sent| sent >= since) && self.resolve_wait().is_some() {
-            *turn = Some(now());
-            if self.who_is_for(instance, network).await.is_ok() {
-                tokio::time::sleep(SETTLE).await;
+        if !self.any_registered(&claims, instance).await
+            && let Err(error) = self
+                .look_once((key, key.0), false, (&mut turn, since))
+                .await
+        {
+            tracing::warn!("looking for device {instance} before watching it at {here}: {error}");
+            return Settled::Unsent;
+        }
+        let settled = if self.claims_and(instance, network, Some(here)).await == [here.clone()] {
+            Settled::Open
+        } else {
+            let resolved = self
+                .resolve_claims((key, key.0), live, (&mut turn, since))
+                .await;
+            match resolved.and_then(|(address, asked)| self.place_confirmed(key, address, &asked)) {
+                Ok(place) if self.place_of(&place) == *here => Settled::Here,
+                Err(OpsError::Ambiguous { .. }) => Settled::Ambiguous,
+                Ok(_) | Err(_) => Settled::Open,
             }
-        }
-        if self.claims_and(instance, network, Some(here)).await == [here.clone()] {
-            return Settled::Open;
-        }
-        let resolved = self
-            .resolve_claims((key, key.0), live, (&mut turn, since))
-            .await;
-        match resolved.and_then(|(address, asked)| self.place_confirmed(key, address, &asked)) {
-            Ok(place) if self.place_of(&place) == *here => Settled::Here,
-            Err(OpsError::Ambiguous { .. }) => Settled::Ambiguous,
-            Ok(_) | Err(_) => Settled::Open,
-        }
+        };
+        lock(&place).settled = true;
+        settled
     }
 }
 

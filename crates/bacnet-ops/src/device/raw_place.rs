@@ -138,14 +138,13 @@ pub async fn place_instance<T: TransportPort + 'static>(
             Err(error) => return Ok(failed(error.into())),
         };
         let mut events = client.device_events();
-        // A Who-Is the link can't send is one asked all the same: the
-        // claims the table holds are asked.
-        let sent = crate::raw::who_is(client, &look.scope, Some(range)).await;
-        match &sent {
-            Ok(()) => asked = Some(look.scope.clone()),
-            Err(error) => tracing::warn!("looking for device {instance}: {error}"),
+        // A Who-Is the link can't send places nothing: no claim is asked
+        // without one, as a handle's placement asks none.
+        if let Err(error) = crate::raw::who_is(client, &look.scope, Some(range)).await {
+            return Ok(failed(error));
         }
-        if sent.is_ok() && claims.is_empty() {
+        asked = Some(look.scope.clone());
+        if claims.is_empty() {
             let wanted = |row: &DiscoveredDevice| {
                 row.object_identifier.instance_number() == instance
                     && DeviceAddress::of(row)
@@ -167,7 +166,7 @@ pub async fn place_instance<T: TransportPort + 'static>(
                     Ok(Ok(_) | Err(RecvError::Lagged(_))) => {}
                 }
             }
-        } else if sent.is_ok() {
+        } else {
             tokio::time::sleep(SETTLE).await;
         }
         claims = self::claims(client, instance, scoped).await;

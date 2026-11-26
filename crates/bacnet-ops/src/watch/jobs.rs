@@ -83,6 +83,9 @@ pub(super) enum Skipped {
     /// Two or more addresses claiming the instance may be the device, its
     /// place settled as a handle's first placement is (#2824).
     Ambiguous,
+    /// The Who-Is for the instance, sent before its place is first watched
+    /// (#2824), couldn't be sent: nothing confirmed the place.
+    Unsent,
 }
 
 /// Whether a start asked for its subscription, and how that went.
@@ -146,7 +149,12 @@ pub(super) async fn start<T: TransportPort + 'static>(
     let client = &inner.client;
     if let Binding::Follows { instance, network } = point.device {
         let key = client.key(network, instance);
-        if client.settle_place(key, address).await == Settled::Ambiguous {
+        let skipped = match client.settle_place(key, address).await {
+            Settled::Ambiguous => Some(Skipped::Ambiguous),
+            Settled::Unsent => Some(Skipped::Unsent),
+            Settled::Here | Settled::Open => None,
+        };
+        if skipped.is_some() {
             return Started {
                 target: None,
                 before: None,
@@ -156,7 +164,7 @@ pub(super) async fn start<T: TransportPort + 'static>(
                 read_at: None,
                 outcome: Outcome::NotAsked,
                 cov: client.cov_known(address, &point.watched),
-                skipped: Some(Skipped::Ambiguous),
+                skipped,
             };
         }
     }
