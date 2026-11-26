@@ -138,3 +138,82 @@ fn a_direct_answer_is_matched_by_its_own_address() {
         AdmissionOutcome::Admitted(_)
     ));
 }
+
+/// An Error, a Reject or an Abort through another station is refused like
+/// an acknowledgment: it ends nothing, and the router's own still does.
+#[test]
+fn an_off_path_error_reject_or_abort_ends_nothing() {
+    use bacnet_encoding::apdu::{AbortPdu, ErrorPdu, RejectPdu};
+    use bacnet_types::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
+    let refusals: [fn(u8) -> Apdu; 3] = [
+        |invoke_id| {
+            Apdu::Error(ErrorPdu {
+                invoke_id,
+                service_choice: SERVICE,
+                error_class: ErrorClass::SERVICES,
+                error_code: ErrorCode::OTHER,
+                error_data: bytes::Bytes::new(),
+            })
+        },
+        |invoke_id| {
+            Apdu::Reject(RejectPdu {
+                invoke_id,
+                reject_reason: RejectReason::OTHER,
+            })
+        },
+        |invoke_id| {
+            Apdu::Abort(AbortPdu {
+                sent_by_server: true,
+                invoke_id,
+                abort_reason: AbortReason::OTHER,
+            })
+        },
+    ];
+    for refusal in refusals {
+        let coordinator = OutboundTransactionCoordinator::new();
+        let token = routed_lease(&coordinator);
+        coordinator.route_through(token, Some(&ROUTER)).unwrap();
+        let apdu = refusal(token.invoke_id());
+        let from = |station: &[u8]| {
+            coordinator
+                .admit_from_source(station, Some(&relayed()), None, &apdu)
+                .unwrap()
+        };
+        assert_eq!(from(&STRANGER), AdmissionOutcome::PeerMismatch, "{apdu:?}");
+        assert_eq!(coordinator.active_count().unwrap(), 1);
+        assert!(matches!(from(&ROUTER), AdmissionOutcome::Admitted(_)));
+        assert_eq!(coordinator.off_path_answers().unwrap(), 1);
+    }
+}
+
+/// A record is kept only while its lease lasts: the next record prunes the
+/// ended ones.
+#[test]
+fn records_of_ended_leases_are_pruned() {
+    let coordinator = OutboundTransactionCoordinator::new();
+    let ended: Vec<_> = (0..8).map(|_| routed_lease(&coordinator)).collect();
+    for token in &ended {
+        coordinator.route_through(*token, Some(&ROUTER)).unwrap();
+    }
+    assert_eq!(coordinator.recorded_hops(), 8);
+    for token in ended {
+        coordinator.release(token).unwrap();
+    }
+    let live = routed_lease(&coordinator);
+    coordinator.route_through(live, None).unwrap();
+    assert_eq!(coordinator.recorded_hops(), 1);
+}
+
+/// Only an attempt recorded as sent by broadcast says so.
+#[test]
+fn went_by_broadcast_names_only_a_broadcast_attempt() {
+    let coordinator = OutboundTransactionCoordinator::new();
+    let unrecorded = routed_lease(&coordinator);
+    let through = routed_lease(&coordinator);
+    let broadcast = routed_lease(&coordinator);
+    coordinator.route_through(through, Some(&ROUTER)).unwrap();
+    coordinator.route_through(broadcast, None).unwrap();
+    assert!(!coordinator.went_by_broadcast(unrecorded));
+    assert!(!coordinator.went_by_broadcast(through));
+    assert!(coordinator.went_by_broadcast(broadcast));
+}

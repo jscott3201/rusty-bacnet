@@ -30,6 +30,16 @@ impl LearnedRouterCache {
         }
     }
 
+    /// Whether an admitted answer may teach its network's router: the one
+    /// rule for learning from answers (#2831). Only an answer to an attempt
+    /// sent with the link's broadcast address may, since no station was
+    /// chosen for that one; an answer to an attempt sent through a station
+    /// only shows that station carried it, and that station may be one
+    /// that had the server send it a routed request itself.
+    pub(super) fn answer_teaches(by_broadcast: bool) -> bool {
+        by_broadcast
+    }
+
     /// Learn `router` for `network`, while the cache knows none for it and
     /// has room for another network.
     pub(super) fn learn_router(&mut self, network: u16, router: &MacAddr) {

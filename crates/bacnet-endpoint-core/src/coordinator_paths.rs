@@ -42,11 +42,21 @@ impl OutboundTransactionCoordinator {
             .state
             .lock()
             .map_err(|_| CoordinatorError::StatePoisoned)?;
-        let active = state.slots[usize::from(token.invoke_id)]
+        let CoordinatorState {
+            slots, next_hops, ..
+        } = &mut *state;
+        let active = slots[usize::from(token.invoke_id)]
             .as_ref()
             .is_some_and(|active| active.generation == token.generation);
         if active {
-            state.next_hops.insert(
+            // Records of leases since ended go here, not on release, which
+            // every client request takes: at most one per invoke ID stays.
+            next_hops.retain(|invoke_id, hop| {
+                slots[usize::from(*invoke_id)]
+                    .as_ref()
+                    .is_some_and(|lease| lease.generation == hop.generation)
+            });
+            next_hops.insert(
                 token.invoke_id,
                 NextHop {
                     generation: token.generation,
@@ -110,24 +120,27 @@ impl OutboundTransactionCoordinator {
             *off_path_answers = off_path_answers.saturating_add(1);
             return Ok(AdmissionOutcome::PeerMismatch);
         }
-        let kind = match validate_apdu(&active.metadata, apdu) {
-            Ok(kind) => kind,
-            Err(outcome) => return Ok(outcome),
-        };
-        if kind == AdmissionKind::Terminal && active.terminal_claimed {
-            return Ok(AdmissionOutcome::DuplicateTerminal);
-        }
-        if kind == AdmissionKind::Terminal {
-            active.terminal_claimed = true;
-        }
-        Ok(AdmissionOutcome::Admitted(Admission {
-            token: LeaseToken {
-                invoke_id,
-                generation: active.generation,
-            },
-            metadata: active.metadata.clone(),
-            kind,
-        }))
+        Ok(claim(active, invoke_id, apdu))
+    }
+
+    /// Whether `token`'s current attempt was recorded as sent with the
+    /// link's broadcast address ([`Self::route_through`] with `None`): the
+    /// one kind of attempt whose answer may come through any router. Asked
+    /// before the lease is completed; false for one that recorded nothing,
+    /// went through a station, or is gone.
+    pub fn went_by_broadcast(&self, token: LeaseToken) -> bool {
+        // lock-poison: fail-closed (a half-done lease could repeat an invoke ID)
+        self.state.lock().is_ok_and(|state| {
+            state
+                .next_hops
+                .get(&token.invoke_id)
+                .is_some_and(|hop| hop.generation == token.generation && hop.station.is_none())
+        })
+    }
+
+    #[cfg(test)]
+    fn recorded_hops(&self) -> usize {
+        self.state.lock().unwrap().next_hops.len()
     }
 }
 

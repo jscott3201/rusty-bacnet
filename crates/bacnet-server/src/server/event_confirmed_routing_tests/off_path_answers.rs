@@ -221,3 +221,42 @@ async fn with_no_retries_a_silent_learned_router_is_forgotten_at_the_end() {
     harness.distribute().await;
     assert_eq!(harness.broadcast_frames().len(), 2);
 }
+
+/// A station that has the server send it a routed request, as a COV
+/// subscription made from its own address with a network source does, and
+/// then acknowledges it, does not become that network's router: an answer
+/// to an attempt sent through a station teaches nothing.
+#[tokio::test]
+async fn an_answer_through_the_station_a_request_went_to_teaches_no_router() {
+    let harness = Harness::new(
+        vec![destination_for(address_recipient(1000, RECIPIENT), true)],
+        60_000,
+    )
+    .await;
+    let (operation, receiver) = harness
+        .notification_transactions
+        .reserve(
+            canonical_routed_peer(1000, &[0x0B; 6]),
+            ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+        )
+        .unwrap();
+    operation.route_through(Some(STRANGER));
+    let ack = Apdu::SimpleAck(SimpleAck {
+        invoke_id: operation.invoke_id(),
+        service_choice: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+    });
+    let subscriber = NpduAddress {
+        network: 1000,
+        mac_address: MacAddr::from_slice(&[0x0B; 6]),
+    };
+    harness
+        .dispatch_terminal(STRANGER, Some(subscriber), ack)
+        .await;
+    assert_eq!(receiver.await.unwrap(), CovAckResult::Ack);
+    assert_eq!(
+        harness.learned_routers.lock().await.cached_router(1000),
+        None
+    );
+    harness.distribute().await;
+    assert!(harness.unicast_frames().is_empty(), "still by broadcast");
+}

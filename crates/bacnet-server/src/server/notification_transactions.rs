@@ -474,6 +474,20 @@ impl NotificationTransactions {
         local_network: Option<u16>,
         apdu: &Apdu,
     ) -> bool {
+        self.admit_answer(immediate_source, routed_source, local_network, apdu)
+            .is_some()
+    }
+
+    /// [`Self::admit_terminal`], saying how the request's attempt went
+    /// when the answer completed it: `Some(true)` for one sent with the
+    /// link's broadcast address, `Some(false)` otherwise (#2831).
+    pub(super) fn admit_answer(
+        &self,
+        immediate_source: &[u8],
+        routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
+        apdu: &Apdu,
+    ) -> Option<bool> {
         self.core
             .admit_terminal(immediate_source, routed_source, local_network, apdu)
     }
@@ -564,7 +578,7 @@ impl NotificationCore {
         routed_source: Option<&NpduAddress>,
         local_network: Option<u16>,
         apdu: &Apdu,
-    ) -> bool {
+    ) -> Option<bool> {
         let admitted = self.coordinator.admit_from_source(
             immediate_source,
             routed_source,
@@ -577,10 +591,12 @@ impl NotificationCore {
             {
                 admission
             }
-            Ok(_) | Err(_) => return false,
+            Ok(_) | Err(_) => return None,
         };
-
+        // Read before the lease is completed and its record can go.
+        let by_broadcast = self.coordinator.went_by_broadcast(admission.token());
         self.complete_pre_admitted(admission, apdu)
+            .then_some(by_broadcast)
     }
 
     pub(super) fn complete_pre_admitted(&self, admission: Admission, apdu: &Apdu) -> bool {

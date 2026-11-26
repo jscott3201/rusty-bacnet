@@ -654,6 +654,10 @@ impl OutboundTransactionCoordinator {
             return Ok(AdmissionOutcome::PeerMismatch);
         }
 
+        // The same steps as `claim`, kept written out here: through that
+        // helper, even always inlined, this function compiled to more
+        // instructions (221 to 230 in a release build, 2026-11-26), and
+        // every client answer takes it (#2831).
         let kind = match validate_apdu(&active.metadata, apdu) {
             Ok(kind) => kind,
             Err(outcome) => return Ok(outcome),
@@ -854,6 +858,31 @@ pub fn response_invoke_id(apdu: &Apdu) -> Option<u8> {
         Apdu::Abort(pdu) => Some(pdu.invoke_id),
         Apdu::ConfirmedRequest(_) | Apdu::UnconfirmedRequest(_) => None,
     }
+}
+
+/// Validate `apdu` against the matched lease `active` and, for a terminal,
+/// claim its one terminal admission: the routed check's tail
+/// (`admit_through`, #2831). [`OutboundTransactionCoordinator::admit`]
+/// writes the same steps out, for the reason given there.
+fn claim(active: &mut ActiveLease, invoke_id: u8, apdu: &Apdu) -> AdmissionOutcome {
+    let kind = match validate_apdu(&active.metadata, apdu) {
+        Ok(kind) => kind,
+        Err(outcome) => return outcome,
+    };
+    if kind == AdmissionKind::Terminal && active.terminal_claimed {
+        return AdmissionOutcome::DuplicateTerminal;
+    }
+    if kind == AdmissionKind::Terminal {
+        active.terminal_claimed = true;
+    }
+    AdmissionOutcome::Admitted(Admission {
+        token: LeaseToken {
+            invoke_id,
+            generation: active.generation,
+        },
+        metadata: active.metadata.clone(),
+        kind,
+    })
 }
 
 fn validate_apdu(metadata: &LeaseMetadata, apdu: &Apdu) -> Result<AdmissionKind, AdmissionOutcome> {

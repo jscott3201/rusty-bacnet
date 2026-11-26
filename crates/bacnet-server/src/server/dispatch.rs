@@ -7,8 +7,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// completes only a request still keyed to that routed form, never one
     /// sent straight to its SADR (#2831), and teaches no next hop: sends to
     /// this network go out locally. A routed answer completes a request sent
-    /// through a router only when it arrives from that router, and teaches
-    /// its network's router only while none is known (#2831).
+    /// through a router only when it arrives from that router. Which
+    /// answers teach their network's router is
+    /// [`LearnedRouterCache::answer_teaches`]'s rule (#2831).
     async fn admit_notification_terminal(
         learned_routers: &Arc<Mutex<LearnedRouterCache>>,
         notification_transactions: &Arc<NotificationTransactions>,
@@ -17,17 +18,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         local_network: Option<u16>,
         apdu: &Apdu,
     ) -> bool {
-        if !notification_transactions.admit_terminal(
-            source_mac,
-            source_network,
-            local_network,
-            apdu,
-        ) {
+        let Some(by_broadcast) =
+            notification_transactions.admit_answer(source_mac, source_network, local_network, apdu)
+        else {
             return false;
-        }
+        };
 
         if let Some(source) = source_network.filter(|source| {
-            !source.mac_address.is_empty() && Some(source.network) != local_network
+            LearnedRouterCache::answer_teaches(by_broadcast)
+                && !source.mac_address.is_empty()
+                && Some(source.network) != local_network
         }) {
             learned_routers
                 .lock()
