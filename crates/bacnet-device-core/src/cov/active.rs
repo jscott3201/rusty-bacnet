@@ -601,10 +601,12 @@ mod tests {
                 Some(source) => source.mac_address.push(0xA5),
                 None => too_long.subscriber_mac.push(0xA5),
             }
-            assert!(matches!(
-                table.subscribe(too_long, now),
-                Err(Error::Encoding(_))
-            ));
+            let refused = table.subscribe(too_long, now);
+            assert!(
+                matches!(&refused, Err(Error::InvalidArgument(why))
+                    if why.to_string() == "COV recipient MAC of 19 octets exceeds the 18-octet BACnetAddress limit"),
+                "{refused:?}"
+            );
         }
         assert_eq!(table.len(), 2);
 

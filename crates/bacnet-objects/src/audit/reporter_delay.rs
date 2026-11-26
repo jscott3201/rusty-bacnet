@@ -132,7 +132,7 @@ impl AuditReporterStatus {
     pub fn validate_send_now(&self, captured: bool) -> Result<(), Error> {
         let state = self.0.lock();
         if state.command_revision == u64::MAX || (captured && state.capture_revision == u64::MAX) {
-            return Err(Error::Encoding("audit command revision exhausted".into()));
+            return Err(Error::limit_reached("audit command revision exhausted"));
         }
         Ok(())
     }
@@ -143,12 +143,12 @@ impl AuditReporterStatus {
         let revision = state
             .command_revision
             .checked_add(1)
-            .ok_or_else(|| Error::Encoding("audit command revision exhausted".into()))?;
+            .ok_or_else(|| Error::limit_reached("audit command revision exhausted"))?;
         let capture = if captured {
             state
                 .capture_revision
                 .checked_add(1)
-                .ok_or_else(|| Error::Encoding("audit capture revision exhausted".into()))?
+                .ok_or_else(|| Error::limit_reached("audit capture revision exhausted"))?
         } else {
             state.capture_revision
         };

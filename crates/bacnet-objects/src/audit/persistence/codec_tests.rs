@@ -290,3 +290,20 @@ fn only_a_record_too_deep_is_dropped() {
     assert_eq!(trimmed.records, vec![status_record(2), unencodable]);
     assert_out_of_range(encode_snapshot(&trimmed), "record does not encode");
 }
+
+/// The receipt check's two refusals stay apart in a snapshot: more receipts
+/// than the cap is a cap, and a repeated key is damage, told apart by the
+/// check's typed kinds (#1833). An encode relabels both as refusals, so
+/// their texts tell which.
+#[test]
+fn receipts_past_their_cap_and_a_repeated_key_are_told_apart() {
+    let mut over = snapshot();
+    over.completed_receipts = (0..=crate::audit::MAX_COMPLETED_AUDIT_RECEIPTS as u32)
+        .map(|key| CompletedAuditReceipt::new(key.to_be_bytes().to_vec(), 1_000).unwrap())
+        .collect();
+    assert_out_of_range(encode_snapshot(&over), "past their caps");
+    let mut repeated = snapshot();
+    let receipt = CompletedAuditReceipt::new(vec![7], 1_000).unwrap();
+    repeated.completed_receipts = vec![receipt.clone(), receipt];
+    assert_out_of_range(encode_snapshot(&repeated), "empty or repeated");
+}

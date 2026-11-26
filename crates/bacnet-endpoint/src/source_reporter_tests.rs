@@ -263,14 +263,13 @@ async fn rejected(
     } else {
         None
     };
-    // The session's refusals of its configuration; "must match identity" is
-    // bacnet-objects' identity check, text until #1833 reaches that crate.
-    let objects = expected.contains("must match identity");
+    // The session's refusals of its configuration, and bacnet-objects'
+    // identity check ("must match identity"), are each a configuration
+    // refusal (#1833).
     for _ in 0..2 {
         let result = session.start().await.map_err(Error::from);
         let refused = match &result {
-            Err(Error::InvalidConfig(refusal)) if !objects => refusal.to_string(),
-            Err(Error::Encoding(message)) if objects => message.clone(),
+            Err(Error::InvalidConfig(refusal)) => refusal.to_string(),
             other => panic!("expected {expected}: {other:?}"),
         };
         assert!(refused.contains(expected), "expected {expected}: {refused}");

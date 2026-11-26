@@ -1,14 +1,13 @@
 //! Who a COV subscription belongs to and what it monitors: the delivery
 //! route, the original client address, and the coordinates every table
 //! operation keys on.
-use alloc::string::String;
 use core::cmp::Ordering;
 
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::PropertyIdentifier;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bacnet_types::primitives::ObjectIdentifier;
 
 /// Delivery endpoint, including the immediate router for routed traffic.
@@ -62,8 +61,8 @@ impl CovRecipient {
     /// stays for subscriptions that reach the public table API another way.
     pub fn validate(&self) -> Result<(), Error> {
         if matches!(self, Self::Routed(source) if source.mac_address.is_empty()) {
-            return Err(Error::Encoding(
-                "COV routed recipient requires a nonempty source MAC".into(),
+            return Err(Error::invalid_argument(
+                "COV routed recipient requires a nonempty source MAC",
             ));
         }
         let mac = match self {
@@ -71,34 +70,20 @@ impl CovRecipient {
             Self::Routed(source) => &source.mac_address,
         };
         if mac.len() > BACnetAddress::MAX_MAC_LEN {
-            return Err(Error::Encoding(mac_too_long(mac.len())));
+            return Err(Error::InvalidArgument(
+                Refusal::new(MAC_TOO_LONG).with_value(mac.len() as u64),
+            ));
         }
         Ok(())
     }
 }
 
-/// The refusal of a recipient MAC of `octets` octets, written without
-/// `core::fmt`, so a firmware image formats nothing on its account (#2187).
-fn mac_too_long(octets: usize) -> String {
-    const _: () = assert!(BACnetAddress::MAX_MAC_LEN == 18);
-    // usize::MAX has at most twenty digits.
-    let mut digits = [0u8; 20];
-    let mut start = digits.len();
-    let mut rest = octets;
-    loop {
-        start -= 1;
-        // `rest % 10` is below ten, so the cast keeps it whole.
-        digits[start] = b'0' + (rest % 10) as u8;
-        rest /= 10;
-        if rest == 0 {
-            break;
-        }
-    }
-    let mut message = String::from("COV recipient MAC of ");
-    message.extend(digits[start..].iter().copied().map(char::from));
-    message.push_str(" octets exceeds the 18-octet BACnetAddress limit");
-    message
-}
+/// The refusal of a recipient MAC longer than a BACnetAddress takes, with
+/// its length. A static label, built only when displayed, so a firmware
+/// image formats nothing on its account (#2187).
+const MAC_TOO_LONG: &str =
+    "COV recipient MAC of {} octets exceeds the 18-octet BACnetAddress limit";
+const _: () = assert!(BACnetAddress::MAX_MAC_LEN == 18);
 
 /// Multiple notification context. Confirmed and unconfirmed forms are independent.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

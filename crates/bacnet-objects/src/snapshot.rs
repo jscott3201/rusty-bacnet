@@ -96,12 +96,12 @@
 //!         }
 //!         write_config::decode(object, &sector)
 //!             .map(Some)
-//!             .map_err(|error| Error::Encoding(error.to_string()))
+//!             .map_err(Error::from)
 //!     }
 //!
 //!     fn save(&self, object: ObjectIdentifier, snapshot: &WriteConfigSnapshot) -> Result<(), Error> {
 //!         let octets = write_config::encode(object, snapshot)
-//!             .map_err(|error| Error::OutOfRange(error.to_string()))?;
+//!             .map_err(Error::from)?;
 //!         *self.0.lock().unwrap() = octets;
 //!         Ok(())
 //!     }

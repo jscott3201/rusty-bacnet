@@ -150,8 +150,8 @@ impl ColorObject {
         let xy = |value| match value {
             Some(ColorOutputValue::Xy(color)) if command::xy_in_range(color) => Ok(Some(color)),
             None => Ok(None),
-            Some(_) => Err(Error::Encoding(
-                "saved Color output is not a colour the object can hold".into(),
+            Some(_) => Err(Error::invalid_config(
+                "saved Color output is not a colour the object can hold",
             )),
         };
         if let Some(color) = xy(saved.present_value)? {

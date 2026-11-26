@@ -96,27 +96,31 @@ impl ObjectDatabase {
         if oid.object_type() != ObjectType::NETWORK_PORT
             || !(1..=255).contains(&oid.instance_number())
         {
-            return Err(invalid("registered Network Port instance must be 1..255"));
+            return Err(Error::invalid_argument(
+                "registered Network Port instance must be 1..255",
+            ));
         }
         if self
             .network_port
             .as_ref()
             .is_some_and(|port| port.lease.strong_count() != 0)
         {
-            return Err(invalid("database already has a live registered port owner"));
+            return Err(Error::limit_reached(
+                "database already has a live registered port owner",
+            ));
         }
-        let authority = self
-            .builtin_network_port_mut(&oid)
-            .ok_or_else(|| invalid("registration requires the selected built-in Network Port"))?;
+        let authority = self.builtin_network_port_mut(&oid).ok_or_else(|| {
+            Error::invalid_argument("registration requires the selected built-in Network Port")
+        })?;
         let configured = match authority.configured_address_internal() {
             Some(configured) if configured == address => configured,
             Some(configured) if configured.same_family(address) => {
-                return Err(invalid(
+                return Err(Error::invalid_config(
                     "Network Port configuration differs from transport interface/UDP",
                 ));
             }
             _ => {
-                return Err(invalid(match address {
+                return Err(Error::invalid_config(match address {
                     PortAddress::V4(..) => "registration requires an IPV4 port",
                     PortAddress::V6(..) => "registration requires an IPV6 port",
                 }));
@@ -204,15 +208,17 @@ impl ObjectDatabase {
         capacity: u32,
         mode: BipPortMode,
     ) -> Result<(), Error> {
+        // An oid with no live reservation or built-in port behind it is the
+        // caller's argument refused (#1833), not a lifecycle state of the database.
         let registration = self
             .network_port
             .as_ref()
             .filter(|port| port.oid == oid)
-            .ok_or_else(|| invalid("missing Network Port reservation"))?;
+            .ok_or_else(|| Error::invalid_argument("missing Network Port reservation"))?;
         let lease = registration
             .lease
             .upgrade()
-            .ok_or_else(|| invalid("Network Port owner expired"))?;
+            .ok_or_else(|| Error::invalid_argument("Network Port owner expired"))?;
         let actual = bind.address();
         let configured = registration.configured;
         if registration.published
@@ -220,10 +226,12 @@ impl ObjectDatabase {
             || actual.udp() == 0
             || (configured.udp() != 0 && configured.udp() != actual.udp())
         {
-            return Err(invalid("post-bind Network Port identity mismatch"));
+            return Err(Error::invalid_config(
+                "post-bind Network Port identity mismatch",
+            ));
         }
         self.builtin_network_port_mut(&oid)
-            .ok_or_else(|| invalid("selected Network Port authority disappeared"))?
+            .ok_or_else(|| Error::invalid_argument("selected Network Port authority disappeared"))?
             .reconcile_internal(&lease, bind, capacity, mode)?;
         self.network_port
             .as_mut()
@@ -268,7 +276,7 @@ impl ObjectDatabase {
         activation: bool,
     ) -> Result<(), Error> {
         self.builtin_network_port_mut(&oid)
-            .ok_or_else(|| invalid("selected Network Port authority disappeared"))?
+            .ok_or_else(|| Error::invalid_argument("selected Network Port authority disappeared"))?
             .set_activation_internal(activation);
         Ok(())
     }
@@ -286,7 +294,7 @@ impl ObjectDatabase {
         multicast: Option<alloc::sync::Arc<dyn bacnet_types::bip_port::IpMulticast>>,
     ) -> Result<(), Error> {
         self.builtin_network_port_mut(&oid)
-            .ok_or_else(|| invalid("selected Network Port authority disappeared"))?
+            .ok_or_else(|| Error::invalid_argument("selected Network Port authority disappeared"))?
             .set_multicast_internal(multicast);
         Ok(())
     }
@@ -355,7 +363,4 @@ impl ObjectDatabase {
         }
         Ok(())
     }
-}
-fn invalid(message: &str) -> Error {
-    Error::Encoding(message.into())
 }

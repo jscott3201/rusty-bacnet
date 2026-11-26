@@ -12,7 +12,7 @@ use bacnet_types::constructed::{
     LogDatum,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RangeError};
 use bacnet_types::primitives::{Date, Time};
 use bytes::BytesMut;
 
@@ -387,19 +387,20 @@ impl<R: ResidentLogRecord> LogRecordBuffer<R> {
     ) -> Result<(), Error> {
         let held = records.len();
         if held > self.capacity as usize {
-            return Err(Error::OutOfRange(format!(
-                "{held} log records exceed Buffer_Size {}",
-                self.capacity
-            )));
+            return Err(RangeError::new("{} log records exceed Buffer_Size {}")
+                .with_values(held as u64, u64::from(self.capacity))
+                .into());
         }
         if total_record_count == 0 && held > 0 {
-            return Err(Error::OutOfRange(format!(
-                "{held} log records restored with a Total_Record_Count of 0"
-            )));
+            return Err(
+                RangeError::new("{} log records restored with a Total_Record_Count of 0")
+                    .with_value(held as u64)
+                    .into(),
+            );
         }
         if stops_when_full && held > 0 && held >= self.capacity as usize {
-            return Err(Error::OutOfRange(
-                "a log with Stop_When_Full and Enable TRUE can't hold a full buffer".into(),
+            return Err(Error::range(
+                "a log with Stop_When_Full and Enable TRUE can't hold a full buffer",
             ));
         }
         let mut scratch = BytesMut::new();

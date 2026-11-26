@@ -248,7 +248,7 @@ fn cov_recipient_empty_routed_source_is_refused_before_any_table_effect() {
                         subscriptions
                     ),
                     Err(MultipleRefusal {
-                        error: Error::Encoding(_),
+                        error: Error::InvalidArgument(_),
                         refused: None,
                         ..
                     })
@@ -264,7 +264,7 @@ fn cov_recipient_empty_routed_source_is_refused_before_any_table_effect() {
                     vec![]
                 ),
                 Err(MultipleRefusal {
-                    error: Error::Encoding(_),
+                    error: Error::InvalidArgument(_),
                     ..
                 })
             ));
@@ -272,7 +272,7 @@ fn cov_recipient_empty_routed_source_is_refused_before_any_table_effect() {
         } else {
             assert!(matches!(
                 table.subscribe(malformed),
-                Err(Error::Encoding(_))
+                Err(Error::InvalidArgument(_))
             ));
         }
         let mut invalid_key = before.key().clone();

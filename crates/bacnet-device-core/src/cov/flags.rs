@@ -50,7 +50,7 @@ impl PreparedFlags {
         let value = self
             .value
             .as_ref()
-            .ok_or_else(|| Error::Encoding("Selected Status_Flags is not declared".into()))?;
+            .ok_or_else(|| Error::unsupported("Selected Status_Flags is not declared"))?;
         let (sample, numeric) =
             super::validate_sample(object, PropertyIdentifier::STATUS_FLAGS, index, value)?;
         Ok(super::prepare::PreparedCovValue {

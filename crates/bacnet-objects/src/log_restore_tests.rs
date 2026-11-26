@@ -74,7 +74,7 @@ fn inconsistent_restores_are_refused_and_change_nothing() {
             (3, samples(1..4)),
         ] {
             let error = log.restore(total, records).unwrap_err();
-            assert!(matches!(error, Error::OutOfRange(_)), "{kind:?} {error:?}");
+            assert!(matches!(error, Error::Range(_)), "{kind:?} {error:?}");
             assert_eq!(state(&log), before, "{kind:?} {total}");
         }
 
@@ -97,7 +97,7 @@ fn a_zero_capacity_log_restores_only_its_count() {
         assert_eq!(log.total(), 5, "{kind:?}");
         assert!(matches!(
             log.restore(6, samples(1..2)).unwrap_err(),
-            Error::OutOfRange(_)
+            Error::Range(_)
         ));
         assert_eq!(log.total(), 5, "{kind:?}");
         log.restore(0, Vec::new()).unwrap();
@@ -147,7 +147,7 @@ fn only_a_record_fills_a_stop_when_full_buffer() {
     let mut one = crate::log_buffer::LogRecordBuffer::<BACnetLogRecord>::new(1);
     assert!(matches!(
         one.restore(5, VecDeque::from(samples(1..2)), true),
-        Err(Error::OutOfRange(_))
+        Err(Error::Range(_))
     ));
     one.restore(5, VecDeque::new(), true).unwrap();
 }
@@ -252,7 +252,7 @@ fn an_interruption_needs_an_actual_moment() {
         let before = state(&log);
         for (date, time) in [(wrong_weekday, time), (date, unspecified)] {
             assert!(
-                matches!(log.interrupt(date, time), Err(Error::OutOfRange(_))),
+                matches!(log.interrupt(date, time), Err(Error::Range(_))),
                 "{kind:?}"
             );
             assert_eq!(state(&log), before, "{kind:?}");

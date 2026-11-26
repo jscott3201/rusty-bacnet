@@ -502,7 +502,7 @@ fn a_stored_list_is_validated_as_a_write_of_it_is() {
                         taken += 1;
                     }
                     Err(error) => {
-                        assert!(matches!(error, Error::Encoding(_)), "{error:?}");
+                        assert!(matches!(error, Error::InvalidConfig(_)), "{error:?}");
                         refused += 1;
                     }
                 }

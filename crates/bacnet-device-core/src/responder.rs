@@ -231,14 +231,13 @@ impl Responder {
     /// [`ReadPropertyMultipleBudget::validate`] refuses.
     pub fn new(identity: DeviceIdentity, limits: Limits) -> Result<Self, Error> {
         if identity.segmentation() != Segmentation::NO_SEGMENTATION {
-            return Err(Error::Encoding(
+            return Err(Error::invalid_config(
                 "bacnet-device-core segments neither way: build the Device identity \
-                 .with_segmentation(Segmentation::NO_SEGMENTATION)"
-                    .into(),
+                 .with_segmentation(Segmentation::NO_SEGMENTATION)",
             ));
         }
         if limits.read_work == 0 {
-            return Err(Error::Encoding("read_work must be positive".into()));
+            return Err(Error::invalid_config("read_work must be positive"));
         }
         limits.rpm.validate()?;
         let scope = ReadScope {

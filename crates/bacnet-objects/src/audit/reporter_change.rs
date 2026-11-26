@@ -153,8 +153,8 @@ impl AuditReporterAuthority<'_> {
             .1
             .is_some_and(|owner| owner.upgrade().is_some_and(|owner| owner.is_active()));
         if source_active && (selectors.is_some() || maximum_send_delay.is_some()) {
-            return Err(Error::Encoding(
-                "source Audit does not support Monitored_Objects or delayed notifications".into(),
+            return Err(Error::unsupported(
+                "source Audit does not support Monitored_Objects or delayed notifications",
             ));
         }
         let mut next = self.0.configuration_internal();
@@ -232,8 +232,8 @@ impl AuditReporterObject {
         source: Option<&AuditWriteSource>,
     ) -> Result<(), Error> {
         if next.audit_level == AuditLevel::DEFAULT {
-            return Err(Error::OutOfRange(
-                "Audit Reporter audit level must not be DEFAULT".into(),
+            return Err(Error::range(
+                "Audit Reporter audit level must not be DEFAULT",
             ));
         }
         if let Some(sink) = self

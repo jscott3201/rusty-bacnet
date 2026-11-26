@@ -36,7 +36,7 @@ impl TrendLogObject {
     /// valid clock, unless it reopens full and stopped. See
     /// [`crate::log_persistence`] for when it commits.
     ///
-    /// Fails with [`Error::OutOfRange`] for a `buffer_size` a slot can't
+    /// Fails with [`Error::Range`] for a `buffer_size` a slot can't
     /// hold, with storage's error when the snapshot can't be loaded, and
     /// when it doesn't hold together as a Trend Log's: another object's
     /// identity, a zero generation, more records than Buffer_Size, records

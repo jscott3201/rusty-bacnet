@@ -95,8 +95,8 @@ impl FileAuditLogPersistence {
     pub fn new(base_path: impl AsRef<Path>) -> Result<Self, Error> {
         let base_path = base_path.as_ref();
         if base_path.as_os_str().is_empty() {
-            return Err(Error::OutOfRange(
-                "AuditLog persistence base path must not be empty".into(),
+            return Err(Error::invalid_config(
+                "AuditLog persistence base path must not be empty",
             ));
         }
         let base = base_path.as_os_str();

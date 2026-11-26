@@ -82,7 +82,7 @@ impl ReadPropertyMultipleBudget {
             ),
         ] {
             if value == 0 {
-                return Err(Error::Encoding(message.into()));
+                return Err(Error::invalid_config(message));
             }
         }
         Ok(())

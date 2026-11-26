@@ -380,9 +380,7 @@ pub(crate) fn check(snapshot: &AuditLogSnapshot) -> Result<(), SnapshotError> {
         ));
     }
     receipt::validate_receipts(&snapshot.completed_receipts).map_err(|error| match error {
-        Error::OutOfRange(_) => {
-            SnapshotError::out_of_range("holds completed receipts past their caps")
-        }
+        Error::Range(_) => SnapshotError::out_of_range("holds completed receipts past their caps"),
         _ => SnapshotError::damaged("holds a completed receipt key that is empty or repeated"),
     })?;
     // A counted log may hold no records: one grown from Buffer_Size 0 keeps

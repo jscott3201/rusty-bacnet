@@ -154,27 +154,27 @@ fn invalid_cov_policy_raises_the_constructor_exception_types() {
         ),
         (
             c"{'max_notifications_per_event': 0}",
-            "ValueError: encoding error: COV policy max_notifications_per_event must be positive",
+            "ValueError: COV policy max_notifications_per_event must be positive",
         ),
         (
             c"{'reserved_peers': [b'']}",
-            "ValueError: encoding error: COV policy reserved_peers entries need a MAC of 1..=18 octets",
+            "ValueError: COV policy reserved_peers entries need a MAC of 1..=18 octets",
         ),
         (
             c"{'reserved_peers': [bytes(19)]}",
-            "ValueError: encoding error: COV policy reserved_peers entries need a MAC of 1..=18 octets",
+            "ValueError: COV policy reserved_peers entries need a MAC of 1..=18 octets",
         ),
         (
             c"{'reserved_recipients': [(None, bytes(19))]}",
-            "ValueError: encoding error: COV policy reserved_recipients entries need a MAC of 1..=18 octets",
+            "ValueError: COV policy reserved_recipients entries need a MAC of 1..=18 octets",
         ),
         (
             c"{'reserved_recipients': [(65534, bytes(19))]}",
-            "ValueError: encoding error: COV policy reserved_recipients entries need a MAC of 1..=18 octets",
+            "ValueError: COV policy reserved_recipients entries need a MAC of 1..=18 octets",
         ),
         (
             cr"{'reserved_recipients': [(65535, b'\x01')]}",
-            "ValueError: encoding error: COV policy reserved_recipients networks must be 1..=65534",
+            "ValueError: COV policy reserved_recipients networks must be 1..=65534",
         ),
     ] {
         let error = read(source).unwrap_err().to_string();

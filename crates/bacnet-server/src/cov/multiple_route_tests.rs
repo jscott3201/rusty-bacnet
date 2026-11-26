@@ -97,7 +97,7 @@ fn cov_multiple_route_rejected_generation_or_identity_preserves_live_target() {
                 vec![a.clone()]
             ),
             Err(MultipleRefusal {
-                error: Error::Encoding(_),
+                error: Error::InvalidArgument(_),
                 refused: None,
                 ..
             })

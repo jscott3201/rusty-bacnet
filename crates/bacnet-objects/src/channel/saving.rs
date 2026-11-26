@@ -63,8 +63,8 @@ impl ChannelObject {
             None => {}
             Some(WriteConfigSnapshot::Channel(saved)) => channel.restore(saved)?,
             Some(_) => {
-                return Err(Error::Encoding(
-                    "saved write configuration is not a Channel's".into(),
+                return Err(Error::invalid_config(
+                    "saved write configuration is not a Channel's",
                 ));
             }
         }
@@ -83,8 +83,8 @@ impl ChannelObject {
         if let Some(members) = saved.members {
             check_members(&members.references)?;
             if members.execution_delay.len() != members.references.len() {
-                return Err(Error::Encoding(
-                    "saved Channel members and delays differ in number".into(),
+                return Err(Error::invalid_config(
+                    "saved Channel members and delays differ in number",
                 ));
             }
             config.learned = vec![None; members.references.len()];

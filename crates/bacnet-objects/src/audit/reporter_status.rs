@@ -56,10 +56,10 @@ impl AuditReporterStatus {
             .checked_add(1)
             .filter(|v| *v != u64::MAX)
             .ok_or_else(|| {
-                bacnet_types::error::Error::Encoding("audit generation exhausted".into())
+                bacnet_types::error::Error::limit_reached("audit generation exhausted")
             })?;
         let capture = state.capture_revision.checked_add(1).ok_or_else(|| {
-            bacnet_types::error::Error::Encoding("audit capture revision exhausted".into())
+            bacnet_types::error::Error::limit_reached("audit capture revision exhausted")
         })?;
         let result = prepare(AuditDeliveryToken {
             configuration,
@@ -88,7 +88,7 @@ impl AuditReporterStatus {
             .checked_add(1)
             .filter(|epoch| *epoch != u64::MAX)
             .ok_or_else(|| {
-                bacnet_types::error::Error::Encoding("audit generation exhausted".into())
+                bacnet_types::error::Error::limit_reached("audit generation exhausted")
             })?;
         let token = AuditDeliveryToken {
             configuration,
@@ -130,9 +130,7 @@ impl AuditReporterStatus {
             .configuration_epoch
             .checked_add(1)
             .filter(|v| *v != u64::MAX)
-            .ok_or_else(|| {
-                bacnet_types::error::Error::Encoding("audit generation exhausted".into())
-            })
+            .ok_or_else(|| bacnet_types::error::Error::limit_reached("audit generation exhausted"))
     }
     /// Publish a previously checked rotation under the owning commit lock.
     #[doc(hidden)]

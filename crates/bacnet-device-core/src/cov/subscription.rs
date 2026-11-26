@@ -65,12 +65,33 @@ impl CovSubscription {
         let object = self.monitored_object_identifier;
         let index = self.monitored_property_array_index;
         match (self.notification_kind, self.monitored_property, index) {
-            (CovNotificationKind::Single, None, None) => Ok(CovSubscriptionKey::Object { recipient, process_id, object }),
-            (CovNotificationKind::Single, Some(property), _) => Ok(CovSubscriptionKey::Property { recipient, process_id, object, property, index }),
-            (CovNotificationKind::Multiple, Some(property), _) => Ok(CovSubscriptionKey::Multiple {
-                context: MultipleContextKey { recipient, process_id, confirmed: self.issue_confirmed_notifications }, object, property, index,
+            (CovNotificationKind::Single, None, None) => Ok(CovSubscriptionKey::Object {
+                recipient,
+                process_id,
+                object,
             }),
-            _ => Err(Error::Encoding("COV reference requires a property; whole-object subscriptions cannot carry an index".into())),
+            (CovNotificationKind::Single, Some(property), _) => Ok(CovSubscriptionKey::Property {
+                recipient,
+                process_id,
+                object,
+                property,
+                index,
+            }),
+            (CovNotificationKind::Multiple, Some(property), _) => {
+                Ok(CovSubscriptionKey::Multiple {
+                    context: MultipleContextKey {
+                        recipient,
+                        process_id,
+                        confirmed: self.issue_confirmed_notifications,
+                    },
+                    object,
+                    property,
+                    index,
+                })
+            }
+            _ => Err(Error::invalid_argument(
+                "COV reference requires a property; whole-object subscriptions cannot carry an index",
+            )),
         }
     }
 }
