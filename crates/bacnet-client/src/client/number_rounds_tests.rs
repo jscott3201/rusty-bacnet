@@ -24,7 +24,7 @@ fn window_of(answers: &[(u16, u8)]) -> Decision {
     }
     assert!(!learning.due(at(start, 5)));
     assert_eq!(learning.due(at(start, 6)), !answers.is_empty());
-    learning.close(0)
+    learning.close(0, asked(start, 0))
 }
 
 /// The window is the APDU timeout or the longest a node that is not a
@@ -73,7 +73,7 @@ fn a_window_with_a_loss_decides_nothing() {
         for (second, &number) in (0..).zip(answers) {
             learning.heard((0, number, 1), asked(start, 3), at(start, second));
         }
-        learning.close(losses)
+        learning.close(losses, asked(start, 3))
     };
     assert_eq!(close_with(&[7], 3), Decision::Agreed { number: 7, flag: 1 });
     assert_eq!(close_with(&[7], 4), Decision::Lost);
@@ -83,7 +83,7 @@ fn a_window_with_a_loss_decides_nothing() {
     let mut learning = Learning::new(WINDOW);
     learning.heard((0, 7, 1), asked(start, 3), start);
     learning.heard((0, 7, 1), asked(at(start, 2), 5), at(start, 3));
-    assert_eq!(learning.close(5), Decision::Lost);
+    assert_eq!(learning.close(5, asked(at(start, 2), 5)), Decision::Lost);
 }
 
 /// Outside a window, an announcement naming the number held is `Same`, and
@@ -109,7 +109,10 @@ fn only_announcements_inside_a_window_are_answers() {
         Heard::Answer
     );
     assert!(learning.due(at(start, 16)));
-    assert_eq!(learning.close(0), Decision::Agreed { number: 5, flag: 1 });
+    assert_eq!(
+        learning.close(0, question),
+        Decision::Agreed { number: 5, flag: 1 }
+    );
     assert_eq!(
         learning.heard((7, 5, 1), question, at(start, 16)),
         Heard::Cue { ask: false },
@@ -142,7 +145,7 @@ fn a_later_question_stretches_the_open_window() {
     );
     assert!(!learning.due(at(start, 9)));
     assert!(learning.due(at(start, 10)));
-    assert_eq!(learning.close(0), Decision::Split);
+    assert_eq!(learning.close(0, later), Decision::Split);
 }
 
 /// Cues ask at once the first time, then once per hold: a minute,
@@ -204,5 +207,47 @@ async fn the_wait_ends_when_the_window_closes() {
     );
     learning.closes().await;
     assert_eq!(start.elapsed(), WINDOW);
-    assert_eq!(learning.close(0), Decision::Agreed { number: 7, flag: 1 });
+    assert_eq!(
+        learning.close(0, asked(start, 0)),
+        Decision::Agreed { number: 7, flag: 1 }
+    );
+}
+
+/// A window longer than the clock can hold, from the longest APDU timeout
+/// or a test's own window, is cut to [`LONGEST_WINDOW`]: computing it, and
+/// its close, never overflows, and it stays open as long as that.
+#[test]
+fn a_window_too_long_for_the_clock_is_cut() {
+    assert_eq!(window_for(Duration::MAX), LONGEST_WINDOW);
+    assert_eq!(window_for(Duration::from_millis(u64::MAX)), LONGEST_WINDOW);
+    let start = Instant::now();
+    let mut learning = Learning::new(Duration::MAX);
+    assert_eq!(
+        learning.heard((0, 7, 1), asked(start, 0), start),
+        Heard::Answer
+    );
+    assert!(!learning.due(start + LONGEST_WINDOW - Duration::from_secs(1)));
+    assert!(learning.due(start + LONGEST_WINDOW));
+}
+
+/// A window whose question's note went back (its send failed or was cut
+/// off after an answer came) is covered by no noted question when it
+/// closes: it decides nothing, whatever came.
+#[test]
+fn a_window_no_noted_question_covers_is_void() {
+    let start = Instant::now();
+    let earlier = asked(start, 0);
+    let rolled_back = asked(at(start, 20), 0);
+    for asked_at_close in [None, earlier] {
+        let mut learning = Learning::new(WINDOW);
+        assert_eq!(
+            learning.heard((0, 7, 1), rolled_back, at(start, 21)),
+            Heard::Answer
+        );
+        assert_eq!(
+            learning.close(0, asked_at_close),
+            Decision::Void,
+            "{asked_at_close:?}"
+        );
+    }
 }

@@ -199,13 +199,18 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     }
 
     /// How many windows of answers to this client's What-Is-Network-Number
-    /// decided nothing for a disagreement, so the client kept what it held,
-    /// a number or none (#2826): the answers named two numbers, whatever
-    /// their flags, or they agreed on a network the client reaches through
-    /// a router and a router on this link answered that it routes there,
-    /// or may have. A rise means stations on this link claim different
-    /// numbers for it: two routers configured apart, or a station
-    /// announcing a number that is not this network's. Always zero for a
+    /// decided nothing because the answers disagreed or may have, so the
+    /// client kept what it held, a number or none (#2826): they named two
+    /// numbers, whatever their flags; they agreed on a network the client
+    /// reaches through a router and a router on this link answered that it
+    /// routes there, or its answer may have been lost; or an answer may
+    /// have been lost while the window was open (a queue turned controls
+    /// away). A window nobody answered, or whose question may not have
+    /// gone, isn't counted. A rise means stations on this link claim
+    /// different numbers for it (two routers configured apart, a station
+    /// announcing a number that is not this network's, or nodes still
+    /// answering a number the link had before it was renumbered) or that
+    /// controls come faster than the client takes them. Always zero for a
     /// client on an endpoint's seat, whose node holds the number.
     pub fn network_number_disagreements(&self) -> u64 {
         self.device_table.asking.disagreements()

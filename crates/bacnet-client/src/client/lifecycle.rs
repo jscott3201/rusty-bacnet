@@ -160,7 +160,7 @@ struct DispatchTask<S> {
     /// The routing-table queries waiting for their answers.
     routing_query: Arc<routing_table::RoutingQueries>,
     /// The Number owner's queue, on a link that takes the Number controls.
-    number_tx: Option<mpsc::Sender<bacnet_network::network_number::NumberControl>>,
+    number_tx: Option<mpsc::Sender<network_number::Received>>,
     /// The routed paths' limits, which network rejects teach.
     routed_path_limits: Arc<RoutedPathLimits>,
     /// Transaction state machine.
@@ -512,7 +512,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             &task.routing_query.outstanding,
                         );
                         if let Some((tx, parsed)) = task.number_tx.as_ref().zip(number) {
-                            if tx.try_send(parsed).is_err() {
+                            if tx.try_send(network_number::Received::now(parsed)).is_err() {
                                 // A window open now may have lost an answer
                                 // (#2826).
                                 task.device_table.asking.turned_away();

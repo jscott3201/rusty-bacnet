@@ -70,7 +70,11 @@ impl<T: TransportPort + 'static> RouterCheck<'_, T> {
             debug!(%error, number, "the router check's query failed");
             return Routed::Unknown;
         }
-        let deadline = tokio::time::Instant::now() + self.wait;
+        // A wait too long for the clock waits as long as it can.
+        let now = tokio::time::Instant::now();
+        let deadline = now
+            .checked_add(self.wait)
+            .unwrap_or_else(|| now + Duration::from_secs(86_400 * 365));
         let mut here = false;
         let lost = collect_until(&mut rx, deadline, "I-Am-Router-To-Network", |received| {
             if let NetworkReport::IAmRouterToNetwork(listed) = received.report

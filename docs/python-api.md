@@ -3396,9 +3396,11 @@ until its path's limit is set by hand:
   answering for other devices.
 - `network_number_disagreements()` counts, since start, the windows of
   answers to the client's What-Is-Network-Number that decided nothing
-  (#2826): the answers named two numbers, or agreed on a network the client
-  reaches through a router that a router on its link answered it routes
-  to. A rise means stations on the link claim different numbers for it.
+  because the answers disagreed or may have (#2826): they named two
+  numbers, agreed on a network the client reaches through a router that a
+  router on its link answered it routes to, or an answer may have been
+  lost. A rise means stations on the link claim different numbers for it,
+  or controls come faster than the client takes them.
 
 None of the seven sends anything through the path (a B/IPv6 router given as a
 socket address is first asked its VMAC), and each raises `RuntimeError`
@@ -3465,7 +3467,8 @@ it reaches through a router is taken one router check later, and only if
 no router on the link answers that it routes there. A Network-Number-Is it
 did not ask for that names another number makes it ask (at most once a
 minute, then less often), and never sets the number by itself (#2826).
-`network_number_disagreements()` counts the windows that decided nothing.
+`network_number_disagreements()` counts the windows that decided nothing
+because the answers disagreed or may have.
 A client from `endpoint.client()` holds its endpoint's number instead,
 which the endpoint still takes from any announcement; configure its
 Network Port's number to prevent that. A relay heard

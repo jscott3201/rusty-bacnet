@@ -193,6 +193,7 @@ async fn a_check_that_may_have_lost_an_answer_refuses() {
     }
     tokio::time::sleep(PAST_THE_CHECK).await;
     assert_eq!(site.client.network_number(), None);
+    assert_eq!(site.client.network_number_disagreements(), 1, "counted");
     let device = site
         .client
         .get_device(10)

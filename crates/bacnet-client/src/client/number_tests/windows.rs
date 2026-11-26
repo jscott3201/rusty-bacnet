@@ -76,6 +76,7 @@ async fn a_window_that_may_have_lost_an_answer_decides_nothing() {
     site.gate.add_permits(100);
     tokio::time::sleep(PAST_EVERY_WINDOW).await;
     assert_eq!(site.client.network_number(), None, "answers were lost");
+    assert_eq!(site.client.network_number_disagreements(), 1, "counted");
 
     site.client.what_is_network_number(None).await.unwrap();
     broadcast_from(&site.inbound, &number(THIS_NETWORK, 1), &ROUTER).await;
@@ -135,5 +136,65 @@ async fn a_question_cut_off_mid_send_opens_no_window() {
     assert_eq!(site.asks(), 2, "the announcement was a cue");
     tokio::time::sleep(PAST_EVERY_WINDOW).await;
     assert_eq!(site.client.network_number(), None, "no answer was heard");
+    site.client.stop().await.unwrap();
+}
+
+/// An answer heard while a caller's question is still in its send counts
+/// toward that question's window; when the send is then cut off, the note
+/// goes back, and the window it opened decides nothing (#2826): the
+/// question may never have gone, and the "answer" may have been an
+/// announcement nobody asked for.
+#[tokio::test(start_paused = true)]
+async fn a_window_whose_question_was_cut_off_decides_nothing() {
+    let mut site = gated().await;
+    {
+        let asking = site.client.what_is_network_number(None);
+        let held = tokio::time::timeout(Duration::from_millis(100), asking);
+        let answer = async {
+            bounded(site.entered.acquire()).await.unwrap().forget();
+            broadcast_from(&site.inbound, &number(THIS_NETWORK, 1), &ROUTER).await;
+        };
+        let (held, ()) = tokio::join!(held, answer);
+        assert!(held.is_err(), "held in the send, then cut off");
+    }
+    site.gate.add_permits(100);
+    tokio::time::sleep(PAST_EVERY_WINDOW).await;
+    assert_eq!(site.client.network_number(), None, "no question went");
+    site.client.stop().await.unwrap();
+}
+
+/// An answer that came inside the window counts even when the Number
+/// owner only takes it from its queue after the window closed (#2826):
+/// it is judged by when it came, not when it was handled. Here the owner
+/// waits in the send of the question it asks about an announcement while
+/// the router's answer waits in its queue past the close.
+#[tokio::test(start_paused = true)]
+async fn an_answer_queued_before_the_close_counts() {
+    let mut site = gated().await;
+    owner_held(&site).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    broadcast_from(&site.inbound, &number(THIS_NETWORK, 1), &ROUTER).await;
+    tokio::time::sleep(PAST_EVERY_WINDOW).await;
+    assert_eq!(site.client.network_number(), None, "still held");
+    site.gate.add_permits(100);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(site.client.network_number(), Some(THIS_NETWORK));
+    site.client.stop().await.unwrap();
+}
+
+/// The longest APDU timeout a configuration can hold opens a window that
+/// does not overflow the clock: the Number owner keeps running (#2826).
+#[tokio::test(start_paused = true)]
+async fn the_longest_apdu_timeout_does_not_stop_the_owner() {
+    let config = ClientConfig {
+        apdu_timeout_ms: u64::MAX,
+        ..ClientConfig::default()
+    };
+    let mut site = open_site_with(true, config).await;
+    site.client.what_is_network_number(None).await.unwrap();
+    broadcast_from(&site.inbound, &number(THIS_NETWORK, 1), &ROUTER).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let owner = site.client.network_number_task.as_ref().expect("an owner");
+    assert!(!owner.is_finished(), "the owner is still running");
     site.client.stop().await.unwrap();
 }

@@ -18,11 +18,10 @@ use bacnet_endpoint_core::seat::{
     ClientSeat, InitiationGate, NodeDcc, SeatHold, SeatHolds, SeatNumber,
 };
 use bacnet_network::layer::{ApduReceiver, ReceivedApdu, ReceivedNetworkControl};
-use bacnet_network::network_number::NumberControl;
 
 use super::dispatch_turn::{Turn, TurnOrder};
 use super::lifecycle::Controls;
-use super::network_number::{self, Owner};
+use super::network_number::{self, Owner, Received};
 use super::*;
 
 /// One turn of the dispatch loop.
@@ -49,7 +48,7 @@ pub(super) trait Inbound<T: TransportPort + 'static>: Send + 'static {
     fn answers_for_device(&self) -> bool;
 
     /// Start the task that takes the Number controls.
-    fn spawn_number_owner(&self, owner: Owner) -> (mpsc::Sender<NumberControl>, JoinHandle<()>);
+    fn spawn_number_owner(&self, owner: Owner) -> (mpsc::Sender<Received>, JoinHandle<()>);
 
     /// Take the client's transaction state and discovery state, which a
     /// seat closes when its queues end. Called once, before the dispatch
@@ -116,7 +115,7 @@ impl<T: TransportPort + 'static> Inbound<T> for Own<T> {
     }
 
     #[inline(always)]
-    fn spawn_number_owner(&self, owner: Owner) -> (mpsc::Sender<NumberControl>, JoinHandle<()>) {
+    fn spawn_number_owner(&self, owner: Owner) -> (mpsc::Sender<Received>, JoinHandle<()>) {
         network_number::spawn(&self.network, owner)
     }
 
@@ -234,7 +233,7 @@ impl<T: TransportPort + 'static> Inbound<T> for Seated<T> {
         !self.server
     }
 
-    fn spawn_number_owner(&self, owner: Owner) -> (mpsc::Sender<NumberControl>, JoinHandle<()>) {
+    fn spawn_number_owner(&self, owner: Owner) -> (mpsc::Sender<Received>, JoinHandle<()>) {
         let held = HeldNetwork {
             network: Arc::clone(&self.held.network),
             _hold: self.held._hold.clone(),
@@ -313,7 +312,7 @@ fn spawn_seated_number<T: TransportPort + 'static>(
     held: HeldNetwork<T>,
     owner: Owner,
     published: SeatNumber,
-) -> (mpsc::Sender<NumberControl>, JoinHandle<()>) {
+) -> (mpsc::Sender<Received>, JoinHandle<()>) {
     let (tx, mut rx) = mpsc::channel(network_number::CAPACITY);
     let task = tokio::spawn(async move {
         // The node's owner decides the number: no window opens here.

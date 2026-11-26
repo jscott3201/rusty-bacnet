@@ -335,10 +335,12 @@ that came from another station than a routed request's router, or were
 relayed with this network's own number as SNET for a request sent straight
 to the device: a rise means a station is answering for other devices.
 `network_number_disagreements` counts the windows of answers to the
-client's What-Is-Network-Number that decided nothing: the answers named two
-numbers, or agreed on a network the client reaches through a router that a
-router on the link answered it routes to; a rise means stations on the link
-claim different numbers for it. When the
+client's What-Is-Network-Number that decided nothing because the answers
+disagreed or may have: they named two numbers, agreed on a network the
+client reaches through a router that a router on the link answered it
+routes to, or an answer may have been lost; a rise means stations on the
+link claim different numbers for it, or controls come faster than the
+client takes them. When the
 command timed out after such a reject, `hint` (a `Hint:` line
 in a table) names the flag to set for each path that drew one; otherwise it is
 `null`.

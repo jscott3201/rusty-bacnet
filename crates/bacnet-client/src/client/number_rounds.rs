@@ -37,9 +37,17 @@
 //!   it, or a routed path to it) is taken only after the router check
 //!   (`number_check`): no router on this link may answer that it routes
 //!   there.
-//! - A window that decides nothing for two numbers, or that the router
-//!   check refuses, keeps what the client held and counts in
+//! - A window that decides nothing for two numbers or a possibly lost
+//!   answer, or that the router check refuses, keeps what the client held
+//!   and counts in
 //!   [`BACnetClient::network_number_disagreements`](super::BACnetClient::network_number_disagreements).
+//!   A window whose question may not have gone (its send failed or was cut
+//!   off after an answer came) decides nothing and isn't counted.
+//! - An answer is judged by when it came, not when the Number owner took
+//!   it from its queue, and a window doesn't close while controls that
+//!   may hold answers wait there.
+//! - A window lasts at most [`LONGEST_WINDOW`], however long the APDU
+//!   timeout.
 //! - An announcement heard outside a window that names another number than
 //!   the client holds, unknown included, is a cue: the client asks, at once
 //!   the first time, then at most once per hold, which starts at a minute
@@ -82,10 +90,18 @@ pub(super) const CUE_HOLD_MAX: Duration = Duration::from_secs(600);
 /// token.
 pub(super) const ANSWER_MARGIN: Duration = Duration::from_secs(2);
 
+/// The longest a window stays open: a day. A longer APDU timeout, the
+/// longest a configuration holds included, opens a window this long, so
+/// the time it closes never overflows the clock.
+pub(super) const LONGEST_WINDOW: Duration = Duration::from_secs(86_400);
+
 /// How long the answers to a question count, for a client whose APDU
 /// timeout is `apdu_timeout`.
 pub(super) fn window_for(apdu_timeout: Duration) -> Duration {
-    apdu_timeout.max(ANSWER_DELAY_MAX) + ANSWER_MARGIN
+    apdu_timeout
+        .max(ANSWER_DELAY_MAX)
+        .saturating_add(ANSWER_MARGIN)
+        .min(LONGEST_WINDOW)
 }
 
 /// A question the client sent: when it went, and how many controls the
@@ -133,6 +149,10 @@ pub(super) enum Decision {
     /// They named one number or none, but an answer may have been lost
     /// while the window was open.
     Lost,
+    /// The question the window was open for may never have gone: its send
+    /// failed or was cut off after an answer had come, and the note of it
+    /// went back. What came may have been no answer at all.
+    Void,
 }
 
 /// The answers to the client's question, until the window closes.
@@ -196,10 +216,10 @@ pub(super) struct Learning {
 
 impl Learning {
     /// No window open, and the first cue asks at once. `window` is how
-    /// long answers to a question count.
+    /// long answers to a question count, at most [`LONGEST_WINDOW`].
     pub(super) fn new(window: Duration) -> Self {
         Self {
-            window,
+            window: window.min(LONGEST_WINDOW),
             round: None,
             next_cue: None,
             hold: CUE_HOLD_MIN,
@@ -277,12 +297,19 @@ impl Learning {
         }
     }
 
-    /// The window has closed, with `losses` controls lost by now: what its
-    /// answers decided.
-    pub(super) fn close(&mut self, losses: u64) -> Decision {
-        self.round
-            .take()
-            .map_or(Decision::Unanswered, |round| round.decide(losses))
+    /// The window has closed, with `losses` controls lost by now and the
+    /// client's latest question `asked`: what its answers decided. A window
+    /// no noted question still covers, its question's note gone back, is
+    /// [`Decision::Void`].
+    pub(super) fn close(&mut self, losses: u64, asked: Option<Question>) -> Decision {
+        let Some(round) = self.round.take() else {
+            return Decision::Unanswered;
+        };
+        let covered = asked.is_some_and(|asked| asked.at + self.window >= round.closes);
+        if !covered {
+            return Decision::Void;
+        }
+        round.decide(losses)
     }
 }
 

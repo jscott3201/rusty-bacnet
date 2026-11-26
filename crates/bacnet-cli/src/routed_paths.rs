@@ -203,8 +203,9 @@ struct Summary {
     /// this network's number for a request sent straight to the device.
     off_path_answer_drops: u64,
     /// Windows of answers to the client's What-Is-Network-Number that
-    /// decided nothing (#2826): two numbers, or one a router on the link
-    /// routes to.
+    /// decided nothing because the answers disagreed or may have (#2826):
+    /// two numbers, one a router on the link routes to, or an answer that
+    /// may have been lost.
     network_number_disagreements: u64,
     /// What to do about a timeout on a path whose router refused a small
     /// request as too long; `null` otherwise.
@@ -308,8 +309,8 @@ impl Summary {
             self.off_path_answer_drops
         ));
         text.push_str(&format!(
-            "\nNetwork-number answers that decided nothing: {} (two numbers, or one a \
-             router on this link routes to).",
+            "\nNetwork-number answers that decided nothing: {} (two numbers, one a router \
+             on this link routes to, or an answer that may have been lost).",
             self.network_number_disagreements
         ));
         if let Some(hint) = &self.hint {

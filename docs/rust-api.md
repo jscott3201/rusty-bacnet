@@ -11032,9 +11032,11 @@ where they are not.
   routes there refuses the number, and so does an answer that may have
   been lost. Only when no router answers is it taken, and the routed rows
   fold.
-- A window that decides nothing for two numbers, or that the check
-  refuses, keeps what the client held and counts in
-  `network_number_disagreements()`.
+- A window that decides nothing for two numbers, for an answer that may
+  have been lost, or because the check refuses it, keeps what the client
+  held and counts in `network_number_disagreements()`. One whose question
+  may not have gone (its send failed or was cut off after an answer came)
+  decides nothing either, and isn't counted.
 - A Network-Number-Is heard outside a window that names another number
   than the client holds is a cue: the client asks, at once the first time,
   then at most once per hold, which starts at a minute and doubles to ten
@@ -11052,8 +11054,17 @@ the client's queues (in a socket buffer or on the link).
 
 This is the standalone client's rule. A client on an endpoint's seat holds
 its node's number, and the node, like the full server, still takes any
-announcement by Clause 6.4.20 (a follow-up): give those a registered
-Network Port with a configured number, which no announcement changes.
+announcement by Clause 6.4.20 (#2839): give those a registered Network
+Port with a configured number, which no announcement changes.
+
+A known limit: after a link is renumbered, nodes that learned the old
+number and don't follow the router's new announcement keep answering with
+the old one until they restart, standalone clients under this rule among
+them. Until then the client hears two numbers in each window, keeps the
+number it held and counts the disagreement. Restart those nodes; servers
+and endpoints with a registered Network Port configured with the number
+never answer with a stale one. The standalone client has no setting for
+its own number.
 
 Until the answer comes, the table is in an interim state. A relay heard then
 makes a routed row for the same device, so its instance is ambiguous, though

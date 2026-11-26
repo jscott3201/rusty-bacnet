@@ -470,11 +470,19 @@ impl Held<'_> {
     ) {
         let (number, flag) = match decision {
             Decision::Unanswered => return,
-            Decision::Lost => {
+            Decision::Void => {
                 debug!(
-                    "a What-Is-Network-Number window may have lost an answer; it decides nothing"
+                    "a What-Is-Network-Number window's question may not have gone; it decides \
+                     nothing"
                 );
                 return;
+            }
+            Decision::Lost => {
+                return self.refused(
+                    check.asking,
+                    None,
+                    "an answer to What-Is-Network-Number may have been lost",
+                );
             }
             Decision::Split => {
                 return self.refused(
@@ -548,10 +556,28 @@ impl Held<'_> {
     }
 }
 
+/// A Number control and when the client heard it: an answer is judged by
+/// when it came, not when the owner took it from its queue (#2826).
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Received {
+    pub(super) control: NumberControl,
+    pub(super) at: Instant,
+}
+
+impl Received {
+    /// `control`, heard now.
+    pub(super) fn now(control: NumberControl) -> Self {
+        Self {
+            control,
+            at: Instant::now(),
+        }
+    }
+}
+
 pub(super) fn spawn<T: TransportPort + 'static>(
     network: &Arc<NetworkLayer<T>>,
     owner: Owner,
-) -> (mpsc::Sender<NumberControl>, JoinHandle<()>) {
+) -> (mpsc::Sender<Received>, JoinHandle<()>) {
     let (tx, mut rx) = mpsc::channel(CAPACITY);
     let network = Arc::clone(network);
     let task = tokio::spawn(async move {
@@ -608,18 +634,22 @@ pub(super) fn spawn<T: TransportPort + 'static>(
                     announce(&network, held.state).await;
                     continue;
                 }
-                () = learning.closes() => {
-                    held.decided(learning.close(asking.losses()), &check).await;
+                // Not while controls wait in the queue: one that came
+                // before the close is an answer still to count.
+                () = learning.closes(), if rx.is_empty() => {
+                    let decision = learning.close(asking.losses(), asking.asked_at());
+                    held.decided(decision, &check).await;
                     continue;
                 }
             };
+            let Received { control, at: now } = control;
             match control {
                 NumberControl::NumberIs { number, flag } => {
-                    let now = Instant::now();
-                    // A window that closed while this waited is decided
+                    // A window that closed before this came is decided
                     // first, so its answers and later ones never mix.
                     if learning.due(now) {
-                        held.decided(learning.close(asking.losses()), &check).await;
+                        let decision = learning.close(asking.losses(), asking.asked_at());
+                        held.decided(decision, &check).await;
                     }
                     let ours = held.state.snapshot().0;
                     match learning.heard((ours, number, flag), asking.asked_at(), now) {
@@ -632,7 +662,7 @@ pub(super) fn spawn<T: TransportPort + 'static>(
                             debug!(number, ask, "an unasked Network-Number-Is is a cue");
                             // Only a question that went takes the hold.
                             if ask && asking.cue(&network).await {
-                                learning.cue_asked(now);
+                                learning.cue_asked(Instant::now());
                             }
                         }
                     }

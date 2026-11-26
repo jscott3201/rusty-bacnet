@@ -172,11 +172,13 @@ pub struct RoutedPaths {
     /// A rise means a station is answering for other devices.
     pub off_path_answer_drops: u64,
     /// Windows of answers to the client's What-Is-Network-Number that
-    /// decided nothing since start: the answers named two numbers, or
-    /// agreed on a network the client reaches through a router that a
-    /// router on its link answered it routes to (#2826,
+    /// decided nothing since start because the answers disagreed or may
+    /// have: they named two numbers, agreed on a network the client
+    /// reaches through a router that a router on its link answered it
+    /// routes to, or an answer may have been lost (#2826,
     /// [`BACnetClient::network_number_disagreements`](bacnet_client::client::BACnetClient::network_number_disagreements)).
-    /// A rise means stations on the link claim different numbers for it.
+    /// A rise means stations on the link claim different numbers for it,
+    /// or controls come faster than the client takes them.
     pub network_number_disagreements: u64,
 }
 
