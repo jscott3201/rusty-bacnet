@@ -37,7 +37,9 @@
 //! A write sent with a priority is a command at that priority, which the
 //! Reporter's Audit_Priority_Filter applies to and the record names; one
 //! sent without a priority is not filtered by priority. An operation cut
-//! off by a stop, of the session or of the client, is not recorded.
+//! off by the session's stop is not recorded. One the client's own stop or
+//! drop cut off after it may have gone out is, with COMMUNICATION, OTHER
+//! for its unknown outcome (#1833); one cut off before it went is not.
 use std::future::Future;
 use std::pin::Pin;
 
