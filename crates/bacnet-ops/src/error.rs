@@ -118,11 +118,12 @@ pub enum OpsError {
         /// The address asked: the instance's one claim, or the place the
         /// handles following it hold.
         at: DeviceAddress,
-        /// One other address the discovery table has the instance at, if
-        /// one: unconfirmed, as the table takes I-Ams nobody asked for. For
-        /// a handle's first placement while handles follow the instance at
-        /// `at`, the address whose device did confirm it, where a read
-        /// through those handles moves them.
+        /// For a write (`placing` false): one other address the discovery
+        /// table has the instance at, if one, unconfirmed, as the table
+        /// takes I-Ams nobody asked for. For a handle's first placement
+        /// while handles follow the instance at `at`: the address whose
+        /// device did confirm it, where a read through those handles moves
+        /// them. `None` for a placement on the instance's one claim.
         candidate: Option<DeviceAddress>,
         /// What the device at `at` did when asked which device it is:
         /// silent, another instance, no such Device object, or the question
@@ -243,29 +244,38 @@ impl OpsError {
             return None;
         };
         let (at, said) = (show(at), said(*answer));
-        let mut text = match placing {
-            true => format!(
-                "device {instance} isn't confirmed at {at}: asked which device answers there, \
-                 {said}, and nothing is sent to an address its device hasn't confirmed"
-            ),
-            false => format!(
-                "device {instance} isn't confirmed at {at}, where the handle reaches it: asked \
-                 which device answers there, {said}, and a write never goes elsewhere on its own"
-            ),
-        };
-        if let Some(candidate) = candidate {
-            text.push_str(&format!(
-                "; the discovery table has it at {}",
+        Some(match (placing, candidate) {
+            // Handles follow the instance at `at` already, and the device
+            // at the candidate confirmed it: a new handle never moves them.
+            (true, Some(candidate)) => format!(
+                "device {instance} isn't confirmed at {at}, where the handles already following \
+                 it are: asked which device answers there, {said}. The device at {} confirmed \
+                 it, but a new handle never moves the handles following the instance: read \
+                 through them (a read asks their address first and moves them), or drop them, \
+                 then make the handle again",
                 show(candidate)
-            ));
-        }
-        text.push_str(match placing {
-            true => {
-                ": make the handle again once the device answers, after a discovery if it moved"
+            ),
+            (true, None) => format!(
+                "device {instance} isn't confirmed at {at}: asked which device answers there, \
+                 {said}, and nothing is sent to an address its device hasn't confirmed: make \
+                 the handle again once the device answers, after a discovery if it moved"
+            ),
+            (false, candidate) => {
+                let mut text = format!(
+                    "device {instance} isn't confirmed at {at}, where the handle reaches it: \
+                     asked which device answers there, {said}, and a write never goes \
+                     elsewhere on its own"
+                );
+                if let Some(candidate) = candidate {
+                    text.push_str(&format!(
+                        "; the discovery table has it at {}",
+                        show(candidate)
+                    ));
+                }
+                text.push_str(": read through the handle first, which looks for the device");
+                text
             }
-            false => ": read through the handle first, which looks for the device",
-        });
-        Some(text)
+        })
     }
 
     /// The low-level client's `error` for a request to `device`.

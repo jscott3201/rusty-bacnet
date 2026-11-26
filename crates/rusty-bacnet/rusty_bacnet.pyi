@@ -4966,9 +4966,14 @@ class BacnetLookupError(BacnetError, LookupError):
         at: The address asked which device answers there, as ``(network,
             mac)`` (network 0 the local one): the instance's one claim, or
             the address a following handle holds; else None.
-        candidate: The one other address the discovery table has the
-            instance at, as ``(network, mac)``, or None. An unconfirmed
-            hint: the table takes I-Ams nobody asked for.
+        candidate: As ``(network, mac)``, or None. For ``device()`` while
+            handles already follow the instance at ``at``: the address
+            whose device did confirm it; a new handle never moves the live
+            ones, so read through them (a read asks their address and moves
+            them) or drop them, then make the handle again. For a write
+            through a following handle: the one other address the
+            discovery table has the instance at, an unconfirmed hint, as
+            the table takes I-Ams nobody asked for.
         answer: What the device at ``at`` did, asked which device it is:
             ``"silent"``, ``"another-device"`` (``answer_instance`` names
             it), ``"no-device-object"``, ``"refused"`` or ``"failed"``;

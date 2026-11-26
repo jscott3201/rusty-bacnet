@@ -92,7 +92,9 @@ pub(crate) struct Lookup {
     /// handle holds, as (network, MAC).
     pub(crate) at: Option<(u16, Vec<u8>)>,
     /// For that write: the one other address the discovery table has the
-    /// instance at, unconfirmed, as (network, MAC).
+    /// instance at, unconfirmed, as (network, MAC). For a new handle while
+    /// handles follow the instance at `at` (#2824): the address whose
+    /// device confirmed it.
     pub(crate) candidate: Option<(u16, Vec<u8>)>,
     /// What the device at `at` did, asked which device it is (#2824):
     /// `"silent"`, `"another-device"`, `"no-device-object"`, `"refused"` or

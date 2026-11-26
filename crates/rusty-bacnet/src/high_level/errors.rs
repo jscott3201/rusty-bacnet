@@ -112,9 +112,10 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
         // A handle by instance its claim didn't confirm (#2824), or a write
         // through a following handle not sent (#2795): its addresses in the
         // link's own form in the message, and as (network, MAC) in `at`
-        // (the address asked) and `candidate`, an unconfirmed hint kept out
-        // of `candidates`, which are real choices; what the device there
-        // did in `answer` and `answer_instance`.
+        // (the address asked) and `candidate` (for a write an unconfirmed
+        // hint; for a new handle beside live ones, the address that
+        // confirmed it), kept out of `candidates`, which are real choices;
+        // what the device there did in `answer` and `answer_instance`.
         OpsError::NotConfirmed {
             instance,
             at,
