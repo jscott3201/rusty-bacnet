@@ -221,13 +221,15 @@ async fn a_second_check_that_does_not_strike_resets() {
         assert_eq!(check(&mut table, &again, Identity::Silent), Step::Again);
     }
 
-    // Another station claims the device during the second check, the
-    // first claimant silent.
+    // Another station answers the second check, the first claimant
+    // silent: a contest.
     let (mut table, start) = struck();
     tokio::time::advance(CHECK_HOLD_OFF).await;
     assert!(begins(&mut table, &start));
     hear(&mut table, 9, THIRD);
-    assert_eq!(ends(&mut table, &start, Identity::Silent), Step::Done);
+    let step = ends(&mut table, &start, Identity::Silent);
+    assert!(matches!(step, Step::Contested(_)), "{step:?}");
+    assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND));
 
     // The old address answered a request of the server's between them.
     let (mut table, start) = struck();
@@ -391,4 +393,151 @@ async fn first_contact_binds_only_a_sole_answer_once_the_wait_ends() {
     assert_eq!(bound_at(&alone, 9).as_deref(), Some(CLAIMANT));
     assert_eq!(alone.conflicts(), 0);
     assert_eq!(bound_at(&late, 9), None);
+}
+
+/// The bound station's own I-Am during a pair of checks, between them or
+/// during either, is word from the old address (decision, maintainer,
+/// 2026-11-26): the strikes are off.
+#[tokio::test(start_paused = true)]
+async fn the_bound_stations_i_am_during_the_checks_resets_them() {
+    let (mut table, start) = struck();
+    assert_eq!(hear(&mut table, 9, BOUND), Heard::Refreshed);
+    tokio::time::advance(CHECK_HOLD_OFF).await;
+    assert_eq!(check(&mut table, &start, Identity::Silent), Step::Done);
+    assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND));
+
+    let (mut table, start) = struck();
+    tokio::time::advance(CHECK_HOLD_OFF).await;
+    assert!(begins(&mut table, &start));
+    hear(&mut table, 9, CLAIMANT);
+    hear(&mut table, 9, BOUND);
+    assert_eq!(ends(&mut table, &start, Identity::Silent), Step::Done);
+    assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND));
+}
+
+/// Another station answering the second check's broadcast beside the
+/// claimant is a contest: nothing moves, and it is counted once with the
+/// stations named.
+#[tokio::test(start_paused = true)]
+async fn another_answer_to_the_second_check_is_a_counted_contest() {
+    let (mut table, start) = struck();
+    tokio::time::advance(CHECK_HOLD_OFF).await;
+    assert!(begins(&mut table, &start));
+    hear(&mut table, 9, CLAIMANT);
+    hear(&mut table, 9, THIRD);
+    hear(&mut table, 9, THIRD);
+    let third = DeviceBindingTarget::Local {
+        peer_mac: MacAddr::from_slice(THIRD),
+    };
+    let step = ends(&mut table, &start, Identity::Silent);
+    assert_eq!(step, Step::Contested(vec![third]));
+    assert_eq!(table.conflicts(), 1);
+    assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND));
+    // A third station during the first, directed check is no answer to a
+    // question of the server's: nothing struck, nothing counted.
+    let mut table = found();
+    let start = cue(&mut table, CLAIMANT);
+    assert!(begins(&mut table, &start));
+    hear(&mut table, 9, CLAIMANT);
+    hear(&mut table, 9, THIRD);
+    assert_eq!(ends(&mut table, &start, Identity::Silent), Step::Done);
+    assert_eq!(table.conflicts(), 0);
+}
+
+/// A probe's sole answer binds a device only where it has no binding or a
+/// lapsed one: a binding made fresh meanwhile stays.
+#[tokio::test(start_paused = true)]
+async fn a_probes_answer_does_not_replace_a_fresh_binding() {
+    let mut table = found();
+    tokio::time::advance(OBSERVED_BINDING_TTL).await;
+    table.ask_for_test(device(9), WAIT);
+    assert_eq!(hear(&mut table, 9, CLAIMANT), Heard::Claimed);
+    let third = DeviceBindingTarget::Local {
+        peer_mac: MacAddr::from_slice(THIRD),
+    };
+    table.record_observation(device(9), third, now());
+    table.decide_for_test(device(9));
+    assert_eq!(bound_at(&table, 9).as_deref(), Some(THIRD));
+}
+
+/// An I-Am that answers a probe out during the second check still counts
+/// for the check: another station's claim is a contest.
+#[tokio::test(start_paused = true)]
+async fn a_claim_answering_a_probe_still_contests_a_running_check() {
+    let (mut table, start) = struck();
+    tokio::time::advance(CHECK_HOLD_OFF).await;
+    assert!(begins(&mut table, &start));
+    hear(&mut table, 9, CLAIMANT);
+    table.ask_for_test(device(9), WAIT);
+    assert_eq!(hear(&mut table, 9, THIRD), Heard::Claimed);
+    let step = ends(&mut table, &start, Identity::Silent);
+    assert!(!matches!(step, Step::Moved(..)), "{step:?}");
+    assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND));
+}
+
+/// A binding that lapses during the second check doesn't move: the
+/// lapsed binding's own rule takes it from there.
+#[tokio::test(start_paused = true)]
+async fn a_binding_that_lapses_during_the_second_check_does_not_move() {
+    let (mut table, start) = struck();
+    tokio::time::advance(CHECK_HOLD_OFF).await;
+    assert!(begins(&mut table, &start));
+    hear(&mut table, 9, CLAIMANT);
+    tokio::time::advance(OBSERVED_BINDING_TTL).await;
+    assert_eq!(ends(&mut table, &start, Identity::Silent), Step::Done);
+    assert_eq!(
+        table.resolve_at(&device(9), now(), |_| false),
+        DeviceResolution::Stale
+    );
+}
+
+/// One station heard straight and relayed with this network's own number
+/// is one answer to a probe, not a contest.
+#[tokio::test(start_paused = true)]
+async fn one_station_heard_two_ways_is_one_answer() {
+    let mut table = DeviceBindingTable::new();
+    table.ask_for_test(device(9), WAIT);
+    let relayed = NpduAddress {
+        network: 5,
+        mac_address: MacAddr::from_slice(&[0x09]),
+    };
+    let heard = |table: &mut DeviceBindingTable, mac: &[u8], routed| {
+        let from = IAmFrom {
+            mac,
+            routed,
+            local_network: Some(5),
+        };
+        table.hear_i_am_at(device(9), from, now(), |_| false, Some(WAIT))
+    };
+    assert_eq!(heard(&mut table, &[0x09], None), Heard::Claimed);
+    assert_eq!(heard(&mut table, BOUND, Some(&relayed)), Heard::Claimed);
+    table.decide_for_test(device(9));
+    assert_eq!(table.conflicts(), 0);
+    assert_eq!(bound_at(&table, 9).as_deref(), Some(&[0x09][..]));
+}
+
+/// A check holds its place for as long as its task runs, however long
+/// that is: the cap counts tasks, and a place is given up only once its
+/// task has ended.
+#[tokio::test(start_paused = true)]
+async fn a_check_holds_its_place_while_its_task_runs() {
+    let mut table = DeviceBindingTable::new();
+    let devices = 100..100 + MAX_CHECKS as u32;
+    for instance in devices.clone() {
+        table.bind_found_at(device(instance), BOUND, None, now(), |_| false);
+    }
+    let mut starts: Vec<_> = devices
+        .filter_map(|instance| match hear(&mut table, instance, CLAIMANT) {
+            Heard::Cue(start) => Some(start),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(starts.len(), MAX_CHECKS);
+    tokio::time::advance(OBSERVED_BINDING_TTL * 2).await;
+    let late = 100 + MAX_CHECKS as u32;
+    table.bind_found_at(device(late), BOUND, None, now(), |_| false);
+    assert_eq!(hear(&mut table, late, CLAIMANT), Heard::Ignored, "full");
+    // One task ends without a word: its place is free.
+    starts.pop();
+    assert!(matches!(hear(&mut table, late, CLAIMANT), Heard::Cue(_)));
 }

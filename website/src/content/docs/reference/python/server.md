@@ -2946,6 +2946,21 @@ samples are not an atomic aggregate. Excludes incomplete cancellation,
 duplicates, pre-handler rejection and timer expiry. No trace bridge or
 subscriber installation. Raises RuntimeError before start/after stop.
 
+### BACnetServer.device_binding_conflicts
+
+```python
+def device_binding_conflicts(self) -> Awaitable[int]
+```
+
+Count the server's Who-Is for a device that two or more stations answered.
+
+None of them was bound (#2825), and each is logged with the device
+and the stations: a first contact's Who-Is, a lapsed binding's, or
+the broadcast of a binding check's second read, when a station other
+than the one claiming the device answered it. The device is asked
+again later; a configured `add_device_binding` settles it. Zero at
+each start. Raises RuntimeError before start and after stop.
+
 ### BACnetServer.sc_npdu_drop_counts
 
 ```python

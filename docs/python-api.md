@@ -6040,8 +6040,9 @@ WriteProperty when the server has a binding for it, from `add_device_binding`
 or an answer to its own Who-Is in the last ten minutes. An I-Am it did not ask
 for binds nothing, and one naming a bound device from another address only
 starts a check: the binding moves there after two reads of the bound address a
-minute apart both fail while that address answers, about 84 seconds with the
-default timeout (#2825, [the rules](rust-api.md#device-bindings-the-server-finds)).
+minute apart both fail while that address alone answers, 84 seconds with the
+default 3 second timeout (#2825, [the
+rules](rust-api.md#device-bindings-the-server-finds)).
 With neither, the server first
 broadcasts one Who-Is for that device's instance alone, on every network or,
 for a device whose old binding it still holds, on the network that binding
@@ -7545,6 +7546,17 @@ with `accepted_total`, `policy_denied_total`, `password_failure_total`,
 `DccOutcomeCounters` TypedDict in the stub. Each field saturates and is read on
 its own. Like `cov_counters()`, it raises `RuntimeError` before start and after
 stop. See [DCC policy](dcc-policy.md) for what each total counts.
+
+#### `device_binding_conflicts() -> int`
+
+Count the server's Who-Is requests for a device that two or more stations
+answered, so none was bound (#2825): a first contact's, a lapsed binding's, or
+the broadcast of a binding check's second read when a station other than the
+one claiming the device answered it. Each is logged with the device and the
+stations, and the device is asked again later; `add_device_binding` settles
+it. Zero at each start; like `cov_counters()`, it raises `RuntimeError` before
+start and after stop. See [Device bindings the server
+finds](rust-api.md#device-bindings-the-server-finds) for the rules.
 
 #### `local_address() -> str`
 

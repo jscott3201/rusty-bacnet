@@ -7651,36 +7651,43 @@ maintainer, 2026-11-26):
 - **Freshness.** An I-Am from a device's bound address, or the device naming
   itself in a check's read, keeps its binding for another ten minutes.
 - **Moves.** An I-Am naming a bound device from another address is a cue for
-  a check, run on a task of the server's. The server sends that address a
-  Who-Is limited to the device's instance, and reads the Device object's
-  Object_Identifier at the bound address with a confirmed ReadProperty: by
-  the wildcard instance 4194303, or, for a device that refuses that, by the
-  bound instance. The read leases an invoke ID and is retried as a write is,
-  and only the bound station's answer, through its router for a routed
-  binding, ends it. The check fails when the read times out after its
-  retries, names another instance, or finds no Device object of the bound
-  instance there. A failed check is a strike only when the other address
-  answered the Who-Is, no third address claimed the device during the check,
-  and the bound address answered no request of the server's (a write, a read,
-  a notification) since the first check began; an I-Am or notification it
-  sends unasked counts for nothing either way. A strike schedules a second
-  check a minute later, and when that strikes too, the binding moves to the
-  address that answered both times, with a warning naming the device and both
-  addresses. Anything else ends the checks with the binding where it was: the
-  bound address naming the device, or answering with something that says
-  neither (a Reject, an Abort, another Error), a request the link failed to
-  send, no free invoke ID, the binding changing or lapsing, DCC, the server
-  stopping. With the default timeout (3 seconds, three retries) a device that
-  really moved is followed 84 seconds after its first I-Am from the new
-  address; until then every write and notification goes to the old one.
+  a pair of checks, run on a task of the server's. Each reads the Device
+  object's Object_Identifier at the bound address with a confirmed
+  ReadProperty: by the wildcard instance 4194303, or, for a device that
+  refuses that, by the bound instance. The read leases an invoke ID and is
+  retried as a write is, and only the bound station's answer, through its
+  router for a routed binding, ends it. Each check also sends a Who-Is
+  limited to the device's instance: the first straight to the claimant, the
+  second as a broadcast on the bound address's network (on every network
+  when the claimant is on another), so the device answering anywhere else is
+  heard. A check fails when the read times out after its retries, names
+  another instance, or finds no Device object of the bound instance there.
+  A failed check is a strike only when the claimant answered the Who-Is, no
+  other address claimed the device during the check, and nothing was heard
+  from the bound address since the first check began: no answer to a request
+  of the server's (a write, a read, a notification) and no I-Am of its own,
+  asked or not. A strike schedules the second check a minute later, and when
+  that strikes too, the binding moves to the claimant, with a warning naming
+  the device and both addresses. Another address answering the second
+  check's broadcast is a contest: nothing moves, a warning names the
+  stations, and `BACnetServer::device_binding_conflicts` counts it. Anything
+  else ends the checks with the binding where it was: the bound address
+  naming the device, or answering with something that says neither (a
+  Reject, an Abort, another Error), a request the link failed to send, no
+  free invoke ID, the binding changing or lapsing, DCC, the server stopping.
+  A device that really moved is followed 2 x (retries + 1) x timeout + 60 s
+  after its first I-Am from the new address: 84 seconds at the server's 3
+  second timeout with three retries, 108 seconds at 6 seconds. Until then
+  every write and notification goes to the old address.
 - **Pacing.** A cue starts at most one check of a device a minute. At most 64
-  devices hold a check, out, between its two reads or within its minute, and a
-  cue that finds them all held starts nothing: none is given up for it. At
+  devices hold a check, each while its task runs and for a minute after, and
+  a cue that finds them all held starts nothing: none is given up for it. At
   most 16 of the checks' reads are out at once, so they hold at most 16 of the
   server's invoke IDs, and none runs while DeviceCommunicationControl
-  restricts initiation. Forged I-Ams naming one device that keeps answering
-  cost a Who-Is and a read a minute, and naming any number of such devices
-  128 frames a minute; a silent bound address costs a read's retries too.
+  restricts initiation. The broadcast only ever follows a first strike.
+  Forged I-Ams naming one device that keeps answering cost a Who-Is and a
+  read a minute, and naming any number of such devices 128 frames a minute; a
+  silent bound address costs a read's retries too.
 - **Configured bindings** (`DeviceBinding` on the builder) never move. They
   are the path for a device that only announces itself and never answers a
   Who-Is, and for alarm recipients whose notifications must not wait for one.
@@ -7688,12 +7695,27 @@ maintainer, 2026-11-26):
   bindings and the devices that answered the server. A write from a station
   the server never asked about names its address as the source, not a Device.
 
-What remains: a station that alone answers the server's question while the
-device is absent or silent is bound, at first contact or after two checks,
-and keeps the binding while it answers as the device. And the server takes
-some sources as the frame states them: an I-Am or answer inside a forwarded
-B/IP frame is credited to the address the forwarding names, and a B/IPv6
-virtual address is the sender's own claim (#2837).
+What remains, as classes:
+
+- A station that alone answers the server's question while the device is
+  absent or silent is bound, at first contact or after two checks, and keeps
+  the binding while it answers as the device. A device silent at its bound
+  address but alive elsewhere is a contest when it answers the second
+  check's broadcast, and is still taken for gone when it does not.
+- A slow device loses to a station that answers alone inside the first
+  contact's wait: its late answer contests nothing once that station is
+  bound, and is only a cue for checks that station then answers.
+- A routed binding's identity read is answered through its router, so a
+  station that can have frames relayed through that router can answer for
+  the device (#2837).
+- A frame relayed with this network's own number as its source network
+  names its station by the address it carries, whatever station sent it:
+  it can refresh a binding, count as the bound station heard, or be taken
+  for a device's write source.
+- An I-Am inside a forwarded B/IP frame is credited to the origin the
+  forwarding names, so a forged one naming the bound address keeps a
+  binding fresh and calls off a legitimate move; a B/IPv6 virtual address is
+  likewise the sender's own claim (#2837).
 
 A run that `stop()` cuts short isn't resumed. It ends where it stood
 (#1252): In_Process returns to FALSE, each command it hadn't made reads

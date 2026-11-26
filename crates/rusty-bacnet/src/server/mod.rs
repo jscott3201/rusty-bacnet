@@ -361,6 +361,7 @@ mod server_methods {
     mod audit_log_methods;
     mod averaging_methods;
     mod binary_io_methods;
+    mod binding_conflicts;
     mod channel_methods;
     mod clock_zone;
     mod constructor;

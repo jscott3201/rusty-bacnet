@@ -10575,6 +10575,18 @@ class BACnetServer:
         """
         ...
 
+    def device_binding_conflicts(self) -> Awaitable[int]:
+        """Count the server's Who-Is for a device that two or more stations answered.
+
+        None of them was bound (#2825), and each is logged with the device
+        and the stations: a first contact's Who-Is, a lapsed binding's, or
+        the broadcast of a binding check's second read, when a station other
+        than the one claiming the device answered it. The device is asked
+        again later; a configured ``add_device_binding`` settles it. Zero at
+        each start. Raises RuntimeError before start and after stop.
+        """
+        ...
+
     def sc_npdu_drop_counts(self) -> Awaitable[ScNpduDropCounts]:
         """Copy SC ingress counters; requires a started SC owner.
 

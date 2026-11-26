@@ -491,7 +491,17 @@ impl DeviceBindingTable {
         let tokio_now = TokioInstant::from_std(now);
         match self.probes.claim_after(device, tokio_now)? {
             Claim::One(claimant, at) => {
-                if !matches!(self.entries.get(device), Some(BindingEntry::Configured(_))) {
+                // Only where there is no binding, or a lapsed one: one made
+                // fresh meanwhile (its old address heard, or a check's move)
+                // stays.
+                let open = match self.entries.get(device) {
+                    None => true,
+                    Some(BindingEntry::Observed { observed_at, .. }) => {
+                        now.saturating_duration_since(*observed_at) >= OBSERVED_BINDING_TTL
+                    }
+                    Some(BindingEntry::Configured(_)) => false,
+                };
+                if open {
                     self.record_observation(*device, claimant, at);
                 }
                 None
@@ -716,6 +726,24 @@ fn observed_target(
         Some(_) => return None,
     };
     target_is_usable(&target, is_group).then_some(target)
+}
+
+/// Whether `a` and `b` name one station: equal, or one MAC on this network,
+/// bound through this network's own number on one side and heard straight
+/// on the other (#1358, #1404).
+pub(super) fn same_station(
+    a: &DeviceBindingTarget,
+    b: &DeviceBindingTarget,
+    local: Option<u16>,
+) -> bool {
+    let here = |target: &DeviceBindingTarget| match target {
+        DeviceBindingTarget::Local { peer_mac } => Some(peer_mac.clone()),
+        DeviceBindingTarget::Routed {
+            network, final_mac, ..
+        } if Some(*network) == local => Some(final_mac.clone()),
+        DeviceBindingTarget::Routed { .. } => None,
+    };
+    a == b || here(a).is_some_and(|mac| here(b) == Some(mac))
 }
 
 /// The MAC of `target` that is a group address of the link, the device's own

@@ -55,18 +55,21 @@ async fn a_strangers_i_am_does_not_move_a_device_recipient() {
     h.server.stop().await.unwrap();
 }
 
-/// Answer the Who-Is a check sends STRANGER, once it has gone out.
-async fn stranger_answers(h: &Harness) {
+/// Answer the Who-Is a check sends, once it has gone out: straight to
+/// STRANGER for the first check, broadcast on this network for the second.
+async fn stranger_answers(h: &Harness, broadcast: bool) {
     let mut asked = Vec::new();
     until("the check's Who-Is", || {
-        asked.extend(directed_who_is_sent(h));
+        let directed = directed_who_is_sent(h)
+            .into_iter()
+            .map(|(mac, (_, who_is))| (Some(mac), who_is));
+        asked.extend(directed);
+        asked.extend(who_is_sent(h).into_iter().map(|(_, who_is)| (None, who_is)));
         !asked.is_empty()
     })
     .await;
-    let [(mac, (_, who_is))] = &asked[..] else {
-        panic!("one Who-Is, not {asked:?}");
-    };
-    assert_eq!((mac.as_slice(), who_is), (&STRANGER[..], &targeted(9)));
+    let to = (!broadcast).then(|| STRANGER.to_vec());
+    assert_eq!(asked, [(to, targeted(9))]);
     deliver(h, &i_am(9), &STRANGER, None).await;
 }
 
@@ -93,12 +96,12 @@ async fn a_device_recipient_that_moved_gets_nothing_there_before_the_move() {
     h.settle().await;
 
     deliver(&h, &i_am(9), &STRANGER, None).await;
-    stranger_answers(&h).await;
+    stranger_answers(&h, false).await;
     h.write_local(50.0).await;
     // The first read times out 12 s on; the second check comes a minute
     // after that, and its read times out 12 s later.
     tokio::time::sleep(Duration::from_secs(12) + CHECK_HOLD_OFF - Duration::from_secs(2)).await;
-    stranger_answers(&h).await;
+    stranger_answers(&h, true).await;
     tokio::time::sleep(Duration::from_secs(11)).await;
     let bound_at = |h: &Harness| {
         let now = crate::runtime_clock::now();

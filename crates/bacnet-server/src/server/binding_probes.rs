@@ -45,7 +45,9 @@
 //! with the old address silent and no third address heard
 //! ([`DeviceBindingTable::after_probe`]).
 
-use super::device_bindings::{DeviceBindingTable, DeviceBindingTarget, DeviceResolution};
+use super::device_bindings::{
+    DeviceBindingTable, DeviceBindingTarget, DeviceResolution, same_station,
+};
 use super::*;
 use tokio::time::Instant as TokioInstant;
 
@@ -114,7 +116,7 @@ pub(super) enum Claim {
 }
 
 /// The most contesting stations a probe keeps to name in its warning.
-const MAX_CONTESTANTS: usize = 4;
+pub(super) const MAX_CONTESTANTS: usize = 4;
 
 /// One device's Who-Is.
 #[derive(Debug)]
@@ -282,17 +284,22 @@ impl BindingProbes {
 
     /// `target` answered `device`'s probe at `at` from another address than
     /// the device's lapsed binding: its claim, or, beside another
-    /// address's, a contest.
+    /// station's, a contest. One station heard straight and relayed with
+    /// this network's own number, `local`, is one claimant
+    /// ([`same_station`]).
     pub(super) fn claim(
         &mut self,
         device: &ObjectIdentifier,
         target: DeviceBindingTarget,
         at: Instant,
+        local: Option<u16>,
     ) {
         if let Some(probe) = self.probes.get_mut(device) {
             probe.claim = match std::mem::take(&mut probe.claim) {
                 Claim::None => Claim::One(target, at),
-                Claim::One(first, _) if first == target => Claim::One(first, at),
+                Claim::One(first, _) if same_station(&first, &target, local) => {
+                    Claim::One(first, at)
+                }
                 Claim::One(first, _) => Claim::Contested {
                     stations: vec![first, target],
                     reported: false,
@@ -301,7 +308,10 @@ impl BindingProbes {
                     mut stations,
                     reported,
                 } => {
-                    if stations.len() < MAX_CONTESTANTS && !stations.contains(&target) {
+                    let known = stations
+                        .iter()
+                        .any(|station| same_station(station, &target, local));
+                    if stations.len() < MAX_CONTESTANTS && !known {
                         stations.push(target);
                     }
                     Claim::Contested { stations, reported }
@@ -316,12 +326,13 @@ impl BindingProbes {
         &self,
         device: &ObjectIdentifier,
         target: &DeviceBindingTarget,
+        local: Option<u16>,
     ) -> bool {
         self.probes
             .get(device)
             .is_some_and(|probe| match &probe.claim {
                 Claim::None => true,
-                Claim::One(first, _) => first == target,
+                Claim::One(first, _) => same_station(first, target, local),
                 Claim::Contested { .. } => false,
             })
     }

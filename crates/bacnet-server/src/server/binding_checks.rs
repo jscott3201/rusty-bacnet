@@ -5,25 +5,28 @@
 //! alone settles nothing. The server binds a device only from an I-Am that
 //! answers a Who-Is of its own for that device ([`super::binding_probes`]).
 //! An I-Am from a device's bound address refreshes its binding. One naming
-//! a bound device from another address, unasked, is a cue for a check
-//! (decision, maintainer, 2026-11-26), run by a task of its own
-//! ([`run`]): the server sends the claimant a Who-Is for the device's
-//! instance, and asks the bound address which device it is, with a
+//! a bound device from another address, unasked, is a cue for a pair of
+//! checks (decisions, maintainer, 2026-11-26), run by a task of its own
+//! ([`run`]). Each asks the bound address which device it is, with a
 //! confirmed ReadProperty of the Device object's Object_Identifier by the
 //! wildcard instance, or by the bound instance where the wildcard read is
-//! refused. The check fails when that read times out after its retries,
-//! names another instance, or finds no Device object of the bound instance
-//! there, and it is a strike only when the claimant answered the Who-Is, no
-//! third address claimed the device meanwhile, and the bound address
-//! answered none of the server's requests meanwhile ([`Checked`]). A
-//! strike schedules a second check a hold-off later, and the binding moves
-//! to the claimant only when that one strikes too. Anything else ends the
-//! checks with the binding where it was: the bound address naming the
-//! device, or answering otherwise (a Reject, an Abort, another Error), a
-//! check whose requests did not all go out, the binding changing or
-//! lapsing meanwhile, or the server stopping. Sends to the device keep
-//! going to the bound address throughout. A configured binding is never
-//! changed by traffic.
+//! refused, and sends a Who-Is for the device's instance: the first check
+//! straight to the claimant, the second as a broadcast, so the device
+//! answering anywhere else is heard. A check fails when the read times out
+//! after its retries, names another instance, or finds no Device object of
+//! the bound instance there. It is a strike only when the claimant answered
+//! the Who-Is, no other address claimed the device during it, and nothing
+//! was heard from the bound address since the first check began: no answer
+//! to a request of the server's ([`Checked`]) and no I-Am of its own. A
+//! strike schedules the second check a hold-off later, and the binding
+//! moves to the claimant only when that one strikes too. Another address
+//! answering the second check's broadcast is a contest, counted in
+//! [`DeviceBindingTable::conflicts`]. Anything else ends the checks with
+//! the binding where it was: the bound address naming the device, or
+//! answering otherwise (a Reject, an Abort, another Error), a check whose
+//! requests did not all go out, the binding changing or lapsing meanwhile,
+//! or the server stopping. Sends to the device keep going to the bound
+//! address throughout. A configured binding is never changed by traffic.
 //!
 //! A device the server has asked nothing about binds nothing from an I-Am,
 //! and one whose binding has lapsed is asked again where it was last seen:
@@ -33,13 +36,13 @@
 //!
 //! Checks are paced: one per device per [`CHECK_HOLD_OFF`] from a cue, the
 //! second of a pair a hold-off after the first's strike, at most
-//! [`MAX_CHECKS`] devices held at once (a cue finding them all held starts
-//! nothing, and none is given up for it), none while
-//! DeviceCommunicationControl restricts initiation, and at most
-//! [`MAX_CHECK_READS`] reads out at once, so the checks never hold more
-//! than that many invoke IDs.
+//! [`MAX_CHECKS`] devices held at once, each held while its task runs and
+//! for the hold-off after (a cue finding them all held starts nothing, and
+//! none is given up for it), none while DeviceCommunicationControl
+//! restricts initiation, and at most [`MAX_CHECK_READS`] reads out at
+//! once, so the checks never hold more than that many invoke IDs.
 
-use super::super::binding_probes::MAX_PROBE_WAIT;
+use super::super::binding_probes::{MAX_CONTESTANTS, MAX_PROBE_WAIT};
 use super::*;
 use tokio::sync::Semaphore;
 use tokio::time::Instant as TokioInstant;
@@ -58,10 +61,6 @@ pub(in crate::server) const MAX_CHECKS: usize = 64;
 
 /// The most reads the checks have out at once.
 pub(in crate::server) const MAX_CHECK_READS: usize = 16;
-
-/// How long a check out or between its two checks holds its place with no
-/// word from its task, which only a panic leaves unsaid.
-const RUN_LIMIT: Duration = OBSERVED_BINDING_TTL;
 
 /// Where one device's checks stand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,20 +91,41 @@ pub(super) struct Check {
     claimant: DeviceBindingTarget,
     /// When the claimant last answered as the device during the check out.
     claimant_answered: Option<Instant>,
-    /// A third address claimed the device during the check out.
-    contested: bool,
+    /// Other addresses that claimed the device during the check out, the
+    /// first [`MAX_CONTESTANTS`] of them.
+    contestants: Vec<DeviceBindingTarget>,
+    /// The bound station sent an I-Am for the device during the pair of
+    /// checks: word from it, asked or not (decision, maintainer,
+    /// 2026-11-26).
+    bound_heard: bool,
+    /// Lives while the checks' task does ([`TaskHold`]).
+    task: std::sync::Weak<()>,
 }
 
 impl Check {
-    /// Whether it still holds back another check of its device at `now`.
+    /// Whether it still holds back another check of its device at `now`:
+    /// while its task runs, then for the hold-off.
     fn holds_at(&self, now: Instant) -> bool {
-        let age = now.saturating_duration_since(self.began);
         match self.phase {
-            Phase::Running | Phase::Waiting => age < RUN_LIMIT,
-            Phase::Ended => age < CHECK_HOLD_OFF,
+            Phase::Running | Phase::Waiting => self.task.strong_count() > 0,
+            Phase::Ended => now.saturating_duration_since(self.began) < CHECK_HOLD_OFF,
         }
     }
 }
+
+/// Held by a check's task, and every copy of its start: the check holds
+/// its place until the last is gone, however long the task's reads take,
+/// so the cap counts the tasks running.
+#[derive(Debug, Clone)]
+pub(in crate::server) struct TaskHold(Arc<()>);
+
+impl PartialEq for TaskHold {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for TaskHold {}
 
 /// A check its task runs ([`start_check`]), reporting to
 /// [`DeviceBindingTable::check_begins`] and
@@ -119,6 +139,7 @@ pub(in crate::server) struct CheckStart {
     /// Who-Is.
     pub(in crate::server) wait: Duration,
     pub(in crate::server) reads: ReadSlots,
+    task: TaskHold,
 }
 
 /// The slots the checks' reads take ([`MAX_CHECK_READS`]).
@@ -211,6 +232,10 @@ pub(in crate::server) enum Step {
     Again,
     /// Both checks struck: the binding moved from the first to the second.
     Moved(DeviceBindingTarget, DeviceBindingTarget),
+    /// Stations other than the claimant answered the second check's
+    /// broadcast for the device: nothing moves, and the contest is counted
+    /// ([`DeviceBindingTable::conflicts`]).
+    Contested(Vec<DeviceBindingTarget>),
 }
 
 /// Where an I-Am came from: its link source, the SNET and SADR a router
@@ -220,20 +245,6 @@ pub(in crate::server) struct IAmFrom<'a> {
     pub(in crate::server) mac: &'a [u8],
     pub(in crate::server) routed: Option<&'a NpduAddress>,
     pub(in crate::server) local_network: Option<u16>,
-}
-
-/// Whether `a` and `b` name one station: equal, or one MAC on this network,
-/// bound through this network's own number on one side and heard straight
-/// on the other (#1358, #1404).
-fn same_station(a: &DeviceBindingTarget, b: &DeviceBindingTarget, local: Option<u16>) -> bool {
-    let here = |target: &DeviceBindingTarget| match target {
-        DeviceBindingTarget::Local { peer_mac } => Some(peer_mac.clone()),
-        DeviceBindingTarget::Routed {
-            network, final_mac, ..
-        } if Some(*network) == local => Some(final_mac.clone()),
-        DeviceBindingTarget::Routed { .. } => None,
-    };
-    a == b || here(a).is_some_and(|mac| here(b) == Some(mac))
 }
 
 /// What an I-Am the server heard did (#2825).
@@ -294,7 +305,7 @@ impl DeviceBindingTable {
             // (`after_probe`): one station answered, it is bound; more,
             // none is.
             None if asked => {
-                self.probes.claim(&device, target, now);
+                self.probes.claim(&device, target, now, from.local_network);
                 return Heard::Claimed;
             }
             // A late answer still binds while the probe holds the device
@@ -303,8 +314,11 @@ impl DeviceBindingTable {
                 .probes
                 .asked_lately_at(&device, TokioInstant::from_std(now)) =>
             {
-                if !self.probes.sole_answer(&device, &target) {
-                    self.probes.claim(&device, target, now);
+                if !self
+                    .probes
+                    .sole_answer(&device, &target, from.local_network)
+                {
+                    self.probes.claim(&device, target, now, from.local_network);
                     return Heard::Claimed;
                 }
                 return match self.record_observation(device, target, now) {
@@ -318,24 +332,25 @@ impl DeviceBindingTable {
             None => return Heard::Ignored,
         };
         if same_station(&bound, &target, from.local_network) {
-            // A frame it sent unasked: no word for a check, which reads
-            // the address instead.
             self.record_observation(device, bound, now);
             self.probes.answer(&device);
+            // Word from the old address, asked or not: the pair of checks
+            // is off (decision, maintainer, 2026-11-26).
+            if let Some(check) = self.checks.checks.get_mut(&device)
+                && check.phase != Phase::Ended
+            {
+                check.bound_heard = true;
+            }
             return Heard::Refreshed;
         }
+        let counted = self
+            .checks
+            .claimed(&device, &target, now, from.local_network);
         if asked {
-            self.probes.claim(&device, target, now);
+            self.probes.claim(&device, target, now, from.local_network);
             return Heard::Claimed;
         }
-        if let Some(check) = self.checks.checks.get_mut(&device)
-            && check.phase == Phase::Running
-        {
-            if same_station(&check.claimant, &target, from.local_network) {
-                check.claimant_answered = Some(now);
-            } else {
-                check.contested = true;
-            }
+        if counted {
             return Heard::Claimed;
         }
         match checking {
@@ -347,17 +362,18 @@ impl DeviceBindingTable {
         }
     }
 
-    /// `start`'s next check begins at `now`, its claimant's Who-Is about
-    /// to go: `device`'s binding as the check reads it, or `None` when the
-    /// check is no longer current, or the binding moved, lapsed or went
-    /// since it was cued, which ends it undecided. The claimant's answers
-    /// count from here.
+    /// `start`'s next check begins at `now`, its Who-Is about to go:
+    /// `device`'s binding as the check reads it, and whether this is the
+    /// second check, whose Who-Is is broadcast; or `None` when the check is
+    /// no longer current, or the binding moved, lapsed or went since it was
+    /// cued, which ends it undecided. The claimant's answers, and other
+    /// addresses' claims, count from here.
     pub(in crate::server) fn check_begins(
         &mut self,
         start: &CheckStart,
         now: Instant,
         is_group: impl Fn(&[u8]) -> bool,
-    ) -> Option<DeviceResolution> {
+    ) -> Option<(DeviceResolution, bool)> {
         let check = self
             .checks
             .checks
@@ -372,13 +388,14 @@ impl DeviceBindingTable {
         if !still_bound || !matches!(check.phase, Phase::Running | Phase::Waiting) {
             return None;
         }
-        if check.phase == Phase::Waiting {
+        let second = check.phase == Phase::Waiting;
+        if second {
             check.began = now;
         }
         check.phase = Phase::Running;
         check.claimant_answered = None;
-        check.contested = false;
-        Some(self.resolve_at(&start.device, now, is_group))
+        check.contestants.clear();
+        Some((self.resolve_at(&start.device, now, is_group), second))
     }
 
     /// `start`'s check ended at `now`, finding `checked`: decide it.
@@ -396,30 +413,40 @@ impl DeviceBindingTable {
         else {
             return Step::Done;
         };
+        let contested = !check.contestants.is_empty();
         let strike = checked.identity.fails(start.device.instance_number())
             && check.claimant_answered.is_some()
-            && !check.contested
-            && !checked.heard;
+            && !contested
+            && !checked.heard
+            && !check.bound_heard;
         check.phase = Phase::Ended;
         let first = check.struck.take();
+        // The bound address named the device in an answer to the server's
+        // own read: as fresh as an answer to its Who-Is.
+        if checked.identity == Identity::Is(start.device.instance_number())
+            && let Some(BindingEntry::Observed {
+                target,
+                observed_at,
+            }) = self.entries.get_mut(&start.device)
+            && *target == check.bound
+        {
+            *observed_at = now;
+        }
+        // Another station answered the second check's broadcast.
+        if contested && first.is_some() {
+            self.conflicts = self.conflicts.saturating_add(1);
+            return Step::Contested(std::mem::take(&mut check.contestants));
+        }
         if !strike {
-            // The bound address named the device in an answer to the
-            // server's own read: as fresh as an answer to its Who-Is.
-            if checked.identity == Identity::Is(start.device.instance_number())
-                && let Some(BindingEntry::Observed {
-                    target,
-                    observed_at,
-                }) = self.entries.get_mut(&start.device)
-                && *target == check.bound
-            {
-                *observed_at = now;
-            }
             return Step::Done;
         }
         let Some(first) = first else {
             check.struck = Some(now);
             check.phase = Phase::Waiting;
-            debug!(device = %start.device, "A check found the device's bound address failing; checking again in a minute");
+            debug!(
+                device = %start.device,
+                "A check found the device's bound address failing; checking again in a minute"
+            );
             return Step::Again;
         };
         let (bound, claimant, at) = (
@@ -430,11 +457,14 @@ impl DeviceBindingTable {
         if now.saturating_duration_since(first) < CHECK_HOLD_OFF {
             return Step::Done;
         }
+        // A binding that lapsed meanwhile is the lapsed binding's rule's.
         match self.entries.get_mut(&start.device) {
             Some(BindingEntry::Observed {
                 target,
                 observed_at,
-            }) if *target == bound => {
+            }) if *target == bound
+                && now.saturating_duration_since(*observed_at) < OBSERVED_BINDING_TTL =>
+            {
                 *target = claimant.clone();
                 *observed_at = at;
                 Step::Moved(bound, claimant)
@@ -470,12 +500,14 @@ impl BindingChecks {
         }
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
+        let task = TaskHold(Arc::new(()));
         let start = CheckStart {
             device,
             id,
             claimant: claimant.clone(),
             wait,
             reads: self.reads.clone(),
+            task: task.clone(),
         };
         self.checks.insert(
             device,
@@ -487,10 +519,42 @@ impl BindingChecks {
                 bound,
                 claimant,
                 claimant_answered: None,
-                contested: false,
+                contestants: Vec::new(),
+                bound_heard: false,
+                task: Arc::downgrade(&task.0),
             },
         );
         Some(start)
+    }
+
+    /// An I-Am naming `device` from `target`, not its bound station, heard
+    /// at `now`: while a check of it is out, the claimant's answer or
+    /// another address's claim. Whether a check counted it.
+    fn claimed(
+        &mut self,
+        device: &ObjectIdentifier,
+        target: &DeviceBindingTarget,
+        now: Instant,
+        local: Option<u16>,
+    ) -> bool {
+        let Some(check) = self
+            .checks
+            .get_mut(device)
+            .filter(|check| check.phase == Phase::Running)
+        else {
+            return false;
+        };
+        if same_station(&check.claimant, target, local) {
+            check.claimant_answered = Some(now);
+        } else if check.contestants.len() < MAX_CONTESTANTS
+            && !check
+                .contestants
+                .iter()
+                .any(|station| same_station(station, target, local))
+        {
+            check.contestants.push(target.clone());
+        }
+        true
     }
 }
 

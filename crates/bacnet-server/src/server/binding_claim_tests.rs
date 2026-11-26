@@ -164,15 +164,16 @@ async fn cue_answered(h: &Harness, claimant: &[u8]) -> u8 {
 }
 
 /// The second check, due a hold-off after the first struck: wait for its
-/// Who-Is to `claimant`, which `answers` or not, and return its read's
-/// invoke ID.
+/// Who-Is, broadcast on this network (decision, maintainer, 2026-11-26),
+/// which `claimant` `answers` or not, and return its read's invoke ID.
 async fn second_check(h: &Harness, claimant: &[u8], answers: bool) -> u8 {
     tokio::time::sleep(CHECK_HOLD_OFF - Duration::from_millis(10)).await;
-    assert!(checked(h).is_empty(), "not before the hold-off");
+    assert!(who_is_sent(h).is_empty(), "not before the hold-off");
     // The first check's retries.
     identity_reads(h);
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(checked(h), [claimant.to_vec()]);
+    assert_eq!(who_is_sent(h), [(None, targeted(9))], "a local broadcast");
+    assert!(checked(h).is_empty(), "nothing straight to the claimant");
     if answers {
         deliver(h, &i_am(9), claimant, None).await;
     }
@@ -283,6 +284,43 @@ async fn the_old_address_answering_between_the_checks_resets_them() {
     assert_eq!(bound(&h).await, PEER);
 }
 
+/// The device is silent at its bound address but alive at a third one,
+/// which answers the second check's broadcast beside the claimant: a
+/// contest, counted, and nothing moves.
+#[tokio::test(start_paused = true)]
+async fn a_device_alive_elsewhere_contests_the_second_check() {
+    const ALIVE: [u8; 6] = [10, 0, 0, 77, 0xBA, 0xC0];
+    let h = start_unbound().await;
+    bound_to_peer(&h).await;
+    cue_answered(&h, &STRANGER).await;
+    tokio::time::sleep(SILENT_READ).await;
+    second_check(&h, &STRANGER, true).await;
+    deliver(&h, &i_am(9), &ALIVE, None).await;
+    tokio::time::sleep(SILENT_READ).await;
+    identity_reads(&h);
+    no_further_check(&h).await;
+    assert_eq!(bound(&h).await, PEER);
+    assert_eq!(h.server.device_binding_conflicts().await, 1);
+}
+
+/// After one strike, the bound station's own I-Am, which it sent unasked,
+/// is word from it all the same (decision, maintainer, 2026-11-26): the
+/// second check, though its read times out, moves nothing.
+#[tokio::test(start_paused = true)]
+async fn the_bound_stations_i_am_between_the_checks_resets_them() {
+    let h = start_unbound().await;
+    bound_to_peer(&h).await;
+    cue_answered(&h, &STRANGER).await;
+    tokio::time::sleep(SILENT_READ).await;
+    deliver(&h, &i_am(9), &PEER, None).await;
+    second_check(&h, &STRANGER, true).await;
+    tokio::time::sleep(SILENT_READ).await;
+    identity_reads(&h);
+    no_further_check(&h).await;
+    assert_eq!(bound(&h).await, PEER);
+    assert_eq!(h.server.device_binding_conflicts().await, 0);
+}
+
 /// After a strike with one claimant, another claims the device during the
 /// second check, the first silent: nothing moves.
 #[tokio::test(start_paused = true)]
@@ -299,6 +337,7 @@ async fn different_claimants_reset_the_checks() {
     identity_reads(&h);
     no_further_check(&h).await;
     assert_eq!(bound(&h).await, PEER);
+    assert_eq!(h.server.device_binding_conflicts().await, 1, "a contest");
 }
 
 /// A third station claims the device during the first check: its silent

@@ -230,11 +230,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.cov_counters.snapshot()
     }
 
-    /// Targeted Who-Is requests of this server's, for a Device it held no
-    /// binding for or a lapsed one, that two or more stations answered
-    /// since start (#2825). None of them was bound; each is logged with the
-    /// instance and the stations, and the device is asked again a minute
-    /// later.
+    /// Targeted Who-Is requests of this server's that two or more stations
+    /// answered since start (#2825): for a Device it held no binding for or
+    /// a lapsed one, or the broadcast of a binding check's second read, which
+    /// a station other than the one claiming the device answered. None of
+    /// them was bound or moved to; each is logged with the instance and the
+    /// stations, and the device is asked again later.
     pub async fn device_binding_conflicts(&self) -> u64 {
         self.device_bindings.read().await.conflicts()
     }

@@ -1,8 +1,12 @@
 //! A binding check's requests (#2825): the task that asks the claimant and
 //! the bound address, once, and again a hold-off after a strike.
 //!
-//! The claimant gets a Who-Is limited to the device's instance, straight
-//! to its station or through its router. The bound address gets a
+//! The first check sends the claimant a Who-Is limited to the device's
+//! instance, straight to its station or through its router. The second
+//! broadcasts it on the bound address's network, or on every network when
+//! the claimant is on another ([`broadcast_scope`]), so that the device
+//! answering anywhere but the claimant's address is seen. The bound address
+//! gets a
 //! confirmed ReadProperty of the Device object's Object_Identifier by the
 //! wildcard instance, which names the device there; a device that refuses
 //! it (one older than the wildcard) is asked for the bound instance's
@@ -19,7 +23,7 @@
 //!
 //! [`LeaseMetadata::server_read`]: bacnet_endpoint_core::coordinator::LeaseMetadata::server_read
 
-use super::super::super::binding_probes::{station_text, targeted_who_is};
+use super::super::super::binding_probes::{WhoIsScope, station_text, targeted_who_is};
 use super::super::super::event_recipient_route::{ConfirmedRecipientRoute, RecipientRoute};
 use super::super::super::notification_transactions::{
     AnswerListener, Attempt, AttemptsEnd, run_attempts,
@@ -88,6 +92,21 @@ async fn run<T: TransportPort + 'static>(handles: CheckHandles<T>, start: CheckS
             .check_ended(&start, checked, now);
         match step {
             Step::Done => return,
+            Step::Contested(stations) => {
+                let transport = handles.network.transport();
+                let stations: Vec<_> = stations
+                    .iter()
+                    .map(|station| station_text(transport, station))
+                    .collect();
+                warn!(
+                    device = %start.device,
+                    claimant = %station_text(transport, &start.claimant),
+                    others = %stations.join(", "),
+                    "Other stations answered a check's Who-Is for a device beside the station \
+                     claiming it: its binding stays where it is"
+                );
+                return;
+            }
             Step::Again => tokio::time::sleep(CHECK_HOLD_OFF).await,
             Step::Moved(from, to) => {
                 let transport = handles.network.transport();
@@ -115,24 +134,29 @@ async fn once<T: TransportPort + 'static>(
     }
     let network = &handles.network;
     let is_group = |mac: &[u8]| network.transport().is_group_destination(mac);
-    let resolution =
-        handles
-            .bindings
-            .write()
-            .await
-            .check_begins(start, runtime_clock::now(), is_group);
-    let Some(route) = resolution.and_then(|resolution| {
-        RecipientRoute::from_device_resolution(resolution)
-            .localize(network.local_network_number().get(), is_group, is_group)
+    let began = handles
+        .bindings
+        .write()
+        .await
+        .check_begins(start, runtime_clock::now(), is_group);
+    let local = network.local_network_number().get();
+    let Some((route, broadcast)) = began.and_then(|(resolution, second)| {
+        // The second check asks everyone the bound address and the claimant
+        // can hear, so the device answering elsewhere is seen (decision,
+        // maintainer, 2026-11-26).
+        let scope = second.then(|| broadcast_scope(&resolution, &start.claimant, local));
+        let route = RecipientRoute::from_device_resolution(resolution)
+            .localize(local, is_group, is_group)
             .into_confirmed(is_group)
-            .ok()
+            .ok()?;
+        Some((route, scope))
     }) else {
         return Checked::NOT_ASKED;
     };
     let listener = sequence
         .listener
         .get_or_insert_with(|| handles.transactions.listen(route.canonical_peer.clone()));
-    if !ask_claimant(handles, start).await {
+    if !ask(handles, start, broadcast).await {
         return Checked::NOT_ASKED;
     }
     let asked = tokio::time::Instant::now();
@@ -147,13 +171,39 @@ async fn once<T: TransportPort + 'static>(
     Checked { identity, heard }
 }
 
-/// Send the claimant a Who-Is limited to the device's instance, straight
-/// to a station on this link or through its router to one on another
-/// network: whether it went out. Nothing goes while
-/// DeviceCommunicationControl restricts initiation.
-async fn ask_claimant<T: TransportPort + 'static>(
+/// Where the second check's Who-Is goes: the network the bound address is
+/// on, when the claimant is on it too, as a first contact's Who-Is goes
+/// to a lapsed binding's network; every network otherwise.
+fn broadcast_scope(
+    bound: &DeviceResolution,
+    claimant: &DeviceBindingTarget,
+    local: Option<u16>,
+) -> WhoIsScope {
+    let bound = match bound {
+        DeviceResolution::ResolvedRouted { network, .. } => WhoIsScope::Remote(*network),
+        _ => WhoIsScope::Local,
+    };
+    let claimant = match claimant {
+        DeviceBindingTarget::Local { .. } => WhoIsScope::Local,
+        DeviceBindingTarget::Routed { network, .. } => WhoIsScope::Remote(*network),
+    };
+    let (bound, claimant) = (bound.localize(local), claimant.localize(local));
+    if bound == claimant {
+        bound
+    } else {
+        WhoIsScope::Global
+    }
+}
+
+/// Send a Who-Is limited to the device's instance: broadcast across
+/// `broadcast` for the second check, else straight to the claimant, a
+/// station on this link or one through its router on another network.
+/// Whether it went out. Nothing goes while DeviceCommunicationControl
+/// restricts initiation.
+async fn ask<T: TransportPort + 'static>(
     handles: &CheckHandles<T>,
     start: &CheckStart,
+    broadcast: Option<WhoIsScope>,
 ) -> bool {
     if handles.comm_state.initiation_restricted() {
         return false;
@@ -161,6 +211,18 @@ async fn ask_claimant<T: TransportPort + 'static>(
     let network = &handles.network;
     let apdu = targeted_who_is(start.device);
     let priority = NetworkPriority::Normal;
+    if let Some(scope) = broadcast {
+        return match scope {
+            WhoIsScope::Local => network.broadcast_apdu(&apdu, false, priority).await,
+            WhoIsScope::Remote(dnet) => {
+                network
+                    .broadcast_to_network(&apdu, dnet, false, priority)
+                    .await
+            }
+            WhoIsScope::Global => network.broadcast_global_apdu(&apdu, false, priority).await,
+        }
+        .is_ok();
+    }
     match &start.claimant {
         DeviceBindingTarget::Local { peer_mac } => {
             network.send_apdu(&apdu, peer_mac, false, priority).await
