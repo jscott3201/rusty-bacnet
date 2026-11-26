@@ -39,19 +39,19 @@ fn the_list_settings_make_a_valid_hub() {
 }
 
 /// Present_Value follows the object (SubscribeCOV); any other property is
-/// a property watch; the hub's point is at the row's device address.
+/// a property watch; the hub's point follows the row's device instance on
+/// its network (#2795).
 #[test]
 fn rows_map_to_hub_points() {
-    let at = bacnet_ops::DeviceAddress::new(2, &[5]).unwrap();
     let mut point = Point {
         device: 2001,
         network: Some(2),
         object: ai(1),
         property: PropertyIdentifier::PRESENT_VALUE,
     };
-    assert_eq!(hub_point(&point, at.clone()).watched, Watched::Object);
+    assert_eq!(hub_point(&point).watched, Watched::Object);
     point.property = PropertyIdentifier::STATUS_FLAGS;
-    let hub = hub_point(&point, at.clone());
+    let hub = hub_point(&point);
     assert_eq!(
         hub.watched,
         Watched::Property {
@@ -59,7 +59,11 @@ fn rows_map_to_hub_points() {
             index: None,
         }
     );
-    assert_eq!((hub.device, hub.object), (at, ai(1)));
+    let follows = Binding::Follows {
+        instance: 2001,
+        network: Some(2),
+    };
+    assert_eq!((hub.device, hub.object), (follows, ai(1)));
 }
 
 fn snapshot(source: Option<hub::Source>, why: Option<Why>, note: Option<&str>) -> Snapshot {

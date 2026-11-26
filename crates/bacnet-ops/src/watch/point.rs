@@ -1,13 +1,99 @@
-//! What a watch names and reports: a [`Point`] by its device's address,
-//! and [`Why`] a point is polled, unreachable or given up.
+//! What a watch names and reports: a [`Point`] by what its device is
+//! bound to ([`Binding`]), [`Why`] a point is polled, unreachable or given
+//! up, and where a followed device [`Moved`].
 
 use std::fmt;
+use std::time::SystemTime;
 
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::device::DeviceAddress;
 use crate::label::kebab;
+
+/// What a watched point's device is bound to (#2795): an address, or a
+/// device instance the hub follows from address to address.
+///
+/// [`Device::point`](crate::Device::point) picks by the handle: a pinned
+/// handle's points are [`At`](Self::At) its address, a following handle's
+/// [`Follows`](Self::Follows) its instance. Either way the point is its own
+/// identity: an [`Update`](super::Update) carries the point as watched, and
+/// says where its device answers now ([`Update::at`](super::Update::at)).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Binding {
+    /// The device at this address, whichever it is: given up as
+    /// [`Why::Moved`] when its device answers elsewhere, or
+    /// [`Why::Replaced`] when another answers here.
+    At(DeviceAddress),
+    /// The device of this instance, wherever it answers: on `network` when
+    /// named with one (0, or the client's own network's number, is the
+    /// local network), on any otherwise. The hub watches it at the one
+    /// address claiming it when the watch starts, and moves its watch to
+    /// another address once its own reads there and here say the device
+    /// went there ([`Update::moved`](super::Update::moved)).
+    Follows {
+        /// The device instance.
+        instance: u32,
+        /// The network it is looked for on; any for `None`.
+        network: Option<u16>,
+    },
+}
+
+impl Binding {
+    /// The address a pinned point is at; `None` for a following one, whose
+    /// address is state ([`Update::at`](super::Update::at)).
+    pub fn address(&self) -> Option<&DeviceAddress> {
+        match self {
+            Self::At(address) => Some(address),
+            Self::Follows { .. } => None,
+        }
+    }
+
+    /// The instance a following point follows; `None` for a pinned one.
+    pub fn instance(&self) -> Option<u32> {
+        match self {
+            Self::At(_) => None,
+            Self::Follows { instance, .. } => Some(*instance),
+        }
+    }
+}
+
+impl From<DeviceAddress> for Binding {
+    fn from(address: DeviceAddress) -> Self {
+        Self::At(address)
+    }
+}
+
+impl fmt::Display for Binding {
+    /// In the target grammar: the address, or the instance (`1234`, or
+    /// `2:1234` on network 2).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::At(address) => write!(f, "{address}"),
+            Self::Follows {
+                instance,
+                network: Some(network),
+            } => write!(f, "{network}:{instance}"),
+            Self::Follows { instance, .. } => write!(f, "{instance}"),
+        }
+    }
+}
+
+/// A followed device's move, as the hub took it (#2795): its reads named
+/// the device at `to`, and its device was gone from `from`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Moved {
+    /// Where the device answered before.
+    pub from: DeviceAddress,
+    /// Where it answers now.
+    pub to: DeviceAddress,
+    /// When the hub took the move, by the wall clock.
+    pub when: SystemTime,
+    /// How many moves the hub has taken for the point, this one included:
+    /// a consumer that fell behind compares it to tell a new move, whatever
+    /// the wall clock did meanwhile.
+    pub count: u64,
+}
 
 /// What a watch follows on an object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -24,19 +110,21 @@ pub enum Watched {
     },
 }
 
-/// A watched point: an object of the device at an address, whole or one
-/// property. The hub keys its entries and its per-device schedulers on
-/// it, so two devices sharing an instance are two points, and a device
-/// announcing itself again at the same address keeps its entries.
+/// A watched point: an object, whole or one property, of the device its
+/// [`Binding`] names: at an address, or followed by its instance. The hub
+/// keys its entries on it, so two devices sharing an instance, each named
+/// by its address, are two points, and a followed device's point stays the
+/// same point when the device moves (#2795).
 ///
 /// [`Device::point`](crate::Device::point) makes one from the grammar
 /// (`"ai:1"`, `"ao:2 priority-array[8]"`). [`Display`](fmt::Display) writes
-/// it back in that grammar after the address: `192.168.1.10:47808
-/// analog-input:1`, `2:0x05 analog-output:2 priority-array[8]`.
+/// it back in that grammar after the target: `192.168.1.10:47808
+/// analog-input:1`, `2:0x05 analog-output:2 priority-array[8]`, `1234
+/// analog-input:1`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Point {
-    /// Where the device answers.
-    pub device: DeviceAddress,
+    /// What the device is bound to: an address, or an instance followed.
+    pub device: Binding,
     /// The object.
     pub object: ObjectIdentifier,
     /// The object or one property.
@@ -104,7 +192,7 @@ pub enum Why {
     /// No route to the device's address is known: a remote network the
     /// discovery table holds no router for.
     Missing,
-    /// The device's instance answers at `to` now: the device there named
+    /// A pinned point's device answers at `to` now: the device there named
     /// itself so, answering the hub's read of its Device object by the
     /// wildcard instance (#2812), and it is gone from the point's address:
     /// its device, asked once more, times out or isn't that one (a device
@@ -117,8 +205,13 @@ pub enum Why {
     /// this one) or by a handle following the instance moving there;
     /// neither alone gives the point up. The point is given up
     /// ([`State::Gone`](super::State::Gone)); watch the point at `to`
-    /// instead. The hub doesn't follow it, but starts the point again if
-    /// the old address answers for the instance again.
+    /// instead, or watch it following its instance
+    /// ([`Binding::Follows`]). The hub starts the point again if the old
+    /// address answers for the instance again.
+    ///
+    /// A following point is never given up for a move: on the same
+    /// answers the hub moves its watch to `to` and says so in
+    /// [`Update::moved`](super::Update::moved) (#2795).
     ///
     /// A point given up already, for another device at its address
     /// ([`Replaced`](Self::Replaced)), is no longer watched there, so the
@@ -137,11 +230,14 @@ pub enum Why {
     /// named for the point. Nothing from the address is taken as
     /// the point's from then on, its values are dropped, and nothing more
     /// is sent for it: its old subscription, which the new device never
-    /// held, lapses with its lifetime. The point is given up
+    /// held, lapses with its lifetime. A pinned point is given up
     /// ([`State::Gone`](super::State::Gone)), becomes
     /// [`Moved`](Self::Moved) once `watched` announces itself at one other
     /// address and names itself there when read, and starts again when its
-    /// address answers for `watched` again.
+    /// address answers for `watched` again. A following point is
+    /// [`State::Unreachable`](super::State::Unreachable) for this reason
+    /// while the hub looks for its device, and its watch moves where the
+    /// hub's reads find it (#2795).
     Replaced {
         /// The instance an earlier answer named for the point.
         watched: u32,
@@ -159,4 +255,12 @@ pub enum Why {
         /// The instance the notifications name.
         sender: u32,
     },
+    /// A following point's device can't be confirmed at the address the
+    /// point was placed at (#2795): the device there refuses the read that
+    /// names it, a read of the instance's own Device object names nothing
+    /// on its own (a gateway answers for any instance), and no address the
+    /// device left was asked. Nothing it answers is taken and nothing is subscribed there: the
+    /// point is [`State::Unreachable`](super::State::Unreachable). Watch
+    /// such a device by its address ([`Binding::At`]).
+    Unconfirmed,
 }

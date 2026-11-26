@@ -360,7 +360,7 @@ fn device_event(instance: u32, mac: u8) -> DeviceEvent {
 async fn a_receiver_behind_on_the_table_still_drops_another_senders_notification() {
     let registry = Arc::new(Registry::new(0x100, Duration::ZERO, Vec::new(), false));
     let slot = Arc::new(DeviceSlot::new());
-    let shared = Arc::new(Shared::new(object(ai(1)), 0x100, 4));
+    let shared = Arc::new(Shared::new(object(ai(1)), 0x100, 4, lab_at()));
     {
         let mut entry = shared.lock();
         entry.identity = Some(LAB);

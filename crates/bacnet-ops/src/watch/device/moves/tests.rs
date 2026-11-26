@@ -12,12 +12,13 @@ use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::error::{Error, NetworkReject};
 
 use super::super::super::hub::WatchOptions;
-use super::super::super::jobs::{Answer, left_silence};
+use super::super::super::jobs::Answer;
 use super::super::super::shared::DeviceSlot;
 use super::super::super::test_lab::{ELSEWHERE, LAB, Lab, READ_PROPERTY, lab_at};
 use super::super::{Device, Op};
 use super::{Cue, Moves, WARNED};
 use crate::device::DeviceAddress;
+use crate::device::confirm::left_silence;
 
 /// A scheduler at the lab device's address with no points.
 fn bare(lab: &Lab) -> Device<TestTransport> {

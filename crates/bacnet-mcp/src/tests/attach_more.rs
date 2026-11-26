@@ -164,7 +164,9 @@ async fn the_tui_keeps_its_cov_when_an_agent_leaves_the_same_point() {
     .await
     .unwrap();
     let point = Point {
-        device: bacnet_ops::DeviceAddress::local(&super::LAB_MAC).unwrap(),
+        device: bacnet_ops::watch::Binding::At(
+            bacnet_ops::DeviceAddress::local(&super::LAB_MAC).unwrap(),
+        ),
         object: ai1(),
         watched: Watched::Object,
     };

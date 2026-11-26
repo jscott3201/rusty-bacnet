@@ -7,7 +7,7 @@ use bacnet_ops::DeviceAddress;
 use bacnet_ops::label::kebab;
 use bacnet_ops::octets::hex;
 use bacnet_ops::parse::{parse_object_specifier, parse_property};
-use bacnet_ops::watch::{Point, Watched};
+use bacnet_ops::watch::{Binding, Point, Watched};
 use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -162,10 +162,13 @@ pub(crate) struct PointUri {
 }
 
 impl PointUri {
-    /// The point of the device at `address`, as the watch hub keys it.
+    /// The point of the device at `address`, as the watch hub keys it:
+    /// pinned there (`Binding::At`), so a device that moves away is given up
+    /// as moved, as the URI's instance is looked up again by its next read
+    /// or subscription.
     pub(crate) fn at(self, address: DeviceAddress) -> Point {
         Point {
-            device: address,
+            device: Binding::At(address),
             object: self.object,
             watched: self.watched,
         }

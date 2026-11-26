@@ -80,19 +80,27 @@
 //! | I-Am, the point's device here | - | restart cue | restart cue | restart cue | restart cue | cue; back on the answer |
 //! | I-Am, another device here | - | cue | cue | cue; drops the name if it is the name | waits | - |
 //! | I-Am, a given-up device elsewhere | - | - | - | - | - | looked for (no request, or a following handle's paced Who-Is); found, cue there, no ask |
-//! | I-Ams moving a handle that follows the device away | cue there, asked here even while failing | same | same | same | same | cue there, no ask |
+//! | A handle following the device moving away (after its own reads) | cue there, asked here even while failing | same | same | same | same | cue there, no ask |
 //! | I-Am, the point's device elsewhere, answering there too | - | cue there through a handle's move or the scheduler's look: two claimants, nothing | same | same | same | cue there, no ask |
 //! | Restart notification, its own | - | restart cue | restart cue | restart cue | restart cue | - |
 //! | Restart notification, another's | ignored | ignored | ignored | ignored | ignored | ignored |
+//!
+//! "Given up" is a pinned point's [`Phase::Gone`]; a following point
+//! (#2795) is unreachable then, as the hub looks for its device, and where
+//! a pinned point would be given up as moved it goes to the new address
+//! instead ([`follow`](super::follow)). A following point's instance is
+//! its own from the start: an answer naming another is another device.
+//!
+//! [`Phase::Gone`]: super::super::hub::Phase::Gone
 //!
 //! Points are given up as moved only on that read's answer (#2812), and,
 //! while they are watched, on the answer here to one more ask
 //! ([`moves`](super::moves)), skipped only with no route here, or for the
 //! scheduler's own look while here is failing: its cue is a following
-//! handle's move (on the table's rows, or by its own rule after a timeout),
-//! or the new address the scheduler's own look found after one of its
-//! requests went unanswered (the handle's rule, or the table's positive
-//! evidence).
+//! handle's move (once the device there named the instance to the
+//! handle's own read), or the new address the scheduler's own look found
+//! after one of its requests went unanswered (the handle's rule, or the
+//! table's positive evidence).
 //!
 //! Not caught: a device taking the address before the watched device named
 //! itself, or at all for a device that refuses the wildcard read (it is
@@ -792,12 +800,23 @@ impl<T: TransportPort + 'static> Device<T> {
 
     /// Whether `started`, the start of `process`, was answered while the
     /// table named another instance at the address than the point's (and
-    /// the device's last word doesn't say otherwise) and the device is
-    /// being asked which it is. Then nothing of the start is the point's
-    /// (its subscription, if it made one, isn't kept), and the point waits
-    /// for that answer; between asks, the start stands.
+    /// the device's last word doesn't say otherwise), or, for a following
+    /// point, while the device there had named another instance itself,
+    /// and the device is being asked which it is. Then nothing of the start
+    /// is the point's (its subscription, if it made one, isn't kept), and
+    /// the point waits for that answer; between asks, the start stands.
     pub(super) fn started_elsewhere(&mut self, process: u32, started: &Started) -> bool {
-        let stale = started.instance.is_some_and(|found| self.stale(found));
+        // A following point's instance is its own (#2795): the device's own
+        // word naming another is another device there, never the point's.
+        let follows = self
+            .rows
+            .get(&process)
+            .is_some_and(|row| row.shared.point.device.instance().is_some());
+        let found = match (follows, started.before, started.vouched) {
+            (true, Some(before), true) => Some(before),
+            _ => started.instance,
+        };
+        let stale = found.is_some_and(|found| self.stale(found));
         let Some(row) = self.rows.get_mut(&process) else {
             return false;
         };
@@ -806,15 +825,27 @@ impl<T: TransportPort + 'static> Device<T> {
             None => (started.instance, false),
         };
         let identity = row.shared.learn(learned, vouched);
-        let (Some(watched), Some(found)) = (identity, started.instance) else {
+        let (Some(watched), Some(found)) = (identity, found) else {
             return false;
         };
-        if watched == found || stale {
+        // The device's own word, for a following point, is never stale.
+        if watched == found || (stale && !(follows && vouched)) {
             return false;
         }
         if row.removing || row.shared.is_stopped() {
             let row = self.rows.remove(&process).expect("looked up above");
             self.finish(row);
+            return true;
+        }
+        if follows && vouched {
+            // The device here named itself another instance, answering
+            // the client: the followed device isn't here. Nothing of the
+            // start is the point's (it asked no subscription, `jobs::start`),
+            // and the point is unreachable here, replaced as the device's
+            // answer says, while the hub looks for its device.
+            row.mode = Mode::Held;
+            row.maybe_subscribed |= matches!(started.outcome, Outcome::Asked(Ok(_)));
+            self.check(found);
             return true;
         }
         self.claim(found);

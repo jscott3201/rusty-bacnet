@@ -134,9 +134,11 @@ async fn no_other_claim_sends_once() {
 }
 
 /// Another device announcing itself at a following handle's address takes
-/// the address, not the handle: before its next request the handle, and
-/// a clone of it, move to the one other address claiming the instance,
-/// and nothing goes to the old one (the reviewer's probe P1).
+/// the address, not the handle: before its next request the handle asks
+/// the device there which it is (another), then the one other address
+/// claiming the instance (the device), and only then moves there, a clone
+/// with it; the request itself never goes to the old address (the
+/// reviewer's probe P1, #2795).
 #[tokio::test(start_paused = true)]
 async fn a_reused_address_moves_a_following_handle_before_it_sends() {
     let bus = Bus::new();
@@ -158,9 +160,14 @@ async fn a_reused_address_moves_a_following_handle_before_it_sends() {
     settle().await;
     let mut events = client.events();
     let rp = ConfirmedServiceChoice::READ_PROPERTY;
-    let before = requests(&sent, rp, 2);
+    let (before, there) = (requests(&sent, rp, 2), requests(&sent, rp, 3));
     assert_eq!(name_of(&device).await.unwrap(), "B");
-    assert_eq!(requests(&sent, rp, 2), before, "nothing went to station 2");
+    assert_eq!(requests(&sent, rp, 2) - before, 1, "one ask at station 2");
+    assert_eq!(
+        requests(&sent, rp, 3) - there,
+        2,
+        "the ask there, then the read"
+    );
     assert_eq!(device.address(), at(3));
     assert_eq!(copy.address(), at(3), "a clone moves with it");
     assert_eq!(
@@ -175,8 +182,9 @@ async fn a_reused_address_moves_a_following_handle_before_it_sends() {
 }
 
 /// Another device announcing itself at a following handle's address, with
-/// no other address claiming the instance: the request fails as unknown,
-/// and nothing is sent.
+/// no other address claiming the instance: the device there is asked which
+/// it is, and as another, the request fails as unknown and isn't sent
+/// (#2795).
 #[tokio::test(start_paused = true)]
 async fn a_reused_address_with_no_other_claim_fails_unsent() {
     let bus = Bus::new();
@@ -196,7 +204,7 @@ async fn a_reused_address_with_no_other_claim_fails_unsent() {
         matches!(&error, OpsError::UnknownDevice { target, asked: None } if target == "1001"),
         "{error}"
     );
-    assert_eq!(sent.len(), before, "nothing sent");
+    assert_eq!(sent.len() - before, 1, "only the question");
     assert_eq!(device.address(), at(2));
     stop(vec![other]).await;
 }

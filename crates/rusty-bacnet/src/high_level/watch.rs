@@ -38,10 +38,11 @@ use std::time::Duration;
 use bacnet_ops::target::AddressStyle;
 use bacnet_ops::watch::hub::{Lifetime, MAX_POLL, POLL_FLOOR};
 use bacnet_ops::watch::{
-    MAX_WATCHED, Point, Update, Watch, WatchControl, WatchError, WatchSettings, Watched,
+    Binding, MAX_WATCHED, Point, Update, Watch, WatchControl, WatchError, WatchSettings, Watched,
 };
-use bacnet_ops::{DeviceAddress, OpsError, PropertyRef};
+use bacnet_ops::{OpsError, PropertyRef};
 use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::error::Lifecycle;
 use bacnet_types::sync::MutexExt;
 use pyo3::exceptions::{PyRuntimeError, PyStopAsyncIteration, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -53,6 +54,7 @@ use super::errors::ops_err;
 use super::specs::{property_item, refuse_text};
 use super::watch_update::PyWatchUpdate;
 use crate::client::{END_WAIT, WatchTie};
+use crate::errors::lifecycle_error;
 use crate::event_stream::{EventSource, LossyReceiver};
 use crate::py_async::{PutBack, Via, future_into_py, future_into_py_or_put_back};
 use crate::types::{PyObjectIdentifier, PyPropertyIdentifier};
@@ -337,15 +339,16 @@ pub(super) fn points_arg(points: &Bound<'_, PyAny>) -> PyResult<Vec<PropertyRef>
     Ok(wanted)
 }
 
-/// `wanted` as the point the hub watches at `at`: Present_Value by its
-/// object, as `Device::point` names it.
-fn point_at(at: &DeviceAddress, wanted: &PropertyRef) -> Point {
+/// `wanted` as the point the hub watches of the device `target` names (its
+/// address, or its instance followed): Present_Value by its object, as
+/// `Device::point` names it.
+fn point_of(target: &Binding, wanted: &PropertyRef) -> Point {
     let watched = match (wanted.property, wanted.index) {
         (PropertyIdentifier::PRESENT_VALUE, None) => Watched::Object,
         (property, index) => Watched::Property { property, index },
     };
     Point {
-        device: at.clone(),
+        device: target.clone(),
         object: wanted.object,
         watched,
     }
@@ -375,12 +378,11 @@ pub(super) async fn open(
             .map_err(|error| watch_err(error, style))?;
         let shared = Arc::new(WatchShared::new(watch));
         let tie = keeper.tie().keep_watch(Arc::clone(&shared));
-        let at = device.address();
         Ok(PyWatch {
             shared,
             tie,
-            address: at.styled(style),
-            at,
+            address: device.address().styled(style),
+            target: device.binding(),
             points: Arc::new(Mutex::new(wanted)),
             settings,
             style,
@@ -493,8 +495,9 @@ pub(crate) struct PyWatch {
     shared: Arc<WatchShared>,
     tie: WatchTie,
     address: String,
-    /// Where the points are, as the hub keys them.
-    at: DeviceAddress,
+    /// What the points are bound to: the handle's address, or the instance
+    /// it follows (#2795).
+    target: Binding,
     /// The points watched, in the order named, added ones last. Held
     /// across each change of the hub's, so the two agree.
     points: Arc<Mutex<Vec<PropertyRef>>>,
@@ -503,13 +506,14 @@ pub(crate) struct PyWatch {
 }
 
 impl PyWatch {
-    /// Why a change was refused: the watch has ended (RuntimeError), or
-    /// what any call raises.
+    /// Why a change was refused: the watch has ended (`BacnetStateError`,
+    /// state closed, still a RuntimeError; #2819), or what any call raises.
     fn changed_err(ended: Option<Ended>, error: WatchError, style: AddressStyle) -> PyErr {
         match error {
-            WatchError::Closed | WatchError::Shut => {
-                PyRuntimeError::new_err(ended.map_or("the watch ended", Ended::text).to_string())
-            }
+            WatchError::Closed | WatchError::Shut => lifecycle_error(
+                Lifecycle::Closed,
+                ended.map_or("the watch ended", Ended::text),
+            ),
             other => ops_err(OpsError::Watch(other), style),
         }
     }
@@ -518,10 +522,21 @@ impl PyWatch {
 #[pymethods]
 impl PyWatch {
     /// Where the device answered when the watch was made, as text
-    /// `BACnetClient.device` reads back: every point is at this address.
+    /// `BACnetClient.device` reads back. A watch of a handle made from an
+    /// address keeps every point there; one of a handle made from an
+    /// instance follows the device, and each update's `address` says where
+    /// it answers now.
     #[getter]
     fn address(&self) -> &str {
         &self.address
+    }
+
+    /// True when the watch follows its device's instance from address to
+    /// address (a handle made from an instance), False when it watches one
+    /// address.
+    #[getter]
+    fn follows(&self) -> bool {
+        matches!(self.target, Binding::Follows { .. })
     }
 
     /// The points watched, in the order named, added ones last, each once,
@@ -600,8 +615,9 @@ impl PyWatch {
         )
     }
 
-    /// Watch `points` too, at the watch's address, each in what
-    /// `read_many` takes; those watched already are left as they are.
+    /// Watch `points` too, of the watch's device (at its address, or
+    /// following it, as the watch does), each in what `read_many` takes;
+    /// those watched already are left as they are.
     /// Done before this returns, as `remove` is, so an `add` and a
     /// `remove` take effect in the order called, awaited or not.
     /// Awaitable: the count newly watched. Each new point is read, then
@@ -612,7 +628,7 @@ impl PyWatch {
     /// would take the watch's hub past 4096 (nothing is added then).
     fn add<'py>(&self, py: Python<'py>, points: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let wanted = points_arg(points)?;
-        let added: Vec<Point> = wanted.iter().map(|p| point_at(&self.at, p)).collect();
+        let added: Vec<Point> = wanted.iter().map(|p| point_of(&self.target, p)).collect();
         let count = {
             // Held across the hub's change and the list's, so the two agree.
             let mut list = self.points.locked();
@@ -644,7 +660,7 @@ impl PyWatch {
         points: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let wanted = points_arg(points)?;
-        let removed: Vec<Point> = wanted.iter().map(|p| point_at(&self.at, p)).collect();
+        let removed: Vec<Point> = wanted.iter().map(|p| point_of(&self.target, p)).collect();
         let count = {
             let mut list = self.points.locked();
             let count = self

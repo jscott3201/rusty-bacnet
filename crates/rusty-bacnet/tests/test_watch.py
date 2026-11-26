@@ -28,6 +28,9 @@ import unittest
 
 import rusty_bacnet
 from rusty_bacnet import (
+    BacnetError,
+    BacnetLookupError,
+    BacnetStateError,
     BACnetClient,
     BACnetServer,
     Device,
@@ -38,6 +41,7 @@ from rusty_bacnet import (
     PropertyValue,
     Value,
     Watch,
+    WatchMove,
     WatchReason,
     WatchUpdate,
 )
@@ -134,6 +138,31 @@ async def next_where(watch: Watch, test, seconds: float = 15.0) -> WatchUpdate:
         update = await asyncio.wait_for(anext(watch), left)
         if test(update):
             return update
+
+
+async def table_holds(c: BACnetClient, rows: set[tuple[int, str]]) -> bool:
+    """Whether the discovery table has each (instance, address) of ``rows``."""
+    held = {(d.object_identifier.instance, d.mac_address) for d in await c.discovered_devices()}
+    return all((instance, mac_of(address)) in held for instance, address in rows)
+
+
+def mac_of(address: str) -> bytes:
+    """The B/IP MAC of ``address`` (``host:port``)."""
+    host, port = address.rsplit(":", 1)
+    return bytes(int(octet) for octet in host.split(".")) + int(port).to_bytes(2, "big")
+
+
+def i_am(instance: int) -> bytes:
+    """An I-Am of device ``instance`` in an Original-Unicast-NPDU, for the
+    relay to send to the client's own address. Not an
+    Original-Broadcast-NPDU: that must arrive at the broadcast address, and
+    Windows reports a unicast delivery as one (``MSG_BCAST`` unset), so the
+    client rightly drops it there, while hosts that report nothing take the
+    loopback broadcast address, the client's own here, as a broadcast."""
+    apdu = (bytes([0x10, 0x00, 0xC4]) + ((8 << 22) | instance).to_bytes(4, "big")
+            + bytes([0x22, 0x05, 0xC4, 0x91, 0x03, 0x21, 0x2A]))
+    npdu = bytes([0x01, 0x00]) + apdu
+    return bytes([0x81, 0x0A]) + (len(npdu) + 4).to_bytes(2, "big") + npdu
 
 
 def subscribed(update: WatchUpdate) -> bool:
@@ -317,6 +346,90 @@ class LifetimeTests(Lab):
             await watch.close()
         values = [u.value.value.value for u in seen if u.value is not None]
         self.assertNotIn(999.0, values)
+
+
+class FollowTests(Lab):
+    async def test_a_watch_of_an_instance_follows_its_device(self) -> None:
+        # The same device answering at its own address too: where it goes
+        # once the relay's address falls silent and the table forgets it.
+        moved = await plant(DEVICE, 55.0)
+        self.addAsyncCleanup(cleanup, moved.stop)
+        new = await moved.local_address()
+        async with client() as c:
+            await c.discover(scope=self.address, wait=0.3)
+            dev = await c.device(DEVICE)
+            self.assertTrue(dev.follows)
+            watch = await dev.watch(["ai:1"], lifetime=4, poll_interval=1)
+            self.assertTrue(watch.follows)
+            first = await next_where(watch, subscribed)
+            self.assertEqual((first.address, first.instance, first.moved),
+                             (self.address, DEVICE, None))
+            self.relay.passing = 0
+            await c.clear_devices()
+            await c.discover(scope=new, wait=0.3)
+            went = await next_where(watch, lambda u: u.moved is not None, 30)
+            self.assertIsInstance(went.moved, WatchMove)
+            self.assertEqual((went.moved.from_, went.moved.to, went.address),
+                             (self.address, new, new))
+            self.assertLess(abs(went.moved.timestamp - time.time()), 60)
+            self.assertEqual(went.moved.count, 1)
+            self.assertEqual(repr(went.moved), f"WatchMove({self.address} -> {new})")
+            with self.assertRaises(TypeError):
+                pickle.dumps(went.moved)
+            # The same point, now from the device's own address.
+            self.assertEqual((went.object_id, went.instance), (AI, DEVICE))
+            await next_where(watch, lambda u: subscribed(u) and u.address == new, 30)
+            await moved.set_present_value_local(AI, PropertyValue.real(56.5))
+            update = await next_where(watch, valued(56.5))
+            self.assertEqual((update.address, update.moved.to), (new, new))
+            # The watch took the move after its own request at the relay's
+            # address went unanswered, so the handle stays until a read of
+            # its own asks there and finds the device moved.
+            self.assertEqual(dev.address, self.address)
+            self.assertEqual((await dev.read("ai:1")).data, 56.5)
+            self.assertEqual(dev.address, new)
+            await watch.close()
+            self.assertEqual(await active(moved), 0)
+
+    async def test_a_write_never_moves_a_following_handle(self) -> None:
+        moved = await plant(DEVICE, 55.0)
+        self.addAsyncCleanup(cleanup, moved.stop)
+        new = await moved.local_address()
+        async with client() as c:
+            await c.discover(scope=self.address, wait=0.3)
+            dev = await c.device(DEVICE)
+            # The table: another device at the relay's address, which then
+            # answers nothing, and the device at its own. Until the table
+            # holds both rows, the handle's own row still names the device,
+            # and the write would rightly go there.
+            self.relay.answer(i_am(OTHER))
+            await c.discover(scope=new, wait=0.3)
+            await until(lambda: table_holds(c, {(OTHER, self.address), (DEVICE, new)}),
+                        10, "both rows in the discovery table")
+            self.relay.passing = 0
+            with self.assertRaises(BacnetLookupError) as caught:
+                await dev.write("ai:1", "out-of-service", "true")
+            error = caught.exception
+            self.assertEqual((error.target, error.instance), (str(DEVICE), DEVICE))
+            self.assertEqual(error.at, (0, mac_of(self.address)))
+            self.assertEqual(error.candidate, (0, mac_of(new)))
+            self.assertEqual(error.candidates, [], "a hint is no choice")
+            self.assertIn(f"isn't confirmed at {self.address}", str(error))
+            self.assertIn(f"the discovery table has it at {new}", str(error))
+            self.assertEqual(dev.address, self.address, "a write moves no handle")
+            # Nothing was written at the device's own address either.
+            there = await c.device(new)
+            self.assertIs((await there.read("ai:1", "out-of-service")).data, False)
+
+    async def test_a_watch_of_an_address_stays_there(self) -> None:
+        async with client() as c:
+            dev = await c.device(self.address)
+            watch = await dev.watch(["ai:1"])
+            self.assertFalse(watch.follows)
+            update = await next_where(watch, subscribed)
+            self.assertEqual((update.address, update.instance, update.moved),
+                             (self.address, DEVICE, None))
+            await watch.close()
 
 
 class EndTests(Lab):
@@ -597,10 +710,19 @@ class ChangeTests(Lab):
             await until(lambda: self.relay.count(SUBSCRIBE_COV) >= 3, 10, "the cancel")
             self.assertEqual(await active(self.server), 1)
             await watch.close()
-            with self.assertRaisesRegex(RuntimeError, "it was closed"):
-                await watch.add(["ai:1"])
-            with self.assertRaisesRegex(RuntimeError, "it was closed"):
-                await watch.remove(["ai:2"])
+            # An ended watch is a state (#2819): BacnetStateError, which
+            # both RuntimeError and BacnetError catch, its text unchanged.
+            for change, points in ((watch.add, ["ai:1"]), (watch.remove, ["ai:2"])):
+                for catch in (RuntimeError, BacnetError):
+                    with self.subTest(change=change.__name__, caught_as=catch.__name__):
+                        try:
+                            await change(points)
+                        except catch as error:
+                            self.assertIsInstance(error, BacnetStateError)
+                            self.assertEqual(error.state, "closed")
+                            self.assertEqual(str(error), "the watch ended: it was closed")
+                        else:
+                            self.fail("an ended watch took a change")
 
     async def test_add_and_remove_take_effect_in_the_order_called(self) -> None:
         async with client() as c:
@@ -704,7 +826,7 @@ class ChangeTests(Lab):
 
 
 class StubParityTests(unittest.TestCase):
-    CLASSES = ("Watch", "WatchUpdate", "WatchReason")
+    CLASSES = ("Watch", "WatchUpdate", "WatchReason", "WatchMove")
 
     def test_every_public_member_matches_the_stub(self) -> None:
         for name in self.CLASSES:

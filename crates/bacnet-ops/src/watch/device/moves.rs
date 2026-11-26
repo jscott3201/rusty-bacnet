@@ -45,9 +45,14 @@
 //! that one. So forged cues can hold a real move's read to one a lifetime,
 //! or take its slot; the scheduler's own look after each unanswered poll
 //! cues the real address again. A handle that moved stays where it moved,
-//! whatever the reads find, and the hub's own look ([`Client::relocated`])
-//! still moves a following handle before anything is read there (for the
-//! hub that follows devices, #2795).
+//! whatever the reads find; the hub's own look ([`Client::relocated`])
+//! moves no handle, but a move the reads bore out, the address asked once
+//! more, takes the handles following the instance with the hub's
+//! following points (#2795).
+//!
+//! When the reads bear a move out, the pinned points are given up
+//! ([`Why::Moved`]) and the following ones go to the new address
+//! ([`follow`](super::follow)).
 //!
 //! [`Client::relocated`]: crate::Client
 
@@ -57,9 +62,10 @@ use std::sync::Arc;
 use bacnet_transport::port::TransportPort;
 use tokio::time::Instant;
 
-use super::super::Why;
 use super::super::hub::Phase;
 use super::super::jobs::{self, Answer};
+use super::super::{Binding, Why};
+use super::follow::follows_to;
 use super::identity::{Pace, give_up};
 use super::{Device, Done, Job, Mode, Op, Row};
 use crate::device::DeviceAddress;
@@ -229,8 +235,25 @@ impl<T: TransportPort + 'static> Device<T> {
                 looked,
             });
         } else {
-            self.moved(instance, to);
+            // No point of it watched here: given up for another device the
+            // hub's ask found here, the address was asked; given up for no
+            // word of the device's (unconfirmed), or here failing for the
+            // hub's own request, or no route here: nothing asked.
+            let asked = !watched && self.replaced_here(instance);
+            self.moved(instance, to, asked);
         }
+    }
+
+    /// Whether a point of `instance` here was given up for another device
+    /// the hub's ask found answering here: this address was asked, and
+    /// isn't the device. A point given up as unconfirmed is no such word.
+    fn replaced_here(&self, instance: u32) -> bool {
+        self.rows.values().any(|row| {
+            matches!(
+                row.shared.lock().snapshot.why,
+                Some(Why::Replaced { watched, .. }) if watched == instance
+            )
+        })
     }
 
     /// Whether the device at the address is failing: in its backoff, or a
@@ -257,7 +280,8 @@ impl<T: TransportPort + 'static> Device<T> {
     pub(super) fn left_job(&mut self, instance: u32) -> Option<Job> {
         if !self.rows.values().any(|row| watches(row, instance)) {
             if let Some(cue) = self.moves.asking.take() {
-                self.moved(cue.instance, cue.to);
+                let asked = self.replaced_here(cue.instance);
+                self.moved(cue.instance, cue.to, asked);
             }
             return None;
         }
@@ -283,9 +307,9 @@ impl<T: TransportPort + 'static> Device<T> {
             }
             Answer::Is(found) => {
                 self.settle(found, None);
-                self.moved(instance, to);
+                self.moved(instance, to, true);
             }
-            Answer::Has(_) | Answer::Not | Answer::Silent => self.moved(instance, to),
+            Answer::Has(_) | Answer::Not | Answer::Silent => self.moved(instance, to, true),
             Answer::Unclear | Answer::Failed => tracing::debug!(
                 "device {instance} answers at {to}; the device at {} couldn't say whether it is \
                  still there; no move",
@@ -321,29 +345,80 @@ impl<T: TransportPort + 'static> Device<T> {
         );
     }
 
+    /// A following point's start found a device at the address that
+    /// refuses the read that names it (#2795): nothing there can confirm
+    /// it, so nothing it answered is taken or subscribed, and the point is
+    /// unreachable as unconfirmed. It goes with its device if the hub's
+    /// reads find it at another address.
+    pub(super) fn unconfirmed(&mut self, process: u32) {
+        let seq = &self.inner.registry.seq;
+        let at = &self.address;
+        let Some(row) = self.rows.get_mut(&process) else {
+            return;
+        };
+        let Some(instance) = row.shared.point.device.instance() else {
+            return;
+        };
+        if row.removing || row.shared.is_stopped() {
+            let row = self.rows.remove(&process).expect("looked up above");
+            self.finish(row);
+            return;
+        }
+        let note = format!(
+            "the device at {at} refuses the read that names it, so device {instance} can't be \
+             confirmed there; watch it by its address"
+        );
+        give_up(row, Why::Unconfirmed, note, seq, instance);
+    }
+
     /// The device of `instance` answers at `to` now, as answers there and
-    /// at the address showed: give its points up (those of another instance
-    /// stay), stopping their renewals and sending nothing more for them,
-    /// each noting the instance it was given up for; a point given up for
-    /// that instance already, its address taken by another device, now says
-    /// where it went.
-    fn moved(&mut self, instance: u32, to: DeviceAddress) {
+    /// at the address showed. Its pinned points are given up (those of
+    /// another instance stay), stopping their renewals and sending nothing
+    /// more for them, each noting the instance it was given up for; a point
+    /// given up for that instance already, its address taken by another
+    /// device, now says where it went. Its following points go to `to`
+    /// ([`follow`](super::follow)), the client's handles with them when
+    /// this address was `asked` (#2795). No start runs now: the scheduler
+    /// runs one job at a time, and this is another's end.
+    fn moved(&mut self, instance: u32, to: DeviceAddress, asked: bool) {
         tracing::info!(
-            "device {instance} at {} answers at {to} now; its watches stop",
+            "device {instance} at {} answers at {to} now; its pinned watches stop and its \
+             following ones go there",
             self.address
         );
         let seq = &self.inner.registry.seq;
         let note = format!("the device answers at {to} now; watch it there");
         let mut gone = Vec::new();
+        let mut going = Vec::new();
+        let mut keys = Vec::new();
         for (process, row) in &mut self.rows {
-            if goes(row, instance) {
+            if !goes(row, instance) {
+                continue;
+            }
+            if follows_to(&row.shared, instance, &to) {
+                going.push(*process);
+                if let Binding::Follows { instance, network } = row.shared.point.device {
+                    keys.push(self.inner.client.key(network, instance));
+                }
+            } else {
                 let why = Why::Moved { to: to.clone() };
                 give_up(row, why, note.clone(), seq, instance);
                 gone.push(*process);
             }
         }
-        self.ops
-            .retain(|op| !matches!(op, Op::Start(process) if gone.contains(process)));
+        self.ops.retain(|op| {
+            !matches!(op, Op::Start(process) if gone.contains(process) || going.contains(process))
+        });
+        keys.sort_unstable();
+        keys.dedup();
+        #[cfg(test)]
+        {
+            let hook = self.inner.registry.before_move.lock().unwrap().take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
+        self.follow_to((instance, keys), going, &to, asked);
     }
 }
 

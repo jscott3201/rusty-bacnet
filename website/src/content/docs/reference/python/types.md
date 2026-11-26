@@ -853,6 +853,13 @@ one at a time, each with the next update. `add` and `remove`
 change the points while another task iterates. The watch never ends on
 its own, even when a point is given up or every point removed.
 
+A watch of a handle made from an instance (`follows`) follows its
+device (#2795): once the watch's own reads find the device at another
+address and its old one no longer answering as it, the points move
+there, each update saying so (`WatchUpdate.moved`) and where it is
+watched (`WatchUpdate.address`). An announcement alone moves nothing.
+A watch of a handle made from an address stays there.
+
 It ends on `close()`, when the object goes away, or on its client's
 `stop()`, whichever comes first: `__anext__` raises
 `StopAsyncIteration` then and ever after, saying why, and the
@@ -870,7 +877,8 @@ and refuses `copy` and `pickle`.
 
 Properties:
 
-- `address: str`: Where the device answered when the watch was made, as text `BACnetClient.device` reads back: every point is at this address.
+- `address: str`: Where the device answered when the watch was made, as text `BACnetClient.device` reads back. A watch of a handle made from an address keeps every point there; one of a handle made from an instance follows the device, and each update's `address` says where it answers now.
+- `follows: bool`: True when the watch follows its device's instance from address to address (a handle made from an instance), False when it watches one address.
 - `points: tuple[tuple[ObjectIdentifier, PropertyIdentifier, Optional[int]], ...]`: The points watched, in the order named, added ones last, each once, as `(object, property, array_index)`: Present\_Value for a point named by its object alone.
 - `lifetime: int`: Each subscription's lifetime, in seconds.
 - `poll_interval: float`: The least time between two polls of the device, in seconds.
@@ -887,16 +895,18 @@ def add(
 ) -> Awaitable[int]
 ```
 
-Watch `points` too, at the watch's address, each in what
-`read_many` takes; those watched already are left as they are.
+Watch `points` too, of the watch's device (at its address, or
+following it, as the watch does), each in what `read_many` takes;
+those watched already are left as they are.
 Resolves to the count newly watched. Each new point is read, then
 subscribed (or polled) under the watch's settings; one another
 watch of the same settings holds joins its subscription. Raised:
 `TypeError` or `ValueError` for a bad argument (one str, bytes
 or bytearray, no points, more than 4096, ALL, REQUIRED or OPTIONAL)
-before the awaitable is made; on await `RuntimeError` once the
-watch has ended, or when the points would take the watch's hub past
-4096 (nothing is added then).
+before the awaitable is made; on await `BacnetStateError`
+(`state` `"closed"`, also a `RuntimeError`) once the watch has
+ended, or `RuntimeError` when the points would take the watch's hub
+past 4096 (nothing is added then).
 
 ### Watch.remove
 
@@ -914,7 +924,8 @@ included; one already waiting may still get an update it had
 taken. Resolves to the count removed. A point no other watch holds
 is cancelled on the wire afterwards, best effort, without delaying
 this. Raised: `TypeError` or `ValueError` for a bad argument,
-`RuntimeError` once the watch has ended.
+`BacnetStateError` (`state` `"closed"`, also a
+`RuntimeError`) once the watch has ended.
 
 ### Watch.close
 
@@ -980,11 +991,13 @@ yet.
 
 Properties:
 
-- `address: str`: Where the point's device answers, as text `BACnetClient.device` reads back: the watch's address.
+- `address: str`: Where the point is watched now, as text `BACnetClient.device` reads back: the watch's address, or, for a watch that follows its device, where the device answers now.
+- `instance: Optional[int]`: The device's instance, when known: the one a following watch follows, else the one the device at the address named, or the discovery table's.
+- `moved: Optional[WatchMove]`: For a watch that follows its device: the latest move the watch took (it watches the point at `moved.to`, which is `address`, since `moved.timestamp`); None before any move, and always for a watch of one address. A consumer that falls behind sees the latest move only: compare its `count` to tell a new one. The update a move makes is `"starting"`, with the value read before; values from the new address follow.
 - `object_id: ObjectIdentifier`: The object.
 - `property_id: PropertyIdentifier`: The property whose value `value` is: Present\_Value for a point named by its object alone.
 - `array_index: Optional[int]`: The array element watched, None for the whole property.
-- `state: Literal["starting", "subscribed", "polled", "unreachable", "gone", "other"]`: How the point's watch goes: `"starting"` (its first read and subscription haven't finished), `"subscribed"` (values come as COV notifications), `"polled"` (read with the device's other polled points; `why` says why), `"unreachable"` (the device didn't answer the last request; polled again after a backoff) or `"gone"` (given up: nothing more is sent for it and nothing its address sends is taken as its own; `why` says whether the device moved or another device took its address). `"other"` for a state this version doesn't name.
+- `state: Literal["starting", "subscribed", "polled", "unreachable", "gone", "other"]`: How the point's watch goes: `"starting"` (its first read and subscription haven't finished), `"subscribed"` (values come as COV notifications), `"polled"` (read with the device's other polled points; `why` says why), `"unreachable"` (the device didn't answer the last request, polled again after a backoff; or, for a watch that follows its device, another device answers at its address, `why.kind == "replaced"`, while the watch looks for it) or `"gone"` (a watch of one address only: given up, nothing more is sent for it and nothing its address sends is taken as its own; `why` says whether the device moved or another device took its address). `"other"` for a state this version doesn't name.
 - `why: Optional[WatchReason]`: Why the point isn't subscribed; None while it is subscribed or starting.
 - `value: Optional[Value]`: The value as last read or notified, its text naming the object's units or state; None before any. With `error` set too, it is a value read earlier while the latest read failed.
 - `error: Optional[BacnetError]`: Why the latest read gave no value, as the exception a typed read of the property would raise, never raised here: the device's error for the property or the object, or a `BacnetError` for an answer that left it out. None once a value was read or notified since.
@@ -1002,12 +1015,25 @@ and `pickle`.
 
 Properties:
 
-- `kind: Literal['refused', 'poll-only', 'no-answer', 'full', 'lapsed', 'missing', 'moved', 'replaced', 'foreign-sender', 'other']`: The reason: `"refused"` (the device refused the subscription; not asked again), `"poll-only"` (the watch polls every point, `subscribe=False`), `"no-answer"` (the first read or the subscription went unanswered), `"full"` (the device's subscription table was full) or `"lapsed"` (a renewal failed), each subscribed again after a backoff; `"missing"` (no router to a remote device's network is known); `"moved"` (the device answers at `to` now) or `"replaced"` (device `found` answers at the address now, not `watched`), either of which gives the point up; `"foreign-sender"` (its notifications name device `sender`, which can't be told from another device there, so it is polled). `"other"` for a reason this version doesn't name.
+- `kind: Literal['refused', 'poll-only', 'no-answer', 'full', 'lapsed', 'missing', 'moved', 'replaced', 'foreign-sender', 'unconfirmed', 'other']`: The reason: `"refused"` (the device refused the subscription; not asked again), `"poll-only"` (the watch polls every point, `subscribe=False`), `"no-answer"` (the first read or the subscription went unanswered), `"full"` (the device's subscription table was full) or `"lapsed"` (a renewal failed), each subscribed again after a backoff; `"missing"` (no router to a remote device's network is known); `"moved"` (the device answers at `to` now) or `"replaced"` (device `found` answers at the address now, not `watched`), either of which gives up a point of a watch of one address (a following watch is unreachable for `"replaced"` while it looks for its device, and follows a move); `"foreign-sender"` (its notifications name device `sender`, which can't be told from another device there, so it is polled); `"unconfirmed"` (a following watch's device refuses the read that names it at its address, so nothing it answers is taken: watch it by its address). `"other"` for a reason this version doesn't name.
 - `error: Optional[str]`: The device's error, or the client's, as text, for `"refused"`, `"no-answer"`, `"full"` and `"lapsed"`; else None.
 - `to: Optional[str]`: For `"moved"`: where the device answers now, as text `BACnetClient.device` reads back; else None.
 - `watched: Optional[int]`: For `"replaced"`: the instance an earlier answer named for the point; else None.
 - `found: Optional[int]`: For `"replaced"`: the instance the device at the address answers for now; else None.
 - `sender: Optional[int]`: For `"foreign-sender"`: the instance the notifications name; else None.
+
+## WatchMove
+
+Where a followed device moved, as a watch took it (#2795): its own
+reads named the device at `to`, and its old address no longer
+answered as it. Frozen; refuses `copy` and `pickle`.
+
+Properties:
+
+- `from_: str`: Where the device answered before, as text `BACnetClient.device` reads back. `from_`, as `from` is a keyword.
+- `to: str`: Where it answers now, as text `BACnetClient.device` reads back.
+- `count: int`: How many moves the watch has taken for the point, this one included: compare it to tell a new move.
+- `timestamp: float`: When the watch took the move, as POSIX seconds by the wall clock, as `time.time()`.
 
 ## Discovered
 
@@ -1437,10 +1463,16 @@ keyword left None takes the client's (`watch_lifetime`,
 `watch_poll_interval`, `watch_subscribe`); watches with equal
 settings share their subscriptions (#2603).
 
-The points are at the device's address now: a following handle
-whose device moves later reports it (`why.kind == "moved"`)
-rather than following, and another device answering at the address
-is reported (`"replaced"`) and never taken for this one.
+A handle made from an instance (`follows`) watches its device
+wherever it answers (#2795): once the watch's own reads find the
+device at another address and its old one no longer answering as
+it, the points move there, each update saying so (`moved`, a
+`WatchMove`) and where it is watched (`address`); while another
+device answers at its address the points are `"unreachable"`
+(`why.kind == "replaced"`), never taken for it. A handle made from
+an address watches that address: a device that moves away is
+reported (`"gone"`, `why.kind == "moved"`), another device there
+too (`"replaced"`). An announcement alone moves nothing.
 
 The watch runs on its own until it ends: `close()` (or leaving
 `async with`), the object going away, or the client's `stop()`.
