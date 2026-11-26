@@ -23,9 +23,10 @@
 use bacnet_ops::error::PagingFault;
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::target::AddressStyle;
+use bacnet_ops::watch::WatchError;
 use bacnet_ops::{OpsError, Scope, WriteDenied, Written};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
-use bacnet_types::error::{Error, RemoteError};
+use bacnet_types::error::{Error, Lifecycle, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -33,8 +34,8 @@ use pyo3::prelude::*;
 
 use super::priorities::PyWritten;
 use crate::errors::{
-    BacnetError, BacnetProtocolError, BacnetTimeoutError, DETAIL_ATTRIBUTES, Lookup, lookup_error,
-    set_enum_attr, to_py_err,
+    BacnetError, BacnetProtocolError, BacnetTimeoutError, DETAIL_ATTRIBUTES, Lookup,
+    lifecycle_error, lookup_error, set_enum_attr, to_py_err,
 };
 use crate::types::{PyObjectIdentifier, PyPropertyIdentifier};
 
@@ -153,9 +154,13 @@ pub(crate) fn ops_err(error: OpsError, style: AddressStyle) -> PyErr {
             Lookup::unknown(target),
         ),
         OpsError::Paging(fault) => paging(message, fault),
+        // A hub shut or a watch closed: the binding's own lifecycle state
+        // (#2819), `BacnetStateError`, still a RuntimeError.
+        OpsError::Watch(WatchError::Closed | WatchError::Shut) => {
+            lifecycle_error(Lifecycle::Closed, message)
+        }
         // The hub's own limit, or no runtime: nothing was watched, and the
-        // device said nothing. The state errors of this binding are
-        // RuntimeError ("client not started").
+        // device said nothing.
         OpsError::Watch(_) => PyRuntimeError::new_err(message),
         OpsError::Denied(denied) => write_denied(&denied),
         // As the binding's own SC startup reports TLS material it refused.

@@ -903,9 +903,10 @@ subscribed (or polled) under the watch's settings; one another
 watch of the same settings holds joins its subscription. Raised:
 `TypeError` or `ValueError` for a bad argument (one str, bytes
 or bytearray, no points, more than 4096, ALL, REQUIRED or OPTIONAL)
-before the awaitable is made; on await `RuntimeError` once the
-watch has ended, or when the points would take the watch's hub past
-4096 (nothing is added then).
+before the awaitable is made; on await `BacnetStateError`
+(`state` `"closed"`, also a `RuntimeError`) once the watch has
+ended, or `RuntimeError` when the points would take the watch's hub
+past 4096 (nothing is added then).
 
 ### Watch.remove
 
@@ -923,7 +924,8 @@ included; one already waiting may still get an update it had
 taken. Resolves to the count removed. A point no other watch holds
 is cancelled on the wire afterwards, best effort, without delaying
 this. Raised: `TypeError` or `ValueError` for a bad argument,
-`RuntimeError` once the watch has ended.
+`BacnetStateError` (`state` `"closed"`, also a
+`RuntimeError`) once the watch has ended.
 
 ### Watch.close
 

@@ -537,8 +537,9 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
   waiting included; a step already waiting may still get one it had
   taken. A removed point no other watch holds is cancelled on the wire
   afterwards, best effort; one added again is read afresh. Both take
-  `points` as `watch` does and raise `RuntimeError` once the watch has
-  ended; `add` raises it too when the points would take the watch's hub
+  `points` as `watch` does and raise `BacnetStateError` (`state` is
+  `"closed"`, also a `RuntimeError`) once the watch has ended (#2819);
+  `add` raises `RuntimeError` when the points would take the watch's hub
   past 4096.
 - The watch never ends on its own, not even with every point removed. It
   ends on `close()` (or leaving `async with`), when the object goes away,

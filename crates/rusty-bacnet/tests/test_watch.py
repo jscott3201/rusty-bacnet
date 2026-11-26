@@ -28,7 +28,9 @@ import unittest
 
 import rusty_bacnet
 from rusty_bacnet import (
+    BacnetError,
     BacnetLookupError,
+    BacnetStateError,
     BACnetClient,
     BACnetServer,
     Device,
@@ -693,10 +695,19 @@ class ChangeTests(Lab):
             await until(lambda: self.relay.count(SUBSCRIBE_COV) >= 3, 10, "the cancel")
             self.assertEqual(await active(self.server), 1)
             await watch.close()
-            with self.assertRaisesRegex(RuntimeError, "it was closed"):
-                await watch.add(["ai:1"])
-            with self.assertRaisesRegex(RuntimeError, "it was closed"):
-                await watch.remove(["ai:2"])
+            # An ended watch is a state (#2819): BacnetStateError, which
+            # both RuntimeError and BacnetError catch, its text unchanged.
+            for change, points in ((watch.add, ["ai:1"]), (watch.remove, ["ai:2"])):
+                for catch in (RuntimeError, BacnetError):
+                    with self.subTest(change=change.__name__, caught_as=catch.__name__):
+                        try:
+                            await change(points)
+                        except catch as error:
+                            self.assertIsInstance(error, BacnetStateError)
+                            self.assertEqual(error.state, "closed")
+                            self.assertEqual(str(error), "the watch ended: it was closed")
+                        else:
+                            self.fail("an ended watch took a change")
 
     async def test_add_and_remove_take_effect_in_the_order_called(self) -> None:
         async with client() as c:

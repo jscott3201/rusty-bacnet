@@ -42,6 +42,7 @@ use bacnet_ops::watch::{
 };
 use bacnet_ops::{OpsError, PropertyRef};
 use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::error::Lifecycle;
 use bacnet_types::sync::MutexExt;
 use pyo3::exceptions::{PyRuntimeError, PyStopAsyncIteration, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -53,6 +54,7 @@ use super::errors::ops_err;
 use super::specs::{property_item, refuse_text};
 use super::watch_update::PyWatchUpdate;
 use crate::client::{END_WAIT, WatchTie};
+use crate::errors::lifecycle_error;
 use crate::event_stream::{EventSource, LossyReceiver};
 use crate::py_async::{PutBack, Via, future_into_py, future_into_py_or_put_back};
 use crate::types::{PyObjectIdentifier, PyPropertyIdentifier};
@@ -504,13 +506,14 @@ pub(crate) struct PyWatch {
 }
 
 impl PyWatch {
-    /// Why a change was refused: the watch has ended (RuntimeError), or
-    /// what any call raises.
+    /// Why a change was refused: the watch has ended (`BacnetStateError`,
+    /// state closed, still a RuntimeError; #2819), or what any call raises.
     fn changed_err(ended: Option<Ended>, error: WatchError, style: AddressStyle) -> PyErr {
         match error {
-            WatchError::Closed | WatchError::Shut => {
-                PyRuntimeError::new_err(ended.map_or("the watch ended", Ended::text).to_string())
-            }
+            WatchError::Closed | WatchError::Shut => lifecycle_error(
+                Lifecycle::Closed,
+                ended.map_or("the watch ended", Ended::text),
+            ),
             other => ops_err(OpsError::Watch(other), style),
         }
     }
