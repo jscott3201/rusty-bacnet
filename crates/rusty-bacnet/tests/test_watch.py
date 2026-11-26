@@ -153,11 +153,16 @@ def mac_of(address: str) -> bytes:
 
 
 def i_am(instance: int) -> bytes:
-    """An I-Am of device ``instance``, as a B/IP broadcast."""
+    """An I-Am of device ``instance`` in an Original-Unicast-NPDU, for the
+    relay to send to the client's own address. Not an
+    Original-Broadcast-NPDU: that must arrive at the broadcast address, and
+    Windows reports a unicast delivery as one (``MSG_BCAST`` unset), so the
+    client rightly drops it there, while hosts that report nothing take the
+    loopback broadcast address, the client's own here, as a broadcast."""
     apdu = (bytes([0x10, 0x00, 0xC4]) + ((8 << 22) | instance).to_bytes(4, "big")
             + bytes([0x22, 0x05, 0xC4, 0x91, 0x03, 0x21, 0x2A]))
     npdu = bytes([0x01, 0x00]) + apdu
-    return bytes([0x81, 0x0B]) + (len(npdu) + 4).to_bytes(2, "big") + npdu
+    return bytes([0x81, 0x0A]) + (len(npdu) + 4).to_bytes(2, "big") + npdu
 
 
 def subscribed(update: WatchUpdate) -> bool:
@@ -394,10 +399,9 @@ class FollowTests(Lab):
             await c.discover(scope=self.address, wait=0.3)
             dev = await c.device(DEVICE)
             # The table: another device at the relay's address, which then
-            # answers nothing, and the device at its own. The relay's I-Am
-            # can land after the discovery ends (a loaded runner): until the
-            # table holds both rows, the handle's own row still names the
-            # device, and the write would rightly go there.
+            # answers nothing, and the device at its own. Until the table
+            # holds both rows, the handle's own row still names the device,
+            # and the write would rightly go there.
             self.relay.answer(i_am(OTHER))
             await c.discover(scope=new, wait=0.3)
             await until(lambda: table_holds(c, {(OTHER, self.address), (DEVICE, new)}),
