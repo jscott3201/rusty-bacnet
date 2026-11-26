@@ -1,12 +1,60 @@
 //! The segment timer's expiry, called on its own (#2558). The wait reaches
 //! it only when the timer and a segment's progress are ready in the same
 //! poll and the select takes the timer, a race no end-to-end test can pin:
-//! here the transaction's state is set by hand first.
+//! here the transaction's state is set by hand first. And a retry that its
+//! stopped link refuses (#1833).
 
 use super::*;
 use bacnet_transport::test_transport::{StartMode, TestTransport};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::error::Lifecycle;
+use bacnet_types::primitives::ObjectIdentifier;
+use std::sync::Arc;
+use std::time::Duration;
 
 const PEER: &[u8] = &[0x02];
+
+/// A request that went out, whose link then stopped while the client ran
+/// on (#1833): the link refuses its retry for its state, and the request
+/// ends cut off as one that went out, which the device may have carried
+/// out, not with that refusal, which says nothing was done. A request
+/// after the stop gets the refusal itself: nothing of it left.
+#[tokio::test(start_paused = true)]
+async fn a_retry_its_stopped_link_refuses_ends_the_request_cut_off_as_sent() {
+    let transport = TestTransport::builder()
+        .local_mac(&[0x01])
+        .start(StartMode::Fresh(4))
+        .build();
+    let sent = transport.handle().sent();
+    let config = ClientConfig {
+        apdu_timeout_ms: 1_000,
+        apdu_retries: 1,
+        ..ClientConfig::default()
+    };
+    let client = Arc::new(BACnetClient::start(config, transport).await.unwrap());
+    let object = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap();
+    let present = PropertyIdentifier::PRESENT_VALUE;
+    let read = tokio::spawn({
+        let client = Arc::clone(&client);
+        async move { client.read_property(PEER, object, present, None).await }
+    });
+    while sent.is_empty() {
+        tokio::task::yield_now().await;
+    }
+    client.transport().stop().await.unwrap();
+    tokio::time::advance(Duration::from_millis(1_100)).await;
+    let ended = read.await.unwrap();
+    assert!(
+        matches!(ended, Err(Error::RequestCutOff { sent: true })),
+        "{ended:?}"
+    );
+    assert_eq!(sent.len(), 1, "the retry went nowhere");
+    let refused = client.read_property(PEER, object, present, None).await;
+    assert!(
+        matches!(refused, Err(Error::State(Lifecycle::NotRunning, _))),
+        "{refused:?}"
+    );
+}
 
 #[tokio::test(start_paused = true)]
 async fn a_segment_timer_expiry_follows_the_transaction_s_phase_and_generation() {

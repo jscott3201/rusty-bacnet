@@ -123,7 +123,7 @@ struct CutOff {
 
 impl fmt::Display for CutOff {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the request ended without an answer: the client stopped ")?;
+        f.write_str("the request ended without an answer: the client or its link stopped ")?;
         if self.sent {
             f.write_str("while it waited, and the device may have carried it out")
         } else {
@@ -483,13 +483,15 @@ pub enum Error {
         sent: bool,
     },
 
-    /// A confirmed request whose transaction its client ended under it
-    /// before an answer came (#2617, #2720, #1833): the client's own stop,
-    /// or the stop or drop of the endpoint or node it runs on, while the
-    /// request waited for its turn at the destination or for its answer.
-    /// It is that one transaction's outcome, not a lifecycle state of the
-    /// client: a call made after the stop gets its own refusal. No answer
-    /// will come for it.
+    /// A request that ended before an answer came because the client or
+    /// its link stopped under it (#2617, #2720, #1833): the client's own
+    /// stop, or the stop or drop of the endpoint or node it runs on, while
+    /// the request waited for its turn at the destination or for its
+    /// answer; or the link stopping after the request went out, which
+    /// refuses its retry or a later segment, or drops the wait of a B/IP
+    /// BVLC management request. It is that one request's outcome, not a
+    /// lifecycle state: a call made after the stop gets
+    /// [`Error::State`], with nothing sent. No answer will come for it.
     #[error("{}", CutOff { sent: *.sent })]
     RequestCutOff {
         /// `false`: nothing of the request left, as it was still waiting

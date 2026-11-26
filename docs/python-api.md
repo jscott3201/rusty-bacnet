@@ -812,7 +812,7 @@ ask only the instances between them: give both or neither.
 | `BacnetNetworkRejectError` | A router on the way refused the request (#2724); `reached_device` is `False` when it never reached the device, `None` when an earlier attempt may have |
 | `BacnetError` | Among others, an acknowledgement of the wrong kind for the service: a write may or may not have been applied (#2721). For a device in the field that acknowledges writes with a Complex-ACK, `BACnetClient(..., accept_complex_ack_for_simple_services=True)` takes that as success |
 | `BacnetTransportError` | The link failed |
-| `BacnetStateError` (also `RuntimeError`) | The link's own state refused the request before it went: not started, stopped, or a router-application client's router closed. `state` says which. Nothing was sent, and the device wasn't asked |
+| `BacnetStateError` (also `RuntimeError`) | The link's own state refused the request before it went: not started, stopped, or a router-application client's router closed. `state` says which. Nothing was sent, and the device wasn't asked. A request that went out before its link stopped raises `BacnetError` (the request ended without an answer): it may have been carried out |
 | `BacnetReadBackError`, `BacnetNoPriorityArrayError` | A relinquish the device acknowledged whose read back failed, or found no Priority_Array |
 | `BacnetPagingError` | A device broke a paged read's rules. No call pages yet |
 | `RuntimeError` | The client isn't started |
@@ -7567,7 +7567,7 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetReadBackError` | The device acknowledged a `relinquish`, which took effect, but the read after it failed; `written` is the relinquish and `__cause__` the read's error. Not a `BacnetTimeoutError` |
 | `BacnetNoPriorityArrayError` | A `BacnetProtocolError` (PROPERTY / UNKNOWN_PROPERTY): the device says the object has no Priority_Array. `object_id` is the object, and `written` the NULL a `relinquish` sent first (None from `priority_array`) |
 | `BacnetTransportError` | A socket or I/O failure: a bind or listen that fails (B/IP, B/IPv6, `ScHub.start`), a failed SC dial. Also an `OSError` |
-| `BacnetStateError` | A call refused for the state its component was in (#1833): a send on a transport that isn't started or has stopped, a router-application client's router closed, a second start, a channel closed under the call, a BACnet/SC node whose hub isn't connected. Nothing was done, and the link didn't fail. Also a `RuntimeError`. `state` is `"not_running"` (not started, or stopped and able to start again), `"closed"` (stopped for good), `"stopping"`, `"already_started"` or `"not_connected"`. A request the client's stop cut off while it waited raises `BacnetError` instead, since it may have gone out |
+| `BacnetStateError` | A call refused for the state its component was in (#1833): a send on a transport that isn't started or has stopped, a router-application client's router closed, a second start, a channel closed under the call, a BACnet/SC node whose hub isn't connected. Nothing was done, and the link didn't fail. Also a `RuntimeError`. `state` is `"not_running"` (not started, or stopped and able to start again), `"closed"` (stopped for good), `"stopping"`, `"already_started"` or `"not_connected"`. A request that went out before the client or its link stopped under it raises `BacnetError` instead, since the device may have carried it out |
 | `BacnetRouterCloseError` | A `BACnetRouter`'s cleanup failed; `failures` holds a tuple of `RouterCleanupFailure` records (see [B/IP router](#bip-router)) |
 
 ```python
@@ -8630,7 +8630,7 @@ on the endpoint's link. Its calls keep their names and result shapes:
 | `write_property(address, ..., *, commandability=...)` | `write_property(address, ...)` without `commandability=`; it takes a `RoutedTarget` too, and sends a raw value as given |
 | `service_scope()` | gone: the client initiates every service it has a call for |
 | a request no one answered: `BacnetTimeoutError` | `BacnetAbortError` for the transaction's timeout, as a typed call raises it |
-| a call after the endpoint closed: `BacnetError` | `RuntimeError` naming the endpoint; a request the close cut off raises `BacnetError` saying the client stopped while it waited |
+| a call after the endpoint closed: `BacnetError` | `RuntimeError` naming the endpoint; a request the close cut off raises `BacnetError` saying the client or its link stopped while it waited |
 | an endpoint with `source_audit_reporter`: audited reads and `write_property(..., commandability=...)` | the same reads, audited, plus the other reads and writes listed under [The endpoint's client](#the-endpoints-client); a write's `priority` makes it a command at that priority |
 
 Not yet routed on the full client: the COV subscriptions and the other

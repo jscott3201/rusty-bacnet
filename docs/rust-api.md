@@ -391,14 +391,16 @@ the OS error kept as the source and an NPDU too long for the link as
 endpoint session or ingress that is not running says why with its
 `Lifecycle`: `NotRunning` before its start, `Stopping` while a stop runs, and
 `Closed` once stopped or shut, since each starts once. A stopped server's
-broadcaster and a closed client seat are `Closed` too. A confirmed request
-its client's stop cut off is no lifecycle refusal but its own outcome,
-`Error::RequestCutOff { sent }`. A server answers each of its own refusals
+broadcaster and a closed client seat are `Closed` too. A request that
+ended because the client or its link stopped under it is no lifecycle
+refusal but its own outcome, `Error::RequestCutOff { sent }`: so is a
+request that went out before its link stopped, whose retry or later segment
+the stopped link then refused. A server answers each of its own refusals
 with the Error PDU SERVICES / OTHER, as it answered their text. A send on a
 transport that isn't started, or has stopped, is a lifecycle refusal too: `NotRunning`
 before start and after the stop of a transport that starts again, `Closed`
 after the stop of one that doesn't, and a second start `AlreadyStarted`
-(below). Nothing of such a send was attempted: the client's source Audit
+(below). Nothing of such a send was attempted, and nothing of its request had gone out: the client's source Audit
 doesn't count it, `bacnet-ops` treats it as the client's own failure rather
 than a device that stopped answering, a router draws no reject from it, and
 the bindings raise `BacnetStateError`.
@@ -13993,7 +13995,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (objects, device-core and the crates above the client and server) |
 | `Error::Transport(io_error)` | Transport I/O failure, with the OS error as its source where one caused it: a socket's, a serial port's open, read or write, GPIO, the RS-485 ioctl, entropy (#1833), an SC dial's TLS handshake. A send this side's link didn't carry before its deadline (an endpoint's deadline-bound send, a server's audit forwarding) is one of kind `TimedOut`, not `Error::Timeout` (#1833). A stopped transport's send is `Error::State` |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
-| `Error::RequestCutOff { sent }` | The client's stop, or its endpoint's or node's, ended a confirmed request before an answer came (#1833). `sent: false`: it was still waiting for its turn and nothing left. `sent: true`: it, or some of its segments, may have gone out and been carried out, so don't send a write again blindly. The text says which; an endpoint whose audited request's task its stop ended reports it with `sent: true` too. The source Audit records one with `sent: true`, its outcome unknown (COMMUNICATION, OTHER), and not one with `sent: false` |
+| `Error::RequestCutOff { sent }` | A request ended before an answer came because the client or its link stopped under it (#1833): the client's stop, its endpoint's or node's, or the link stopping after the request went out, refusing its retry or a later segment or dropping a B/IP BVLC management request's wait. `sent: false`: it was still waiting for its turn and nothing left. `sent: true`: it, or some of its segments, may have gone out and been carried out, so don't send a write again blindly. The text says which; an endpoint whose audited request's task its stop ended reports it with `sent: true` too. The source Audit records one with `sent: true`, its outcome unknown (COMMUNICATION, OTHER), and not one with `sent: false` |
 | `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles); `BACnetClient::resolve_device` and the calls that look a device up by its instance refuse an instance the table doesn't hold this way (#1833); a server's audit send to a recipient with no router known fails this way too, and counts as not sent |
 
 ---

@@ -142,8 +142,25 @@ impl RouterResponse {
                     tokio::sync::mpsc::error::TrySendError::Closed(()) => unavailable(),
                 })?;
         }
-        completed.await.map_err(|_| unavailable())?
+        // The completion went without an answer: dropped from the queue
+        // before its send, or after `start` handed it to a send that a stop
+        // then cut short, which may have reached the link. Which can't be
+        // told here, so not the closed state, which says nothing was done
+        // (#1833), and not a request's cut-off: this is a reply. It keeps
+        // the link's not-connected error it had.
+        completed.await.map_err(|_| reply_lost())?
     }
+}
+
+/// A queued reply whose completion went unanswered, whether or not its
+/// send began (see [`RouterResponse::send`]).
+#[cold]
+#[inline(never)]
+fn reply_lost() -> Error {
+    Error::Transport(std::io::Error::new(
+        std::io::ErrorKind::NotConnected,
+        "original router response route unavailable",
+    ))
 }
 
 pub(super) struct ReplyCompletion {

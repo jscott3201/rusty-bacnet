@@ -415,13 +415,13 @@ fn a_cut_off_request_says_whether_it_may_have_been_carried_out() {
     let unsent = Error::RequestCutOff { sent: false };
     assert_eq!(
         unsent.to_string(),
-        "the request ended without an answer: the client stopped before it was sent"
+        "the request ended without an answer: the client or its link stopped before it was sent"
     );
     let sent = Error::RequestCutOff { sent: true };
     assert_eq!(
         sent.to_string(),
-        "the request ended without an answer: the client stopped while it waited, and the \
-         device may have carried it out"
+        "the request ended without an answer: the client or its link stopped while it waited, \
+         and the device may have carried it out"
     );
     for cut_off in [unsent, sent] {
         assert_eq!(cut_off.remote(), None);

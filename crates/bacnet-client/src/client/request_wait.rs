@@ -173,7 +173,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 self.enqueue_transaction_cleanup(
                                     tsm_mac, invoke_id, owner, false, None,
                                 );
-                                return Expired::End(Err(error));
+                                return Expired::End(Err(super::requests::retry_refused(error)));
                             }
                             RequestTimerExpiration::Retry | RequestTimerExpiration::Withdrawn => {
                                 unreachable!(

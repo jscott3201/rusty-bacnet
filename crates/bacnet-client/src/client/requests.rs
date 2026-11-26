@@ -127,6 +127,21 @@ pub(super) fn cut_off(sent: bool) -> Error {
     Error::RequestCutOff { sent }
 }
 
+/// The error a request ends with when a send after its first one (a retry,
+/// or a segment once an earlier one left) failed with `error` (#1833). A
+/// link that stopped under the request refuses it for its state; the
+/// request may already have reached the device, so it is cut off as sent,
+/// not that refusal, which says nothing was done. Any other failure, a
+/// link's I/O error say, is the request's own end as it is.
+#[cold]
+#[inline(never)]
+pub(super) fn retry_refused(error: Error) -> Error {
+    match error {
+        Error::State(..) => cut_off(true),
+        other => other,
+    }
+}
+
 /// A confirmed request to a group address on this link, refused out of
 /// line from the hot request path (#1833).
 #[cold]

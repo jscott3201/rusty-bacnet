@@ -629,11 +629,23 @@ async fn a_request_given_up_after_stop_leaves_the_status_clear() {
         received = peer.recv_from(&mut packet) => { received.unwrap(); }
     }
     transport.stop().await.unwrap();
-    // It fails as a request after the stop does (#2612).
+    // It had gone out, so it is cut off as sent, not refused as a request
+    // after the stop is (#2612, #1833): the BBMD may have carried it out.
     match request.await.unwrap_err() {
-        BvlcExchangeError::Transport(Error::State(Lifecycle::NotRunning, _)) => {}
-        other => panic!("not the not-started error: {other}"),
+        BvlcExchangeError::Transport(Error::RequestCutOff { sent: true }) => {}
+        other => panic!("not the cut-off error: {other}"),
     }
+    let after = node
+        .request(&target, register(60), THREE_SECONDS, None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            after,
+            BvlcExchangeError::Transport(Error::State(Lifecycle::NotRunning, _))
+        ),
+        "{after}"
+    );
     let snapshot = transport.bvlc_client_snapshot();
     assert_eq!(snapshot.foreign_registration.last_outcome, None);
     assert_eq!(snapshot.foreign_registration.attempts, 1);

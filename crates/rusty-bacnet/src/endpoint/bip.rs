@@ -75,13 +75,15 @@ async fn bvlc_tables(
 
 /// A table read's failure. One that `close()` cut off, or that met the
 /// transport stopping, raises what a read after `close()` does (#2612): the
-/// B/IP transport reports both as not running (#1833).
+/// B/IP transport reports one refused before it went as not running, and
+/// one whose wait the stop dropped after it went as cut off (#1833). A
+/// read changes nothing at the BBMD, so neither has anything more to say.
 fn table_read_error(error: bacnet_transport::bip::BvlcExchangeError) -> PyErr {
+    use bacnet_types::error::{Error, Lifecycle};
     match &error {
-        bacnet_transport::bip::BvlcExchangeError::Transport(bacnet_types::error::Error::State(
-            bacnet_types::error::Lifecycle::NotRunning,
-            _,
-        )) => PyRuntimeError::new_err("endpoint not started"),
+        bacnet_transport::bip::BvlcExchangeError::Transport(
+            Error::State(Lifecycle::NotRunning, _) | Error::RequestCutOff { .. },
+        ) => PyRuntimeError::new_err("endpoint not started"),
         _ => crate::errors::bvlc_exchange_err(error),
     }
 }

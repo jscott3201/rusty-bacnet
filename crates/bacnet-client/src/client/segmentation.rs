@@ -368,7 +368,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 .map(|(i, s)| (window_start + i, s))
             {
                 let is_last = seq == total_segments - 1;
-                match self
+                let sent = self
                     .send_outgoing_segment(
                         transfer.send_context,
                         seq,
@@ -377,8 +377,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         response_rx,
                         progress_rx,
                     )
-                    .await?
-                {
+                    .await;
+                // Once segment 0 left, a link that stopped under the request
+                // cuts it off as sent (#1833).
+                let sent = match sent {
+                    Err(error) if seq > 0 => Err(super::requests::retry_refused(error)),
+                    sent => sent,
+                };
+                match sent? {
                     OutgoingSegmentSend::Sent => {
                         debug!(seq, is_last, "Sent segment");
                     }
@@ -503,6 +509,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             .map(|(i, s)| (window_start + i, s))
                         {
                             let is_last = seq == transfer.send_context.total_segments - 1;
+                            // A resend: the window left before, so a link
+                            // that stopped since cuts the request off as
+                            // sent (#1833).
                             match self
                                 .send_outgoing_segment(
                                     transfer.send_context,
@@ -512,7 +521,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     response_rx,
                                     progress_rx,
                                 )
-                                .await?
+                                .await
+                                .map_err(super::requests::retry_refused)?
                             {
                                 OutgoingSegmentSend::Sent => {
                                     debug!(seq, is_last, "Retransmitted segment");

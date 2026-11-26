@@ -2,7 +2,8 @@
 //! Audit (#2617). These hold the node's state through a server seat taken
 //! from the session's ingress, as a seated server does, so each case sets
 //! it by hand; `source_server_tests.rs` drives it through the full server
-//! the session builds.
+//! the session builds. Beside them, a request whose retry its stopped link
+//! refused, recorded by the same rule (#1833).
 use super::*;
 use bacnet_client::client::ClientOptions;
 use bacnet_endpoint_core::seat::ServerSeat;
@@ -284,6 +285,48 @@ async fn an_audited_request_whose_retry_is_withheld_is_recorded_as_failed() {
     .await;
     drop(client);
     drop(seat);
+    session.stop().await.unwrap();
+    peer.stop().await.unwrap();
+    sink.stop().await.unwrap();
+}
+
+/// A request that went out, whose link then stopped under the client
+/// (#1833): the link refuses its retry for its state, and the request ends
+/// cut off as one that went out, which the source Audit records, as it
+/// records one whose retry DeviceCommunicationControl withheld. The
+/// record's own delivery fails on the stopped link, which the Reporter
+/// reports; before #1833 nothing was recorded.
+#[tokio::test(start_paused = true)]
+async fn a_request_its_link_stranded_is_recorded_as_cut_off() {
+    let (peer, mut requests) = network().await;
+    let (sink, _records) = network().await;
+    let mut session = session(database(false), SessionRole::ClientOnly, &sink);
+    session.client_config.apdu_timeout_ms = 1_000;
+    session.client_config.apdu_retries = 1;
+    session.start().await.unwrap();
+    let client = client_of(&session);
+    let read = start_read(
+        &client,
+        peer.local_mac(),
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+    );
+    let _first = receive(&mut requests).await;
+    let no_fault = Reliability::NO_FAULT_DETECTED.to_raw();
+    assert_eq!(reliability(&session).await, no_fault);
+    client.transport().stop().await.unwrap();
+    let ended = timeout(WAIT, read).await.unwrap().unwrap();
+    assert!(
+        matches!(ended, Err(Error::RequestCutOff { sent: true })),
+        "{ended:?}"
+    );
+    let failure = Reliability::COMMUNICATION_FAILURE.to_raw();
+    eventually(WAIT, "a record went to the stopped link", async || {
+        reliability(&session).await == failure
+    })
+    .await;
+    assert!(requests.try_recv().is_err(), "no retry went");
+    drop(client);
     session.stop().await.unwrap();
     peer.stop().await.unwrap();
     sink.stop().await.unwrap();

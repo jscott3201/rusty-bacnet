@@ -4930,8 +4930,9 @@ class BacnetStateError(BacnetError, RuntimeError):
     the bindings' own "not started" checks raise, so ``except RuntimeError``
     catches both.
 
-    A request the client's stop cut off while it waited is not one: it
-    raises ``BacnetError``, since it may already have gone out.
+    A request that went out before the client or its link stopped under it
+    is not one: it raises ``BacnetError``, since the device may have carried
+    it out.
 
     Attributes:
         state: Which state refused the call: ``"not_running"`` (not started

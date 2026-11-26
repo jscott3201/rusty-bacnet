@@ -172,9 +172,10 @@ pub fn unreachable(error: &Error) -> bool {
 ///   [`Error::LimitReached`] (a client out of invoke IDs). Each is the
 ///   client's or the link's own refusal: a stopped local link is not a
 ///   device that stopped answering, so [`unreachable()`] doesn't count it.
-/// - [`Error::RequestCutOff`]: the client's own stop, or its node's, ended
-///   the request before an answer came. With `sent: true` it **may already
-///   have left**, and the device may have carried it out.
+/// - [`Error::RequestCutOff`]: the client or its link stopped under the
+///   request before an answer came (the client's own stop, its node's, or
+///   the link's after the request went out). With `sent: true` it **may
+///   already have left**, and the device may have carried it out.
 ///
 /// So a failure here is not "never sent", and nothing may send again on the
 /// strength of one: reads only stop on it, since the client, not the

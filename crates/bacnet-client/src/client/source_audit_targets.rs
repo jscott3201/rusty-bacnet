@@ -246,7 +246,7 @@ pub(super) fn decode(
 /// transport failure while sending, a router's refusal of a request that
 /// went out (#2724), a request sent before the node's
 /// DeviceCommunicationControl withheld its retry, and one whose transaction
-/// its client's or node's stop ended after it may have gone out
+/// its client, node or link stopping ended after it may have gone out
 /// ([`Error::RequestCutOff`] with `sent: true`, #1833) did. A refusal
 /// before anything was sent did not: a transport that isn't started or has
 /// stopped ([`Error::State`], #1833) and every other local refusal, and a

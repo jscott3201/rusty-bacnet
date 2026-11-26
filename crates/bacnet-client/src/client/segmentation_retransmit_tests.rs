@@ -736,5 +736,46 @@ async fn negative_ack_naming_last_of_window_advances_the_window() {
         .expect("a NAK naming the window's last segment must advance, not stall");
 }
 
+/// Segment zero went out, then the client's link stopped while the client
+/// ran on (#1833): the link refuses the window's resend for its state, and
+/// the request ends cut off as one that went out, not with that refusal,
+/// which says nothing was done.
+#[tokio::test(start_paused = true)]
+async fn a_resend_its_stopped_link_refuses_ends_the_request_cut_off_as_sent() {
+    let (client_transport, mut server_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let mut server_rx = server_transport.start().await.unwrap();
+    let config = ClientConfig {
+        apdu_timeout_ms: 2000,
+        apdu_retries: 1,
+        max_apdu_length: 50,
+        proposed_window_size: 2,
+        ..ClientConfig::default()
+    };
+    let client = std::sync::Arc::new(BACnetClient::start(config, client_transport).await.unwrap());
+    let request = tokio::spawn({
+        let client = std::sync::Arc::clone(&client);
+        async move {
+            let data: Vec<u8> = (0..140).map(|i| i as u8).collect();
+            let service = ConfirmedServiceChoice::WRITE_PROPERTY;
+            client.confirmed_request(&[0x02][..], service, &data).await
+        }
+    });
+    let zero = recv_confirmed_segment(&mut server_rx, "segment zero").await;
+    assert_eq!(zero.sequence_number, Some(0));
+    client.transport().stop().await.unwrap();
+    let ended = timeout(Duration::from_secs(10), request)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(
+            ended,
+            Err(bacnet_types::error::Error::RequestCutOff { sent: true })
+        ),
+        "{ended:?}"
+    );
+    expect_quiet(&mut server_rx, 100, "nothing more went out").await;
+}
+
 #[path = "segmentation_first_window_tests.rs"]
 mod first_window;
