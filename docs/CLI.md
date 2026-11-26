@@ -310,22 +310,28 @@ names the command, the device form first.
 
 After the command, the CLI prints the client's routed paths to stderr when
 something happened that the command line didn't ask for: a path learned a
-limit from a router, or the client dropped a too-long reject. With `-v` it
+limit from a router, the client dropped a too-long reject, or it refused an
+answer for a routed device that came from another station than the
+request's router (#2831). With `-v` it
 prints them whenever a path holds a limit. Stdout stays the command's own
 output. With table output it is a table, one row a path (the router in the
 link's own form, the network, the limit in force, where it comes from:
 `default`, `configured` or `learned`, the configured and learned limits, and
-whether a small request was refused there), and a line with the two counts of
-rejects the client did not believe. With JSON output it is one line:
+whether a small request was refused there), a line with the two counts of
+rejects the client did not believe, and a line with the count of answers it
+refused for the path they came by. With JSON output it is one line:
 
 ```json
-{"routed_paths":[{"router":"192.168.1.20:47808","network":5,"max_npdu":228,"source":"default","configured_max_npdu":null,"learned_max_npdu":null,"below_minimum_reject_seen":true}],"too_long_reject_drops":0,"below_minimum_reject_drops":4,"hint":"a router refused a request of 228 NPDU octets or fewer as too long, ..."}
+{"routed_paths":[{"router":"192.168.1.20:47808","network":5,"max_npdu":228,"source":"default","configured_max_npdu":null,"learned_max_npdu":null,"below_minimum_reject_seen":true}],"too_long_reject_drops":0,"below_minimum_reject_drops":4,"off_path_answer_drops":0,"hint":"a router refused a request of 228 NPDU octets or fewer as too long, ..."}
 ```
 
 `too_long_reject_drops` counts rejects that could answer a larger frame of an
 earlier request on the same path, and clears by itself;
 `below_minimum_reject_drops` counts rejects for a request of 228 octets or
-fewer. When the command timed out after such a reject, `hint` (a `Hint:` line
+fewer. `off_path_answer_drops` counts answers for a routed device's open
+request that came from another station than the router the request went
+to: a rise means a station is answering for routed devices. When the
+command timed out after such a reject, `hint` (a `Hint:` line
 in a table) names the flag to set for each path that drew one; otherwise it is
 `null`.
 

@@ -188,8 +188,9 @@ fn timed_out(outcome: &CliResult) -> bool {
     false
 }
 
-/// The client's routed paths and its two counts of too-long rejects it
-/// did not believe, after the command.
+/// The client's routed paths, its two counts of too-long rejects it did not
+/// believe and its count of answers it refused for the path they came by,
+/// after the command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct Summary {
     /// Each path as `bacnet_ops` decodes it: router in the link's own form,
@@ -197,6 +198,9 @@ struct Summary {
     routed_paths: Vec<RoutedPathStatus>,
     too_long_reject_drops: u64,
     below_minimum_reject_drops: u64,
+    /// Answers for a routed device that came from another station than the
+    /// request's router (#2831).
+    off_path_answer_drops: u64,
     /// What to do about a timeout on a path whose router refused a small
     /// request as too long; `null` otherwise.
     hint: Option<String>,
@@ -209,6 +213,7 @@ impl Summary {
             paths.paths,
             paths.too_long_reject_drops,
             paths.below_minimum_reject_drops,
+            paths.off_path_answer_drops,
             timed_out,
         )
     }
@@ -217,6 +222,7 @@ impl Summary {
         routed_paths: Vec<RoutedPathStatus>,
         too_long_reject_drops: u64,
         below_minimum_reject_drops: u64,
+        off_path_answer_drops: u64,
         timed_out: bool,
     ) -> Self {
         let hint = (timed_out && below_minimum_reject_drops > 0).then(|| hint(&routed_paths));
@@ -224,16 +230,18 @@ impl Summary {
             routed_paths,
             too_long_reject_drops,
             below_minimum_reject_drops,
+            off_path_answer_drops,
             hint,
         }
     }
 
-    /// Whether to print it: when the client learned a limit or dropped a
-    /// reject, which the command line did not ask for, and with `-v` when
-    /// there is anything to show.
+    /// Whether to print it: when the client learned a limit, dropped a
+    /// reject or refused an answer, which the command line did not ask for,
+    /// and with `-v` when there is anything to show.
     fn shown(&self, verbose: u8) -> bool {
         let unasked = self.too_long_reject_drops > 0
             || self.below_minimum_reject_drops > 0
+            || self.off_path_answer_drops > 0
             || self
                 .routed_paths
                 .iter()
@@ -241,7 +249,7 @@ impl Summary {
         unasked || (verbose > 0 && !self.routed_paths.is_empty())
     }
 
-    /// A table and two lines, or one line of JSON.
+    /// A table and three lines, or one line of JSON.
     fn render(&self, format: OutputFormat) -> String {
         if format == OutputFormat::Json {
             return serde_json::to_string(self).expect("serialize the routed-path summary");
@@ -283,6 +291,11 @@ impl Summary {
             "Too-long rejects not believed: {} that could answer an earlier request's larger \
              frame, {} for a request of 228 NPDU octets or fewer.",
             self.too_long_reject_drops, self.below_minimum_reject_drops
+        ));
+        text.push_str(&format!(
+            "\nAnswers refused for the path they came by: {} from another station than \
+             the request's router.",
+            self.off_path_answer_drops
         ));
         if let Some(hint) = &self.hint {
             text.push_str(&format!("\nHint: {hint}"));

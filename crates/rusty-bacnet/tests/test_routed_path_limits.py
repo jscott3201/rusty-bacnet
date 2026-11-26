@@ -35,7 +35,8 @@ NEAR = 2667
 # as SADR. A path limit less this is the largest APDU the client sends.
 FORWARDED_NPCI = 9 + 1 + 6
 CALLS = ("configure_routed_path_max_npdu", "clear_routed_path_limit",
-         "routed_path_limits", "too_long_reject_drops", "below_minimum_reject_drops")
+         "routed_path_limits", "too_long_reject_drops", "below_minimum_reject_drops",
+         "off_path_answer_drops")
 
 
 def too_long(network):
@@ -177,6 +178,8 @@ class RoutedPathLimitWireTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value, rb.PropertyValue.unsigned(0))
         self.assertEqual(await self.client.below_minimum_reject_drops(), 1)
         self.assertEqual(await self.client.too_long_reject_drops(), 0)
+        # The answer came through the request's own router (#2831).
+        self.assertEqual(await self.client.off_path_answer_drops(), 0)
         [path] = await self.client.routed_path_limits()
         self.assertEqual(
             (path.router, path.network, path.max_npdu, path.source, path.configured_max_npdu,

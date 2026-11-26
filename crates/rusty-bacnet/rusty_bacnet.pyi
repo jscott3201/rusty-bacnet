@@ -6865,6 +6865,14 @@ class BACnetClient:
         RuntimeError before start and after stop."""
         ...
 
+    def off_path_answer_drops(self) -> Awaitable[int]:
+        """How many answers for a routed device's open request the client
+        dropped since start because they came from another station than the
+        router the request went to (#2831). A rise means a station is
+        answering for routed devices. RuntimeError before start and after
+        stop."""
+        ...
+
     def network_reports(self) -> Awaitable[NetworkReportIterator]:
         """Follow the I-Am-Router-To-Network, Network-Number-Is,
         Reject-Message-To-Network and Initialize-Routing-Table-Ack (query

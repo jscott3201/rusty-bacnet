@@ -123,6 +123,7 @@ const PYTHON_OTHER_METHODS: &[&str] = &[
     "routed_path_limits",
     "too_long_reject_drops",
     "below_minimum_reject_drops",
+    "off_path_answer_drops",
     "read_bdt",
     "write_bdt",
     "read_fdt",

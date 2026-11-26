@@ -68,10 +68,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             &apdu,
         )
         .await;
-        // A routed device's answer counts only through the router its
-        // request went to: its SNET and SADR are its sender's word (#2831).
-        // A router's own application names no router (the router's table
-        // routes it), so there the router's ports are the path.
+        // A routed device's answer counts only from the router its request
+        // went to: its SNET and SADR are its sender's word (#2831). A client
+        // on a router's application port names no router (the router's own
+        // table routes its requests), so its answers are not checked here.
         if let CanonicalPeer::Routed { network: snet, .. } = &canonical_peer
             && let Some(invoke_id) = answers_own_request(&apdu)
             && network.transport().attached_networks().is_empty()

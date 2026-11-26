@@ -10175,22 +10175,27 @@ the wrong request (#2651):
 - Network controls observed at ingress before a request becomes active are
   discarded using a monotonic ingress sequence.
 
-An answer for a routed device counts only when it comes through the router its
+An answer for a routed device counts only when it comes from the router its
 request went to (#2831): the acknowledgments, Error, Reject, and the server's
 Abort and Segment-ACK. A routed frame's SNET and SADR are written by its
-sender, so any station on the link could name the device in them and guess the
-invoke ID; the link station it comes from is the part it can't choose. One
-from another station is dropped unanswered (no Segment-ACK, no Abort), counted
-in `BACnetClient::off_path_answer_drops()`, and the request waits for the
+sender, so any station on the link could name the device in them and guess
+the invoke ID; the link station it comes from is the part a sender can't
+choose on most links. So another station can no longer complete a routed
+request by sending the answer itself: one from another station is dropped
+unanswered (no Segment-ACK, no Abort), counted in
+`BACnetClient::off_path_answer_drops()`, and the request waits for the
 device's own answer. The standard allows one path between two nodes (Clause
-4.2), so a device's answers return through the router its requests went to; a
-retry goes through the same router as the first frame. A request by local
-broadcast (`Station::routed_via_local_broadcast`) names no router, so any
-router's relay of its answer still completes it. Nor is the path checked for a
-client on a router's application port, whose requests the router's own table
-routes. A request sent straight to a station on this link once its network
-number is known is not covered: an answer relayed back with this network as
-its SNET still completes it from any station (#1465).
+4.2), so a device's answers return through the router its requests went to;
+a retry goes through the same router as the first frame. The path ties to the
+request from before the TSM holds it, so no answer arrives in between
+unchecked. Not covered: an answer relayed through the request's own router,
+which only that router could check; an answer that names this network as its
+source, which completes a request sent straight to the station from any
+station (#1465); a request by local broadcast
+(`Station::routed_via_local_broadcast`), which names no router, so any
+router's relay completes it; a client on a router's application port, whose
+requests the router's own table routes; and B/IPv6, where a frame's source
+virtual address is the sender's own claim.
 
 A reject is addressed to the station that sent the refused message, so one
 that came as a broadcast (a global one, DNET 65535, or a broadcast on this
@@ -14060,8 +14065,9 @@ shown as `ROUTER/NETWORK`.
 - `routed_paths()` returns `RoutedPaths`: each path holding more than the
   default as a `RoutedPathStatus` (`max_npdu`, `source` as
   `RoutedPathLimitSource`, the configured and learned values, and
-  `below_minimum_reject_seen`), with `too_long_reject_drops` and
-  `below_minimum_reject_drops`. `status(&path)` reads one path, the default
+  `below_minimum_reject_seen`), with `too_long_reject_drops`,
+  `below_minimum_reject_drops` and `off_path_answer_drops` (answers refused
+  for the path they came by, #2831). `status(&path)` reads one path, the default
   `bacnet_ops::client::DEFAULT_ROUTED_PATH_MAX_NPDU` (228 octets, the
   low-level client's `bacnet_client::client::DEFAULT_ROUTED_PATH_MAX_NPDU`)
   when it is not listed. It serializes with `source` as `default`,

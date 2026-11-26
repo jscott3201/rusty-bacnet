@@ -147,8 +147,9 @@ fn source_name<S: serde::Serializer>(
     serializer.serialize_str(source.name())
 }
 
-/// The client's routed paths and its two counts of too-long rejects it did
-/// not believe ([`Client::routed_paths`]).
+/// The client's routed paths, its two counts of too-long rejects it did not
+/// believe, and its count of answers it refused for the path they came by
+/// ([`Client::routed_paths`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RoutedPaths {
     /// Each path holding more than the default (a limit set or learned, or
@@ -162,6 +163,12 @@ pub struct RoutedPaths {
     /// above 228 octets. A rise, with timeouts to a network, is the sign of
     /// a router that needs its path's limit set.
     pub below_minimum_reject_drops: u64,
+    /// Answers for a routed device's open request dropped since start
+    /// because they came from another station than the router the request
+    /// went to (#2831,
+    /// [`BACnetClient::off_path_answer_drops`](bacnet_client::client::BACnetClient::off_path_answer_drops)).
+    /// A rise means a station is answering for routed devices.
+    pub off_path_answer_drops: u64,
 }
 
 impl RoutedPaths {
@@ -191,6 +198,7 @@ impl RoutedPaths {
             paths,
             too_long_reject_drops: client.too_long_reject_drops(),
             below_minimum_reject_drops: client.below_minimum_reject_drops(),
+            off_path_answer_drops: client.off_path_answer_drops(),
         }
     }
 

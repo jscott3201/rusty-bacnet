@@ -490,7 +490,7 @@ async fn a_reject_queued_before_the_request_went_out_is_not_its_own() {
         ConfirmedServiceChoice::WRITE_PROPERTY,
     );
     let tsm = Arc::new(SyncMutex::new(tsm));
-    limits.install_active(target, tsm_mac.clone(), 9, registration.owner.clone(), 5, 5);
+    limits.install_active(target, &tsm_mac, 9, registration.owner.clone(), 5, 5);
     assert!(limits.authorize_attempt(target, &tsm_mac, 9, &registration.owner, 10));
 
     let reason = RejectMessageReason::NOT_DIRECTLY_CONNECTED;

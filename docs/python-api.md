@@ -3340,8 +3340,12 @@ until its path's limit is set by hand:
   clear by themselves), the second because the request sent nothing above 228
   octets. A rise in the second, with timeouts to a network, is the sign of a
   router that needs its path's limit set.
+- `off_path_answer_drops()` counts, since start, the answers for a routed
+  device's open request that the client dropped because they came from
+  another station than the router the request went to (#2831). A rise means
+  a station is answering for routed devices.
 
-None of the five sends anything through the path (a B/IPv6 router given as a
+None of the six sends anything through the path (a B/IPv6 router given as a
 socket address is first asked its VMAC), and each raises `RuntimeError`
 before the client starts and after `stop()`. The first two apply at once
 (#2683): they wait neither for a request on the path nor out the hold a

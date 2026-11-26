@@ -151,6 +151,18 @@ impl BACnetClient {
             Ok(started(&inner).await?.below_minimum_reject_drops())
         })
     }
+
+    /// How many answers for a routed device's open request the client
+    /// dropped since start because they came from another station than the
+    /// router the request went to (#2831). A rise means a station is
+    /// answering for routed devices. Raises RuntimeError before start and
+    /// after stop.
+    fn off_path_answer_drops<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        crate::py_async::future_into_py(py, async move {
+            Ok(started(&inner).await?.off_path_answer_drops())
+        })
+    }
 }
 
 #[cfg(test)]
