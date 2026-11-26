@@ -510,17 +510,17 @@ impl Caller for McpCaller<'_> {
         false
     }
 
-    /// The policy, at the address the desk found (its network, local form)
-    /// and the entry's instance; for an attached revert, the address
-    /// confirmed. Found once, by the desk, so what is checked is what is
-    /// sent to.
-    fn revert_refusal(
+    /// The policy, at each address claiming the entry's device (its
+    /// network, local form) and the entry's instance, before anything is
+    /// asked there (#2824): a claim on a network the policy leaves out
+    /// stops the revert with nothing sent anywhere.
+    fn claim_refusal(
         &self,
         entry: &bacnet_tool::safety::ledger::Entry,
-        at: &bacnet_ops::DeviceAddress,
+        claim: &bacnet_ops::DeviceAddress,
     ) -> Option<String> {
         let reverting = self.reverting.as_ref()?;
-        let network = at.network();
+        let network = claim.network();
         if !reverting.policy.allows_network(network) {
             return Some(format!(
                 "network {network} is not in this server's [mcp] networks"
@@ -531,6 +531,22 @@ impl Caller for McpCaller<'_> {
                 "device {} is not in this server's [mcp] devices",
                 entry.device
             ));
+        }
+        None
+    }
+
+    /// The policy, at the address the desk found (its network, local form)
+    /// and the entry's instance; for an attached revert, the address
+    /// confirmed. Found once, by the desk, so what is checked is what is
+    /// sent to.
+    fn revert_refusal(
+        &self,
+        entry: &bacnet_tool::safety::ledger::Entry,
+        at: &bacnet_ops::DeviceAddress,
+    ) -> Option<String> {
+        let reverting = self.reverting.as_ref()?;
+        if let Some(why) = self.claim_refusal(entry, at) {
+            return Some(why);
         }
         match &reverting.confirmed {
             Some(confirmed) if confirmed != at => Some(format!(

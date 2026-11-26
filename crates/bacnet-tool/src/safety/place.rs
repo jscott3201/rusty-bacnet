@@ -20,7 +20,7 @@ use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 
 use super::ledger::Entry;
-use bacnet_ops::device::{Look, place_instance};
+use bacnet_ops::device::{Gate, Look, Withheld, place_instance};
 use bacnet_ops::limits::{RequestLimits, Turn};
 use bacnet_ops::raw::{self, Halt, Reader};
 use bacnet_ops::target::AddressStyle;
@@ -96,6 +96,17 @@ pub enum Unsent {
         /// The address asked and what answered there, as text.
         said: String,
     },
+    /// A revert whose caller may not ask an address claiming the entry's
+    /// device (MCP's policy, [`Caller::claim_refusal`]): nothing was sent
+    /// to it, or to any other claim.
+    ///
+    /// [`Caller::claim_refusal`]: super::desk::Caller::claim_refusal
+    Withheld {
+        /// The address refused.
+        at: DeviceAddress,
+        /// Why, as the caller said.
+        why: String,
+    },
 }
 
 impl std::fmt::Display for Unsent {
@@ -148,6 +159,7 @@ impl std::fmt::Display for Unsent {
                 "{said}; this entry predates the ledger keeping addresses, so it goes only \
                  where its device answers as it"
             ),
+            Self::Withheld { why, .. } => write!(f, "{why}"),
         }
     }
 }
@@ -307,7 +319,9 @@ async fn claimed<T: TransportPort + 'static>(
 
 /// Where the revert of `entry` goes, settled before anything is sent there
 /// (the identity read included), in its local form once the client knows
-/// its own network's number. Sends nothing unless `look`, but questions.
+/// its own network's number. Sends nothing unless `look`, but questions,
+/// and nothing at all to an address `gate` refuses: each address claiming
+/// the entry's device, and the entry's own address, pass it first.
 ///
 /// An entry with an address goes there. A routed one with no row has no
 /// route: with `look` (the caller may look, [`Caller::may_look`]) its
@@ -324,7 +338,8 @@ async fn claimed<T: TransportPort + 'static>(
 /// Who-Is when `look` is false, [`Unsent::Contested`] for an entry without
 /// an address whose instance two or more addresses may be,
 /// [`Unsent::Unconfirmed`] for one whose one claim didn't answer as it,
-/// and [`Unsent::Client`] when a Who-Is found nothing.
+/// [`Unsent::Withheld`] for an address `gate` refused, and
+/// [`Unsent::Client`] when a Who-Is found nothing.
 ///
 /// [`Caller::may_look`]: super::desk::Caller::may_look
 pub async fn revert_address<T: TransportPort + 'static>(
@@ -332,6 +347,7 @@ pub async fn revert_address<T: TransportPort + 'static>(
     rate: &RequestLimits,
     entry: &Entry,
     look: bool,
+    gate: Gate<'_>,
 ) -> Result<DeviceAddress, Unsent> {
     let own = client.network_number();
     let style = AddressStyle::of(client.transport());
@@ -341,7 +357,9 @@ pub async fn revert_address<T: TransportPort + 'static>(
             scope: bacnet_ops::Scope::Global,
             wait: bacnet_ops::client::RESOLVE_WAIT,
         });
-        let placement = place_instance(client, rate, instance, None, look).await;
+        let placement = place_instance(client, rate, instance, None, look, gate)
+            .await
+            .map_err(|Withheld { at, why }| Unsent::Withheld { at, why })?;
         let said = placement.refusal(&instance.to_string(), &|at| at.styled(style));
         return match placement.placed {
             Ok(at) => Ok(at.localized(own)),
@@ -366,6 +384,9 @@ pub async fn revert_address<T: TransportPort + 'static>(
         };
     };
     let at = address.clone().localized(own);
+    if let Some(why) = gate(&at) {
+        return Err(Unsent::Withheld { at, why });
+    }
     if !at.is_local() && at.row(client).await.is_none() {
         if !look {
             return Err(Unsent::NotLooking {

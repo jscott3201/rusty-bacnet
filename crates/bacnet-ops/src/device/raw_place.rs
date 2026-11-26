@@ -33,6 +33,22 @@ pub struct Look {
     pub wait: Duration,
 }
 
+/// A front end's check of each address claiming the instance, run by
+/// [`place_instance`] once the claims are settled and before anything is
+/// asked there: why the address may not be asked, if it may not (MCP's
+/// policy). `&|_| None` lets every claim be asked.
+pub type Gate<'a> = &'a (dyn Fn(&DeviceAddress) -> Option<String> + Sync);
+
+/// A claim a front end's [`Gate`] refused: [`place_instance`] asked no
+/// claim anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Withheld {
+    /// The first claim refused, in address order.
+    pub at: DeviceAddress,
+    /// Why, as the gate said.
+    pub why: String,
+}
+
 /// What [`place_instance`] found.
 #[derive(Debug)]
 pub struct Placement {
@@ -90,14 +106,21 @@ impl Placement {
 /// there ([`identify`], all at once, each at its gate under `limits`), and
 /// [`placed`] decides. More claims needing a question than
 /// [`MAX_ASKED`](super::MAX_ASKED) place only a single one registered by
-/// hand, else are ambiguous, asked nothing.
+/// hand, else are ambiguous, asked nothing. Every claim passes `gate`
+/// before any is asked: the first it refuses is returned, with nothing
+/// asked anywhere.
+///
+/// # Errors
+///
+/// [`Withheld`] for a claim `gate` refused.
 pub async fn place_instance<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
     instance: u32,
     network: Option<u16>,
     look: Option<Look>,
-) -> Placement {
+    gate: Gate<'_>,
+) -> Result<Placement, Withheld> {
     let failed = |error: OpsError| Placement {
         asked: Vec::new(),
         placed: Err(error),
@@ -112,7 +135,7 @@ pub async fn place_instance<T: TransportPort + 'static>(
     {
         let range = match DeviceInstanceRange::single(instance) {
             Ok(range) => range,
-            Err(error) => return failed(error.into()),
+            Err(error) => return Ok(failed(error.into())),
         };
         let mut events = client.device_events();
         // A Who-Is the link can't send is one asked all the same: the
@@ -149,24 +172,30 @@ pub async fn place_instance<T: TransportPort + 'static>(
         }
         claims = self::claims(client, instance, scoped).await;
     }
+    if let Some((at, why)) = claims
+        .iter()
+        .find_map(|(at, _)| gate(at).map(|why| (at.clone(), why)))
+    {
+        return Err(Withheld { at, why });
+    }
     if claims.is_empty() {
-        return failed(OpsError::UnknownDevice {
+        return Ok(failed(OpsError::UnknownDevice {
             target: match network {
                 Some(network) => format!("{network}:{instance}"),
                 None => instance.to_string(),
             },
             asked,
-        });
+        }));
     }
     let before: Vec<(DeviceAddress, Option<Answer>)> = claims
         .iter()
         .map(|(at, registered)| (at.clone(), registered.then_some(Answer::Is(instance))))
         .collect();
     if let Some(decided) = over_cap(instance, &before) {
-        return Placement {
+        return Ok(Placement {
             asked: Vec::new(),
             placed: decided,
-        };
+        });
     }
     let asks = before.iter().map(|(at, known)| async move {
         match known {
@@ -177,10 +206,10 @@ pub async fn place_instance<T: TransportPort + 'static>(
     let answers = every(asks).await;
     let asked: Vec<(DeviceAddress, Answer)> =
         before.into_iter().map(|(at, _)| at).zip(answers).collect();
-    Placement {
+    Ok(Placement {
         placed: placed(instance, &asked),
         asked,
-    }
+    })
 }
 
 /// The addresses whose rows claim `instance`, on `network` (as the table

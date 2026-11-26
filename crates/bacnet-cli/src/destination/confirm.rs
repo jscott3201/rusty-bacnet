@@ -60,7 +60,11 @@ pub(super) async fn confirmed<T: TransportPort + 'static>(
         ));
     }
     let look = Look { scope, wait };
-    let placement = place_instance(client, &limits, instance, dnet, Some(look)).await;
+    // A one-shot command holds no policy of its own: every claim may be
+    // asked.
+    let placement = place_instance(client, &limits, instance, dnet, Some(look), &|_| None)
+        .await
+        .map_err(|withheld| withheld.why)?;
     if let Err(OpsError::UnknownDevice { asked, .. }) = &placement.placed {
         return Err(match asked {
             Some(Scope::Network(network)) => format!(

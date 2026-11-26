@@ -63,8 +63,11 @@ async fn placed<T: TransportPort + 'static>(
         scope,
         wait: bacnet_ops::client::RESOLVE_WAIT,
     };
+    // The TUI holds no policy of its own: every claim may be asked.
     let placement =
-        bacnet_ops::device::place_instance(client, rate, instance, network, Some(look)).await;
+        bacnet_ops::device::place_instance(client, rate, instance, network, Some(look), &|_| None)
+            .await
+            .map_err(|withheld| withheld.why)?;
     let name = match network {
         Some(network) => format!("{network}:{instance}"),
         None => instance.to_string(),

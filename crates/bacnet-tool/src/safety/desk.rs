@@ -100,6 +100,15 @@ pub trait Caller: Sync {
     /// entry as not reverted, with why.
     fn may_look(&self) -> bool;
 
+    /// Why the device of a revert's `entry` may not be asked anything at
+    /// `claim`, if it may not: each address claiming its instance (for an
+    /// entry kept without an address), or the entry's own address, passes
+    /// this before any question or Who-Is goes there (#2824), and one
+    /// refused stops the revert with nothing sent. MCP checks its policy.
+    fn claim_refusal(&self, _entry: &Entry, _claim: &DeviceAddress) -> Option<String> {
+        None
+    }
+
     /// Why the revert of `entry` may not go to `at`, if it may not: `at` is
     /// where the desk found the entry's device, in its local form, settled
     /// before anything is sent there (an identity read included). MCP
@@ -559,7 +568,8 @@ async fn revert_entry<T: TransportPort + 'static>(
     let Some(object) = entry.object() else {
         return Outcome::NotSent(UNKNOWN_PRE_IMAGE.into());
     };
-    let at = match revert_address(client, rate, entry, caller.may_look()).await {
+    let gate = |claim: &DeviceAddress| caller.claim_refusal(entry, claim);
+    let at = match revert_address(client, rate, entry, caller.may_look(), &gate).await {
         Ok(at) => at,
         Err(error) => return Outcome::NotSent(error.to_string()),
     };

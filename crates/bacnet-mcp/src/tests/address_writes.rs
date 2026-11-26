@@ -416,3 +416,45 @@ async fn a_forged_claim_is_asked_and_refused() {
     assert!(Ledger::open(dir.path()).unwrap().entries().is_empty());
     lab.stop().await;
 }
+
+/// An entry from before addresses for device 1201, whose instance a forged
+/// routed I-Am also claims, from network 2002, which the policy leaves out
+/// (#2824): every claim is checked against the policy before any question
+/// goes out, so the revert is refused as not allowed and no frame at all
+/// goes to network 2002 (nor anywhere else).
+#[tokio::test(start_paused = true)]
+async fn an_old_entry_asks_no_claim_the_policy_leaves_out() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(FILE), ledger(&[(1, LAB, None)])).unwrap();
+    let mut policy = writes(dir.path(), ArmMode::Elicit);
+    policy.networks = Some([0].into());
+    let mut lab = Lab::start(policy).await;
+    lab.agent.initialize().await;
+    let forged = NpduAddress {
+        network: 2002,
+        mac_address: MacAddr::from_slice(&[0x09]),
+    };
+    lab.inject(&i_am_from(LAB, Some(forged)), &LAB_MAC).await;
+    let claims = |lab: &Lab| {
+        let known = lab.mcp.ctx().known.lock().unwrap();
+        known.values().filter(|instance| **instance == LAB).count()
+    };
+    until(&lab, |lab| claims(lab) == 2, "the forged claim is known").await;
+    let before = lab.sends().len();
+    let reply = call(&mut lab, "bacnet_revert", json!({ "all": true }), json!({})).await;
+    let result = &reply["structuredContent"]["results"][0];
+    assert_eq!(result["applied"], json!(false), "{reply}");
+    assert_eq!(
+        result["outcome"]["why"],
+        json!("network 2002 is not in this server's [mcp] networks"),
+        "{reply}"
+    );
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert_eq!(
+        lab.sends().len(),
+        before,
+        "nothing sent, to 2002 or anywhere"
+    );
+    assert_eq!(Ledger::open(dir.path()).unwrap().entries().len(), 1);
+    lab.stop().await;
+}

@@ -154,7 +154,9 @@ async fn the_low_level_placement_keeps_the_rule() {
             wait: RESOLVE_WAIT,
         });
         let asking = look.is_some();
-        let placement = place_instance(client.low_level(), &limits, N, None, look).await;
+        let placement = place_instance(client.low_level(), &limits, N, None, look, &|_| None)
+            .await
+            .unwrap();
         match asking {
             true => {
                 assert_eq!(placement.placed.unwrap(), at(2));

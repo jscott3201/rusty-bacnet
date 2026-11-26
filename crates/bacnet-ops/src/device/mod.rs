@@ -170,7 +170,7 @@ pub(crate) use self::follow::{FollowKey, Followed};
 pub(crate) use self::follow::{Follows, Said, keep_room};
 pub use self::misses::MISS_MEMORY;
 pub(crate) use self::misses::StationMisses;
-pub use self::raw_place::{Look, Placement, place_instance};
+pub use self::raw_place::{Gate, Look, Placement, Withheld, place_instance};
 pub(crate) use self::route::{path_to, router_for};
 use crate::client::{Client, lock};
 use crate::error::OpsError;

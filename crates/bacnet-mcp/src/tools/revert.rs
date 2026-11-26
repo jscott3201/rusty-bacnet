@@ -259,17 +259,22 @@ async fn attached<T: TransportPort + 'static>(
         .or(chosen.first());
     let address = match first {
         Some(entry) => {
-            if entry.address.is_none() {
-                for claim in ctx.claims(entry.device, None).await {
-                    if let Some(at) = DeviceAddress::of(&claim) {
-                        ctx.allow(&at, entry.device)?;
-                    }
-                }
-            }
+            let gate = |claim: &DeviceAddress| match ctx.allow(claim, entry.device) {
+                Ok(()) => None,
+                Err(ToolError::Refused { message, .. }) => Some(message),
+                Err(other) => Some(format!("{other:?}")),
+            };
             Some(
-                revert_address(client, ops.limits(), entry, false)
+                revert_address(client, ops.limits(), entry, false, &gate)
                     .await
-                    .map_err(|unsent| unplaced(entry, unsent))?,
+                    .map_err(|unsent| match unsent {
+                        // The policy's own refusal, with its reason.
+                        Unsent::Withheld { at, why } => ctx
+                            .allow(&at, entry.device)
+                            .err()
+                            .unwrap_or(ToolError::Failed(why)),
+                        unsent => unplaced(entry, unsent),
+                    })?,
             )
         }
         None => None,
