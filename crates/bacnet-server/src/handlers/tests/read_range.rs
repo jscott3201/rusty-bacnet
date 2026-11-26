@@ -633,7 +633,7 @@ fn item_encoding_error_keeps_response_byte_for_byte_unchanged() {
         |buf, item| {
             encoded += 1;
             if encoded == 2 {
-                Err(Error::Encoding("synthetic item encoding failure".into()))
+                Err(Error::encode("synthetic item encoding failure"))
             } else {
                 encode_property_value(buf, item)
             }
@@ -643,7 +643,7 @@ fn item_encoding_error_keeps_response_byte_for_byte_unchanged() {
 
     assert!(matches!(
         error,
-        Error::Encoding(message) if message == "synthetic item encoding failure"
+        Error::Encode(refused) if refused.label == "synthetic item encoding failure"
     ));
     assert_eq!(response, before);
 }

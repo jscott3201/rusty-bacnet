@@ -7,7 +7,7 @@ use bacnet_types::constructed::BACnetLogRecord;
 use super::codec::{self, HEADER_LEN, SCHEMA_VERSION, SCHEMA_VERSION_DESCRIBED, TRAILER_LEN};
 use super::reporting_codec_tests::{decoded, event, every_setting, reseal, trend};
 use super::*;
-use crate::snapshot::SnapshotErrorKind;
+use crate::snapshot::PersistenceErrorKind;
 
 fn described(text: &str) -> LogReportingSettings {
     LogReportingSettings {
@@ -83,7 +83,7 @@ fn a_damaged_description_is_refused() {
         snapshot
     );
     let error = codec::encode(&trend(described(&format!("{longest}d")))).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
 
     let object = snapshot.object_identifier;
     let slot = codec::encode(&trend(described("Lobby"))).unwrap();
@@ -120,6 +120,6 @@ fn a_damaged_description_is_refused() {
     let error = codec::decode::<BACnetLogRecord>(&later, object);
     assert_eq!(
         error.unwrap_err().kind(),
-        SnapshotErrorKind::UnknownVersion(4)
+        PersistenceErrorKind::UnknownVersion(4)
     );
 }

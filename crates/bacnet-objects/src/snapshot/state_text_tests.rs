@@ -9,7 +9,7 @@
 use bacnet_types::enums::ObjectType;
 
 use super::parameters_tests::{STATE_TEXT, encode, oid, snapshot, with_tail};
-use super::{SnapshotErrorKind, write_config};
+use super::{PersistenceErrorKind, write_config};
 use crate::multistate::{MAX_KEPT_STATE_TEXT_OCTETS, MAX_NUMBER_OF_STATES};
 use crate::write_config::AlgorithmWriteConfig;
 
@@ -42,14 +42,14 @@ fn label(text: &[u8]) -> Vec<u8> {
     octets
 }
 
-fn decoded(kind: ObjectType, tail: &[u8]) -> Result<AlgorithmWriteConfig, SnapshotErrorKind> {
+fn decoded(kind: ObjectType, tail: &[u8]) -> Result<AlgorithmWriteConfig, PersistenceErrorKind> {
     match write_config::decode(oid(kind), &with_tail(kind, tail)) {
         Ok(crate::write_config::WriteConfigSnapshot::Reporting(config)) => Ok(config.algorithm),
         Ok(other) => panic!("{other:?}"),
         Err(error) => {
             assert_eq!(
                 error.is_damage(),
-                error.kind() != SnapshotErrorKind::OutOfRange
+                error.kind() != PersistenceErrorKind::RefusedOnEncode
             );
             Err(error.kind())
         }
@@ -107,26 +107,30 @@ fn a_state_text_past_its_caps_is_refused() {
         ];
         for texts in refused {
             let error = encode(kind, holding(texts)).unwrap_err();
-            assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{kind}");
+            assert_eq!(
+                error.kind(),
+                PersistenceErrorKind::RefusedOnEncode,
+                "{kind}"
+            );
         }
         let one = label(b"x");
         assert_eq!(
             decoded(kind, &tail(0, &[])),
-            Err(SnapshotErrorKind::Damaged)
+            Err(PersistenceErrorKind::Damaged)
         );
         let past = MAX_NUMBER_OF_STATES + 1;
         assert_eq!(
             decoded(kind, &tail(past, &one)),
-            Err(SnapshotErrorKind::Damaged)
+            Err(PersistenceErrorKind::Damaged)
         );
         assert_eq!(
             decoded(kind, &tail(u32::MAX, &one)),
-            Err(SnapshotErrorKind::Damaged)
+            Err(PersistenceErrorKind::Damaged)
         );
         let long = vec![b'x'; MAX_KEPT_STATE_TEXT_OCTETS + 1];
         let file = with_tail(kind, &tail(1, &label(&long)));
         let error = write_config::decode(oid(kind), &file).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "{kind}");
+        assert_eq!(error.kind(), PersistenceErrorKind::Damaged, "{kind}");
         // Refused at the length, before the octets are read.
         assert!(
             error.to_string().contains("longer than its cap"),
@@ -147,13 +151,13 @@ fn a_row_the_file_doesnt_hold_is_refused() {
         let one = label(b"Off");
         let file = with_tail(kind, &tail(MAX_NUMBER_OF_STATES, &one));
         let error = write_config::decode(oid(kind), &file).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::Truncated, "{kind}");
+        assert_eq!(error.kind(), PersistenceErrorKind::Truncated, "{kind}");
         // Refused at the count, before a label is read or room made.
         assert!(error.to_string().contains("count needs"), "{kind}: {error}");
         let mut past_the_file = 400u32.to_be_bytes().to_vec();
         past_the_file.extend_from_slice(b"Off");
         let error = decoded(kind, &tail(1, &past_the_file));
-        assert_eq!(error, Err(SnapshotErrorKind::Truncated), "{kind}");
+        assert_eq!(error, Err(PersistenceErrorKind::Truncated), "{kind}");
         let mut two = label(b"Off");
         two.extend_from_slice(&label(b"Ein"));
         for cut in 0..two.len() {
@@ -165,7 +169,7 @@ fn a_row_the_file_doesnt_hold_is_refused() {
         let mut longer = one.clone();
         longer.push(b'!');
         let error = decoded(kind, &tail(1, &longer));
-        assert_eq!(error, Err(SnapshotErrorKind::Damaged), "{kind}");
+        assert_eq!(error, Err(PersistenceErrorKind::Damaged), "{kind}");
         assert!(decoded(kind, &tail(2, &two)).is_ok());
     }
 }
@@ -182,7 +186,11 @@ fn a_label_that_isnt_utf_8_is_damage() {
             &[0xC0, 0x80],
         ] {
             let error = decoded(kind, &tail(1, &label(octets)));
-            assert_eq!(error, Err(SnapshotErrorKind::Damaged), "{kind} {octets:?}");
+            assert_eq!(
+                error,
+                Err(PersistenceErrorKind::Damaged),
+                "{kind} {octets:?}"
+            );
         }
     }
 }

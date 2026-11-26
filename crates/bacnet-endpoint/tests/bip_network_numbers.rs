@@ -329,7 +329,7 @@ mod start_loses_observer_port {
                 .block_on(rerun_on_lost_port(async || {
                     counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     Err(port_retry::bind_error(
-                        bacnet_types::error::Error::Encoding("not a bind".into()),
+                        bacnet_types::error::Error::invalid_config("not a bind"),
                     ))
                 }));
         })

@@ -72,7 +72,8 @@ fn a_clear_whose_save_fails_keeps_the_description() {
         case.fail(true);
         let result = clear(object.as_mut());
         assert!(
-            matches!(&result, Err(Error::Encoding(reason)) if reason == "storage unavailable"),
+            matches!(&result, Err(Error::Persistence(refused))
+                if refused.to_string() == "storage unavailable"),
             "{:?}: {result:?}",
             case.other().0
         );

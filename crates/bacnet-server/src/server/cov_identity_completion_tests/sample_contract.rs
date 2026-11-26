@@ -63,7 +63,7 @@ impl BACnetObject for Probe {
         _: PropertyValue,
         _: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Encoding("test read only".into()))
+        Err(Error::unsupported("test read only"))
     }
 }
 

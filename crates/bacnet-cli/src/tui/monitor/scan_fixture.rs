@@ -138,9 +138,10 @@ impl ScanLine {
     }
     pub(crate) fn participant(&self) -> Result<super::lines::CliSerial, Error> {
         self.participants.fetch_add(1, Ordering::SeqCst);
-        Err(Error::Encoding(
-            "scanner fixture rejects participant construction".into(),
-        ))
+        Err(Error::Transport(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "scanner fixture rejects participant construction",
+        )))
     }
 }
 fn traffic(baud: u32, matched: bool) -> Vec<u8> {

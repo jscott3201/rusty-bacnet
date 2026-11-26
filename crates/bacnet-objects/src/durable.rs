@@ -440,9 +440,10 @@ impl SaveTicket {
                 if ok {
                     Ok(())
                 } else {
-                    Err(Error::Encoding(
-                        "save failed; its error was reported".into(),
-                    ))
+                    Err(
+                        crate::snapshot::backend_failed("save failed; its error was reported")
+                            .into(),
+                    )
                 }
             }
             Outcome::Pending => unreachable!("the event is set only after the outcome"),

@@ -145,8 +145,9 @@ pub enum SendMode {
     /// fails the send. The inner transport's own error ends the send before
     /// the hook. Without an inner transport the send fails.
     ForwardFirst,
-    /// Record the frame, then fail with an error carrying this message,
-    /// skipping the hook and the built-in controls.
+    /// Record the frame, then fail as a link whose send failed does: an
+    /// `Error::Transport` carrying this message, skipping the hook and the
+    /// built-in controls.
     Fail(&'static str),
     /// Return `Ok(())` without recording or running anything.
     Ignore,
@@ -347,7 +348,7 @@ impl TestTransport {
             SendMode::ForwardFirst => (true, true),
             SendMode::Fail(message) => {
                 self.shared.sent.push(frame);
-                return Err(Error::Encoding(message.into()));
+                return Err(Error::Transport(std::io::Error::other(message)));
             }
             SendMode::Ignore => return Ok(()),
             SendMode::Panic(message) => panic!("{message}"),
@@ -380,7 +381,7 @@ impl TestTransport {
         let inner = self
             .inner
             .as_ref()
-            .ok_or_else(|| Error::Encoding("test transport has no inner transport".into()))?;
+            .ok_or_else(|| Error::invalid_config("test transport has no inner transport"))?;
         if frame.broadcast {
             inner.send_broadcast(&frame.npdu, &frame.attributes).await
         } else {
@@ -473,7 +474,7 @@ impl TransportPort for TestTransport {
         }
         match &mut self.inner {
             Some(inner) => inner.retain_lease(lease),
-            None => Err(Error::Encoding("not a B/IP test link".into())),
+            None => Err(Error::unsupported("not a B/IP test link")),
         }
     }
 
@@ -516,21 +517,21 @@ impl TransportPort for TestTransport {
                 Some(inner) => inner.start().await?,
                 None => mpsc::channel(1).1,
             },
-            StartMode::Inbound(receiver) => receiver
-                .take()
-                .ok_or_else(|| Error::Encoding("test transport already started".into()))?,
+            StartMode::Inbound(receiver) => receiver.take().ok_or_else(|| {
+                Error::state(Lifecycle::AlreadyStarted, "test transport already started")
+            })?,
             StartMode::Replace(receiver) => {
                 let inner = self.inner.as_mut().ok_or_else(|| {
-                    Error::Encoding("test transport has no inner transport to start".into())
+                    Error::invalid_config("test transport has no inner transport to start")
                 })?;
                 let _real = inner.start().await?;
-                receiver
-                    .take()
-                    .ok_or_else(|| Error::Encoding("test transport already started".into()))?
+                receiver.take().ok_or_else(|| {
+                    Error::state(Lifecycle::AlreadyStarted, "test transport already started")
+                })?
             }
             StartMode::Relay(capacity) => {
                 let inner = self.inner.as_mut().ok_or_else(|| {
-                    Error::Encoding("test transport has no inner transport to start".into())
+                    Error::invalid_config("test transport has no inner transport to start")
                 })?;
                 let mut from_link = inner.start().await?;
                 let (tx, rx) = mpsc::channel(*capacity);

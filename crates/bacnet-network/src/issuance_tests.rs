@@ -20,7 +20,9 @@ fn layer(fail: bool) -> (NetworkLayer<TestTransport>, Arc<AtomicUsize>) {
             );
             async move {
                 if fail {
-                    Err(Error::Encoding("injected transport failure".into()))
+                    Err(Error::Transport(std::io::Error::other(
+                        "injected transport failure",
+                    )))
                 } else {
                     std::future::pending().await
                 }

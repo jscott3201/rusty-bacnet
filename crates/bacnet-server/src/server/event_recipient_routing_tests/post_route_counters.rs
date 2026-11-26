@@ -20,8 +20,8 @@ async fn distribute_failing(
         .broadcast_mac(LITERAL_BROADCAST_MAC)
         .on_send(move |frame| async move {
             if fails(&frame) {
-                Err(bacnet_types::error::Error::Encoding(
-                    "injected send failure".into(),
+                Err(bacnet_types::error::Error::Transport(
+                    std::io::Error::other("injected send failure"),
                 ))
             } else {
                 Ok(())

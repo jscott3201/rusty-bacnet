@@ -285,7 +285,12 @@ async fn audit_reporter_rp_execution_errors_map_result_but_unknown_outcomes_are_
             Some((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)),
         ),
         (
-            || Error::Encoding("executed service failure".into()),
+            || {
+                Error::from(bacnet_types::error::PersistenceError::new(
+                    bacnet_types::error::PersistenceErrorKind::BackendFailed,
+                    "executed service failure",
+                ))
+            },
             Some((ErrorClass::SERVICES, ErrorCode::OTHER)),
         ),
         (|| Error::Timeout(Duration::from_secs(1)), None),
@@ -331,8 +336,20 @@ async fn audit_reporter_rp_execution_errors_map_result_but_unknown_outcomes_are_
 async fn audit_reporter_rpm_expanded_order_inline_errors_and_response_parity() {
     let mut fixture = server(read_reporter()).await;
     let mut plain = plain_server(read_reporter()).await;
-    let reads = add_probe(&fixture, || Error::Encoding("mapped inline".into())).await;
-    add_probe(&plain, || Error::Encoding("mapped inline".into())).await;
+    let reads = add_probe(&fixture, || {
+        Error::from(bacnet_types::error::PersistenceError::new(
+            bacnet_types::error::PersistenceErrorKind::BackendFailed,
+            "mapped inline",
+        ))
+    })
+    .await;
+    add_probe(&plain, || {
+        Error::from(bacnet_types::error::PersistenceError::new(
+            bacnet_types::error::PersistenceErrorKind::BackendFailed,
+            "mapped inline",
+        ))
+    })
+    .await;
     let missing = oid(ObjectType::BINARY_VALUE, 99);
     let input = oid(ObjectType::ANALOG_INPUT, 1);
     let requested_scalar_index = Some(3);

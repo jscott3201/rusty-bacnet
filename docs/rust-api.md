@@ -301,8 +301,8 @@ if let Error::Structured { detail, .. } = &e {
 }
 
 // Other variants: Timeout, RoutedPathTooLong, NetworkRejected,
-// UnexpectedAck, RoutedPathCapacityExceeded, UnsupportedTransport, Encoding,
-// etc.
+// UnexpectedAck, RoutedPathCapacityExceeded, UnsupportedTransport, State,
+// InvalidConfig, Persistence, etc.
 ```
 
 `RemoteError` has three arms, one per PDU: `Error { class, code }`,
@@ -382,14 +382,21 @@ or field of its own, as `Error::SendTooLong` has. Each displays as its text
 alone; `Error::with_context` puts context in front and keeps the variant.
 `Error::state`, `Error::invalid_config`, `Error::invalid_argument`,
 `Error::unsupported` and `Error::limit_reached` build one from a static
-label. `bacnet-transport`, `bacnet-network`, `bacnet-endpoint-core`,
-`bacnet-endpoint`, `bacnet-server`, `bacnet-client`, `bacnet-objects` and
-`bacnet-device-core` report their refusals this way (a few of the objects'
-persisted-state refusals aside), and `bacnet-transport` its I/O failures as
-`Error::Transport` with
-the OS error kept as the source and an NPDU too long for the link as
-`Error::SendTooLong`; the CLI and the bindings still report theirs as
-`Error::Encoding` or `Error::OutOfRange` text until #1833 reaches them. An
+label. Every crate, the CLI and the bindings report their refusals this
+way. Any I/O the operating system reported is `Error::Transport`, with
+the OS error kept as the source: a socket's, a serial port's, and a storage
+file's, which the stack's own file backends return this way. An NPDU too
+long for the link is `Error::SendTooLong`. Persisted state is
+`Error::Persistence(PersistenceError)`: stored octets that are damaged or
+cut short, a sound snapshot of another object or of a version this build
+doesn't read, a snapshot refused as it is encoded, or a storage backend that
+failed with no OS error behind it. Its `kind()` says which, and
+`is_damage()` whether a backend keeping two copies falls back to the other.
+It is opaque, with static text in every build; with `std`,
+`Error::with_context` puts a path or other context in front and keeps the
+kind. There is no catch-all text variant: the untyped `Error::Encoding` and
+`Error::OutOfRange` are gone (#1833), and the codecs' own refusals are the
+static `Error::Encode`, `Error::Decoding` and `Error::Range`. An
 endpoint session or ingress that is not running says why with its
 `Lifecycle`: `NotRunning` before its start, `Stopping` while a stop runs, and
 `Closed` once stopped or shut, since each starts once. A stopped server's
@@ -878,7 +885,7 @@ use bacnet_services::who_has::{WhoHasRequest, WhoHasObject, IHaveRequest};
 and 16.10, #1483). A range holds both limits, so a request with one alone can't
 be built, and `DeviceInstanceRange::new` refuses a low limit above the high one,
 or a limit past `ObjectIdentifier::MAX_INSTANCE` (4194303), with
-`Error::OutOfRange`. `DeviceInstanceRange::single(n)` asks one instance,
+`Error::Range`. `DeviceInstanceRange::single(n)` asks one instance,
 `DeviceInstanceRange::device(oid)` one device's instance, and
 `DeviceInstanceRange::from_limits(low, high)` turns two optional limits into a
 range, refusing one without the other. Both decoders refuse a request with one
@@ -1510,7 +1517,7 @@ warning.
 
 The transport sends NPDUs up to 1497 octets, the most a B/IP data link
 carries (Table 6-1); a BBMD's Forwarded-NPDU of one is a 1507-octet datagram.
-A longer NPDU, unicast or broadcast, fails with `Error::Encoding` before
+A longer NPDU, unicast or broadcast, fails with `Error::SendTooLong` before
 anything is sent, and counts in `send_counters().npdu_too_long`, whose totals
 survive a restart (#1622). A router doesn't hand such an NPDU to a B/IP port:
 it answers the sender with Reject-Message-To-Network reason 4 instead (#1665,
@@ -2613,7 +2620,7 @@ formed throughout, for `bacnet sc-check` and the inspection API too
 
 MS/TP is a token-passing protocol over RS-485 serial, commonly used for field-level BACnet devices. The serial I/O is abstracted behind the `SerialPort` trait, with three RS-485 direction control modes. The master node state machine is the portable `bacnet-mstp-core`, driven by the transport's Tokio task, and frames come from `bacnet-mstp-codec`, re-exported as `bacnet_transport::mstp::codec` for code that builds or reads frames (see [the architecture notes](architecture.md#the-mstp-transport-and-the-portable-core)). Firmware can drive the core directly. Its time is `bacnet-time`'s `Instant` and `Duration`, in nanoseconds from an epoch the caller picks, the same types `bacnet-bip-core` takes, so one clock feeds both.
 
-`MstpConfig` holds the station address, Max_Master, Max_Info_Frames and the baud rate, from which the Clause 9 timers are derived, and the transmit-latency pad for a port without a drain (see [Auto-Direction](#auto-direction-usb-rs-485-adapters) below). Three timers that Clause 9.5.3 lets a station lengthen are lengthened on every host port, since a USB adapter delivers what it receives late (16 ms by default on FTDI parts) and can't be told from a native UART on every platform: T_frame_abort is fixed at its 100 ms maximum (`HOST_FRAME_ABORT_MS`), and `usage_timeout` (T_usage_timeout, 20 to 35 ms) and `reply_timeout` (T_reply_timeout, 255 to 300 ms) default to their maxima, `HOST_USAGE_TIMEOUT` and `HOST_REPLY_TIMEOUT`. With the minimums, a successor that used the token or answered a poll as late as T_usage_delay lets it, or a peer that answered a request as late as T_reply_delay lets it, could still be in the adapter when the station gave up: it would send the token again, poll the next address, or pass the token, over an answer already on the wire. `start()` refuses a configuration the core refuses, and `MstpConfig::validate()` runs the same checks beforehand: `max_master` at most 127, `this_station` at most `max_master`, `max_info_frames` at least 1, a baud rate of at least 2667 (so 40 bit times of turnaround fit in T_usage_delay), the two timeouts within their ranges, and a pad of at most T_usage_delay (15 ms): what the station hears while the pad runs reaches the core only after it, so a longer pad would make it answer a token or poll late. The core's transmit watchdog is lengthened by the pad where it would not otherwise cover the longest padded frame. The Python bindings take all three as `mstp_transmit_latency_pad_ms`, `mstp_usage_timeout_ms` and `mstp_reply_timeout_ms`, and `MstpEndpointBuilder` as `transmit_latency_pad`, `usage_timeout` and `reply_timeout`; the client and server builders take the whole `MstpConfig` with the transport. Sends go to the core's queues, 256 unicast and 256 broadcast NPDUs, served by network priority; a full queue (`WouldBlock`) or an NPDU longer than the port sends (`Error::Encoding`) is refused at once.
+`MstpConfig` holds the station address, Max_Master, Max_Info_Frames and the baud rate, from which the Clause 9 timers are derived, and the transmit-latency pad for a port without a drain (see [Auto-Direction](#auto-direction-usb-rs-485-adapters) below). Three timers that Clause 9.5.3 lets a station lengthen are lengthened on every host port, since a USB adapter delivers what it receives late (16 ms by default on FTDI parts) and can't be told from a native UART on every platform: T_frame_abort is fixed at its 100 ms maximum (`HOST_FRAME_ABORT_MS`), and `usage_timeout` (T_usage_timeout, 20 to 35 ms) and `reply_timeout` (T_reply_timeout, 255 to 300 ms) default to their maxima, `HOST_USAGE_TIMEOUT` and `HOST_REPLY_TIMEOUT`. With the minimums, a successor that used the token or answered a poll as late as T_usage_delay lets it, or a peer that answered a request as late as T_reply_delay lets it, could still be in the adapter when the station gave up: it would send the token again, poll the next address, or pass the token, over an answer already on the wire. `start()` refuses a configuration the core refuses, and `MstpConfig::validate()` runs the same checks beforehand: `max_master` at most 127, `this_station` at most `max_master`, `max_info_frames` at least 1, a baud rate of at least 2667 (so 40 bit times of turnaround fit in T_usage_delay), the two timeouts within their ranges, and a pad of at most T_usage_delay (15 ms): what the station hears while the pad runs reaches the core only after it, so a longer pad would make it answer a token or poll late. The core's transmit watchdog is lengthened by the pad where it would not otherwise cover the longest padded frame. The Python bindings take all three as `mstp_transmit_latency_pad_ms`, `mstp_usage_timeout_ms` and `mstp_reply_timeout_ms`, and `MstpEndpointBuilder` as `transmit_latency_pad`, `usage_timeout` and `reply_timeout`; the client and server builders take the whole `MstpConfig` with the transport. Sends go to the core's queues, 256 unicast and 256 broadcast NPDUs, served by network priority; a full queue (`WouldBlock`) or an NPDU longer than the port sends (`Error::SendTooLong`) is refused at once.
 
 `MstpConfig::extended_frames` (off by default) turns on the extended frame types, 32 and 33, which carry NPDUs of 502 to 1497 octets COBS-encoded. Clause 9.3 requires them of a routing node and leaves them optional for others, so `BACnetRouter::start` turns the flag on for every MS/TP port it routes, through `TransportPort::prepare_for_routing`, and a device keeps it off unless it sets it. With the flag on the port sends and takes NPDUs of up to 1497 octets (`MstpTransport::max_npdu_length`) and declares an APDU limit of 1476 instead of 480; an answer over 501 octets goes back as a Type 33. Without it, an extended frame the port hears counts as an invalid frame, as on a node without COBS support. On firmware, `MstpCoreConfig::with_extended_frames` sets the flag for `bacnet-mstp-core`, which then needs buffers sized for extended frames, as an `ExtendedStorage` bundle holds them (1497-octet delivery and queue slots and 1516 octets of receive storage). On a host each port's queues reserve 512 slots, 768 KiB with the flag on (1536-octet slots) against 272 KiB without (544-octet slots), resident as the queues fill, and the core's action buffers take about 13 KiB either way. `MstpEndpointBuilder::extended_frames(true)` turns the flag on for an endpoint, whose identity may then advertise a Max_APDU_Length_Accepted of up to 1476.
 
@@ -5402,7 +5409,7 @@ application sets them at each start.
   `persistence.save(oid, &WriteConfigSnapshot::Reporting(Default::default()))`.
   In a file, a
   bad value is damage, and a parameter this build doesn't keep for the
-  object's type is an unknown kind (`SnapshotErrorKind::UnknownKind(6)`,
+  object's type is an unknown kind (`PersistenceErrorKind::UnknownKind(6)`,
   `is_damage()` false): a later release may keep it, so a backend with two
   copies stops there instead of falling back to the older one.
 - **State_Text and Number_Of_States.** A Multi-state Input, Output or Value
@@ -6293,15 +6300,20 @@ framing, through the shared `bacnet-encoding` codecs.
 `alloc` alone, so storage an application brings (flash, EEPROM, a database
 row) keeps the same octets a hosted build does. Each format's module has
 `encode`, `decode`, its magic tag and its version as constants, and every
-refusal is a `SnapshotError` whose `kind()` names it: `Truncated`,
-`NotThisFormat`, `UnknownVersion`, `UnknownKind`, `OtherObject`, `TooLarge`,
-`Damaged`, or `OutOfRange` for a snapshot refused as it is encoded. It
-carries only static text, so reporting one needs no allocation.
+refusal is a `bacnet_types::error::PersistenceError` whose `kind()` names
+it: `Truncated`, `NotThisFormat`, `UnknownVersion`, `UnknownKind`,
+`OtherObject`, `TooLarge`, `Damaged`, or `RefusedOnEncode` for a snapshot
+refused as it is encoded. Its text is static, so reporting one needs no
+allocation. The storage traits return it as `Error::Persistence` (#1833); a
+backend of the application's own reports its own failure there with
+`PersistenceError::new(PersistenceErrorKind::BackendFailed, detail)`, which
+is not damage, and an OS I/O failure as `Error::Transport`, as the file
+backends do.
 `is_damage()` says whether a two-slot backend should pass over that copy
 for the other one, and `snapshot::log::newest(object, [slot0, slot1])`
 makes `FileLogPersistence`'s whole choice between two slots, as
 `snapshot::audit_log::newest` does for `FileAuditLogPersistence`. `Error`
-implements `From<SnapshotError>`, the mapping the file backends use.
+implements `From<PersistenceError>`, the mapping the file backends use.
 
 | Module | Snapshot | Tag and versions | File backend |
 | --- | --- | --- | --- |
@@ -14054,8 +14066,8 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Unsupported(Refusal)` | Not offered on this platform, in this build, or by this kind of component |
 | `Error::LimitReached(Refusal)` | A resource cap reached: a full table, a counter run out, a one-holder resource another holds |
 | `Error::SendTooLong { length, limit }` | A send refused for its length before anything was written: an NPDU too long for B/IP, MS/TP or Ethernet, and BACnet/SC's NPDU and frame bounds (#1833). A router answers it with reject reason 4; the high-level client asks again with smaller requests |
-| `Error::Encoding(msg)` | A formatted local error #1833 has not typed yet: a few of `bacnet-objects`' persisted-state refusals (a snapshot that doesn't decode or that the format can't keep, and a failed save), and refusals from the CLI and the Python bindings; a few matchers in the client, `bacnet-ops` and the bindings still read it |
-| `Error::Transport(io_error)` | Transport I/O failure, with the OS error as its source where one caused it: a socket's, a serial port's open, read or write, GPIO, the RS-485 ioctl, entropy (#1833), an SC dial's TLS handshake. A send this side's link didn't carry before its deadline (an endpoint's deadline-bound send, a server's audit forwarding) is one of kind `TimedOut`, not `Error::Timeout` (#1833). A stopped transport's send is `Error::State` |
+| `Error::Persistence(PersistenceError)` | Persisted state that couldn't be loaded or saved (#1833): `kind()` is `Truncated`, `NotThisFormat`, `TooLarge` or `Damaged` for stored octets no save wrote, `UnknownVersion`, `UnknownKind` or `OtherObject` for a sound snapshot this object must not take, `RefusedOnEncode` for one refused as it is encoded (nothing written), and `BackendFailed` for storage that failed with no OS error behind it (a save that failed or panicked, a slot that changed while it was read). `is_damage()` is true for the first four only: a backend keeping two copies passes over that one for the other. The type is opaque; a storage backend of the application's own builds one with `PersistenceError::new(kind, detail)`. With `std`, `Error::with_context` puts context in front and keeps the kind: the Tags file backend names its path this way. `bacnet-ops` counts it as failed locally; a server answers it SERVICES / OTHER |
+| `Error::Transport(io_error)` | I/O the operating system reported, with its error as the source: a socket's, a serial port's open, read or write, GPIO, the RS-485 ioctl, entropy (#1833), an SC dial's TLS handshake, and a storage file's, which the stack's file backends return this way. A send this side's link didn't carry before its deadline (an endpoint's deadline-bound send, a server's audit forwarding) is one of kind `TimedOut`, not `Error::Timeout` (#1833). A stopped transport's send is `Error::State` |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
 | `Error::RequestCutOff { sent }` | A request ended before an answer came because the client or its link stopped under it (#1833): the client's stop, its endpoint's or node's, or the link stopping after the request went out, refusing its retry or a later segment or dropping a B/IP BVLC management request's wait. `sent: false`: it was still waiting for its turn and nothing left. `sent: true`: it, or some of its segments, may have gone out and been carried out, so don't send a write again blindly. The text says which; an endpoint whose audited request's task its stop ended reports it with `sent: true` too. The source Audit records one with `sent: true`, its outcome unknown (COMMUNICATION, OTHER), and not one with `sent: false` |
 | `Error::UnknownDevice { device }` | No address claims the instance and none answered a Who-Is, or no router is known for a remote station (`bacnet-ops` handles); `BACnetClient::resolve_device` and the calls that look a device up by its instance refuse an instance the table doesn't hold this way (#1833); a server's audit send to a recipient with no router known fails this way too, and counts as not sent |

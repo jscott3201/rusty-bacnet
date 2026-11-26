@@ -49,7 +49,9 @@ fn test_transport() -> (TestTransport, Link) {
             async move {
                 sent.send((frame.npdu.to_vec(), frame.mac.to_vec()))
                     .await
-                    .map_err(|_| Error::Encoding("test sent-frame receiver closed".into()))
+                    .map_err(|_| {
+                        Error::Transport(std::io::Error::other("test sent-frame receiver closed"))
+                    })
             }
         })
         .build();

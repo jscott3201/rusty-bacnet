@@ -850,7 +850,9 @@ impl GroupChange for MulticastControl {
             .fail_next_subnet
             .swap(false, std::sync::atomic::Ordering::Relaxed)
         {
-            Err(Error::Encoding("injected link failure".into()))
+            Err(Error::Transport(std::io::Error::other(
+                "injected link failure",
+            )))
         } else {
             node.set_subnet(subnet)
         };

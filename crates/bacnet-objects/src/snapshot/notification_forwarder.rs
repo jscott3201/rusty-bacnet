@@ -24,7 +24,7 @@ use bacnet_encoding::constructed::{
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use super::SnapshotError;
+use super::PersistenceError;
 use super::framing;
 use crate::notification_class::MAX_RECIPIENT_LIST_DESTINATIONS;
 use crate::notification_forwarder::ForwarderSnapshot;
@@ -44,7 +44,7 @@ const BODY_HEADER_LEN: usize = 1 + 4;
 
 /// The file octets for `snapshot`, saved for the forwarder `object`.
 ///
-/// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) a list
+/// Refuses ([`OutOfRange`](super::PersistenceErrorKind::RefusedOnEncode)) a list
 /// longer than a forwarder keeps ([`MAX_RECIPIENT_LIST_DESTINATIONS`],
 /// [`MAX_SUBSCRIBED_RECIPIENTS`]), an entry that doesn't encode, a
 /// Description past 16 KiB, and octets past [`MAX_LEN`]: what [`decode`]
@@ -52,7 +52,7 @@ const BODY_HEADER_LEN: usize = 1 + 4;
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &ForwarderSnapshot,
-) -> Result<Vec<u8>, SnapshotError> {
+) -> Result<Vec<u8>, PersistenceError> {
     encode_file(object, snapshot)
         .map_err(|error| error.in_format("Notification Forwarder snapshot"))
 }
@@ -63,34 +63,38 @@ pub fn encode(
 /// another object, cut short, with a presence octet other than 0 or 1 (or a
 /// list behind a 0), a list longer than the forwarder keeps, an entry that
 /// does not decode, or a Description past 16 KiB or not UTF-8.
-pub fn decode(object: ObjectIdentifier, octets: &[u8]) -> Result<ForwarderSnapshot, SnapshotError> {
+pub fn decode(
+    object: ObjectIdentifier,
+    octets: &[u8],
+) -> Result<ForwarderSnapshot, PersistenceError> {
     decode_file(object, octets).map_err(|error| error.in_format("Notification Forwarder file"))
 }
 
 fn encode_file(
     object: ObjectIdentifier,
     snapshot: &ForwarderSnapshot,
-) -> Result<Vec<u8>, SnapshotError> {
-    let unencodable = SnapshotError::out_of_range("holds an entry that doesn't encode");
-    let too_long = SnapshotError::out_of_range("holds more entries than a forwarder keeps");
+) -> Result<Vec<u8>, PersistenceError> {
+    let unencodable = || crate::snapshot::refused_on_encode("holds an entry that doesn't encode");
+    let too_long =
+        || crate::snapshot::refused_on_encode("holds more entries than a forwarder keeps");
     let mut recipient_list = BytesMut::new();
     if let Some(list) = &snapshot.recipient_list {
         if list.len() > MAX_RECIPIENT_LIST_DESTINATIONS {
-            return Err(too_long);
+            return Err(too_long());
         }
-        encode_destination_list(&mut recipient_list, list).map_err(|_| unencodable)?;
+        encode_destination_list(&mut recipient_list, list).map_err(|_| unencodable())?;
     }
     if snapshot.subscribed_recipients.len() > MAX_SUBSCRIBED_RECIPIENTS {
-        return Err(too_long);
+        return Err(too_long());
     }
     let mut body = BytesMut::with_capacity(BODY_HEADER_LEN + recipient_list.len() + 1024);
     body.extend_from_slice(&[u8::from(snapshot.recipient_list.is_some())]);
     let length = u32::try_from(recipient_list.len())
-        .map_err(|_| SnapshotError::out_of_range("is too large to save"))?;
+        .map_err(|_| crate::snapshot::refused_on_encode("is too large to save"))?;
     body.extend_from_slice(&length.to_be_bytes());
     body.extend_from_slice(&recipient_list);
     encode_event_notification_subscription_list(&mut body, &snapshot.subscribed_recipients)
-        .map_err(|_| unencodable)?;
+        .map_err(|_| unencodable())?;
     let octets = framing::seal_described(
         (&MAGIC, &MAGIC_WITH_DESCRIPTION),
         object,
@@ -98,7 +102,7 @@ fn encode_file(
         &body,
     )?;
     if octets.len() > MAX_LEN {
-        return Err(SnapshotError::out_of_range("is too large to save"));
+        return Err(crate::snapshot::refused_on_encode("is too large to save"));
     }
     Ok(octets)
 }
@@ -106,18 +110,18 @@ fn encode_file(
 fn decode_file(
     object: ObjectIdentifier,
     octets: &[u8],
-) -> Result<ForwarderSnapshot, SnapshotError> {
+) -> Result<ForwarderSnapshot, PersistenceError> {
     let (description, body) =
         framing::open_described(octets, (&MAGIC, &MAGIC_WITH_DESCRIPTION), MAX_LEN, object)?;
     if body.len() < BODY_HEADER_LEN {
-        return Err(SnapshotError::truncated("has no valid header"));
+        return Err(crate::snapshot::truncated("has no valid header"));
     }
     let length = u32::from_be_bytes(body[1..BODY_HEADER_LEN].try_into().expect("four"));
     let split = usize::try_from(length)
         .ok()
         .and_then(|length| BODY_HEADER_LEN.checked_add(length))
         .filter(|split| *split <= body.len())
-        .ok_or(SnapshotError::truncated(
+        .ok_or(crate::snapshot::truncated(
             "has a Recipient_List past its end",
         ))?;
     let recipient_list = &body[BODY_HEADER_LEN..split];
@@ -128,7 +132,7 @@ fn decode_file(
             MAX_RECIPIENT_LIST_DESTINATIONS,
             decode_destination,
         )?),
-        _ => return Err(SnapshotError::damaged("has no valid header")),
+        _ => return Err(crate::snapshot::damaged("has no valid header")),
     };
     Ok(ForwarderSnapshot {
         recipient_list,

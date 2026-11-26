@@ -346,7 +346,7 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
     };
     assert!(matches!(
         storage.save(class, &past_cap),
-        Err(Error::OutOfRange(_))
+        Err(Error::Persistence(refused)) if refused.kind() == bacnet_types::error::PersistenceErrorKind::RefusedOnEncode
     ));
     let mut bytes = std::fs::read(&path).unwrap();
     let mut extra = BytesMut::new();

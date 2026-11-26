@@ -57,7 +57,7 @@ mod tests {
                     io_kind: "ConnectionRefused".into(),
                 },
             ),
-            (Error::Encoding("fixture".into()), FailureKind::Other),
+            (Error::invalid_config("fixture"), FailureKind::Other),
         ];
         for (error, expected) in cases {
             assert_eq!(classify(&error), expected);

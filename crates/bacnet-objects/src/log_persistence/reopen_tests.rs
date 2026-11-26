@@ -297,7 +297,7 @@ fn a_damaged_newer_slot_reopens_the_log_from_the_older_one() {
         }
         let refused = open(kind, base.path(), 4).map(|_| ()).unwrap_err();
         assert!(
-            matches!(refused, Error::Encoding(_)),
+            matches!(&refused, Error::Persistence(damage) if damage.is_damage()),
             "{kind:?} {refused:?}"
         );
     }

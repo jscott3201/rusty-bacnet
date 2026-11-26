@@ -32,7 +32,9 @@ impl WriteConfigPersistence for Rationed {
     fn save(&self, _: ObjectIdentifier, snapshot: &WriteConfigSnapshot) -> Result<(), Error> {
         let left = self.allowed.load(Ordering::SeqCst);
         if left == 0 {
-            return Err(Error::Encoding("storage unavailable".into()));
+            return Err(Error::from(crate::snapshot::backend_failed(
+                "storage unavailable",
+            )));
         }
         self.allowed.store(left - 1, Ordering::SeqCst);
         *self.saved.lock().unwrap() = Some(snapshot.clone());

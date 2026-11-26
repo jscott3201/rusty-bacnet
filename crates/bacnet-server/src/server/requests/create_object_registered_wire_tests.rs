@@ -307,7 +307,12 @@ async fn a_constructor_refusal_reaches_the_client_and_a_panic_creates_nothing() 
         })
         .unwrap();
     constructors
-        .register::<Vendor, _>(raw(2), |_, _| Err(Error::Encoding("not now".into())))
+        .register::<Vendor, _>(raw(2), |_, _| {
+            Err(Error::state(
+                bacnet_types::error::Lifecycle::NotRunning,
+                "not now",
+            ))
+        })
         .unwrap();
     constructors
         .register::<Vendor, _>(raw(3), |_, _| panic!("constructor bug"))

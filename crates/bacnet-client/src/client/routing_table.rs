@@ -360,7 +360,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .send_routing_table_query(&target.hop, target.station.as_ref())
             .await
             .map_err(|error| match error {
-                Error::Encoding(message) => RoutingTableError::InvalidArgument(message),
                 // The router's address in a form the link refuses.
                 Error::InvalidArgument(refusal) => {
                     RoutingTableError::InvalidArgument(refusal.to_string())

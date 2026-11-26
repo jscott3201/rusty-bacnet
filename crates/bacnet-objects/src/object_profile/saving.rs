@@ -270,13 +270,21 @@ impl ProfileState {
         // As the file backend refuses the same Tags in a file.
         crate::snapshot::tags::check_loaded(&snapshot)
             .map_err(|error| Error::from(error.in_format("Tags snapshot")))?;
+        // Tags another object type saved: another object's snapshot, as
+        // the file backends call one saved for another object (#1833).
+        let other_type = |detail| {
+            Error::from(crate::snapshot::PersistenceError::new(
+                crate::snapshot::PersistenceErrorKind::OtherObject,
+                detail,
+            ))
+        };
         if !keeps_description && snapshot.description.is_some() {
-            return Err(Error::invalid_config(
+            return Err(other_type(
                 "saved Tags hold a Description, which this object type doesn't keep there",
             ));
         }
         if !keeps_zone && !snapshot.zone.is_empty() {
-            return Err(Error::invalid_config(
+            return Err(other_type(
                 "saved Tags hold a zone, which only a Device keeps there",
             ));
         }

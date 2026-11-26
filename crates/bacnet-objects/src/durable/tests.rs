@@ -88,7 +88,9 @@ fn saves_run_in_order_on_the_writer_thread() {
     assert_eq!(handle.started.recv_timeout(WAIT).unwrap(), 2);
     handle
         .release
-        .send(Err(Error::Encoding("disk full".into())))
+        .send(Err(Error::from(crate::snapshot::backend_failed(
+            "disk full",
+        ))))
         .unwrap();
     assert!(first.take_outcome().is_ok());
     assert!(second.take_outcome().is_err());
@@ -172,7 +174,7 @@ fn the_done_hook_sees_every_result() {
             if snapshot.is_multiple_of(2) {
                 Ok(())
             } else {
-                Err(Error::Encoding("odd".into()))
+                Err(Error::from(crate::snapshot::backend_failed("odd")))
             }
         },
         move |snapshot, result| seen.lock().unwrap().push((*snapshot, result.is_ok())),

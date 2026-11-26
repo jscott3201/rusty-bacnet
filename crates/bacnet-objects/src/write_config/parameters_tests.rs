@@ -474,7 +474,10 @@ fn a_stored_parameter_is_validated_as_a_write_of_it_is() {
             match built {
                 Ok(object) => assert_eq!(read(object.as_ref(), property), value),
                 Err(error) => {
-                    assert!(matches!(error, Error::InvalidConfig(_)), "{error:?}");
+                    assert!(
+                        matches!(&error, Error::Persistence(refused) if refused.is_damage()),
+                        "{error:?}"
+                    );
                     refused += 1;
                 }
             }
@@ -535,12 +538,18 @@ fn a_type_keeps_only_its_own_parameters() {
     let mut enrollment_takes = 0;
     for stored in stored.chain(more) {
         let built = try_alert(&holding(stored.clone()));
-        assert!(matches!(built, Err(Error::InvalidConfig(_))), "{stored:?}");
+        assert!(
+            matches!(&built, Err(Error::Persistence(refused)) if refused.is_damage()),
+            "{stored:?}"
+        );
         let enrollment = EventEnrollmentObject::new(1, "EE", EventType::CHANGE_OF_STATE)
             .and_then(|object| object.with_reporting_persistence(persistence(&holding(stored))));
         match enrollment {
             Ok(_) => enrollment_takes += 1,
-            Err(error) => assert!(matches!(error, Error::InvalidConfig(_)), "{error:?}"),
+            Err(error) => assert!(
+                matches!(&error, Error::Persistence(refused) if refused.is_damage()),
+                "{error:?}"
+            ),
         }
     }
     // Time_Delay_Normal, Event_Parameters and Fault_Parameters.

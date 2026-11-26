@@ -452,8 +452,10 @@ fn end<S>(shared: &Shared<S>, queue: &mut Queue<S>) {
 /// it through an `Arc` holds the only reference once the save has run.
 fn run_job<S>(shared: &Shared<S>, job: Job<S>) {
     let Job { snapshot, ticket } = job;
-    let result = catch_unwind(AssertUnwindSafe(|| (shared.save.0)(&snapshot)))
-        .unwrap_or_else(|_| Err(Error::Encoding("persistence panicked during a save".into())));
+    let result =
+        catch_unwind(AssertUnwindSafe(|| (shared.save.0)(&snapshot))).unwrap_or_else(|_| {
+            Err(crate::snapshot::backend_failed("persistence panicked during a save").into())
+        });
     let _ = catch_unwind(AssertUnwindSafe(|| (shared.done.0)(&snapshot, &result)));
     drop(snapshot);
     if let Some(ticket) = ticket {

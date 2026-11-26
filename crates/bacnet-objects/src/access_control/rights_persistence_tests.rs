@@ -508,7 +508,7 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
     };
     assert!(matches!(
         storage.save(rights, &past_cap),
-        Err(Error::OutOfRange(_))
+        Err(Error::Persistence(refused)) if refused.kind() == bacnet_types::error::PersistenceErrorKind::RefusedOnEncode
     ));
     let mut body = BytesMut::new();
     bacnet_encoding::tags::encode_opening_tag(&mut body, 1);

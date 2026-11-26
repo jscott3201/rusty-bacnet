@@ -221,10 +221,9 @@ impl PyReinitialize {
                 Ok(())
             }
             Answer::Refuse(class, code) => Err(Error::protocol(class, code)),
-            // Answered SERVICES / OTHER, as a Rust handler's panic is.
-            Answer::Failed => Err(Error::Encoding(
-                "Python on_reinitialize raised or answered with an unexpected value".into(),
-            )),
+            // Answered SERVICES / OTHER, as a Rust handler's panic is; the
+            // exception went to sys.unraisablehook above.
+            Answer::Failed => Err(Error::protocol(ErrorClass::SERVICES, ErrorCode::OTHER)),
         }
     }
 }

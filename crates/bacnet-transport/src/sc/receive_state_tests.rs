@@ -66,7 +66,9 @@ impl WebSocketPort for HeartbeatSendFailureWebSocket {
             *self.connect_request_id.lock().await = Some(request.message_id);
             Ok(())
         } else {
-            Err(Error::Encoding("scripted heartbeat send failure".into()))
+            Err(Error::Transport(std::io::Error::other(
+                "scripted heartbeat send failure",
+            )))
         }
     }
 

@@ -179,12 +179,16 @@ struct RejectIoWebSocket {
 impl WebSocketPort for RejectIoWebSocket {
     async fn send(&self, _: &[u8]) -> Result<(), Error> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err(Error::Encoding("unexpected WebSocket send".into()))
+        Err(Error::Transport(std::io::Error::other(
+            "unexpected WebSocket send",
+        )))
     }
 
     async fn recv(&self) -> Result<Vec<u8>, Error> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err(Error::Encoding("unexpected WebSocket receive".into()))
+        Err(Error::Transport(std::io::Error::other(
+            "unexpected WebSocket receive",
+        )))
     }
 }
 

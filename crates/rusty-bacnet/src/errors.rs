@@ -659,8 +659,8 @@ mod tests {
                 (0x03, 0x00)
             );
 
-            let local = bvlc_exchange_err(BvlcExchangeError::Transport(Error::Encoding(
-                "refused".into(),
+            let local = bvlc_exchange_err(BvlcExchangeError::Transport(Error::invalid_argument(
+                "refused",
             )));
             assert!(local.value(py).get_type().is(py.get_type::<BacnetError>()));
 

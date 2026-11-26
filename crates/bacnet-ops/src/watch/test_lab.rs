@@ -214,8 +214,8 @@ pub(super) fn link(
                 });
             async move {
                 match read {
-                    true => Err(bacnet_types::error::Error::Encoding(
-                        "the link refused the send".into(),
+                    true => Err(bacnet_types::error::Error::invalid_argument(
+                        "the link refused the send",
                     )),
                     false => Ok(()),
                 }

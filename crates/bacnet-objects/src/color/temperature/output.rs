@@ -58,9 +58,9 @@ impl ColorTemperatureObject {
             {
                 Ok(Some(kelvin))
             }
-            Some(_) => Err(Error::invalid_config(
+            Some(_) => Err(Error::from(crate::snapshot::damaged(
                 "saved Color Temperature output is not a temperature the object can hold",
-            )),
+            ))),
         };
         if let Some(kelvin) = kelvin(saved.present_value, false)? {
             self.present_value = self.clamped(kelvin);

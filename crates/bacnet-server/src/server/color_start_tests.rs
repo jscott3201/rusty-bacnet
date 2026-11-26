@@ -45,7 +45,10 @@ impl ColorOutputPersistence for Memory {
 
     fn save(&self, _object: ObjectIdentifier, snapshot: &ColorOutputSnapshot) -> Result<(), Error> {
         if self.refuse.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(Error::Encoding("refused".into()));
+            return Err(Error::from(bacnet_types::error::PersistenceError::new(
+                bacnet_types::error::PersistenceErrorKind::BackendFailed,
+                "refused",
+            )));
         }
         *self.held.lock().unwrap() = Some(snapshot.clone());
         Ok(())

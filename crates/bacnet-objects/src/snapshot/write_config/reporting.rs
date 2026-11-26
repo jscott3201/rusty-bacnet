@@ -10,7 +10,7 @@ use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{NotifyType, ObjectType};
 use bytes::BytesMut;
 
-use super::{Reader, SnapshotError, put_octets};
+use super::{PersistenceError, Reader, put_octets};
 use crate::event::options::MAX_KEPT_TEXT_OCTETS;
 use crate::write_config::ReportingWriteConfig;
 
@@ -81,9 +81,9 @@ pub(crate) fn invalid(config: &ReportingWriteConfig) -> Option<&'static str> {
 pub(super) fn encode(
     body: &mut BytesMut,
     config: &ReportingWriteConfig,
-) -> Result<(), SnapshotError> {
+) -> Result<(), PersistenceError> {
     if let Some(reason) = invalid(config) {
-        return Err(SnapshotError::out_of_range(reason));
+        return Err(crate::snapshot::refused_on_encode(reason));
     }
     put(body, config.notification_class, |body, class| {
         body.extend_from_slice(&class.to_be_bytes());
@@ -136,8 +136,8 @@ impl Reader<'_> {
     /// A part behind its presence octet.
     fn part<T>(
         &mut self,
-        read: impl FnOnce(&mut Self) -> Result<T, SnapshotError>,
-    ) -> Result<Option<T>, SnapshotError> {
+        read: impl FnOnce(&mut Self) -> Result<T, PersistenceError>,
+    ) -> Result<Option<T>, PersistenceError> {
         if self.flag()? {
             read(self).map(Some)
         } else {
@@ -147,11 +147,11 @@ impl Reader<'_> {
 
     /// A reporting body, refused as damage where [`invalid`] would refuse
     /// it.
-    pub(super) fn reporting(&mut self) -> Result<ReportingWriteConfig, SnapshotError> {
+    pub(super) fn reporting(&mut self) -> Result<ReportingWriteConfig, PersistenceError> {
         let notification_class = self.part(Self::u32)?;
         let event_enable = self.part(|reader| {
             EventTransitionBits::from_bits(reader.u8()?)
-                .ok_or(SnapshotError::damaged("holds unknown Event_Enable bits"))
+                .ok_or(crate::snapshot::damaged("holds unknown Event_Enable bits"))
         })?;
         let notify_type = self.part(|reader| Ok(NotifyType::from_raw(reader.u32()?)))?;
         let event_detection_enable = self.part(Self::flag)?;
@@ -159,13 +159,14 @@ impl Reader<'_> {
             let mut text = || {
                 let octets = reader.octets(MAX_KEPT_TEXT_OCTETS)?;
                 String::from_utf8(octets.to_vec())
-                    .map_err(|_| SnapshotError::damaged("holds a message text that isn't UTF-8"))
+                    .map_err(|_| crate::snapshot::damaged("holds a message text that isn't UTF-8"))
             };
             Ok([text()?, text()?, text()?])
         })?;
         let event_algorithm_inhibit_ref = self.part(|reader| {
-            decode_object_property_reference(reader.octets(MAX_REFERENCE_OCTETS)?)
-                .map_err(|_| SnapshotError::damaged("holds an inhibit reference that won't decode"))
+            decode_object_property_reference(reader.octets(MAX_REFERENCE_OCTETS)?).map_err(|_| {
+                crate::snapshot::damaged("holds an inhibit reference that won't decode")
+            })
         })?;
         let event_algorithm_inhibit = self.part(Self::flag)?;
         let config = ReportingWriteConfig {
@@ -180,7 +181,7 @@ impl Reader<'_> {
             algorithm: Default::default(),
         };
         match invalid(&config) {
-            Some(reason) => Err(SnapshotError::damaged(reason)),
+            Some(reason) => Err(crate::snapshot::damaged(reason)),
             None => Ok(config),
         }
     }

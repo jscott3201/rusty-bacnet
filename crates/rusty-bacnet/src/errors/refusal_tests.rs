@@ -3,7 +3,7 @@
 //! untyped error they replace did, whose text led with its prefix.
 
 use super::*;
-use bacnet_types::error::{Lifecycle, Refusal};
+use bacnet_types::error::{Lifecycle, PersistenceError, PersistenceErrorKind, Refusal};
 
 /// Every lifecycle state raises `BacnetStateError` (also a `BacnetError`
 /// and a `RuntimeError`) with its text and the state's name in `state`;
@@ -65,6 +65,16 @@ fn local_refusals_raise_their_class_with_their_text() {
             Error::LimitReached(
                 Refusal::new("A router needs 1 to {} ports, not {}").with_values(255, 256),
             ),
+            // Persisted state (#1833), damaged or a backend's failure: the
+            // base class too, as the untyped text it replaces was.
+            Error::from(
+                PersistenceError::new(PersistenceErrorKind::Damaged, "checksum mismatch")
+                    .in_format("Notification Class file"),
+            ),
+            Error::from(PersistenceError::new(
+                PersistenceErrorKind::BackendFailed,
+                "persistence panicked during a save",
+            )),
         ];
         for error in refusals {
             let text = error.to_string();
@@ -75,18 +85,6 @@ fn local_refusals_raise_their_class_with_their_text() {
             );
             assert_eq!(raised.value(py).str().unwrap().to_str().unwrap(), text);
         }
-        // The untyped error they replace took the base class's arm.
-        let untyped = to_py_err(Error::Encoding("endpoint shutdown".into()));
-        assert!(
-            untyped
-                .value(py)
-                .get_type()
-                .is(py.get_type::<BacnetError>())
-        );
-        assert_eq!(
-            untyped.value(py).str().unwrap().to_str().unwrap(),
-            "encoding error: endpoint shutdown"
-        );
     });
 }
 

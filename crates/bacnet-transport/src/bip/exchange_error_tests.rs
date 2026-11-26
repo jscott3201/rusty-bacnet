@@ -159,8 +159,8 @@ fn only_a_timeout_converts_to_no_reply() {
         BvlcExchangeError::NoReply(t) if t == timeout
     ));
     assert!(matches!(
-        BvlcExchangeError::from(Error::Encoding("x".into())),
-        BvlcExchangeError::Transport(Error::Encoding(_))
+        BvlcExchangeError::from(Error::invalid_config("x")),
+        BvlcExchangeError::Transport(Error::InvalidConfig(_))
     ));
 }
 

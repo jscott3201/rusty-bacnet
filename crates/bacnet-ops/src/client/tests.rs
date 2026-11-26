@@ -693,11 +693,20 @@ fn a_disabled_node_fails_locally() {
 /// The local refusals #1833 typed out of the encoding error fail locally,
 /// as it did, and so does a send on a stopped transport (#1833): a stopped
 /// local link is the client's own state, not a device that stopped
-/// answering. A link that failed a send is still unreachable.
+/// answering. So does this side's own stored state failing, which was that
+/// error's text too. A link that failed a send is still unreachable.
 #[test]
 fn local_refusals_and_a_stopped_link_fail_locally() {
-    use bacnet_types::error::{Error, Lifecycle};
+    use bacnet_types::error::{Error, Lifecycle, PersistenceError, PersistenceErrorKind};
     for error in [
+        Error::from(PersistenceError::new(
+            PersistenceErrorKind::BackendFailed,
+            "storage unavailable",
+        )),
+        Error::from(PersistenceError::new(
+            PersistenceErrorKind::Damaged,
+            "checksum mismatch",
+        )),
         Error::state(
             Lifecycle::NotConnected,
             "BACnet/SC transport not in Connected state",

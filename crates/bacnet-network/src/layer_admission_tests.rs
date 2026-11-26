@@ -15,7 +15,7 @@ fn ingress(incoming: mpsc::Receiver<ReceivedNpdu>, outgoing: mpsc::Sender<Bytes>
         .on_send(move |frame| {
             let queued = outgoing
                 .try_send(frame.npdu)
-                .map_err(|_| Error::Encoding("outgoing queue unavailable".into()));
+                .map_err(|_| Error::Transport(std::io::Error::other("outgoing queue unavailable")));
             async move { queued }
         })
         .build()

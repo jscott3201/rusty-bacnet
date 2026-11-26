@@ -107,7 +107,9 @@ impl AuditCapture {
         if mac.as_slice() == SOURCE {
             self.responses.lock().unwrap().push(bytes);
             if self.fail_response.load(Ordering::Acquire) {
-                return Err(Error::Encoding("injected response send failure".into()));
+                return Err(Error::Transport(std::io::Error::other(
+                    "injected response send failure",
+                )));
             }
             return Ok(());
         }
@@ -122,7 +124,9 @@ impl AuditCapture {
             self.unblock.notified().await;
         }
         if self.fail.load(Ordering::Acquire) {
-            return Err(Error::Encoding("injected send failure".into()));
+            return Err(Error::Transport(std::io::Error::other(
+                "injected send failure",
+            )));
         }
         Ok(())
     }

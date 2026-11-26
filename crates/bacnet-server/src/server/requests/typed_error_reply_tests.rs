@@ -92,15 +92,18 @@ fn every_reject_reason_goes_out_unchanged() {
     }
 }
 
-/// Every kind of error the server's own refusals now take (#1833) goes out
-/// as the untyped text it replaces did: an Error PDU with SERVICES / OTHER,
+/// Every kind of error the server's own refusals now take (#1833), and
+/// persisted state, goes out as the untyped text it replaces did: an Error PDU with SERVICES / OTHER,
 /// the plain one and each Clause 21 production alike. A refusal is never a
 /// syntax fault of the request, so `into_request_reject` leaves each as it
 /// is; only a decoding error becomes a Reject there, which is why a site
 /// typed as `Decoding` is one no request decode passes through.
 #[test]
 fn local_refusals_go_out_as_the_text_they_replace() {
-    use bacnet_types::error::{DecodeError, DecodingKind, Lifecycle, RangeError, Refusal};
+    use bacnet_types::error::{
+        DecodeError, DecodingKind, Lifecycle, PersistenceError, PersistenceErrorKind, RangeError,
+        Refusal,
+    };
     let services = [
         ConfirmedServiceChoice::READ_PROPERTY,
         ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL,
@@ -124,6 +127,20 @@ fn local_refusals_go_out_as_the_text_they_replace() {
                 0,
                 "unknown EnableDisable value",
             )),
+            // Persisted state (#1833): damage, an encode refusal and a
+            // backend's failure, which were that text too.
+            Error::from(
+                PersistenceError::new(PersistenceErrorKind::Damaged, "checksum mismatch")
+                    .in_format("Tags file"),
+            ),
+            Error::from(PersistenceError::new(
+                PersistenceErrorKind::RefusedOnEncode,
+                "more entries than the cap",
+            )),
+            Error::from(PersistenceError::new(
+                PersistenceErrorKind::BackendFailed,
+                "save failed; its error was reported",
+            )),
         ];
         for state in [
             Lifecycle::AlreadyStarted,
@@ -136,21 +153,27 @@ fn local_refusals_go_out_as_the_text_they_replace() {
         }
         all
     };
-    for service in services {
-        let untyped = wire(
+    // What the untyped text went out as, which #1833 removed: SERVICES /
+    // OTHER, in each service's own production.
+    let services_other = |service| {
+        wire(
             service,
-            &Error::Encoding("unknown EnableDisable value".into()),
-        );
-        assert_eq!(
-            untyped,
-            wire(service, &Error::OutOfRange("too large".into())),
-            "{service:?}"
-        );
+            &Error::protocol(ErrorClass::SERVICES, ErrorCode::OTHER),
+        )
+    };
+    // Error PDU, invoke ID 9, the service; SERVICES (5) and OTHER (0) as
+    // application-tagged ENUMERATED.
+    let read = ConfirmedServiceChoice::READ_PROPERTY;
+    assert_eq!(
+        services_other(read),
+        [0x50, 9, read.to_raw(), 0x91, 5, 0x91, 0]
+    );
+    for service in services {
+        let untyped = services_other(service);
         for refusal in refusals() {
             assert_eq!(wire(service, &refusal), untyped, "{service:?}: {refusal:?}");
         }
     }
-    let read = ConfirmedServiceChoice::READ_PROPERTY;
     for refusal in refusals() {
         let decoding = matches!(refusal, Error::Decoding(_));
         let as_request = refusal.into_request_reject();
@@ -162,7 +185,7 @@ fn local_refusals_go_out_as_the_text_they_replace() {
         } else {
             assert_eq!(
                 wire(read, &as_request),
-                wire(read, &Error::Encoding(String::new())),
+                services_other(read),
                 "{as_request:?}"
             );
         }

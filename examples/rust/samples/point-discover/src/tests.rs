@@ -59,14 +59,15 @@ fn object_list_count_is_checked_before_allocation_or_indexed_reads() {
     for count in [10_001, u64::from(u32::MAX)] {
         assert!(matches!(
             object_list_bounds(count),
-            Err(Error::Encoding(message))
-                if message == "object-list count exceeds example limit of 10000"
+            Err(Error::LimitReached(refusal))
+                if refusal.to_string() == "object-list count exceeds example limit of 10000"
         ));
     }
     for count in [u64::from(u32::MAX) + 1, (1u64 << 32) + 1, u64::MAX] {
         assert!(matches!(
             object_list_bounds(count),
-            Err(Error::Encoding(message)) if message == "object-list count exceeds u32"
+            Err(Error::LimitReached(refusal))
+                if refusal.to_string() == "object-list count exceeds u32"
         ));
     }
 }

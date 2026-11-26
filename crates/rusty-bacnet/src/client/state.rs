@@ -82,7 +82,7 @@ impl Started {
             }
         }
         let core = Arc::get_mut(&mut self.core).ok_or_else(|| {
-            Error::Encoding("cannot stop BACnetClient while high-level references remain".into())
+            Error::limit_reached("cannot stop BACnetClient while high-level references remain")
         })?;
         core.stop().await
     }

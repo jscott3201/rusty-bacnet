@@ -12,7 +12,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
 
 use super::tests::oid;
 use super::{
-    SnapshotError, SnapshotErrorKind, access_rights, color, notification_class,
+    PersistenceError, PersistenceErrorKind, access_rights, color, notification_class,
     notification_forwarder, tags,
 };
 use crate::access_control::AccessRightsSnapshot;
@@ -117,8 +117,8 @@ fn round_trips<S: PartialEq + core::fmt::Debug>(
     max_len: usize,
     object: ObjectIdentifier,
     snapshot: &S,
-    encode: fn(ObjectIdentifier, &S) -> Result<Vec<u8>, SnapshotError>,
-    decode: fn(ObjectIdentifier, &[u8]) -> Result<S, SnapshotError>,
+    encode: fn(ObjectIdentifier, &S) -> Result<Vec<u8>, PersistenceError>,
+    decode: fn(ObjectIdentifier, &[u8]) -> Result<S, PersistenceError>,
 ) {
     let octets = encode(object, snapshot).unwrap();
     assert_eq!(octets[..8], magic);
@@ -127,16 +127,16 @@ fn round_trips<S: PartialEq + core::fmt::Debug>(
     let kind = |octets: &[u8], object| decode(object, octets).unwrap_err().kind();
     let mut retagged = octets.clone();
     retagged[0] ^= 1;
-    assert_eq!(kind(&retagged, object), SnapshotErrorKind::NotThisFormat);
+    assert_eq!(kind(&retagged, object), PersistenceErrorKind::NotThisFormat);
     assert_eq!(
         kind(&octets[..11], object),
-        SnapshotErrorKind::NotThisFormat
+        PersistenceErrorKind::NotThisFormat
     );
     let other = ObjectIdentifier::new(object.object_type(), object.instance_number() + 1).unwrap();
-    assert_eq!(kind(&octets, other), SnapshotErrorKind::OtherObject);
+    assert_eq!(kind(&octets, other), PersistenceErrorKind::OtherObject);
     let mut huge = octets;
     huge.resize(max_len + 1, 0);
-    assert_eq!(kind(&huge, object), SnapshotErrorKind::TooLarge);
+    assert_eq!(kind(&huge, object), PersistenceErrorKind::TooLarge);
 }
 
 #[test]
@@ -217,7 +217,7 @@ fn a_version_1_colour_file_loads_with_no_default() {
     longer.push(0);
     assert_eq!(
         color::decode(object, &longer).unwrap_err().kind(),
-        SnapshotErrorKind::Damaged
+        PersistenceErrorKind::Damaged
     );
 }
 
@@ -230,26 +230,26 @@ fn a_newer_tag_or_kind_is_not_damage() {
     let mut octets = notification_class::encode(object, &snapshot).unwrap();
     octets[6..8].copy_from_slice(b"03");
     let error = notification_class::decode(object, &octets).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::UnknownVersion(3));
+    assert_eq!(error.kind(), PersistenceErrorKind::UnknownVersion(3));
     assert!(!error.is_damage());
     let (object, snapshot) = colour();
     let mut octets = color::encode(object, &snapshot).unwrap();
     octets[6..8].copy_from_slice(b"07");
     assert_eq!(
         color::decode(object, &octets).unwrap_err().kind(),
-        SnapshotErrorKind::UnknownVersion(7)
+        PersistenceErrorKind::UnknownVersion(7)
     );
     let mut octets = color::encode(object, &snapshot).unwrap();
     octets[12] = 3;
     let error = color::decode(object, &octets).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::UnknownKind(3));
+    assert_eq!(error.kind(), PersistenceErrorKind::UnknownKind(3));
     assert!(!error.is_damage());
     // Another family, or a version that isn't two digits: not this format.
     for tag in [*b"RBNFWD01", *b"RBNCLRxx"] {
         let mut octets = color::encode(object, &snapshot).unwrap();
         octets[..8].copy_from_slice(&tag);
         let error = color::decode(object, &octets).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::NotThisFormat);
+        assert_eq!(error.kind(), PersistenceErrorKind::NotThisFormat);
         assert!(error.is_damage());
     }
 }
@@ -260,16 +260,16 @@ fn an_over_long_list_never_encodes() {
     let (object, mut snapshot) = class();
     snapshot.recipient_list = Some(vec![destination(2); 33]);
     let error = notification_class::encode(object, &snapshot).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
     let (object, mut snapshot) = forwarder();
     let entry = snapshot.subscribed_recipients[0].clone();
     snapshot.subscribed_recipients = vec![entry; 33];
     let error = notification_forwarder::encode(object, &snapshot).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
     let (object, mut snapshot) = rights();
     snapshot.negative_access_rules = Some(vec![BACnetAccessRule::new(None, None, true); 1025]);
     let error = access_rights::encode(object, &snapshot).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
 }
 
 /// Values no save writes are damage on decode and refusals on encode.
@@ -280,7 +280,7 @@ fn values_out_of_range_are_damage_in_and_refused_out() {
     // Present_Value's x past 1.0.
     octets[14..18].copy_from_slice(&2.0f32.to_be_bytes());
     let error = color::decode(object, &octets).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
+    assert_eq!(error.kind(), PersistenceErrorKind::Damaged);
     assert!(
         error.to_string().starts_with("Color output file "),
         "{error}"
@@ -296,7 +296,7 @@ fn values_out_of_range_are_damage_in_and_refused_out() {
     };
     for refused in [bad, mixed] {
         let error = color::encode(object, &refused).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+        assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
         assert!(!error.is_damage());
     }
 
@@ -307,7 +307,7 @@ fn values_out_of_range_are_damage_in_and_refused_out() {
         zone: Default::default(),
     };
     let error = tags::encode(object, &semicolon).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
     // The same tag in a file, as another writer could leave it.
     let mut octets = tags::encode(
         object,
@@ -322,7 +322,7 @@ fn values_out_of_range_are_damage_in_and_refused_out() {
     octets[at] = b';';
     assert_eq!(
         tags::decode(object, &octets).unwrap_err().kind(),
-        SnapshotErrorKind::Damaged
+        PersistenceErrorKind::Damaged
     );
 }
 
@@ -337,7 +337,7 @@ fn a_bad_presence_octet_or_list_length_is_refused() {
         notification_class::decode(object, &octets)
             .unwrap_err()
             .kind(),
-        SnapshotErrorKind::Damaged
+        PersistenceErrorKind::Damaged
     );
     let (object, snapshot) = forwarder();
     let mut octets = notification_forwarder::encode(object, &snapshot).unwrap();
@@ -346,14 +346,14 @@ fn a_bad_presence_octet_or_list_length_is_refused() {
         notification_forwarder::decode(object, &octets)
             .unwrap_err()
             .kind(),
-        SnapshotErrorKind::Truncated
+        PersistenceErrorKind::Truncated
     );
     let (object, _) = tagged();
     let mut octets = tags::encode(object, &TagsSnapshot::default()).unwrap();
     octets.push(0);
     assert_eq!(
         tags::decode(object, &octets).unwrap_err().kind(),
-        SnapshotErrorKind::Damaged
+        PersistenceErrorKind::Damaged
     );
 }
 
@@ -455,8 +455,9 @@ mod file_backends {
         };
         let error = store.save(object, &bad).unwrap_err();
         assert!(
-            matches!(&error, bacnet_types::error::Error::OutOfRange(message)
-                if message.starts_with("Color output snapshot")),
+            matches!(&error, bacnet_types::error::Error::Persistence(refused)
+                if refused.kind() == bacnet_types::error::PersistenceErrorKind::RefusedOnEncode
+                    && refused.to_string().starts_with("Color output snapshot")),
             "{error:?}"
         );
         assert_eq!(std::fs::read(&path).unwrap(), before);

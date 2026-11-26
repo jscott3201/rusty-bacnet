@@ -215,10 +215,13 @@ pub async fn foreign(param: u64, duration: Duration) -> Result<DegradationPoint,
     let Some(registered) = registered else {
         let snapshot = client.foreign_registration()?;
         let _ = client.stop().await;
-        return Err(Error::Encoding(format!(
-            "no registration with bbmd-a within 10 seconds (last outcome {:?})",
-            snapshot.last_outcome
-        )));
+        return Err(Error::State(
+            bacnet_types::error::Lifecycle::NotConnected,
+            bacnet_types::error::Refusal::text(format!(
+                "no registration with bbmd-a within 10 seconds (last outcome {:?})",
+                snapshot.last_outcome
+            )),
+        ));
     };
     eprintln!(
         "  registered with bbmd-a in {:.1} ms",
@@ -254,9 +257,11 @@ pub async fn foreign(param: u64, duration: Duration) -> Result<DegradationPoint,
     }
     if found.as_deref() != Some(&encode_bip_mac(address, 47808)[..]) {
         let _ = client.stop().await;
-        return Err(Error::Encoding(
-            "the foreign device did not discover server-a at its address".into(),
-        ));
+        // No address of server-a's own claims it: the client's unknown
+        // device (#1833). What did answer, if anything, is printed above.
+        return Err(Error::UnknownDevice {
+            device: SERVER_A.0.to_string(),
+        });
     }
 
     let point = read_loop(&client, "foreign_rp", param, address, None, duration).await;

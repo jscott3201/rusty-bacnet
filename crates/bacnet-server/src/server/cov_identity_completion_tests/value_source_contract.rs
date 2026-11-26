@@ -38,7 +38,7 @@ impl BACnetObject for Probe {
         let mut state = self.state.lock().unwrap();
         *state.reads.entry(p).or_default() += 1;
         if state.fail == Some(p) {
-            return Err(Error::Encoding("injected companion read failure".into()));
+            return Err(Error::unsupported("injected companion read failure"));
         }
         if let Some(value) = state.overrides.get(&p) {
             return Ok(value.clone());
@@ -52,7 +52,7 @@ impl BACnetObject for Probe {
         _: PropertyValue,
         _: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Encoding("read only probe".into()))
+        Err(Error::unsupported("read only probe"))
     }
 }
 

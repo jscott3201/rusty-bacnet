@@ -10,7 +10,7 @@ use bacnet_types::enums::{NotifyType, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
-use super::{SnapshotErrorKind, write_config};
+use super::{PersistenceErrorKind, write_config};
 use crate::write_config::{ReportingWriteConfig, TimerWriteConfig, WriteConfigSnapshot};
 
 fn oid(kind: ObjectType) -> ObjectIdentifier {
@@ -97,21 +97,25 @@ fn the_reporting_kind_and_the_object_type_must_match() {
     let reporting = WriteConfigSnapshot::Reporting(every_setting());
     for kind in [ObjectType::TIMER, ObjectType::CHANNEL, ObjectType::DEVICE] {
         let error = write_config::encode(oid(kind), &reporting).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{kind:?}");
+        assert_eq!(
+            error.kind(),
+            PersistenceErrorKind::RefusedOnEncode,
+            "{kind:?}"
+        );
     }
     let timer = WriteConfigSnapshot::Timer(TimerWriteConfig::default());
     let error = write_config::encode(oid(ObjectType::ANALOG_INPUT), &timer).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
     // A reporting file relabelled for a Timer, and a Timer's kind in an
     // Analog Input's file, name another object type.
     let mut octets = write_config::encode(oid(ObjectType::ANALOG_INPUT), &reporting).unwrap();
     octets[8..12].copy_from_slice(&oid(ObjectType::TIMER).encode());
     let error = write_config::decode(oid(ObjectType::TIMER), &octets).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OtherObject);
+    assert_eq!(error.kind(), PersistenceErrorKind::OtherObject);
     let mut octets = write_config::encode(oid(ObjectType::ANALOG_INPUT), &reporting).unwrap();
     octets[12] = write_config::KIND_TIMER;
     let error = write_config::decode(oid(ObjectType::ANALOG_INPUT), &octets).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OtherObject);
+    assert_eq!(error.kind(), PersistenceErrorKind::OtherObject);
 }
 
 /// A file cut anywhere is refused, and so is one with octets past its end.
@@ -129,7 +133,7 @@ fn every_cut_of_a_reporting_file_is_refused() {
     let mut longer = octets.clone();
     longer.push(0);
     let error = write_config::decode(object, &longer).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
+    assert_eq!(error.kind(), PersistenceErrorKind::Damaged);
 }
 
 /// A value no write leaves is damage when read, and never encodes.
@@ -181,6 +185,10 @@ fn a_value_no_write_leaves_is_refused_both_ways() {
     ] {
         let error = write_config::encode(object, &WriteConfigSnapshot::Reporting(config.clone()))
             .unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{config:?}");
+        assert_eq!(
+            error.kind(),
+            PersistenceErrorKind::RefusedOnEncode,
+            "{config:?}"
+        );
     }
 }

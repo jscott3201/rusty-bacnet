@@ -156,10 +156,7 @@ pub fn parse_target(s: &str) -> Result<Target, String> {
     if s.starts_with(VMAC_TEXT_PREFIX) {
         return parse_vmac_text(s)
             .map(|vmac| Target::Mac(vmac.octets().to_vec()))
-            .map_err(|error| match error {
-                Error::Encoding(message) | Error::OutOfRange(message) => message,
-                other => other.to_string(),
-            });
+            .map_err(|error| error.to_string());
     }
     if s.starts_with('[') {
         return parse_bip6_address(s).map(Target::Bip6);

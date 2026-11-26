@@ -36,7 +36,9 @@ impl HeldSends {
             self.release.acquire().await.unwrap().forget();
         }
         if self.fail.load(Ordering::Relaxed) {
-            return Err(Error::Encoding("injected unconfirmed send failure".into()));
+            return Err(Error::Transport(std::io::Error::other(
+                "injected unconfirmed send failure",
+            )));
         }
         Ok(())
     }

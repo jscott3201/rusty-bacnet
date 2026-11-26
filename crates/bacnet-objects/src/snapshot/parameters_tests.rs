@@ -12,7 +12,7 @@ use bacnet_types::enums::{BinaryPV, ObjectType, PropertyIdentifier as P};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::write_config::{self, parameters};
-use super::{SnapshotError, SnapshotErrorKind};
+use super::{PersistenceError, PersistenceErrorKind};
 use crate::write_config::{AlgorithmWriteConfig, ReportingWriteConfig, WriteConfigSnapshot};
 
 pub(super) const ANALOG: [ObjectType; 3] = [
@@ -214,7 +214,7 @@ pub(super) fn snapshot(algorithm: AlgorithmWriteConfig) -> WriteConfigSnapshot {
 pub(super) fn encode(
     kind: ObjectType,
     algorithm: AlgorithmWriteConfig,
-) -> Result<Vec<u8>, SnapshotError> {
+) -> Result<Vec<u8>, PersistenceError> {
     write_config::encode(oid(kind), &snapshot(algorithm))
 }
 
@@ -245,7 +245,7 @@ fn assert_a_newer_builds(object: ObjectIdentifier, octets: &[u8], what: &str) {
         let error = write_config::decode(object, &file).unwrap_err();
         assert_eq!(
             error.kind(),
-            SnapshotErrorKind::UnknownKind(write_config::KIND_REPORTING_PARAMETERS),
+            PersistenceErrorKind::UnknownKind(write_config::KIND_REPORTING_PARAMETERS),
             "{object} {what}"
         );
         assert!(!error.is_damage(), "{object} {what}");
@@ -458,7 +458,7 @@ fn cut_and_over_long_files_are_refused() {
         let mut long = octets.clone();
         long.push(0);
         let error = write_config::decode(oid(kind), &long).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "{kind}");
+        assert_eq!(error.kind(), PersistenceErrorKind::Damaged, "{kind}");
     }
 }
 
@@ -475,7 +475,7 @@ fn an_unknown_bit_is_an_unknown_kind_and_an_empty_mask_is_damage() {
             assert_a_newer_builds(oid(kind), &file, &format!("mask {mask:#x}"));
         }
         let error = write_config::decode(oid(kind), &with_tail(kind, &[0; 4])).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "{kind}");
+        assert_eq!(error.kind(), PersistenceErrorKind::Damaged, "{kind}");
         assert!(error.is_damage(), "{kind}");
     }
 }
@@ -494,7 +494,11 @@ fn a_parameter_of_another_object_type_is_refused() {
                 continue;
             }
             let error = encode(kind, holding(kind, bit)).unwrap_err();
-            assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{kind}");
+            assert_eq!(
+                error.kind(),
+                PersistenceErrorKind::RefusedOnEncode,
+                "{kind}"
+            );
             let what = format!("bit {bit:#x}");
             assert_a_newer_builds(oid(kind), &with_tail(kind, &tail(kind, bit)), &what);
             let mask_only = with_tail(kind, &bit.to_be_bytes());
@@ -597,11 +601,15 @@ fn a_value_no_write_leaves_is_refused() {
     }
     for (kind, algorithm, bit, row) in refused {
         let error = encode(kind, algorithm.clone()).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{algorithm:?}");
+        assert_eq!(
+            error.kind(),
+            PersistenceErrorKind::RefusedOnEncode,
+            "{algorithm:?}"
+        );
         let mut tail = bit.to_be_bytes().to_vec();
         tail.extend_from_slice(&row);
         let error = write_config::decode(oid(kind), &with_tail(kind, &tail)).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "{algorithm:?}");
+        assert_eq!(error.kind(), PersistenceErrorKind::Damaged, "{algorithm:?}");
     }
     // An Alarm_Value past one octet can't be written as one.
     let wide = AlgorithmWriteConfig {
@@ -609,7 +617,7 @@ fn a_value_no_write_leaves_is_refused() {
         ..none()
     };
     let error = encode(ObjectType::BINARY_VALUE, wide).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
     // The edges a write takes are kept: a deadband of zero, either sign,
     // and both binary states.
     for deadband in [0.0, -0.0, f32::MAX] {

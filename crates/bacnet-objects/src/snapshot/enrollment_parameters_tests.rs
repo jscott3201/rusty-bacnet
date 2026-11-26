@@ -18,7 +18,7 @@ use bacnet_types::primitives::{ObjectIdentifier, StatusFlags};
 use bytes::BytesMut;
 
 use super::parameters_tests::{encode, oid, snapshot, with_tail};
-use super::{SnapshotErrorKind, write_config};
+use super::{PersistenceErrorKind, write_config};
 use crate::write_config::AlgorithmWriteConfig;
 
 const ENROLLMENT: ObjectType = ObjectType::EVENT_ENROLLMENT;
@@ -272,7 +272,7 @@ fn whole(bit: u32, octets: &[u8]) -> Vec<u8> {
     row(bit, octets.len() as u32, octets)
 }
 
-fn decode_tail(tail: &[u8]) -> Result<AlgorithmWriteConfig, super::SnapshotError> {
+fn decode_tail(tail: &[u8]) -> Result<AlgorithmWriteConfig, super::PersistenceError> {
     write_config::decode(oid(ENROLLMENT), &with_tail(ENROLLMENT, tail)).map(|snapshot| {
         let crate::write_config::WriteConfigSnapshot::Reporting(config) = snapshot else {
             unreachable!("a reporting kind")
@@ -431,7 +431,7 @@ fn a_row_that_is_not_one_whole_value_is_damage() {
             let error = decode_tail(&whole(bit, &octets)).unwrap_err();
             assert_eq!(
                 error.kind(),
-                SnapshotErrorKind::Damaged,
+                PersistenceErrorKind::Damaged,
                 "{bit:#x} {what} {octets:02x?}"
             );
             // Refused by the decoder itself, octets after a value too. The
@@ -471,7 +471,7 @@ fn a_value_in_an_encoding_no_save_writes_is_damage() {
         (FAULT, &real_bounds[..]),
     ] {
         let error = decode_tail(&whole(bit, octets)).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "{octets:02x?}");
+        assert_eq!(error.kind(), PersistenceErrorKind::Damaged, "{octets:02x?}");
         assert!(error.to_string().contains("no save writes"), "{error}");
     }
 }
@@ -485,7 +485,7 @@ fn a_length_past_the_cap_or_the_file_is_refused_before_it_is_read() {
     for bit in [EVENT, FAULT] {
         for length in [CAP as u32 + 1, 1 << 20, u32::MAX] {
             let error = decode_tail(&row(bit, length, &[])).unwrap_err();
-            assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "{length}");
+            assert_eq!(error.kind(), PersistenceErrorKind::Damaged, "{length}");
             assert!(error.to_string().contains("longer than its cap"), "{error}");
         }
         // With its octets behind it too: the length alone refuses it.
@@ -494,7 +494,7 @@ fn a_length_past_the_cap_or_the_file_is_refused_before_it_is_read() {
         assert!(error.to_string().contains("longer than its cap"), "{error}");
         for length in [1, 19, CAP as u32] {
             let error = decode_tail(&row(bit, length, &[])).unwrap_err();
-            assert_eq!(error.kind(), SnapshotErrorKind::Truncated, "{length}");
+            assert_eq!(error.kind(), PersistenceErrorKind::Truncated, "{length}");
         }
     }
 }
@@ -532,14 +532,14 @@ fn the_cap_is_64_kib_of_encoding_on_both_rows() {
     assert_eq!(tail.len(), 8 + CAP);
 
     let error = encode(ENROLLMENT, event(legacy(CAP - 3))).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
     let error = encode(ENROLLMENT, fault(extended_fault(CAP + 1))).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
     let mut octets = BytesMut::new();
     encode_event_parameter(&mut octets, &legacy(CAP - 3)).unwrap();
     assert_eq!(octets.len(), CAP + 1);
     let error = decode_tail(&whole(EVENT, &octets)).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
+    assert_eq!(error.kind(), PersistenceErrorKind::Damaged);
 }
 
 /// The cap takes a list of standard property states as long as the decoder
@@ -575,7 +575,7 @@ fn the_decoder_is_bounded_inside_the_cap() {
     long.extend_from_slice(&[0x1F, 0x1F]);
     assert!(long.len() <= CAP);
     let error = decode_tail(&whole(EVENT, &long)).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
+    assert_eq!(error.kind(), PersistenceErrorKind::Damaged);
     // The same with 10,000 is a value.
     let at = long.len() - 4;
     long.drain(at..at + 2);
@@ -590,7 +590,7 @@ fn the_decoder_is_bounded_inside_the_cap() {
         deep.extend_from_slice(&[0xFF, 23]);
         assert!(deep.len() <= CAP);
         let error = decode_tail(&whole(EVENT, &deep)).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "depth {depth}");
+        assert_eq!(error.kind(), PersistenceErrorKind::Damaged, "depth {depth}");
     }
     // fault-extended [2] whose parameters nest the same way.
     let mut deep = vec![0x2E, 0x09, 0x01, 0x19, 0x01, 0x2E];
@@ -598,7 +598,7 @@ fn the_decoder_is_bounded_inside_the_cap() {
     deep.extend(core::iter::repeat_n(0x0F, 30_000));
     deep.extend_from_slice(&[0x2F, 0x2F]);
     let error = decode_tail(&whole(FAULT, &deep)).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
+    assert_eq!(error.kind(), PersistenceErrorKind::Damaged);
 }
 
 /// A value with no encoding, which no write leaves and only a setter can
@@ -610,14 +610,14 @@ fn a_value_with_no_encoding_is_not_saved() {
         data: vec![],
     };
     let error = encode(ENROLLMENT, event(opaque)).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
     let untagged = FaultParameters::FaultExtended {
         vendor_id: 1,
         extended_fault_type: 1,
         parameters: vec![0x1E],
     };
     let error = encode(ENROLLMENT, fault(untagged)).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert_eq!(error.kind(), PersistenceErrorKind::RefusedOnEncode);
 }
 
 /// A small deterministic generator, so a failure names the same input on

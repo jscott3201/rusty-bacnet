@@ -20,7 +20,9 @@ impl WebSocketPort for ReadyPeer {
         if n < 32 {
             Ok(self.incoming.clone())
         } else {
-            Err(Error::Encoding("end of ready fixture stream".into()))
+            Err(Error::Transport(std::io::Error::other(
+                "end of ready fixture stream",
+            )))
         }
     }
     async fn send(&self, _: &[u8]) -> Result<(), Error> {

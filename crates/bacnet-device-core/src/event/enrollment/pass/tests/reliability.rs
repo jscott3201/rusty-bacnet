@@ -62,8 +62,9 @@ impl BACnetObject for OptionalReliabilityTarget {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), bacnet_types::error::Error> {
-        Err(bacnet_types::error::Error::Encoding(
-            "read-only test target".into(),
+        Err(bacnet_types::error::Error::protocol(
+            bacnet_types::enums::ErrorClass::PROPERTY,
+            bacnet_types::enums::ErrorCode::WRITE_ACCESS_DENIED,
         ))
     }
 

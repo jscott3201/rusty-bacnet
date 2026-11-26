@@ -102,13 +102,9 @@ impl MstpTiming {
 /// Check a configuration as the transport's start does, before a port
 /// opens: ValueError with the transport's message, which names the field.
 pub(crate) fn check_config(config: &MstpConfig) -> PyResult<()> {
-    config.validate().map_err(|error| {
-        let message = match error {
-            Error::Encoding(message) => message,
-            other => other.to_string(),
-        };
-        PyValueError::new_err(message)
-    })
+    config
+        .validate()
+        .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
 /// What the port's receiver hears while it transmits, as the `mstp_echo`

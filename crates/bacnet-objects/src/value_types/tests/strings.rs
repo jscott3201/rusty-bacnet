@@ -72,7 +72,7 @@ fn characterstring_value_priority_array_omitted_index_is_write_access_denied() {
     // whole-array writes of PRIORITY_ARRAY are unsupported, so the object
     // surfaces PROPERTY / WRITE_ACCESS_DENIED (a protocol error the service
     // layer can return as Result(-) per Clause 15.9.1.3) rather than an
-    // unmappable Error::Encoding.
+    // unmappable local error.
     let mut obj = CharacterStringValueObject::new(1, "CSV-1").unwrap();
     match obj
         .write_property(

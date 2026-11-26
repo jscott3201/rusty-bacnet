@@ -25,7 +25,7 @@ use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::framing;
-use super::{SnapshotError, SnapshotErrorKind};
+use super::{PersistenceError, PersistenceErrorKind};
 use crate::color::{ColorOutputSnapshot, ColorOutputValue};
 use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
 
@@ -49,13 +49,13 @@ pub const MAX_LEN: usize = 64 + 4 + MAX_DESCRIPTION_OCTETS;
 /// The file octets for `snapshot`, saved for `object`.
 ///
 /// The kind follows the values, or with neither, the object's type.
-/// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) a colour
+/// Refuses ([`OutOfRange`](super::PersistenceErrorKind::RefusedOnEncode)) a colour
 /// and a temperature in one snapshot, a value the object couldn't hold and
 /// a Description past 16 KiB: what [`decode`] would refuse.
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &ColorOutputSnapshot,
-) -> Result<Vec<u8>, SnapshotError> {
+) -> Result<Vec<u8>, PersistenceError> {
     encode_file(object, snapshot).map_err(|error| error.in_format("Color output snapshot"))
 }
 
@@ -68,16 +68,18 @@ pub fn encode(
 pub fn decode(
     object: ObjectIdentifier,
     octets: &[u8],
-) -> Result<ColorOutputSnapshot, SnapshotError> {
+) -> Result<ColorOutputSnapshot, PersistenceError> {
     decode_file(object, octets).map_err(|error| error.in_format("Color output file"))
 }
 
 fn encode_file(
     object: ObjectIdentifier,
     snapshot: &ColorOutputSnapshot,
-) -> Result<Vec<u8>, SnapshotError> {
+) -> Result<Vec<u8>, PersistenceError> {
     if !in_range(snapshot) {
-        return Err(SnapshotError::out_of_range("holds a value out of range"));
+        return Err(crate::snapshot::refused_on_encode(
+            "holds a value out of range",
+        ));
     }
     let kind = match snapshot.present_value.or(snapshot.default) {
         Some(ColorOutputValue::Xy(_)) => KIND_XY,
@@ -100,7 +102,7 @@ fn encode_file(
                 body.extend_from_slice(&kelvin.to_be_bytes());
             }
             Some(_) => {
-                return Err(SnapshotError::out_of_range(
+                return Err(crate::snapshot::refused_on_encode(
                     "holds a colour and a temperature",
                 ));
             }
@@ -124,7 +126,7 @@ fn in_range(snapshot: &ColorOutputSnapshot) -> bool {
 fn decode_file(
     object: ObjectIdentifier,
     octets: &[u8],
-) -> Result<ColorOutputSnapshot, SnapshotError> {
+) -> Result<ColorOutputSnapshot, PersistenceError> {
     // Version 3 is version 2's body behind a Description.
     let (description, previous, body) = if octets.starts_with(&MAGIC_WITH_DESCRIPTION) {
         let tags = (&MAGIC, &MAGIC_WITH_DESCRIPTION);
@@ -134,16 +136,16 @@ fn decode_file(
         let (previous, body) = framing::open(octets, &MAGIC, Some(&MAGIC_V1), MAX_LEN, object)?;
         (None, previous, body)
     };
-    let no_value = SnapshotError::damaged("holds no valid value");
+    let no_value = || crate::snapshot::damaged("holds no valid value");
     let Some((&kind, rest)) = body.split_first() else {
-        return Err(SnapshotError::truncated("holds no valid value"));
+        return Err(crate::snapshot::truncated("holds no valid value"));
     };
     let width = match kind {
         KIND_XY => 8,
         KIND_KELVIN => 4,
         _ => {
-            return Err(SnapshotError::new(
-                SnapshotErrorKind::UnknownKind(kind),
+            return Err(PersistenceError::new(
+                PersistenceErrorKind::UnknownKind(kind),
                 "holds a value of an unknown kind",
             ));
         }
@@ -157,7 +159,7 @@ fn decode_file(
     };
     let snapshot = if previous {
         if rest.len() != width {
-            return Err(no_value);
+            return Err(no_value());
         }
         ColorOutputSnapshot {
             present_value: Some(value(rest)),
@@ -177,12 +179,12 @@ fn decode_file(
                 rest = after;
                 Ok(Some(value(octets)))
             }
-            _ => Err(no_value),
+            _ => Err(no_value()),
         };
         let present_value = next()?;
         let default = next()?;
         if !rest.is_empty() {
-            return Err(no_value);
+            return Err(no_value());
         }
         ColorOutputSnapshot {
             present_value,
@@ -191,7 +193,7 @@ fn decode_file(
         }
     };
     if !in_range(&snapshot) {
-        return Err(SnapshotError::damaged("holds a value out of range"));
+        return Err(crate::snapshot::damaged("holds a value out of range"));
     }
     Ok(snapshot)
 }

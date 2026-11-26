@@ -411,7 +411,7 @@ fn row_errors_keep_the_device_answer_typed() {
         abort,
         PropertyError::Remote(RemoteError::Abort { .. })
     ));
-    let other = PropertyError::from(Error::Encoding("bad tag".into()));
+    let other = PropertyError::from(Error::encode("bad tag"));
     assert_eq!(
         other,
         PropertyError::Other("encoding error: bad tag".into())

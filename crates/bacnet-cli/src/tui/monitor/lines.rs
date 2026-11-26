@@ -120,7 +120,7 @@ impl Lines {
         let mstp = args
             .mstp
             .as_ref()
-            .ok_or_else(|| Error::Encoding("no MS/TP settings to join with".into()))?;
+            .ok_or_else(|| Error::invalid_config("no MS/TP settings to join with"))?;
         let (serial, mode) = match self {
             Self::System => (system_serial(mstp)?, crate::mstp_thread::mode(thread)),
             #[cfg(test)]
@@ -154,8 +154,8 @@ fn system_monitor(port: &str, baud: u32) -> Result<MonitorReader, MonitorAdmissi
 
 #[cfg(not(feature = "serial"))]
 fn system_monitor(_port: &str, _baud: u32) -> Result<MonitorReader, MonitorAdmissionError> {
-    Err(MonitorAdmissionError::without_input(Error::Encoding(
-        crate::mstp::NO_SERIAL.into(),
+    Err(MonitorAdmissionError::without_input(Error::unsupported(
+        crate::mstp::NO_SERIAL,
     )))
 }
 
@@ -166,7 +166,7 @@ fn system_serial(mstp: &crate::mstp::MstpArgs) -> Result<CliSerial, Error> {
 
 #[cfg(not(feature = "serial"))]
 fn system_serial(_mstp: &crate::mstp::MstpArgs) -> Result<CliSerial, Error> {
-    Err(Error::Encoding(crate::mstp::NO_SERIAL.into()))
+    Err(Error::unsupported(crate::mstp::NO_SERIAL))
 }
 
 #[cfg(test)]
@@ -219,9 +219,10 @@ pub(crate) mod test_line {
 
         pub(super) fn monitor(&self) -> Result<MonitorReader, MonitorAdmissionError> {
             let reader = self.monitor.lock().unwrap().take().ok_or_else(|| {
-                MonitorAdmissionError::without_input(Error::Encoding(
-                    "test line: no monitor end".into(),
-                ))
+                MonitorAdmissionError::without_input(Error::Transport(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "test line: no monitor end",
+                )))
             })?;
             self.held.store(true, Ordering::SeqCst);
             Ok(reader)
@@ -243,9 +244,12 @@ pub(crate) mod test_line {
                 )));
             }
             let serial = self.participant.lock().unwrap().take();
-            serial
-                .map(CliSerial::Test)
-                .ok_or_else(|| Error::Encoding("test line: no participant end".into()))
+            serial.map(CliSerial::Test).ok_or_else(|| {
+                Error::Transport(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "test line: no participant end",
+                ))
+            })
         }
     }
 

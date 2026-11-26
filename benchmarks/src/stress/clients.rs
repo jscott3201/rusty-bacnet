@@ -127,7 +127,12 @@ async fn bip6_step(db: ObjectDatabase, index: usize, count: u64, load: Load) -> 
     let address = server
         .transport()
         .and_then(Bip6Transport::local_address)
-        .ok_or_else(|| Error::Encoding("the B/IPv6 server is not running".into()));
+        .ok_or_else(|| {
+            Error::state(
+                bacnet_types::error::Lifecycle::NotRunning,
+                "the B/IPv6 server is not running",
+            )
+        });
     let setup = bip6_setup::setup(
         address,
         count,
@@ -202,9 +207,12 @@ async fn sc_step(db: ObjectDatabase, index: usize, count: u64, load: Load) -> St
         }
     };
     let setup_server = async {
-        let address = hub
-            .local_addr()
-            .ok_or_else(|| Error::Encoding("SC hub address unavailable".into()))?;
+        let address = hub.local_addr().ok_or_else(|| {
+            Error::state(
+                bacnet_types::error::Lifecycle::NotRunning,
+                "SC hub address unavailable",
+            )
+        })?;
         let url = format!("wss://localhost:{}", address.port());
         let (vmac, uuid) = sc_identity(1, 0);
         let transport = sc_transport(&url, &certs, vmac, uuid).await?;

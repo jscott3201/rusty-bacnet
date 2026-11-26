@@ -477,7 +477,7 @@ async fn direct_dial_failure_falls_back_to_hub() {
         .with_direct_discovery(true)
         .with_custom_direct_dialer(|uri: String| async move {
             assert_eq!(uri, "wss://peer.example/sc");
-            Err::<LoopbackWebSocket, Error>(Error::Encoding("dial refused".into()))
+            Err::<LoopbackWebSocket, Error>(Error::Transport(std::io::Error::other("dial refused")))
         });
     let hub_task = tokio::spawn(async move {
         data_attribute_tests::hub_accept(&hub, [0x10; 6]).await;

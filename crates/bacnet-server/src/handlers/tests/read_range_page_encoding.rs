@@ -79,7 +79,7 @@ fn bounded_encode_calls_defer_failures_and_preserve_output_on_current_error() {
                     calls += 1;
                     order.push(item.clone());
                     if calls == failure_at {
-                        return Err(Error::Encoding("current item".into()));
+                        return Err(Error::encode("current item"));
                     }
                     encode_property_value(buf, item)
                 },
@@ -95,7 +95,7 @@ fn bounded_encode_calls_defer_failures_and_preserve_output_on_current_error() {
                 if calls == failure_at {
                     assert!(matches!(
                         result,
-                        Err(ReadRangeFailure::Service(Error::Encoding(_)))
+                        Err(ReadRangeFailure::Service(Error::Encode(_)))
                     ));
                 } else {
                     assert!(matches!(result, Err(ReadRangeFailure::Bytes)));

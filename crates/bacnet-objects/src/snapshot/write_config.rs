@@ -92,7 +92,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use super::framing::{self, HEADER_LEN};
-use super::{SnapshotError, SnapshotErrorKind};
+use super::{PersistenceError, PersistenceErrorKind};
 use crate::channel::{MAX_CHANNEL_MEMBERS, MAX_CONTROL_GROUPS};
 use crate::timer::MAX_TIMER_REFERENCES;
 use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
@@ -141,7 +141,7 @@ pub const MAX_LEN: usize = 1024 * 1024;
 
 /// The file octets for `snapshot`, saved for `object`.
 ///
-/// Refuses ([`OutOfRange`](SnapshotErrorKind::OutOfRange)) a snapshot of
+/// Refuses ([`OutOfRange`](PersistenceErrorKind::RefusedOnEncode)) a snapshot of
 /// another object type than `object`'s, one holding what [`decode`]
 /// wouldn't take back (a priority outside 1 to 16, more references or
 /// members than the object keeps, delays that don't pair with the members,
@@ -154,7 +154,7 @@ pub const MAX_LEN: usize = 1024 * 1024;
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &WriteConfigSnapshot,
-) -> Result<Vec<u8>, SnapshotError> {
+) -> Result<Vec<u8>, PersistenceError> {
     encode_file(object, snapshot).map_err(|error| error.in_format("write configuration"))
 }
 
@@ -166,18 +166,18 @@ pub fn encode(
 pub fn decode(
     object: ObjectIdentifier,
     octets: &[u8],
-) -> Result<WriteConfigSnapshot, SnapshotError> {
+) -> Result<WriteConfigSnapshot, PersistenceError> {
     decode_file(object, octets).map_err(|error| error.in_format("Write configuration file"))
 }
 
 fn encode_file(
     object: ObjectIdentifier,
     snapshot: &WriteConfigSnapshot,
-) -> Result<Vec<u8>, SnapshotError> {
+) -> Result<Vec<u8>, PersistenceError> {
     let mut body = BytesMut::new();
     if let Some(description) = snapshot.description() {
         if description.len() > MAX_DESCRIPTION_OCTETS {
-            return Err(SnapshotError::out_of_range(
+            return Err(crate::snapshot::refused_on_encode(
                 "holds a Description past its cap",
             ));
         }
@@ -206,13 +206,13 @@ fn encode_file(
             }
         }
         _ => {
-            return Err(SnapshotError::out_of_range(
+            return Err(crate::snapshot::refused_on_encode(
                 "for another object type can't be saved for this object",
             ));
         }
     }
     if HEADER_LEN + body.len() > MAX_LEN {
-        return Err(SnapshotError::out_of_range("is too large to save"));
+        return Err(crate::snapshot::refused_on_encode("is too large to save"));
     }
     Ok(framing::seal(&MAGIC, object, &body))
 }
@@ -220,7 +220,7 @@ fn encode_file(
 fn decode_file(
     object: ObjectIdentifier,
     octets: &[u8],
-) -> Result<WriteConfigSnapshot, SnapshotError> {
+) -> Result<WriteConfigSnapshot, PersistenceError> {
     let (_, body) = framing::open(octets, &MAGIC, None, MAX_LEN, object)?;
     let mut reader = Reader { body, at: 0 };
     let mut kind = reader.u8()?;
@@ -228,7 +228,7 @@ fn decode_file(
         let description = reader.description()?;
         kind = reader.u8()?;
         if matches!(kind, KIND_WITH_DESCRIPTION | KIND_TIMER_SET_ONLY) {
-            return Err(SnapshotError::damaged(
+            return Err(crate::snapshot::damaged(
                 "wraps a Description around a kind it never wraps",
             ));
         }
@@ -258,27 +258,27 @@ fn decode_file(
             | KIND_REPORTING_PARAMETERS,
             _,
         ) => {
-            return Err(SnapshotError::new(
-                SnapshotErrorKind::OtherObject,
+            return Err(PersistenceError::new(
+                PersistenceErrorKind::OtherObject,
                 "holds another object type's configuration",
             ));
         }
         (kind, _) => {
-            return Err(SnapshotError::new(
-                SnapshotErrorKind::UnknownKind(kind),
+            return Err(PersistenceError::new(
+                PersistenceErrorKind::UnknownKind(kind),
                 "holds a configuration of an unknown kind",
             ));
         }
     };
     if reader.at != body.len() {
-        return Err(SnapshotError::damaged("has octets past its end"));
+        return Err(crate::snapshot::damaged("has octets past its end"));
     }
     *snapshot.description_mut() = description;
     Ok(snapshot)
 }
 
-fn too_large() -> SnapshotError {
-    SnapshotError::out_of_range("is too large to save")
+fn too_large() -> PersistenceError {
+    crate::snapshot::refused_on_encode("is too large to save")
 }
 
 /// A length, then that many octets. The callers' caps keep every length
@@ -289,7 +289,7 @@ fn put_octets(body: &mut BytesMut, octets: &[u8]) {
 }
 
 /// Append `count`, as four octets, and then `section` with its length.
-fn put_section(body: &mut BytesMut, count: usize, section: &[u8]) -> Result<(), SnapshotError> {
+fn put_section(body: &mut BytesMut, count: usize, section: &[u8]) -> Result<(), PersistenceError> {
     for value in [count, section.len()] {
         let value = u32::try_from(value).map_err(|_| too_large())?;
         body.extend_from_slice(&value.to_be_bytes());
@@ -306,7 +306,7 @@ fn references_section(references: &[BACnetDeviceObjectPropertyReference]) -> Byt
     section
 }
 
-fn encode_timer(body: &mut BytesMut, config: &TimerWriteConfig) -> Result<(), SnapshotError> {
+fn encode_timer(body: &mut BytesMut, config: &TimerWriteConfig) -> Result<(), PersistenceError> {
     encode_timer_set(body, config.state_change.as_ref())?;
     match config.default_timeout {
         None => body.extend_from_slice(&[0]),
@@ -321,21 +321,21 @@ fn encode_timer(body: &mut BytesMut, config: &TimerWriteConfig) -> Result<(), Sn
 fn encode_timer_set(
     body: &mut BytesMut,
     set: Option<&TimerStateChange>,
-) -> Result<(), SnapshotError> {
+) -> Result<(), PersistenceError> {
     let Some(set) = set else {
         body.extend_from_slice(&[0]);
         return Ok(());
     };
-    let out_of_range = SnapshotError::out_of_range("holds a Timer setting out of range");
+    let out_of_range = || crate::snapshot::refused_on_encode("holds a Timer setting out of range");
     // Only what a load takes back is saved.
     if !(1..=16).contains(&set.priority_for_writing) || set.references.len() > MAX_TIMER_REFERENCES
     {
-        return Err(out_of_range);
+        return Err(out_of_range());
     }
     body.extend_from_slice(&[1, set.priority_for_writing]);
     let mut values = BytesMut::new();
     for value in &set.values {
-        encode_timer_state_change_value(&mut values, value).map_err(|_| out_of_range)?;
+        encode_timer_state_change_value(&mut values, value).map_err(|_| out_of_range())?;
     }
     put_section(body, set.values.len(), &values)?;
     put_section(
@@ -345,14 +345,18 @@ fn encode_timer_set(
     )
 }
 
-fn encode_channel(body: &mut BytesMut, config: &ChannelWriteConfig) -> Result<(), SnapshotError> {
-    let out_of_range = SnapshotError::out_of_range("holds a Channel setting out of range");
+fn encode_channel(
+    body: &mut BytesMut,
+    config: &ChannelWriteConfig,
+) -> Result<(), PersistenceError> {
+    let out_of_range =
+        || crate::snapshot::refused_on_encode("holds a Channel setting out of range");
     match &config.members {
         None => body.extend_from_slice(&[0]),
         Some(members) => {
             let count = members.references.len();
             if count > MAX_CHANNEL_MEMBERS || members.execution_delay.len() != count {
-                return Err(out_of_range);
+                return Err(out_of_range());
             }
             body.extend_from_slice(&[1]);
             put_section(body, count, &references_section(&members.references))?;
@@ -374,7 +378,7 @@ fn encode_channel(body: &mut BytesMut, config: &ChannelWriteConfig) -> Result<()
             let count = u8::try_from(groups.len())
                 .ok()
                 .filter(|count| (1..=MAX_CONTROL_GROUPS).contains(&usize::from(*count)))
-                .ok_or(out_of_range)?;
+                .ok_or_else(out_of_range)?;
             body.extend_from_slice(&[1, count]);
             for group in groups {
                 body.extend_from_slice(&group.to_be_bytes());
@@ -396,64 +400,66 @@ struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    fn take(&mut self, len: usize) -> Result<&'a [u8], SnapshotError> {
+    fn take(&mut self, len: usize) -> Result<&'a [u8], PersistenceError> {
         let end = self
             .at
             .checked_add(len)
             .filter(|end| *end <= self.body.len())
-            .ok_or(SnapshotError::truncated("is cut short"))?;
+            .ok_or(crate::snapshot::truncated("is cut short"))?;
         let taken = &self.body[self.at..end];
         self.at = end;
         Ok(taken)
     }
 
-    fn u8(&mut self) -> Result<u8, SnapshotError> {
+    fn u8(&mut self) -> Result<u8, PersistenceError> {
         Ok(self.take(1)?[0])
     }
 
-    fn u16(&mut self) -> Result<u16, SnapshotError> {
+    fn u16(&mut self) -> Result<u16, PersistenceError> {
         Ok(u16::from_be_bytes(self.take(2)?.try_into().expect("two")))
     }
 
-    fn u32(&mut self) -> Result<u32, SnapshotError> {
+    fn u32(&mut self) -> Result<u32, PersistenceError> {
         Ok(u32::from_be_bytes(self.take(4)?.try_into().expect("four")))
     }
 
-    fn u64(&mut self) -> Result<u64, SnapshotError> {
+    fn u64(&mut self) -> Result<u64, PersistenceError> {
         Ok(u64::from_be_bytes(self.take(8)?.try_into().expect("eight")))
     }
 
     /// A length of at most `cap`, then that many octets.
-    fn octets(&mut self, cap: usize) -> Result<&'a [u8], SnapshotError> {
+    fn octets(&mut self, cap: usize) -> Result<&'a [u8], PersistenceError> {
         let len = usize::try_from(self.u32()?)
             .ok()
             .filter(|len| *len <= cap)
-            .ok_or(SnapshotError::damaged("holds a part longer than its cap"))?;
+            .ok_or(crate::snapshot::damaged("holds a part longer than its cap"))?;
         self.take(len)
     }
 
     /// A kept Description: at most [`MAX_DESCRIPTION_OCTETS`] of UTF-8.
-    fn description(&mut self) -> Result<String, SnapshotError> {
+    fn description(&mut self) -> Result<String, PersistenceError> {
         let octets = self.octets(MAX_DESCRIPTION_OCTETS)?;
         String::from_utf8(octets.to_vec())
-            .map_err(|_| SnapshotError::damaged("holds a Description that isn't UTF-8"))
+            .map_err(|_| crate::snapshot::damaged("holds a Description that isn't UTF-8"))
     }
 
     /// A presence octet or a BOOLEAN: 0 or 1, nothing else.
-    fn flag(&mut self) -> Result<bool, SnapshotError> {
+    fn flag(&mut self) -> Result<bool, PersistenceError> {
         match self.u8()? {
             0 => Ok(false),
             1 => Ok(true),
-            _ => Err(SnapshotError::damaged("has a flag that is neither 0 nor 1")),
+            _ => Err(crate::snapshot::damaged(
+                "has a flag that is neither 0 nor 1",
+            )),
         }
     }
 
     /// A count of at most `cap` entries.
-    fn count(&mut self, cap: usize) -> Result<usize, SnapshotError> {
+    fn count(&mut self, cap: usize) -> Result<usize, PersistenceError> {
         usize::try_from(self.u32()?)
             .ok()
             .filter(|count| *count <= cap)
-            .ok_or(SnapshotError::damaged("holds more entries than the cap"))
+            .ok_or(crate::snapshot::damaged("holds more entries than the cap"))
     }
 
     /// A section of exactly `count` elements, each decoded by `decode`.
@@ -461,19 +467,21 @@ impl<'a> Reader<'a> {
         &mut self,
         count: usize,
         decode: impl Fn(&[u8], usize) -> Result<(T, usize), Error>,
-    ) -> Result<Vec<T>, SnapshotError> {
+    ) -> Result<Vec<T>, PersistenceError> {
         let len = self.u32()? as usize;
         let section = self.take(len)?;
         let elements = framing::decode_capped(section, count, decode)?;
         if elements.len() != count {
-            return Err(SnapshotError::damaged("holds fewer entries than it states"));
+            return Err(crate::snapshot::damaged(
+                "holds fewer entries than it states",
+            ));
         }
         Ok(elements)
     }
 
     /// A Timer's body; `with_timeout` for one that goes on past its set
     /// with Default_Timeout.
-    fn timer(&mut self, with_timeout: bool) -> Result<TimerWriteConfig, SnapshotError> {
+    fn timer(&mut self, with_timeout: bool) -> Result<TimerWriteConfig, PersistenceError> {
         let state_change = self.timer_set()?;
         let default_timeout = if with_timeout && self.flag()? {
             Some(self.u64()?)
@@ -487,19 +495,19 @@ impl<'a> Reader<'a> {
         })
     }
 
-    fn timer_set(&mut self) -> Result<Option<TimerStateChange>, SnapshotError> {
+    fn timer_set(&mut self) -> Result<Option<TimerStateChange>, PersistenceError> {
         if !self.flag()? {
             return Ok(None);
         }
         let priority_for_writing = self.u8()?;
         if !(1..=16).contains(&priority_for_writing) {
-            return Err(SnapshotError::damaged("holds a priority outside 1 to 16"));
+            return Err(crate::snapshot::damaged("holds a priority outside 1 to 16"));
         }
         let count = self.count(7)?;
         let values = self.elements(count, decode_timer_state_change_value)?;
         let values = values
             .try_into()
-            .map_err(|_| SnapshotError::damaged("holds other than seven values"))?;
+            .map_err(|_| crate::snapshot::damaged("holds other than seven values"))?;
         let count = self.count(MAX_TIMER_REFERENCES)?;
         let references = self.elements(count, decode_device_object_property_reference)?;
         Ok(Some(TimerStateChange {
@@ -509,7 +517,7 @@ impl<'a> Reader<'a> {
         }))
     }
 
-    fn channel(&mut self) -> Result<ChannelWriteConfig, SnapshotError> {
+    fn channel(&mut self) -> Result<ChannelWriteConfig, PersistenceError> {
         let members = if self.flag()? {
             let count = self.count(MAX_CHANNEL_MEMBERS)?;
             let references = self.elements(count, decode_device_object_property_reference)?;
@@ -531,7 +539,7 @@ impl<'a> Reader<'a> {
         let control_groups = if self.flag()? {
             let count = usize::from(self.u8()?);
             if !(1..=MAX_CONTROL_GROUPS).contains(&count) {
-                return Err(SnapshotError::damaged(
+                return Err(crate::snapshot::damaged(
                     "holds a Control_Groups size out of range",
                 ));
             }

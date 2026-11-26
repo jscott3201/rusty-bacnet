@@ -18,7 +18,7 @@ use super::receipt::CompletedAuditReceipt;
 
 pub(crate) mod codec;
 #[cfg(feature = "std")]
-use crate::snapshot::{SnapshotError, SnapshotErrorKind, audit_log};
+use crate::snapshot::{PersistenceError, PersistenceErrorKind, audit_log};
 #[cfg(feature = "std")]
 use codec::MAX_SNAPSHOT_BYTES;
 
@@ -152,16 +152,19 @@ impl FileAuditLogPersistence {
 enum SlotReadFailure {
     /// The slot can't be a snapshot (it is past the size cap): damage, so
     /// the other slot may still serve.
-    Recoverable(SnapshotError),
+    Recoverable(PersistenceError),
     /// Reading failed: the load fails.
     Fatal(Error),
 }
 
 /// The refusal of a slot past the size cap, found before reading it.
 #[cfg(feature = "std")]
-fn too_large() -> SnapshotError {
-    SnapshotError::new(SnapshotErrorKind::TooLarge, "length exceeds the slot cap")
-        .in_format(codec::WHAT)
+fn too_large() -> PersistenceError {
+    PersistenceError::new(
+        PersistenceErrorKind::TooLarge,
+        "length exceeds the slot cap",
+    )
+    .in_format(codec::WHAT)
 }
 
 #[cfg(feature = "std")]
@@ -284,16 +287,21 @@ fn read_slot_file(path: &Path) -> Result<Option<Vec<u8>>, SlotReadFailure> {
         return Err(SlotReadFailure::Recoverable(too_large()));
     }
     if data.len() != length {
-        return Err(SlotReadFailure::Fatal(Error::Encoding(
-            "AuditLog snapshot changed while being read".into(),
-        )));
+        // The file, not its octets: the other slot is no fallback for it.
+        return Err(SlotReadFailure::Fatal(
+            crate::snapshot::backend_failed("changed while being read")
+                .in_format(codec::WHAT)
+                .into(),
+        ));
     }
     Ok(Some(data))
 }
 
-/// Check `snapshot` as the codec does before writing it: the stack's error,
-/// [`Error::OutOfRange`] for a cap or size, [`Error::Encoding`] for state
-/// that doesn't hold together.
+/// Check `snapshot` as the codec does before writing it: the stack's
+/// [`Error::Persistence`], of kind
+/// [`OutOfRange`](bacnet_types::error::PersistenceErrorKind::RefusedOnEncode) for a cap or size and
+/// [`Damaged`](bacnet_types::error::PersistenceErrorKind::Damaged) for state that doesn't hold
+/// together.
 pub(super) fn validate_snapshot(snapshot: &AuditLogSnapshot) -> Result<(), Error> {
     codec::check(snapshot).map_err(|error| error.in_format(codec::WHAT).into())
 }

@@ -168,7 +168,7 @@ impl BACnetObject for MalformedDetailedAckObject {
                 data: vec![0xf0],
             })
         } else {
-            Err(Error::Encoding("property unavailable".into()))
+            Err(Error::unsupported("property unavailable"))
         }
     }
 
@@ -179,7 +179,7 @@ impl BACnetObject for MalformedDetailedAckObject {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Encoding("test object is read-only".into()))
+        Err(Error::unsupported("test object is read-only"))
     }
 
     fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
@@ -227,7 +227,7 @@ impl BACnetObject for UncorrelatedAckObject {
         _property: PropertyIdentifier,
         _array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
-        Err(Error::Encoding("test object has no properties".into()))
+        Err(Error::unsupported("test object has no properties"))
     }
 
     fn write_property(
@@ -237,7 +237,7 @@ impl BACnetObject for UncorrelatedAckObject {
         _value: PropertyValue,
         _priority: Option<u8>,
     ) -> Result<(), Error> {
-        Err(Error::Encoding("test object is read-only".into()))
+        Err(Error::unsupported("test object is read-only"))
     }
 
     fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {

@@ -295,7 +295,7 @@ async fn ignore_and_hook_errors_skip_built_in_controls() {
                 let refuse = flag.load(Ordering::SeqCst);
                 async move {
                     if refuse {
-                        Err(Error::Encoding("hook refused".into()))
+                        Err(Error::Transport(std::io::Error::other("hook refused")))
                     } else {
                         Ok(())
                     }
@@ -307,7 +307,7 @@ async fn ignore_and_hook_errors_skip_built_in_controls() {
     arm_controls(&handle);
     assert!(matches!(
         transport.send_unicast(&[1], &[2]).await,
-        Err(Error::Encoding(m)) if m == "hook refused"
+        Err(Error::Transport(m)) if m.to_string() == "hook refused"
     ));
     assert_eq!(handle.sent().len(), 1, "the refused send is recorded");
     refuse.store(false, Ordering::SeqCst);
@@ -336,14 +336,14 @@ async fn hooks_state_and_lifecycle() {
             async move {
                 assert_eq!(recorded, 1, "the frame is logged before the hook");
                 if frame.mac.as_slice() == [9] {
-                    return Err(Error::Encoding("hook refused".into()));
+                    return Err(Error::Transport(std::io::Error::other("hook refused")));
                 }
                 Ok(())
             }
         })
         .on_stop(move || {
             stop_count.fetch_add(1, Ordering::SeqCst);
-            async { Err(Error::Encoding("cleanup failed".into())) }
+            async { Err(Error::Transport(std::io::Error::other("cleanup failed"))) }
         })
         .on_drop(move || drop_flag.store(true, Ordering::SeqCst))
         .state(Arc::new(41_u32))
@@ -490,7 +490,7 @@ async fn lifecycle_counters_and_started_report() {
     let seen = Arc::new(AtomicUsize::new(0));
     let count = Arc::clone(&seen);
     let mut transport = TestTransport::builder()
-        .start_gate(|| async { Err(Error::Encoding("no start".into())) })
+        .start_gate(|| async { Err(Error::Transport(std::io::Error::other("no start"))) })
         .on_started(move |_| {
             count.fetch_add(1, Ordering::SeqCst);
         })
@@ -587,7 +587,7 @@ async fn stops_at_once_run_the_hooks_once() {
             async move {
                 gate.notified().await;
                 match failing.load(Ordering::SeqCst) {
-                    true => Err(Error::Encoding("stop refused".into())),
+                    true => Err(Error::Transport(std::io::Error::other("stop refused"))),
                     false => Ok(()),
                 }
             }

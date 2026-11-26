@@ -49,7 +49,9 @@ impl WriteConfigPersistence for MemoryConfig {
 
     fn save(&self, _object: ObjectIdentifier, snapshot: &WriteConfigSnapshot) -> Result<(), Error> {
         if self.fail.load(Ordering::SeqCst) {
-            return Err(Error::Encoding("storage unavailable".into()));
+            return Err(Error::from(crate::snapshot::backend_failed(
+                "storage unavailable",
+            )));
         }
         *self.saved.lock().unwrap() = Some(snapshot.clone());
         self.saves.fetch_add(1, Ordering::SeqCst);
