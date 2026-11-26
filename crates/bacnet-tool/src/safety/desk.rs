@@ -20,7 +20,7 @@
 //! instance meanwhile. Nor is it sent once the address is another
 //! device's: the turn is refused when the discovery table's row there
 //! claims another instance, and a local address with no row is asked which
-//! device it is first ([`Unsent`](super::Unsent)).
+//! device it is first ([`Unsent`]).
 
 use std::future::Future;
 use std::path::Path;
