@@ -145,21 +145,27 @@ fn local_refusals_go_out_as_the_text_they_replace() {
         }
         all
     };
-    for service in services {
-        let untyped = wire(
+    // What the untyped text went out as, which #1833 removed: SERVICES /
+    // OTHER, in each service's own production.
+    let services_other = |service| {
+        wire(
             service,
-            &Error::Encoding("unknown EnableDisable value".into()),
-        );
-        assert_eq!(
-            untyped,
-            wire(service, &Error::OutOfRange("too large".into())),
-            "{service:?}"
-        );
+            &Error::protocol(ErrorClass::SERVICES, ErrorCode::OTHER),
+        )
+    };
+    // Error PDU, invoke ID 9, the service; SERVICES (5) and OTHER (0) as
+    // application-tagged ENUMERATED.
+    let read = ConfirmedServiceChoice::READ_PROPERTY;
+    assert_eq!(
+        services_other(read),
+        [0x50, 9, read.to_raw(), 0x91, 5, 0x91, 0]
+    );
+    for service in services {
+        let untyped = services_other(service);
         for refusal in refusals() {
             assert_eq!(wire(service, &refusal), untyped, "{service:?}: {refusal:?}");
         }
     }
-    let read = ConfirmedServiceChoice::READ_PROPERTY;
     for refusal in refusals() {
         let decoding = matches!(refusal, Error::Decoding(_));
         let as_request = refusal.into_request_reject();
@@ -171,7 +177,7 @@ fn local_refusals_go_out_as_the_text_they_replace() {
         } else {
             assert_eq!(
                 wire(read, &as_request),
-                wire(read, &Error::Encoding(String::new())),
+                services_other(read),
                 "{as_request:?}"
             );
         }

@@ -399,7 +399,7 @@ fn ao_direct_priority_array_no_index_error() {
     // #266: an omitted array index means whole-array access (Clause 12.1.5.1);
     // whole-array writes are unsupported here, so the object must surface a
     // mappable PROPERTY / WRITE_ACCESS_DENIED protocol error (Result(-),
-    // Clause 15.9.1.3), not an opaque Error::Encoding.
+    // Clause 15.9.1.3), not an opaque local error.
     let mut ao = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     match ao
         .write_property(

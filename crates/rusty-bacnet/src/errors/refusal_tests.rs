@@ -83,18 +83,6 @@ fn local_refusals_raise_their_class_with_their_text() {
             );
             assert_eq!(raised.value(py).str().unwrap().to_str().unwrap(), text);
         }
-        // The untyped error they replace took the base class's arm.
-        let untyped = to_py_err(Error::Encoding("endpoint shutdown".into()));
-        assert!(
-            untyped
-                .value(py)
-                .get_type()
-                .is(py.get_type::<BacnetError>())
-        );
-        assert_eq!(
-            untyped.value(py).str().unwrap().to_str().unwrap(),
-            "encoding error: endpoint shutdown"
-        );
     });
 }
 

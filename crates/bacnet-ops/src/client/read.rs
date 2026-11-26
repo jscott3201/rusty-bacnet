@@ -160,9 +160,7 @@ pub fn unreachable(error: &Error) -> bool {
 ///   Nothing was sent, or, with `sent`, a request that went out had its
 ///   retry withheld; either way no word of the device's, and the next
 ///   request fails the same way until the node is enabled again.
-/// - [`Error::Encoding`], the untyped error of the crates #1833 has not
-///   reached yet: the client's or the link's own failure there too.
-/// - The local refusals #1833 typed out of it: [`Error::State`] (a
+/// - The local refusals (#1833): [`Error::State`] (a
 ///   transport not started or stopped, a router-application client's
 ///   router closed, a BACnet/SC link that isn't connected to its hub, a
 ///   closed loopback channel, a client seat that has closed),
@@ -191,8 +189,7 @@ pub fn unreachable(error: &Error) -> bool {
 pub fn failed_locally(error: &Error) -> bool {
     matches!(
         error,
-        Error::Encoding(_)
-            | Error::State(..)
+        Error::State(..)
             | Error::InvalidConfig(_)
             | Error::InvalidArgument(_)
             | Error::Unsupported(_)

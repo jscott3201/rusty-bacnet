@@ -15,7 +15,7 @@
 //! holding a `String` or a `Box` need `alloc`.
 
 #[cfg(all(feature = "alloc", not(feature = "std")))]
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
 use core::time::Duration;
 
@@ -367,12 +367,6 @@ pub enum Error {
     #[error("{0}")]
     Persistence(SnapshotError),
 
-    /// Error encoding a PDU, with a formatted message. Only with `alloc`;
-    /// [`Error::Encode`] is the static form, which the codec crates return.
-    #[cfg(feature = "alloc")]
-    #[error("encoding error: {0}")]
-    Encoding(String),
-
     /// A value an encoder or validator refused, with a static label
     /// (#1802). The encoders and validators of `bacnet-encoding` and
     /// `bacnet-services` report this form.
@@ -409,12 +403,6 @@ pub enum Error {
         /// Bytes actually available.
         have: usize,
     },
-
-    /// Value out of valid range, with a formatted message. Only with
-    /// `alloc`; [`Error::Range`] is the static form.
-    #[cfg(feature = "alloc")]
-    #[error("value out of range: {0}")]
-    OutOfRange(String),
 
     /// A value a checked constructor refused, with a static label (#1646),
     /// such as an object type or instance

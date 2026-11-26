@@ -110,10 +110,9 @@ impl PeerAddresses {
 }
 
 /// A `ValueError` carrying a parse error's own message, without the
-/// `encoding error:` or `value out of range:` prefix its `Display` adds.
+/// `value out of range:` prefix a range error's `Display` adds.
 fn value_error(error: Error) -> PyErr {
     match error {
-        Error::Encoding(message) | Error::OutOfRange(message) => PyValueError::new_err(message),
         Error::Range(refused) => PyValueError::new_err(refused.message().to_string()),
         other => PyValueError::new_err(other.to_string()),
     }

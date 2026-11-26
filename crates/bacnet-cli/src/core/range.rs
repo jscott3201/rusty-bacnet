@@ -1,7 +1,6 @@
 //! Device instance range parsing for Who-Is.
 
 use bacnet_services::who_is::DeviceInstanceRange;
-use bacnet_types::error::Error;
 
 /// Parse a discover range string like "1000-2000"; no string asks every
 /// device. A Who-Is carries both limits or neither (Clause 16.10, #1483), so
@@ -37,10 +36,7 @@ pub(crate) fn parse_discover_range(
     if low > high {
         return Err(format!("invalid range: low ({low}) > high ({high})").into());
     }
-    let range = DeviceInstanceRange::new(low, high).map_err(|error| match error {
-        Error::OutOfRange(message) => format!("invalid range '{r}': {message}"),
-        other => other.to_string(),
-    })?;
+    let range = DeviceInstanceRange::new(low, high).map_err(|error| error.to_string())?;
     Ok(Some(range))
 }
 

@@ -317,13 +317,11 @@ fn syntax_faults_name_their_reject_reasons() {
     );
 }
 
-/// The alloc-only variants keep their text and take no Reject reason.
-#[cfg(feature = "alloc")]
+/// A decoding error becomes the Reject its kind names; a range refusal,
+/// which is no syntax fault, stays as it is (#1833 removed the untyped
+/// text forms this pinned for).
 #[test]
-fn owned_variants_take_no_reject_reason() {
-    for error in [Error::Encoding("x".into()), Error::OutOfRange("x".into())] {
-        assert_eq!(error.reject_reason(), None, "{error}");
-    }
+fn only_a_decoding_error_becomes_a_reject() {
     assert_eq!(
         Error::trailing(3, "more")
             .into_request_reject()
@@ -331,9 +329,22 @@ fn owned_variants_take_no_reject_reason() {
         Some(RejectReason::TOO_MANY_ARGUMENTS)
     );
     assert!(matches!(
-        Error::OutOfRange("x".into()).into_request_reject(),
-        Error::OutOfRange(_)
+        Error::range("x").into_request_reject(),
+        Error::Range(_)
     ));
+}
+
+/// The error is 64 octets on a 64-bit host, its tag in [`DecodeError`]'s
+/// niche, with persisted state's [`SnapshotError`] beside it: removing the
+/// two owned-text variants (#1833) left it as it was, since the decoding
+/// error sets the size. A 32-bit target's 48 is checked in `decode.rs`.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn the_error_is_64_octets_on_a_64_bit_host() {
+    use core::mem::size_of;
+    assert_eq!(size_of::<Error>(), 64);
+    assert_eq!(size_of::<Result<()>>(), 64);
+    assert_eq!(size_of::<SnapshotError>(), 56);
 }
 
 /// The static encoder and segmenter refusals take no Reject reason either
