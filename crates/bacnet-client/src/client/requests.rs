@@ -189,9 +189,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// named router that is a broadcast or group address on this link
     /// (#2722). [`Error::UnknownDevice`] for a remote address with no named
     /// router and no row in the discovery table, since the row is the route.
-    /// Then the errors of the request itself; a request the client's stop
-    /// cuts off fails with [`Error::RequestCutOff`]: `sent: false` while it
-    /// waited for its turn, `sent: true` once it was open.
+    /// Then the errors of the request itself; a request the client's stop,
+    /// or its link stopping or losing its connection after the request went
+    /// out, cuts off fails with [`Error::RequestCutOff`]: `sent: false`
+    /// while it waited for its turn, `sent: true` once it was open.
     ///
     /// [`BACnetAddress`]: bacnet_types::constructed::BACnetAddress
     pub async fn confirmed_request(

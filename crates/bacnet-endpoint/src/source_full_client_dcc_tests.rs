@@ -290,41 +290,67 @@ async fn an_audited_request_whose_retry_is_withheld_is_recorded_as_failed() {
     sink.stop().await.unwrap();
 }
 
-/// A request that went out, whose link then stopped under the client
-/// (#1833): the link refuses its retry for its state, and the request ends
-/// cut off as one that went out, which the source Audit records, as it
-/// records one whose retry DeviceCommunicationControl withheld. The
-/// record's own delivery fails on the stopped link, which the Reporter
-/// reports; before #1833 nothing was recorded.
+/// A request that went out, whose link then refused its retry for its
+/// state, as a link that stopped does (#1833): the request ends cut off as
+/// one that went out, and the source Audit records it once, with
+/// COMMUNICATION, OTHER, as it records one whose retry
+/// DeviceCommunicationControl withheld. The link here refuses only frames
+/// to the peer, so the record reaches its recipient. A request whose first
+/// send the link refuses afterwards went nowhere, and records nothing.
 #[tokio::test(start_paused = true)]
 async fn a_request_its_link_stranded_is_recorded_as_cut_off() {
+    use bacnet_transport::test_transport::{SendMode, SentFrame};
+    use std::sync::atomic::{AtomicBool, Ordering};
     let (peer, mut requests) = network().await;
-    let (sink, _records) = network().await;
-    let mut session = session(database(false), SessionRole::ClientOnly, &sink);
+    let (sink, mut records) = network().await;
+    let refusing = Arc::new(AtomicBool::new(false));
+    let to_peer = peer.local_mac().to_vec();
+    let link = TestTransport::builder()
+        .inner(crate::session::bus_port::bus_port())
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .on_send({
+            let refusing = Arc::clone(&refusing);
+            move |frame: SentFrame| {
+                let refused =
+                    refusing.load(Ordering::SeqCst) && frame.mac.as_slice() == to_peer.as_slice();
+                async move {
+                    match refused {
+                        true => Err(bacnet_transport::port::stopped()),
+                        false => Ok(()),
+                    }
+                }
+            }
+        })
+        .build();
+    let mut session = session_on(link, database(false), SessionRole::ClientOnly, &sink);
     session.client_config.apdu_timeout_ms = 1_000;
     session.client_config.apdu_retries = 1;
     session.start().await.unwrap();
     let client = client_of(&session);
-    let read = start_read(
-        &client,
-        peer.local_mac(),
-        PropertyIdentifier::PRESENT_VALUE,
-        None,
-    );
-    let _first = receive(&mut requests).await;
-    let no_fault = Reliability::NO_FAULT_DETECTED.to_raw();
-    assert_eq!(reliability(&session).await, no_fault);
-    client.transport().stop().await.unwrap();
+    let present = PropertyIdentifier::PRESENT_VALUE;
+    let read = start_read(&client, peer.local_mac(), present, None);
+    let (invoke, _) = read_request(&receive(&mut requests).await);
+    refusing.store(true, Ordering::SeqCst);
     let ended = timeout(WAIT, read).await.unwrap().unwrap();
     assert!(
         matches!(ended, Err(Error::RequestCutOff { sent: true })),
         "{ended:?}"
     );
-    let failure = Reliability::COMMUNICATION_FAILURE.to_raw();
-    eventually(WAIT, "a record went to the stopped link", async || {
-        reliability(&session).await == failure
-    })
-    .await;
+    let (record, _) = notification(&receive(&mut records).await, false);
+    assert_eq!(record.invoke_id, Some(invoke));
+    assert_eq!(
+        record.result,
+        Some((ErrorClass::COMMUNICATION, ErrorCode::OTHER))
+    );
+    let quiet = timeout(Duration::from_millis(100), records.recv()).await;
+    assert!(quiet.is_err(), "one record");
+    // The link refuses the next request's first send: nothing went out.
+    let refused = start_read(&client, peer.local_mac(), present, None);
+    let refused = timeout(WAIT, refused).await.unwrap().unwrap();
+    assert!(matches!(refused, Err(Error::State(..))), "{refused:?}");
+    let quiet = timeout(Duration::from_millis(100), records.recv()).await;
+    assert!(quiet.is_err(), "no record for a request that went nowhere");
     assert!(requests.try_recv().is_err(), "no retry went");
     drop(client);
     session.stop().await.unwrap();

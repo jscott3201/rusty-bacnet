@@ -281,8 +281,8 @@ pub(super) fn attempted(result: &Result<Bytes, Error>) -> bool {
 /// COMMUNICATION code Clause 18 gives its reason
 /// ([`NetworkReject::error_code`](bacnet_types::error::NetworkReject::error_code)).
 /// An acknowledgement of the wrong kind for the service (#2721), whose
-/// outcome is unknown, is OTHER, and so is a request the client's stop cut
-/// off after it may have gone out (#1833). A request whose retry the node's
+/// outcome is unknown, is OTHER, and so is a request that went out before
+/// the client or its link stopped under it (#1833). A request whose retry the node's
 /// DeviceCommunicationControl withheld is SERVICES, COMMUNICATION_DISABLED,
 /// the pair the standard uses for a device whose communication that
 /// control turned off.

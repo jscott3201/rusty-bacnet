@@ -208,8 +208,9 @@ impl Exchange {
                 .waiters
                 .get_mut(&self.id)
                 .and_then(|waiter| waiter.early.take());
-            let outcome =
-                early.unwrap_or_else(|| Err(Error::state(Lifecycle::Closed, "BVLC response lost")));
+            // The request went out and its early answer was lost: what it
+            // did is unknown, so it is cut off as sent (#1833).
+            let outcome = early.unwrap_or_else(|| Err(cut_off_as_sent()));
             state.complete(self.id, outcome);
         });
     }
@@ -251,7 +252,8 @@ impl NodeHandle {
 pub struct BvlcGiveUp(Arc<Mutex<GiveUp>>);
 
 /// What an exchange whose request went out gets when the transport's stop
-/// drops its waiter (#1833): the request may have been carried out.
+/// drops its waiter, or its answer is lost (#1833): the request may have
+/// been carried out.
 #[cold]
 #[inline(never)]
 fn cut_off_as_sent() -> Error {

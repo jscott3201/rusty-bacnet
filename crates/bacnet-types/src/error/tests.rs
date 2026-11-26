@@ -408,20 +408,22 @@ fn initiation_disabled_says_whether_the_request_went_out() {
     assert!(withheld.starts_with("no retry sent"), "{withheld}");
 }
 
-/// A request its client's stop cut off says whether the device may have
-/// carried it out (#1833), and no peer sent it.
+/// A request the client or its link cut off says whether the device may
+/// have carried it out (#1833), and no peer sent it; the text is true for a
+/// link that lost its connection too.
 #[test]
 fn a_cut_off_request_says_whether_it_may_have_been_carried_out() {
     let unsent = Error::RequestCutOff { sent: false };
     assert_eq!(
         unsent.to_string(),
-        "the request ended without an answer: the client or its link stopped before it was sent"
+        "the request ended without an answer: the client stopped, or its link stopped or lost \
+         its connection, before it was sent: the device did not get it"
     );
     let sent = Error::RequestCutOff { sent: true };
     assert_eq!(
         sent.to_string(),
-        "the request ended without an answer: the client or its link stopped while it waited, \
-         and the device may have carried it out"
+        "the request ended without an answer: the client stopped, or its link stopped or lost \
+         its connection, after it went out, and the device may have carried it out"
     );
     for cut_off in [unsent, sent] {
         assert_eq!(cut_off.remote(), None);

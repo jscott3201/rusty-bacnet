@@ -74,13 +74,6 @@ pub(crate) const DETAIL_ATTRIBUTES: [&str; 7] = [
     "vt_session_identifiers",
 ];
 
-/// The message a request raises when it ended before an answer came
-/// because the client or its link stopped under it (#2617, #1833): the
-/// client's stop() ran, the endpoint it runs on closed, which stops it, or
-/// the link stopped after the request went out.
-const REQUEST_CUT_OFF: &str = "the request ended without an answer: the client or its link \
-     stopped while it waited";
-
 /// Convert a Rust `Error` into a Python exception.
 ///
 /// Protocol errors, rejects, and aborts carry structured attributes
@@ -231,9 +224,10 @@ pub fn to_py_err(err: Error) -> PyErr {
         Error::State(state, _) => state::state_error(err.to_string(), state),
         // The request ended before an answer because the client or its
         // link stopped under it: its own stop(), the endpoint's close
-        // (#2617), or the link stopping after the request went out, whether
-        // or not it had gone out (#1833).
-        Error::RequestCutOff { .. } => BacnetError::new_err(REQUEST_CUT_OFF),
+        // (#2617), or the link stopping or losing its connection after the
+        // request went out (#1833). The error's own text says whether it
+        // went out, so a write's caller learns it may have been applied.
+        Error::RequestCutOff { .. } => BacnetError::new_err(err.to_string()),
         _ => BacnetError::new_err(err.to_string()),
     }
 }

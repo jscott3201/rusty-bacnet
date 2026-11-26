@@ -90,26 +90,28 @@ fn local_refusals_raise_their_class_with_their_text() {
     });
 }
 
-/// A request the client's stop cut off (#2617), now its own variant
-/// (#1833), raises the base exception with the message it raised before,
-/// whether or not it had gone out, though the error's own text says which:
-/// it is one transaction's outcome, not a state. The closed refusals that
-/// look like it (a closed seat, an endpoint's shutdown before anything was
-/// sent) are states, and each raises its own text.
+/// A request the client or its link cut off (#2617, #1833) raises the base
+/// exception with the error's own text, which says whether it had gone out
+/// and so whether the device may have carried it out, as a cut-off
+/// `write_bdt` or `delete_fdt_entry` may have changed the table: it is one
+/// request's outcome, not a state. The closed refusals that look like it
+/// (a closed seat, an endpoint's shutdown before anything was sent) are
+/// states, and each raises its own text.
 #[test]
-fn a_cut_off_request_keeps_its_message() {
+fn a_cut_off_request_says_whether_it_went_out() {
     Python::initialize();
     Python::attach(|py| {
-        for sent in [false, true] {
+        let message = |sent| {
             let cut_off = Error::RequestCutOff { sent };
-            assert_ne!(cut_off.to_string(), REQUEST_CUT_OFF);
+            let text = cut_off.to_string();
             let raised = to_py_err(cut_off);
             assert!(raised.value(py).get_type().is(py.get_type::<BacnetError>()));
-            assert_eq!(
-                raised.value(py).str().unwrap().to_str().unwrap(),
-                REQUEST_CUT_OFF
-            );
-        }
+            let shown = raised.value(py).str().unwrap().to_str().unwrap().to_owned();
+            assert_eq!(shown, text);
+            shown
+        };
+        assert!(message(true).contains("may have carried it out"));
+        assert!(message(false).contains("did not get it"));
         let class = state_error_type(py).unwrap().bind(py);
         for text in [
             "the client's seat has closed: its node or the client stopped",

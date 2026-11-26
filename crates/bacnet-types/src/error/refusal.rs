@@ -42,9 +42,11 @@ use super::decode::{placeholder_count, write_label};
 /// deciding between `NotRunning`, `Stopping` and `Closed` from their own
 /// state. The server reports `Closed` once its stop has begun or a cleanup
 /// task failed, and the client `Stopping` while its seat's node stops and
-/// `Closed` once its seat or its coordinator has closed. A request the client's stop cut off is not a
-/// lifecycle state but its own outcome,
-/// [`Error::RequestCutOff`](super::Error::RequestCutOff).
+/// `Closed` once its seat or its coordinator has closed. A request that
+/// went out before the client or its link stopped under it, or the client's
+/// stop cut off while it waited, is not a lifecycle state but its own
+/// outcome, [`Error::RequestCutOff`](super::Error::RequestCutOff): a state
+/// refusal promises nothing of the request went out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Lifecycle {
@@ -56,7 +58,8 @@ pub enum Lifecycle {
     /// or it stopped in a way that lets it start again.
     NotRunning,
     /// A stop has begun and not finished; the call is refused while it
-    /// completes.
+    /// completes. Also a transport an abort ended, whose start is refused
+    /// until a stop has joined what the abort left.
     Stopping,
     /// Running, but its session with the peer it works through, such as a
     /// BACnet/SC node's hub, is not up.

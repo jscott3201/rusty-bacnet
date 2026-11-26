@@ -4990,14 +4990,15 @@ class BacnetStateError(BacnetError, RuntimeError):
     catches both.
 
     A request that went out before the client or its link stopped under it
-    is not one: it raises ``BacnetError``, since the device may have carried
-    it out.
+    is not one: it raises ``BacnetError`` whose message says the device may
+    have carried it out.
 
     Attributes:
         state: Which state refused the call: ``"not_running"`` (not started
             yet, or stopped and able to start again), ``"closed"`` (stopped
             for good, or the channel closed), ``"stopping"`` (a stop is under
-            way), ``"already_started"`` (a second start) or
+            way, or an abort ended it and a start waits for the stop to
+            finish), ``"already_started"`` (a second start) or
             ``"not_connected"`` (running, but its hub or BBMD isn't
             connected). None on the class.
     """
