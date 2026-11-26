@@ -146,9 +146,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     registration::publish_bip6(&mut db, oid, port, capacity.into())?;
                 Bound::V6(address, vmac)
             }
-            // The started link reports neither bind its preflight saw.
+            // The started link reports neither bind its preflight saw: no
+            // single B/IP mode now, a configuration refusal as the server's
+            // twin of this check makes it (#1833).
             (None, None) => {
-                return Err(Error::unsupported(
+                return Err(Error::invalid_config(
                     "registered B/IP mode changed during bind",
                 ));
             }

@@ -194,7 +194,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// # Errors
     ///
-    /// [`Error::Encoding`], leaving the table unchanged, when `mac` is
+    /// [`Error::InvalidArgument`], leaving the table unchanged, when `mac` is
     /// empty or longer than [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN), the
     /// bound [`Self::add_routed_device`] holds a station's MAC to: no
     /// link's MAC is longer, and an empty one names no station (#2606).
@@ -203,10 +203,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// refuses it.
     pub async fn add_device(&self, instance: u32, mac: &[u8]) -> Result<(), Error> {
         if !(1..=bacnet_npdu::MAX_MAC_LEN).contains(&mac.len()) {
-            return Err(Error::Encoding(format!(
-                "device MAC address must contain 1..={} octets",
-                bacnet_npdu::MAX_MAC_LEN
-            )));
+            return Err(Error::InvalidArgument(
+                Refusal::new("device MAC address must contain 1..={} octets")
+                    .with_value(bacnet_npdu::MAX_MAC_LEN as u64),
+            ));
         }
         let oid = bacnet_types::primitives::ObjectIdentifier::new(
             bacnet_types::enums::ObjectType::DEVICE,
@@ -245,7 +245,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// Malformed routing metadata is rejected deliberately: an empty
     /// `router_mac` or `remote_mac` cannot identify a next hop or a peer, so
-    /// such a registration returns [`Error::Encoding`] and the table is left
+    /// such a registration returns [`Error::InvalidArgument`] and the table is left
     /// unchanged (an empty SADR could never satisfy a routed lookup). A
     /// `remote_network` outside 1..=65534 or a `remote_mac` longer than
     /// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) is refused the same way, since
@@ -261,13 +261,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// number is unknown has the client ask for it first, once (#2572).
     pub async fn add_routed_device(&self, config: RoutedDeviceConfig) -> Result<(), Error> {
         if config.router_mac.is_empty() {
-            return Err(Error::Encoding(
-                "router_mac must not be empty: it is the immediate transport next hop".into(),
+            return Err(Error::invalid_argument(
+                "router_mac must not be empty: it is the immediate transport next hop",
             ));
         }
         if config.remote_mac.is_empty() {
-            return Err(Error::Encoding(
-                "remote_mac must not be empty: it is half of the routed peer's identity".into(),
+            return Err(Error::invalid_argument(
+                "remote_mac must not be empty: it is half of the routed peer's identity",
             ));
         }
         check_routed_unicast(config.remote_network, config.remote_mac.len())?;

@@ -47,7 +47,7 @@ use bacnet_types::MacAddr;
 use bacnet_types::enums::{
     ConfirmedServiceChoice, RejectReason, Segmentation, UnconfirmedServiceChoice,
 };
-use bacnet_types::error::{Error, RemoteError};
+use bacnet_types::error::{Error, Lifecycle, Refusal, RemoteError};
 
 use crate::discovery::{Change, DeviceTable, DiscoveredDevice, RoutedDeviceConfig};
 use crate::segmentation::{
@@ -285,22 +285,6 @@ impl ClientOptions {
         self.cov_channel_capacity = capacity;
         self
     }
-
-    fn validate(&self) -> Result<(), Error> {
-        if !(1..=MAX_COV_CHANNEL_CAPACITY).contains(&self.cov_channel_capacity) {
-            return Err(Error::Encoding(format!(
-                "invalid cov-channel-capacity {}; expected 1..={}",
-                self.cov_channel_capacity, MAX_COV_CHANNEL_CAPACITY
-            )));
-        }
-        if !(1..=MAX_EVENT_CHANNEL_CAPACITY).contains(&self.event_channel_capacity) {
-            return Err(Error::Encoding(format!(
-                "invalid event-channel-capacity {}; expected 1..={}",
-                self.event_channel_capacity, MAX_EVENT_CHANNEL_CAPACITY
-            )));
-        }
-        Ok(())
-    }
 }
 
 /// Generic builder for BACnetClient with a pre-built transport. The
@@ -340,7 +324,7 @@ impl<T: TransportPort + 'static> ClientBuilder<T> {
     pub async fn build(self) -> Result<BACnetClient<T>, Error> {
         let transport = self
             .transport
-            .ok_or_else(|| Error::Encoding("transport not set on ClientBuilder".into()))?;
+            .ok_or(Error::invalid_config("transport not set on ClientBuilder"))?;
         BACnetClient::start_with_options(self.config, transport, self.options).await
     }
 }
@@ -864,14 +848,14 @@ impl ScClientBuilder {
 
     fn validate_identity(&self) -> Result<(), Error> {
         match self.vmac {
-            bacnet_transport::sc_frame::UNKNOWN_VMAC => Err(Error::Encoding(
-                "SC client builder: vmac must not be the reserved unknown VMAC".into(),
+            bacnet_transport::sc_frame::UNKNOWN_VMAC => Err(Error::invalid_config(
+                "SC client builder: vmac must not be the reserved unknown VMAC",
             )),
-            bacnet_transport::sc_frame::BROADCAST_VMAC => Err(Error::Encoding(
-                "SC client builder: vmac must not be the reserved broadcast VMAC".into(),
+            bacnet_transport::sc_frame::BROADCAST_VMAC => Err(Error::invalid_config(
+                "SC client builder: vmac must not be the reserved broadcast VMAC",
             )),
-            _ if self.device_uuid == [0; 16] => Err(Error::Encoding(
-                "SC client builder: device_uuid is required and must not be all zero".into(),
+            _ if self.device_uuid == [0; 16] => Err(Error::invalid_config(
+                "SC client builder: device_uuid is required and must not be all zero",
             )),
             _ => Ok(()),
         }
@@ -909,13 +893,18 @@ fn max_apdu_bucket_at_or_below(limit: u16) -> Option<u16> {
     bacnet_encoding::apdu::max_apdu_header_at_or_below(u32::from(limit)).ok()
 }
 
+/// Called for every request: the refusal is built out of line, so this
+/// stays small enough to inline (#1833).
 fn cap_max_apdu_to_transport(configured: u16, transport_limit: u16) -> Result<u16, Error> {
     let limit = configured.min(transport_limit);
-    max_apdu_bucket_at_or_below(limit).ok_or_else(|| {
-        Error::Encoding(format!(
-            "transport max-APDU-length {transport_limit} leaves no valid BACnet APDU bucket"
-        ))
-    })
+    max_apdu_bucket_at_or_below(limit).ok_or_else(|| no_apdu_bucket(transport_limit))
+}
+
+#[cold]
+#[inline(never)]
+fn no_apdu_bucket(transport_limit: u16) -> Error {
+    let label = "transport max-APDU-length {} leaves no valid BACnet APDU bucket";
+    Error::InvalidConfig(Refusal::new(label).with_value(u64::from(transport_limit)))
 }
 
 mod audit;

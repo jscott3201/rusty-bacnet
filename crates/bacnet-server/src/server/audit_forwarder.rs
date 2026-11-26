@@ -206,7 +206,7 @@ impl ForwardBatch {
                                 )
                                 .await
                         }
-                        _ => Err(Error::Encoding("audit forwarding route unavailable".into())),
+                        _ => Err(route.unplaced()),
                     }
                 }),
             )

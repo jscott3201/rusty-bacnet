@@ -270,7 +270,7 @@ async fn no_route_and_no_station_fail_before_sending() {
             .confirmed_request(&nobody, ConfirmedServiceChoice::READ_PROPERTY, &[])
             .await;
         assert!(
-            matches!(refused, Err(Error::Encoding(_))),
+            matches!(refused, Err(Error::InvalidArgument(_))),
             "{nobody:?}: {refused:?}"
         );
     }
@@ -289,7 +289,7 @@ async fn an_empty_local_mac_is_refused_alike_in_every_form() {
         UnconfirmedServiceChoice::TIME_SYNCHRONIZATION,
     );
     let text = |error: Error| match error {
-        Error::Encoding(text) => text,
+        Error::InvalidArgument(text) => text.to_string(),
         other => panic!("not an encoding error: {other:?}"),
     };
     let (by_address, by_station) = (address(0, empty), Station::local(empty));
@@ -418,7 +418,10 @@ async fn an_address_on_the_own_network_is_local() {
             &[],
         )
         .await;
-    assert!(matches!(refused, Err(Error::Encoding(_))), "{refused:?}");
+    assert!(
+        matches!(refused, Err(Error::InvalidArgument(_))),
+        "{refused:?}"
+    );
     assert_eq!(site.sent.len(), before + 1);
 }
 
@@ -485,7 +488,7 @@ async fn a_named_router_to_the_own_network_goes_local() {
     ] {
         let refused = site.client.unconfirmed_request(&nobody, service, &[]).await;
         assert!(
-            matches!(refused, Err(Error::Encoding(_))),
+            matches!(refused, Err(Error::InvalidArgument(_))),
             "{nobody:?}: {refused:?}"
         );
     }

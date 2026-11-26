@@ -64,7 +64,7 @@ fn refusal(mut db: ObjectDatabase) -> String {
         &transactions,
     );
     let text = match installed {
-        Err(Error::Encoding(text)) => text,
+        Err(Error::InvalidConfig(text)) => text.to_string(),
         Err(other) => panic!("unexpected refusal {other:?}"),
         Ok(_) => panic!("install accepted an incomplete database"),
     };

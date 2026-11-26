@@ -409,6 +409,15 @@ impl Outcome {
             Err(error @ Error::InitiationDisabled { sent: true }) => {
                 return Self::Failed(error.to_string());
             }
+            // The client's stop ended it (#1833): while it waited for its
+            // turn it was never sent; once it may have gone out, whether it
+            // was applied is unknown, as for a withheld retry.
+            Err(error @ Error::RequestCutOff { sent: false }) => {
+                return Self::NotSent(error.to_string());
+            }
+            Err(error @ Error::RequestCutOff { sent: true }) => {
+                return Self::Failed(error.to_string());
+            }
             // A request too long for one APDU that the client may not send in
             // segments, or that the device can't take in segments or in so
             // many: the client refuses each before anything goes out (#2617).
@@ -514,6 +523,19 @@ mod tests {
         let withheld = Outcome::of(&Err(Error::InitiationDisabled { sent: true }));
         assert!(matches!(withheld, Outcome::Failed(_)), "{withheld:?}");
         assert_eq!(withheld.applied(), None);
+    }
+
+    /// A write the client's stop cut off while it waited for its turn was
+    /// not applied; one it cut off after it may have gone out may have been
+    /// (#1833).
+    #[test]
+    fn a_write_the_clients_stop_cut_off() {
+        let unsent = Outcome::of(&Err(Error::RequestCutOff { sent: false }));
+        assert!(matches!(unsent, Outcome::NotSent(_)), "{unsent:?}");
+        assert_eq!(unsent.applied(), Some(false));
+        let sent = Outcome::of(&Err(Error::RequestCutOff { sent: true }));
+        assert!(matches!(sent, Outcome::Failed(_)), "{sent:?}");
+        assert_eq!(sent.applied(), None);
     }
 
     /// A write too long for one APDU that the client refused to segment,

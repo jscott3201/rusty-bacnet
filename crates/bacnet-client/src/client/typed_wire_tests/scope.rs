@@ -108,9 +108,10 @@ async fn a_network_broadcast_to_no_one_network_is_refused() {
             c.who_am_i(scope, &request).await,
         ];
         for result in results {
-            let Err(Error::Encoding(text)) = &result else {
+            let Err(Error::InvalidArgument(text)) = &result else {
                 panic!("network {network}: {result:?}");
             };
+            let text = text.to_string();
             assert!(
                 text.contains(&format!("not {network}"))
                     && text.contains("Broadcast::Local")
@@ -166,7 +167,7 @@ async fn a_restricted_node_or_closed_seat_refuses_every_scope() {
         for result in results {
             if sealed {
                 assert!(
-                    matches!(&result, Err(Error::Encoding(text)) if text.contains("seat has closed")),
+                    matches!(&result, Err(Error::State(Lifecycle::Closed, text)) if text.to_string().contains("seat has closed")),
                     "{result:?}"
                 );
             } else {

@@ -56,7 +56,7 @@ fn routed_row(dnet: u16, dadr: &[u8]) -> DiscoveredDevice {
 }
 
 /// DNET 0, DNET 65535 and an empty DADR fail every routed confirmed entry
-/// point with `Error::Encoding` before a frame, a TSM entry or a routed-path
+/// point with `Error::InvalidArgument` before a frame, a TSM entry or a routed-path
 /// entry exists, while an unconfirmed remote broadcast still goes out.
 #[tokio::test]
 async fn routed_confirmed_request_to_no_single_device_fails_before_any_state() {
@@ -95,8 +95,12 @@ async fn routed_confirmed_request_to_no_single_device_fails_before_any_state() {
             },
         ];
         for result in results {
+            // The request's refusal, or the lookup's: `resolve_device` finds
+            // no row it can name, still as text (#1833 types it later).
             assert!(
-                matches!(result, Err(Error::Encoding(_))),
+                matches!(&result, Err(Error::InvalidArgument(_)))
+                    || matches!(&result, Err(Error::Encoding(text))
+                        if text == &format!("device {ROUTED_DEVICE} not in device table")),
                 "DNET {dnet}, DADR {dadr:?}: {result:?}"
             );
         }
@@ -132,7 +136,7 @@ async fn path_apis_and_routed_requests_share_the_remote_dnet_bound() {
         ];
         for result in refused {
             assert!(
-                matches!(&result, Err(Error::Encoding(m)) if m == "routed DNET must be in 1..=65534"),
+                matches!(&result, Err(Error::InvalidArgument(m)) if m.to_string() == "routed DNET must be in 1..=65534"),
                 "DNET {dnet}: {result:?}"
             );
         }
@@ -190,7 +194,10 @@ async fn add_routed_device_refuses_a_destination_no_request_could_reach() {
         (DNET, too_long),
     ] {
         let result = client.add_routed_device(config(dnet, dadr)).await;
-        assert!(matches!(result, Err(Error::Encoding(_))), "{result:?}");
+        assert!(
+            matches!(result, Err(Error::InvalidArgument(_))),
+            "{result:?}"
+        );
         assert!(client.get_device(ROUTED_DEVICE).await.unwrap().is_none());
     }
     let longest = vec![3; bacnet_npdu::MAX_MAC_LEN];
@@ -221,12 +228,15 @@ async fn add_device_holds_its_mac_to_the_routed_bound() {
             max_segments_accepted: None,
         })
         .await;
-    assert!(matches!(routed, Err(Error::Encoding(_))), "{routed:?}");
+    assert!(
+        matches!(routed, Err(Error::InvalidArgument(_))),
+        "{routed:?}"
+    );
     for mac in [Vec::new(), too_long] {
         let result = client.add_device(ROUTED_DEVICE, &mac).await;
         assert!(
-            matches!(&result, Err(Error::Encoding(m))
-                if m == "device MAC address must contain 1..=18 octets"),
+            matches!(&result, Err(Error::InvalidArgument(m))
+                if m.to_string() == "device MAC address must contain 1..=18 octets"),
             "{} octets: {result:?}",
             mac.len()
         );

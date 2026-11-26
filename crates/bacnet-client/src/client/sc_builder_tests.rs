@@ -75,7 +75,7 @@ async fn sc_client_builder_rejects_reserved_vmac_before_connect() {
 
     assert!(matches!(
         result,
-        Err(Error::Encoding(message)) if message.contains("unknown VMAC")
+        Err(Error::InvalidConfig(message)) if message.to_string().contains("unknown VMAC")
     ));
 
     if let Ok(Ok(data)) = timeout(Duration::from_millis(50), ws_hub.recv()).await {
@@ -106,7 +106,7 @@ fn sc_client_builder_rejects_broadcast_vmac_and_zero_device_uuid() {
         .validate_identity();
     assert!(matches!(
         broadcast,
-        Err(Error::Encoding(message)) if message.contains("broadcast VMAC")
+        Err(Error::InvalidConfig(message)) if message.to_string().contains("broadcast VMAC")
     ));
 
     let zero_uuid = BACnetClient::sc_builder()
@@ -114,7 +114,7 @@ fn sc_client_builder_rejects_broadcast_vmac_and_zero_device_uuid() {
         .validate_identity();
     assert!(matches!(
         zero_uuid,
-        Err(Error::Encoding(message)) if message.contains("device_uuid")
+        Err(Error::InvalidConfig(message)) if message.to_string().contains("device_uuid")
     ));
 }
 
@@ -166,7 +166,7 @@ async fn sc_client_builder_valid_reconnect_preserves_missing_tls_error() {
         }
         assert!(matches!(
             builder.build().await,
-            Err(Error::Encoding(message)) if message == "SC client builder: tls_config is required"
+            Err(Error::InvalidConfig(message)) if message.to_string() == "SC client builder: tls_config is required"
         ));
     }
 }
@@ -266,7 +266,7 @@ async fn sc_client_builder_npdu_limit_preflight_covers_all_build_paths() {
             .err()
             .unwrap();
         assert!(
-            matches!(error, Error::Encoding(message) if message.contains("tls_config is required"))
+            matches!(error, Error::InvalidConfig(message) if message.to_string().contains("tls_config is required"))
         );
     }
 }

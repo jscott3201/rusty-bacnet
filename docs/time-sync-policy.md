@@ -105,7 +105,8 @@ the same caveat.
 In Rust, `TimeSyncSourceRestriction::new` checks the entries and
 `TimeSyncPolicy::validate` the rest; the generic, B/IP and SC builders run the
 validation again before any transport starts or SC dials, and each failure is
-an `Error::Encoding`. In Python the constructor checks the dict before any I/O
+an `Error::InvalidConfig`, or `Error::LimitReached` for a source list over 256
+entries (#1833). In Python the constructor checks the dict before any I/O
 and raises `ValueError` for these limits, `TypeError` for an unknown key or a
 value of the wrong type, and `OverflowError` for a negative or oversized
 integer.

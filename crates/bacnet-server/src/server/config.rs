@@ -299,8 +299,8 @@ impl ServerConfig {
     /// refused.
     pub(crate) fn validate_cov_retry_timeout(&self) -> Result<(), bacnet_types::error::Error> {
         if self.cov_retry_timeout_ms == 0 {
-            return Err(bacnet_types::error::Error::Encoding(
-                "cov_retry_timeout_ms is 0; it must be at least 1 millisecond".into(),
+            return Err(bacnet_types::error::Error::invalid_config(
+                "cov_retry_timeout_ms is 0; it must be at least 1 millisecond",
             ));
         }
         Ok(())

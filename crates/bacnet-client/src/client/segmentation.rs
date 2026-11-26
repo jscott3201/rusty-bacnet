@@ -417,9 +417,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 tokio::select! {
                     biased;
                     response = &mut *response_rx => {
-                        return Ok(WindowAck::Terminal(response.map_err(|_| {
-                            Error::Encoding("TSM response channel closed".into())
-                        })));
+                        return Ok(WindowAck::Terminal(
+                            response.map_err(|_| super::requests::cut_off(true)),
+                        ));
                     }
                     // A transaction that left the TSM resolves the
                     // response arm above; progress stays silent.
@@ -477,7 +477,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         return Ok(WindowAck::Ack(ack));
                         }
                         None => {
-                        return Err(Error::Encoding("SegmentAck channel closed".into()));
+                        // Can't happen: the request holds a sender of this
+                        // channel until its transfer ends. Were it to, the
+                        // segments sent so far may have reached the device.
+                        return Err(super::requests::cut_off(true));
                         }
                     },
                     _ = &mut segment_timer => {

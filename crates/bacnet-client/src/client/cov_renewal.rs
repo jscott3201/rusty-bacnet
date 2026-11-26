@@ -72,14 +72,19 @@ impl ManagedCOVSubscriptionOptions {
 
     fn validate(&self, lifetime: u32) -> Result<(), Error> {
         if !(1..=MAX_COV_CHANNEL_CAPACITY).contains(&self.event_channel_capacity) {
-            return Err(Error::Encoding(format!(
-                "invalid managed COV subscription event channel capacity {}; expected 1..={}",
-                self.event_channel_capacity, MAX_COV_CHANNEL_CAPACITY
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new(
+                    "invalid managed COV subscription event channel capacity {}; expected 1..={}",
+                )
+                .with_values(
+                    self.event_channel_capacity as u64,
+                    MAX_COV_CHANNEL_CAPACITY as u64,
+                ),
+            ));
         }
         if self.renewal_margin >= Duration::from_secs(u64::from(lifetime)) {
-            return Err(Error::Encoding(
-                "managed COV subscription renewal margin must be shorter than lifetime".into(),
+            return Err(Error::invalid_config(
+                "managed COV subscription renewal margin must be shorter than lifetime",
             ));
         }
         Ok(())
@@ -288,8 +293,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         options: ManagedCOVSubscriptionOptions,
     ) -> Result<ManagedCOVSubscription, Error> {
         if lifetime == 0 {
-            return Err(Error::Encoding(
-                "managed COV subscriptions require a finite non-zero lifetime".into(),
+            return Err(Error::invalid_argument(
+                "managed COV subscriptions require a finite non-zero lifetime",
             ));
         }
         let request = ManagedRequest::Object {

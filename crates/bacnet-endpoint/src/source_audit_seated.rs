@@ -168,10 +168,11 @@ impl SourceAudit {
             .db
             .try_write()
             .map(|mut db| self.plan(&mut db, &request));
-        // A rejected spawn drops the request, its slot and the reply; the
-        // task never retains its owner. The stop that closes the owner
-        // aborts the task, so an operation it cuts off is not recorded.
-        match planned {
+        // A rejected spawn drops the request, its slot and the reply, with
+        // nothing sent; the task never retains its owner. The stop that
+        // closes the owner aborts the task, so an operation it cuts off is
+        // not recorded.
+        let spawned = match planned {
             Ok(Ok(Some(plan))) => owner.spawn(task.carry_out(plan, request, slot, reply, weak)),
             Ok(Ok(None)) => {
                 drop((slot, owner));
@@ -179,12 +180,17 @@ impl SourceAudit {
             }
             Ok(Err(error)) => return Err(error),
             Err(_busy) => owner.spawn(task.run_admitted(request, slot, reply, weak)),
-        }
+        };
         drop(owner);
+        if !spawned {
+            return Err(shutdown());
+        }
         match answer.await {
             Ok(Handoff::Answer(result)) => result,
             Ok(Handoff::Unaudited(request)) => (*request).execute().await.result,
-            Err(_) => Err(shutdown()),
+            // The stop aborted the task, which may have sent the request
+            // already: whether the device carried it out is unknown (#1833).
+            Err(_) => Err(Error::RequestCutOff { sent: true }),
         }
     }
 

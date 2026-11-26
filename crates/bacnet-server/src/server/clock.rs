@@ -5,7 +5,7 @@ use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::durable::{SaveWait, StageStep};
 use bacnet_transport::port::TransportPort;
-use bacnet_types::error::Error;
+use bacnet_types::error::{DecodeError, DecodingKind, Error, Refusal};
 use bacnet_types::primitives::ObjectIdentifier;
 use bacnet_types::primitives::{Date, Time};
 use bacnet_types::sync::MutexExt;
@@ -32,9 +32,10 @@ impl ClockConfig {
     /// Configure signed minutes west of UTC and daylight-saving status.
     pub fn new(utc_offset_minutes: i16, daylight_savings_status: bool) -> Result<Self, Error> {
         if !(-1440..=1440).contains(&utc_offset_minutes) || utc_offset_minutes % 15 != 0 {
-            return Err(Error::Encoding(format!(
+            // Owned text: the offset may be negative.
+            return Err(Error::InvalidConfig(Refusal::text(format!(
                 "UTC offset {utc_offset_minutes} must be within -1440..=1440 minutes in 15-minute increments"
-            )));
+            ))));
         }
         Ok(Self {
             utc_offset_minutes,
@@ -163,7 +164,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let clock = Arc::clone(
             self.clock
                 .as_ref()
-                .ok_or_else(|| Error::Encoding("Device clock is disabled".into()))?,
+                .ok_or_else(|| Error::unsupported("Device clock is disabled"))?,
         );
         let device = crate::local_device::initiating_device(&self.config.device);
         let db = Arc::clone(&self.db);
@@ -414,9 +415,10 @@ impl ServerClock {
     /// [`set_zone`](Self::set_zone) refuses it, when its local date falls
     /// outside the BACnet Date range.
     pub(super) fn check(&self, config: ClockConfig) -> Result<(), Error> {
-        self.lock().frame_in(config).map(drop).ok_or_else(|| {
-            Error::Encoding("local time in that zone is outside the BACnet Date range".into())
-        })
+        self.lock()
+            .frame_in(config)
+            .map(drop)
+            .ok_or(Error::invalid_argument(ZONE_OUT_OF_RANGE))
     }
 
     /// Replace the zone, keeping the UTC instant and whether a
@@ -427,9 +429,9 @@ impl ServerClock {
     /// nothing.
     pub(super) fn set_zone(&self, config: ClockConfig) -> Result<(), Error> {
         let mut state = self.lock();
-        state.frame_in(config).ok_or_else(|| {
-            Error::Encoding("local time in that zone is outside the BACnet Date range".into())
-        })?;
+        state
+            .frame_in(config)
+            .ok_or(Error::invalid_argument(ZONE_OUT_OF_RANGE))?;
         state.config = config;
         Ok(())
     }
@@ -478,8 +480,13 @@ impl ClockState {
                 }
         };
 
+        // The peer's value, refused as out of range here (#1833).
         frame_from_utc_hundredths(utc_hundredths, config).ok_or_else(|| {
-            Error::Encoding("synchronized time is outside the BACnet Date range".into())
+            Error::from(DecodeError::new(
+                DecodingKind::OutOfRange,
+                DATE_AT,
+                "synchronized time is outside the BACnet Date range",
+            ))
         })?;
 
         self.synchronized_utc = Some((utc_hundredths, crate::runtime_clock::now()));
@@ -554,25 +561,32 @@ fn system_utc_hundredths() -> i128 {
 pub(super) fn date_time_to_hundredths(date: Date, time: Time) -> Result<i128, Error> {
     let year = date
         .actual_year()
-        .ok_or_else(|| invalid_datetime("date contains an unspecified year"))?;
+        .ok_or_else(|| invalid_datetime(DATE_AT, "date contains an unspecified year"))?;
     if !(1..=12).contains(&date.month) {
-        return Err(invalid_datetime("date month must be 1..=12"));
+        return Err(invalid_datetime(DATE_AT, "date month must be 1..=12"));
     }
     let max_day = days_in_month(year, date.month);
     if date.day == 0 || date.day > max_day {
-        return Err(invalid_datetime("date day is invalid for its month"));
+        return Err(invalid_datetime(
+            DATE_AT,
+            "date day is invalid for its month",
+        ));
     }
     if !(1..=7).contains(&date.day_of_week) {
-        return Err(invalid_datetime("date day-of-week must be 1..=7"));
+        return Err(invalid_datetime(DATE_AT, "date day-of-week must be 1..=7"));
     }
 
     let days = days_from_civil(i64::from(year), i64::from(date.month), i64::from(date.day));
     let expected_day_of_week = (days + 3).rem_euclid(7) as u8 + 1;
     if date.day_of_week != expected_day_of_week {
-        return Err(invalid_datetime("date day-of-week is inconsistent"));
+        return Err(invalid_datetime(
+            DATE_AT,
+            "date day-of-week is inconsistent",
+        ));
     }
     if time.hour > 23 || time.minute > 59 || time.second > 59 || time.hundredths > 99 {
         return Err(invalid_datetime(
+            TIME_AT,
             "time must be fully specified and within its field ranges",
         ));
     }
@@ -584,8 +598,23 @@ pub(super) fn date_time_to_hundredths(date: Date, time: Time) -> Result<i128, Er
     Ok(i128::from(days) * HUNDREDTHS_PER_DAY + day_hundredths)
 }
 
-fn invalid_datetime(message: &str) -> Error {
-    Error::Encoding(format!("invalid time synchronization value: {message}"))
+/// A zone whose local date now falls outside the BACnet Date range: the
+/// argument of the `set_clock_zone` call that hands it over (#1833).
+const ZONE_OUT_OF_RANGE: &str = "local time in that zone is outside the BACnet Date range";
+
+/// Where a time synchronization request's Date and Time start: each is an
+/// application tag of one octet and four contents octets, the Date first
+/// (Clauses 16.7 and 16.8).
+const DATE_AT: usize = 0;
+const TIME_AT: usize = 5;
+
+/// A time synchronization's date or time the service doesn't take: the
+/// peer's value at `offset` in its request, refused as out of range
+/// (#1833).
+fn invalid_datetime(offset: usize, message: &'static str) -> Error {
+    DecodeError::new(DecodingKind::OutOfRange, offset, message)
+        .within("invalid time synchronization value")
+        .into()
 }
 
 fn frame_from_utc_hundredths(utc_hundredths: i128, config: ClockConfig) -> Option<ClockFrame> {
@@ -725,31 +754,21 @@ mod tests {
                 day_of_week: 1,
             },
         ] {
-            assert!(
-                clock
-                    .synchronize(invalid_date, time(12, 0, 0, 0), true)
-                    .is_err()
-            );
+            // The peer's Date, at the start of its request (#1833).
+            let refused = clock.synchronize(invalid_date, time(12, 0, 0, 0), true);
+            assert!(matches!(refused, Err(Error::Decoding(d)) if d.offset == DATE_AT));
         }
-        assert!(
-            clock
-                .synchronize(
-                    date(2024, 2, 29, 4),
-                    Time {
-                        hour: Time::UNSPECIFIED,
-                        minute: 0,
-                        second: 0,
-                        hundredths: 0,
-                    },
-                    true,
-                )
-                .is_err()
-        );
-        assert!(
-            clock
-                .synchronize(date(2024, 2, 29, 4), time(24, 0, 0, 0), true)
-                .is_err()
-        );
+        // Its Time, after the Date's five octets.
+        let unspecified = Time {
+            hour: Time::UNSPECIFIED,
+            minute: 0,
+            second: 0,
+            hundredths: 0,
+        };
+        for invalid_time in [unspecified, time(24, 0, 0, 0)] {
+            let refused = clock.synchronize(date(2024, 2, 29, 4), invalid_time, true);
+            assert!(matches!(refused, Err(Error::Decoding(d)) if d.offset == TIME_AT));
+        }
         assert_eq!(clock.state.lock().unwrap().synchronized_utc, anchor);
     }
 

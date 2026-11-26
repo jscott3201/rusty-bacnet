@@ -248,10 +248,29 @@ async fn a_waiting_endpoint_request_fails_at_once_when_the_session_stops() {
     let ended = tokio::time::timeout(Duration::from_secs(1), waiting).await;
     let error = ended.expect("ended at once").unwrap().unwrap_err();
     assert!(
-        matches!(&error, Error::Encoding(message) if message == "TSM response channel closed"),
+        matches!(error, Error::RequestCutOff { sent: false }),
         "{error:?}"
     );
     assert_eq!(sends.lock().unwrap().len(), 1);
+}
+
+/// A request already sent when the session stops is cut off as one that may
+/// have gone out (#1833): the device may have carried it out.
+#[tokio::test(start_paused = true)]
+async fn an_open_endpoint_request_is_cut_off_as_sent_when_the_session_stops() {
+    let (mut session, client, sends) = paced(0, 0, 1, Duration::ZERO).await;
+    let reader = Arc::clone(&client);
+    let open = tokio::spawn(async move { try_read(&reader, A).await });
+    // Well inside the 100 ms APDU timeout: the device stays silent.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(sends.lock().unwrap().len(), 1, "the read went out");
+    session.stop().await.unwrap();
+    let ended = tokio::time::timeout(Duration::from_secs(1), open).await;
+    let error = ended.expect("ended at once").unwrap().unwrap_err();
+    assert!(
+        matches!(error, Error::RequestCutOff { sent: true }),
+        "{error:?}"
+    );
 }
 
 /// More than an hour is refused when the session is made, as

@@ -46,15 +46,6 @@ struct RequestSize<'a> {
     sized_by: Option<(u16, &'a [u8])>,
 }
 
-/// What a confirmed request fails with when the client's tasks end under it
-/// (#2617, #2720): its open transaction is dropped by the stop, or, still
-/// waiting for its turn at the destination, it is woken by the dispatch
-/// task's end. The Python binding reads this text as that case.
-#[cold]
-pub(super) fn request_cut_off() -> Error {
-    Error::Encoding("TSM response channel closed".into())
-}
-
 /// Whether `response` is the device's own answer to a confirmed request: an
 /// acknowledgment, of the right kind or not (#2721), or its Error, Reject
 /// or Abort. Any of them shows that the request reached the device (Clause
@@ -104,11 +95,47 @@ fn check_transmittable_length(peer_or_local: LengthBoundedBy, transport: u16) ->
     } else {
         peer_or_local
     };
-    Err(Error::Encoding(format!(
+    Err(below_minimum(combined, binding))
+}
+
+/// [`check_transmittable_length`]'s refusal, out of line from the request
+/// path. The limits are values the client keeps: its own setting, the
+/// link's, or the peer's row in its device table (#1833).
+#[cold]
+#[inline(never)]
+fn below_minimum(combined: u16, binding: LengthBoundedBy) -> Error {
+    Error::InvalidConfig(Refusal::text(format!(
         "maximum transmittable length {combined} is below the {MINIMUM_MESSAGE_SIZE}-octet \
          MinimumMessageSize every BACnet device accepts (Clause 5.2.1.2); the binding limit is \
          {binding}"
     )))
+}
+
+/// A routed request whose path authorization went to another request,
+/// refused out of line from the request path (#1833).
+#[cold]
+#[inline(never)]
+fn lost_path_authorization() -> Error {
+    Error::limit_reached("routed send lost its active path authorization")
+}
+
+/// [`Error::RequestCutOff`], built out of line: the request paths that
+/// end with it are hot, and the branch to it is the unlikely one (#1833).
+#[cold]
+#[inline(never)]
+pub(super) fn cut_off(sent: bool) -> Error {
+    Error::RequestCutOff { sent }
+}
+
+/// A confirmed request to a group address on this link, refused out of
+/// line from the hot request path (#1833).
+#[cold]
+#[inline(never)]
+fn group_destination() -> Error {
+    Error::invalid_argument(
+        "a confirmed request goes to one device, not to a broadcast or group address (a local \
+         broadcast carries only an UNCONFIRMED_REQUEST APDU, Clause 6.3)",
+    )
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -134,7 +161,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// # Errors
     ///
-    /// Before any request state is taken: [`Error::Encoding`] for a station
+    /// Before any request state is taken: [`Error::InvalidArgument`] for a station
     /// a confirmed request can't go to. That is a MAC that reaches a group
     /// of nodes on this link ([`TransportPort::is_group_destination`]: the
     /// link's broadcast MAC, or on B/IP the limited broadcast, the
@@ -148,8 +175,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// (#2722). [`Error::UnknownDevice`] for a remote address with no named
     /// router and no row in the discovery table, since the row is the route.
     /// Then the errors of the request itself; a request the client's stop
-    /// cuts off, waiting for its turn or open, fails with
-    /// `Error::Encoding("TSM response channel closed")`.
+    /// cuts off fails with [`Error::RequestCutOff`]: `sent: false` while it
+    /// waited for its turn, `sent: true` once it was open.
     ///
     /// [`BACnetAddress`]: bacnet_types::constructed::BACnetAddress
     pub async fn confirmed_request(
@@ -224,7 +251,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             let key = pacing::PaceKey::of(target);
             match self.pacer.wait(key, &self.routing_query.ended).await {
                 Some(pace) => pace,
-                None => return Err(request_cut_off()),
+                // Still waiting for its turn: nothing has gone out.
+                None => return Err(cut_off(false)),
             }
         } else {
             pacing::PaceGuard::unpaced()
@@ -347,9 +375,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         ) {
             guard.mark_completed();
             self.abandon_unsent(&tsm_mac, invoke_id, &owner);
-            return Err(Error::Encoding(
-                "routed send lost its active path authorization".into(),
-            ));
+            // The path's one active request is no longer this one.
+            return Err(lost_path_authorization());
         }
 
         if let Err(e) = self.send_confirmed_target_apdu(target, &buf, &owner).await {
@@ -413,12 +440,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // With no DNET, a group destination is a local broadcast,
                 // which carries no confirmed request (Clause 6.3, #1479).
                 if self.network.transport().is_group_destination(mac) {
-                    return Err(Error::Encoding(
-                        "a confirmed request goes to one device, not to a broadcast or group \
-                         address (a local broadcast carries only an UNCONFIRMED_REQUEST APDU, \
-                         Clause 6.3)"
-                            .into(),
-                    ));
+                    return Err(group_destination());
                 }
             }
             // Still routed, so on another network: its MAC there must not

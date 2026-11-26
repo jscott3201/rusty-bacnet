@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use bacnet_types::MacAddr;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bacnet_types::sync::MutexExt;
 use tokio::sync::watch;
 use tokio::time::{Duration, Instant};
@@ -49,9 +49,10 @@ pub const MAX_MIN_REQUEST_INTERVAL_MS: u64 = 3_600_000;
 /// Refuse an interval past [`MAX_MIN_REQUEST_INTERVAL_MS`].
 pub(crate) fn validate_interval_ms(interval_ms: u64) -> Result<(), Error> {
     if interval_ms > MAX_MIN_REQUEST_INTERVAL_MS {
-        return Err(Error::Encoding(format!(
-            "invalid min-request-interval {interval_ms} ms; expected 0..={MAX_MIN_REQUEST_INTERVAL_MS}"
-        )));
+        return Err(Error::InvalidConfig(
+            Refusal::new("invalid min-request-interval {} ms; expected 0..={}")
+                .with_values(interval_ms, MAX_MIN_REQUEST_INTERVAL_MS),
+        ));
     }
     Ok(())
 }

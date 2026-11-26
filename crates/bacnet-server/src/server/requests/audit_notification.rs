@@ -1,5 +1,6 @@
 use super::super::audit_forwarder::ForwardBatch;
 use super::*;
+use bacnet_types::error::RangeError;
 
 mod durable_receipt;
 pub(super) use bacnet_objects::audit::ConfirmedAuditNotificationOutcome::{Duplicate, Stored};
@@ -19,8 +20,8 @@ pub(super) async fn receive_confirmed_audit_notification(
     ),
     Error,
 > {
-    validate_payload_size("ConfirmedAuditNotification", &confirmed.service_request)?;
-    let request = decode_request("ConfirmedAuditNotification", &confirmed.service_request)?;
+    validate_payload_size(&CONFIRMED, &confirmed.service_request)?;
+    let request = decode_request(&CONFIRMED, &confirmed.service_request)?;
     let sink = config.audit_notification_sink.ok_or_else(request_denied)?;
     let precheck_at = current_unix_millis()?;
     let receipt_identity =
@@ -189,8 +190,8 @@ pub(super) async fn receive_unconfirmed_audit_notification(
     provenance: bacnet_transport::port::TransportProvenance,
     service_request: &Bytes,
 ) -> Result<Option<ForwardBatch>, Error> {
-    validate_payload_size("UnconfirmedAuditNotification", service_request)?;
-    let request = decode_request("UnconfirmedAuditNotification", service_request)?;
+    validate_payload_size(&UNCONFIRMED, service_request)?;
+    let request = decode_request(&UNCONFIRMED, service_request)?;
     let sink = config.audit_notification_sink.ok_or_else(request_denied)?;
     let context = UnconfirmedAuditNotificationAuthorizationContext {
         source_mac: MacAddr::from_slice(source_mac),
@@ -216,25 +217,42 @@ pub(super) async fn receive_unconfirmed_audit_notification(
     Ok(forward)
 }
 
-fn validate_payload_size(service: &str, service_request: &Bytes) -> Result<(), Error> {
+/// The labels of one audit notification service's size refusals: static
+/// [`Error::Range`] forms, with the old text (#1833).
+struct Limits {
+    payload: &'static str,
+    list: &'static str,
+}
+
+const CONFIRMED: Limits = Limits {
+    payload: "ConfirmedAuditNotification payload exceeds {} bytes",
+    list: "ConfirmedAuditNotification list exceeds {} items",
+};
+
+const UNCONFIRMED: Limits = Limits {
+    payload: "UnconfirmedAuditNotification payload exceeds {} bytes",
+    list: "UnconfirmedAuditNotification list exceeds {} items",
+};
+
+fn validate_payload_size(service: &Limits, service_request: &Bytes) -> Result<(), Error> {
     if service_request.len() > MAX_AUDIT_NOTIFICATION_BYTES {
-        return Err(Error::OutOfRange(format!(
-            "{service} payload exceeds {MAX_AUDIT_NOTIFICATION_BYTES} bytes"
-        )));
+        return Err(RangeError::new(service.payload)
+            .with_value(MAX_AUDIT_NOTIFICATION_BYTES as u64)
+            .into());
     }
     Ok(())
 }
 
 fn decode_request(
-    service: &str,
+    service: &Limits,
     service_request: &Bytes,
 ) -> Result<bacnet_services::audit::AuditNotificationRequest, Error> {
     let request = bacnet_services::audit::AuditNotificationRequest::decode(service_request)
         .map_err(Error::into_request_reject)?;
     if request.notifications.len() > MAX_AUDIT_NOTIFICATIONS {
-        return Err(Error::OutOfRange(format!(
-            "{service} list exceeds {MAX_AUDIT_NOTIFICATIONS} items"
-        )));
+        return Err(RangeError::new(service.list)
+            .with_value(MAX_AUDIT_NOTIFICATIONS as u64)
+            .into());
     }
     Ok(request)
 }
@@ -242,9 +260,9 @@ fn decode_request(
 fn current_unix_millis() -> Result<u64, Error> {
     let elapsed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| Error::OutOfRange("system time precedes Unix epoch".into()))?;
+        .map_err(|_| Error::range("system time precedes Unix epoch"))?;
     u64::try_from(elapsed.as_millis())
-        .map_err(|_| Error::OutOfRange("system time exceeds Unix millisecond range".into()))
+        .map_err(|_| Error::range("system time exceeds Unix millisecond range"))
 }
 
 pub(in crate::server) fn fail_closed_authorize(authorize: impl FnOnce() -> bool) -> bool {

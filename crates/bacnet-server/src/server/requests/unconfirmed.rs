@@ -416,7 +416,8 @@ fn synchronize_clock(
     clock::date_time_to_hundredths(request.date, request.time)?;
     let policy = &config.time_sync_policy;
     if !policy.enabled {
-        return Err(time_sync_policy::denied("disabled"));
+        // The server doesn't execute time synchronization (#1833).
+        return Err(Error::unsupported("time sync: disabled"));
     }
     if policy
         .source_restriction
@@ -429,9 +430,11 @@ fn synchronize_clock(
             )
         })
     {
-        return Err(time_sync_policy::denied("source not allowed"));
+        // A decision about a peer, not a missing feature; it only reaches
+        // the debug log below, so its kind is provisional (#1833).
+        return Err(Error::unsupported("time sync: source not allowed"));
     }
-    let clock = clock.ok_or_else(|| Error::Encoding("Device clock is disabled".into()))?;
+    let clock = clock.ok_or(Error::unsupported("Device clock is disabled"))?;
     let mut delta_hundredths = None;
     // The step is judged and the clock set under one hold of its lock, so
     // a zone change can't fall between the two (#2395).

@@ -4,7 +4,7 @@
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::port::{Bip6Port, BipPort};
 use bacnet_types::bip6_vmac::{VmacHex, device_instance_vmac};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bacnet_types::primitives::ObjectIdentifier;
 use std::net::{SocketAddrV4, SocketAddrV6};
 
@@ -66,18 +66,21 @@ fn check_vmac(port: &Bip6Port, served_device: Option<u32>) -> Result<(), Error> 
         .ok_or_else(|| invalid("registered B/IPv6 requires a Device instance in 0..=4194303"))?;
     match port.vmac {
         Some(vmac) if vmac == expected => Ok(()),
-        Some(vmac) => Err(Error::Encoding(format!(
+        Some(vmac) => Err(Error::InvalidConfig(Refusal::text(format!(
             "registered B/IPv6 refused: the transport's VMAC {} is not Device {instance}'s \
              VMAC {}; build the transport with the served Device instance",
             VmacHex(vmac),
             VmacHex(expected),
-        ))),
+        )))),
         // Before start a transport reports a VMAC only when a valid Device
         // instance gave it one.
-        None => Err(Error::Encoding(format!(
-            "registered B/IPv6 refused: the transport has no Device instance in 0..=4194303, \
-             so its VMAC would be random; build it with Device instance {instance}"
-        ))),
+        None => Err(Error::InvalidConfig(
+            Refusal::new(
+                "registered B/IPv6 refused: the transport has no Device instance in \
+                 0..=4194303, so its VMAC would be random; build it with Device instance {}",
+            )
+            .with_value(u64::from(instance)),
+        )),
     }
 }
 
@@ -125,8 +128,9 @@ pub fn publish_bip6(
     Ok((address, vmac))
 }
 
-fn invalid(message: &str) -> Error {
-    Error::Encoding(message.into())
+/// A registration the port's configuration can't take (#1833).
+fn invalid(message: &'static str) -> Error {
+    Error::invalid_config(message)
 }
 
 #[cfg(test)]

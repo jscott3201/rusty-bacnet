@@ -71,12 +71,9 @@ pub(crate) const DETAIL_ATTRIBUTES: [&str; 7] = [
     "vt_session_identifiers",
 ];
 
-/// What the client's transaction state machine says when a request's
-/// transaction ended before an answer came: the client stopped under it.
-const TSM_CHANNEL_CLOSED: &str = "TSM response channel closed";
-
-/// The message a request cut off that way raises (#2617): the client's
-/// stop() ran, or the endpoint it runs on closed, which stops it.
+/// The message a request raises when its transaction ended before an
+/// answer came (#2617): the client's stop() ran, or the endpoint it runs on
+/// closed, which stops it.
 const REQUEST_CUT_OFF: &str = "the request ended without an answer: the client stopped while \
      it waited";
 
@@ -226,11 +223,9 @@ pub fn to_py_err(err: Error) -> PyErr {
         }
         // The request's transaction was ended under it: the client stopped
         // while it waited, by its own stop() or, on an endpoint's link, by
-        // the endpoint's close (#2617). The client names it by this text alone until #1833
-        // gives client errors their types.
-        Error::Encoding(ref message) if message == TSM_CHANNEL_CLOSED => {
-            BacnetError::new_err(REQUEST_CUT_OFF)
-        }
+        // the endpoint's close (#2617), whether or not it had gone out
+        // (#1833).
+        Error::RequestCutOff { .. } => BacnetError::new_err(REQUEST_CUT_OFF),
         _ => BacnetError::new_err(err.to_string()),
     }
 }

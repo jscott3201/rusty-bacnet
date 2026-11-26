@@ -137,10 +137,8 @@ impl PathLimit {
         path: &RoutedPath,
         whose: &str,
     ) -> Result<String, String> {
-        let refused = |error: Error| match error {
-            Error::Encoding(reason) => reason,
-            other => other.to_string(),
-        };
+        // The client's refusals (#1833) show their text alone.
+        let refused = |error: Error| error.to_string();
         let (router_mac, network) = (path.router_mac(), path.network());
         let done = match self.max_npdu {
             Some(max_npdu) => {

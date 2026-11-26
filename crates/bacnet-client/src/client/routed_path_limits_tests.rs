@@ -35,11 +35,11 @@ fn routed_unicast_needs_one_remote_network_and_one_station() {
     for (dnet, dadr_len) in [(0, 6), (u16::MAX, 6), (100, 0), (100, 19)] {
         assert!(matches!(
             check_routed_unicast(dnet, dadr_len),
-            Err(Error::Encoding(_))
+            Err(Error::InvalidArgument(_))
         ));
     }
     assert!(matches!(forwarded_npci_len(0, 6),
-        Err(Error::Encoding(m)) if m == "routed destination MAC address must contain 1..=18 octets"));
+        Err(Error::InvalidArgument(m)) if m.to_string() == "routed destination MAC address must contain 1..=18 octets"));
 }
 
 /// Every MAC a routed path carries holds to [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN)
@@ -50,16 +50,16 @@ async fn routed_path_macs_hold_to_the_npdu_address_bound() {
     let longest = bacnet_npdu::MAX_MAC_LEN;
     assert_eq!(forwarded_npci_len(longest, longest).unwrap(), 45);
     assert!(matches!(forwarded_npci_len(6, longest + 1),
-        Err(Error::Encoding(m)) if m == "local source MAC address for routed forwarding must contain 1..=18 octets"));
+        Err(Error::InvalidConfig(m)) if m.to_string() == "local source MAC address for routed forwarding must contain 1..=18 octets"));
     assert!(matches!(forwarded_npci_len(longest + 1, 6),
-        Err(Error::Encoding(m)) if m == "routed destination MAC address must contain 1..=18 octets"));
+        Err(Error::InvalidArgument(m)) if m.to_string() == "routed destination MAC address must contain 1..=18 octets"));
 
     let limits = Arc::new(RoutedPathLimits::with_capacity(
         4,
         Duration::from_millis(10),
     ));
     assert!(matches!(limits.acquire(&[2; 19], 100).await,
-        Err(Error::Encoding(m)) if m == "immediate router MAC address must contain 1..=18 octets"));
+        Err(Error::InvalidArgument(m)) if m.to_string() == "immediate router MAC address must contain 1..=18 octets"));
     assert!(limits.state().entries.is_empty());
     drop(limits.acquire(&[2; 18], 100).await.unwrap());
     assert_eq!(limits.state().entries.len(), 1);

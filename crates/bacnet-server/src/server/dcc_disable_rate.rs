@@ -29,9 +29,8 @@ impl DccDisableRateLimit {
         if !(1..=65535).contains(&self.capacity)
             || !(1..=86_400_000).contains(&self.refill_interval_ms)
         {
-            return Err(Error::Encoding(
-                "DCC disable rate requires capacity 1..=65535 and refill_interval_ms 1..=86400000"
-                    .into(),
+            return Err(Error::invalid_config(
+                "DCC disable rate requires capacity 1..=65535 and refill_interval_ms 1..=86400000",
             ));
         }
         Ok(())

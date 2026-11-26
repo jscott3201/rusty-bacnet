@@ -137,6 +137,23 @@ pub(super) struct ConfirmedRecipientRoute {
 }
 
 impl ConfirmedRecipientRoute {
+    /// What a send on this route fails with when it names no next hop: a
+    /// station on another network with no router known for it, a device
+    /// that can't be placed (#1833), as the client reports one. The audit
+    /// senders only count such a send as not made.
+    #[cold]
+    pub(super) fn unplaced(&self) -> Error {
+        use bacnet_endpoint_core::coordinator::CanonicalPeer;
+        let (network, mac) = match &self.canonical_peer {
+            CanonicalPeer::Direct(mac) => (0, mac.as_slice()),
+            CanonicalPeer::Routed { network, address } => (*network, address.as_slice()),
+        };
+        let hex: String = mac.iter().map(|octet| format!("{octet:02X}")).collect();
+        Error::UnknownDevice {
+            device: format!("{network}:0x{hex}"),
+        }
+    }
+
     /// The route's station on another network, when its MAC there is a
     /// broadcast or group form ([`BroadcastStation`], #2732): a confirmed
     /// request may not take this route, an unconfirmed one may. A route on
