@@ -1,6 +1,6 @@
 use crate::prelude::*;
 
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RangeError};
 
 /// Repository retention policy for completed confirmed Audit receipts.
 pub const COMPLETED_AUDIT_RECEIPT_RETENTION_MILLIS: u64 = 60_000;
@@ -52,32 +52,34 @@ pub enum ConfirmedAuditNotificationOutcome {
 
 pub(super) fn validate_key(key: &[u8]) -> Result<(), Error> {
     if key.is_empty() {
-        return Err(Error::Encoding(
-            "AuditLog completed receipt key must not be empty".into(),
+        return Err(Error::invalid_argument(
+            "AuditLog completed receipt key must not be empty",
         ));
     }
     if key.len() > MAX_AUDIT_RECEIPT_KEY_BYTES {
-        return Err(Error::OutOfRange(format!(
-            "AuditLog completed receipt key length {} exceeds {MAX_AUDIT_RECEIPT_KEY_BYTES}",
-            key.len()
-        )));
+        return Err(
+            RangeError::new("AuditLog completed receipt key length {} exceeds {}")
+                .with_values(key.len() as u64, MAX_AUDIT_RECEIPT_KEY_BYTES as u64)
+                .into(),
+        );
     }
     Ok(())
 }
 
-pub(super) fn validate_receipts(receipts: &[CompletedAuditReceipt]) -> Result<(), Error> {
+pub(crate) fn validate_receipts(receipts: &[CompletedAuditReceipt]) -> Result<(), Error> {
     if receipts.len() > MAX_COMPLETED_AUDIT_RECEIPTS {
-        return Err(Error::OutOfRange(format!(
-            "AuditLog completed receipt count {} exceeds {MAX_COMPLETED_AUDIT_RECEIPTS}",
-            receipts.len()
-        )));
+        return Err(
+            RangeError::new("AuditLog completed receipt count {} exceeds {}")
+                .with_values(receipts.len() as u64, MAX_COMPLETED_AUDIT_RECEIPTS as u64)
+                .into(),
+        );
     }
     let first_repeat = first_repeated_key(receipts);
     for (index, receipt) in receipts.iter().enumerate() {
         validate_key(receipt.key())?;
         if first_repeat == Some(index) {
-            return Err(Error::Encoding(
-                "AuditLog completed receipt keys must be unique".into(),
+            return Err(Error::invalid_argument(
+                "AuditLog completed receipt keys must be unique",
             ));
         }
     }

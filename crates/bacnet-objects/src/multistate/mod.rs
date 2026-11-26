@@ -13,7 +13,7 @@
 use crate::prelude::*;
 use alloc::borrow::Cow;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier, Reliability};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RangeError};
 #[cfg(test)]
 use bacnet_types::primitives::BACnetTimeStamp;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -134,15 +134,12 @@ fn read_alarm_values(detector: &ChangeOfStateDetector) -> PropertyValue {
 /// allocate one for each (four billion abort the process).
 fn require_state_count(number_of_states: u32) -> Result<(), Error> {
     if number_of_states == 0 {
-        return Err(Error::OutOfRange(
-            "number_of_states must be at least 1".into(),
-        ));
+        return Err(Error::range("number_of_states must be at least 1"));
     }
     if number_of_states > MAX_NUMBER_OF_STATES {
-        return Err(Error::OutOfRange(common::numbered_name(
-            "number_of_states must be at most ",
-            MAX_NUMBER_OF_STATES,
-        )));
+        return Err(RangeError::new("number_of_states must be at most {}")
+            .with_value(u64::from(MAX_NUMBER_OF_STATES))
+            .into());
     }
     Ok(())
 }
@@ -574,7 +571,7 @@ macro_rules! impl_multistate {
             /// [`MAX_NUMBER_OF_STATES`](crate::multistate::MAX_NUMBER_OF_STATES)
             /// is still refused, and the saved texts stay, until
             /// `clear_written_reporting` (#2414). Such a count is
-            /// `Error::OutOfRange` on any object (#2711).
+            /// `Error::Range` on any object (#2711).
             pub fn set_number_of_states(
                 &mut self,
                 number_of_states: u32,

@@ -106,7 +106,7 @@ impl NetworkPortEntry {
     /// Build the declared configuration; this does not inspect an active port.
     pub(super) fn build_object(&self) -> Result<NetworkPortObject, Error> {
         let network_number = u16::try_from(self.network_number)
-            .map_err(|_| Error::Encoding("network number must be 0..65534".into()))?;
+            .map_err(|_| Error::invalid_config("network number must be 0..65534"))?;
         let name = self.object_name();
         // Configured B/IP/SC capacity, independently of Device62/role limits.
         // Live transport association and capability validation are separate.
@@ -118,13 +118,13 @@ impl NetworkPortEntry {
             let [a, b, c, d] = self.ip;
             let [hi, lo] = self.udp_port.to_be_bytes();
             if self.mac.as_slice() != [a, b, c, d, hi, lo] {
-                return Err(Error::Encoding(
-                    "B/IP MAC must match configured IPv4 address and UDP port".into(),
+                return Err(Error::invalid_config(
+                    "B/IP MAC must match configured IPv4 address and UDP port",
                 ));
             }
             if self.ipv6 != [0; 16] {
-                return Err(Error::Encoding(
-                    "a B/IP entry carries no IPv6 address".into(),
+                return Err(Error::invalid_config(
+                    "a B/IP entry carries no IPv6 address",
                 ));
             }
             NetworkPortObject::new_bip(
@@ -183,11 +183,11 @@ impl NetworkPortEntry {
     /// IPv4 address beside its IPv6 one.
     pub(super) fn vmac(&self) -> Result<[u8; 3], Error> {
         if self.ip != [0; 4] {
-            return Err(Error::Encoding(
-                "a B/IPv6 entry carries no IPv4 address".into(),
+            return Err(Error::invalid_config(
+                "a B/IPv6 entry carries no IPv4 address",
             ));
         }
         <[u8; 3]>::try_from(self.mac.as_slice())
-            .map_err(|_| Error::Encoding("B/IPv6 MAC must be a 3-octet VMAC".into()))
+            .map_err(|_| Error::invalid_config("B/IPv6 MAC must be a 3-octet VMAC"))
     }
 }

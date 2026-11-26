@@ -330,13 +330,11 @@ async fn bbmd_mode_serves_ipv6_tables_and_activates_a_written_bdt() {
     );
 }
 
-/// The message a start that should fail failed with: the server's
-/// configuration refusal, or bacnet-objects' text until #1833 reaches that
-/// crate.
+/// The message a start that should fail failed with: a configuration
+/// refusal, the server's or bacnet-objects' (#1833).
 fn refusal(started: Result<BACnetServer<TestTransport>, Error>) -> String {
     match started {
         Err(Error::InvalidConfig(message)) => message.to_string(),
-        Err(Error::Encoding(message)) => message,
         Err(other) => panic!("a configuration refusal: {other:?}"),
         Ok(_) => panic!("the start should fail"),
     }
@@ -353,10 +351,10 @@ async fn registration_refuses_a_b_ipv6_link_that_does_not_match() {
         NetworkPortObject::new_bip(1, "Port", BipPortConfig::default()).unwrap(),
     ))
     .unwrap();
-    // bacnet-objects' refusal, text until #1833 reaches that crate.
+    // bacnet-objects' configuration refusal (#1833).
     assert!(matches!(
         start_with(bind(BipPortMode::Normal), ipv4, false).await,
-        Err(Error::Encoding(message)) if message == "registration requires an IPV6 port"
+        Err(Error::InvalidConfig(message)) if message.to_string() == "registration requires an IPV6 port"
     ));
     // These are refused even when the object declares the same address.
     let concrete = "registered B/IPv6 requires a concrete unicast interface";

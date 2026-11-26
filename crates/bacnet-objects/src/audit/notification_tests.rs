@@ -549,11 +549,11 @@ fn an_empty_batch_or_a_disabled_log_is_refused_confirmed_or_not() {
     let generation = log.generation();
     assert!(matches!(
         log.store_notifications(&[], 2_000),
-        Err(Error::OutOfRange(_))
+        Err(Error::InvalidArgument(_))
     ));
     assert!(matches!(
         log.store_confirmed_notifications(&[], 2_000, receipt(b"empty", 1)),
-        Err(Error::OutOfRange(_))
+        Err(Error::InvalidArgument(_))
     ));
     log.write_property(
         bacnet_types::enums::PropertyIdentifier::ENABLE,

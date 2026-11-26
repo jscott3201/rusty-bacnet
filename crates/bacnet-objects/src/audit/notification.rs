@@ -125,8 +125,8 @@ impl AuditLogObject {
             ));
         }
         if notifications.is_empty() {
-            return Err(Error::OutOfRange(
-                "Audit notification batch must not be empty".into(),
+            return Err(Error::invalid_argument(
+                "Audit notification batch must not be empty",
             ));
         }
 
@@ -152,8 +152,8 @@ impl AuditLogObject {
             ));
         }
         if notifications.is_empty() {
-            return Err(Error::OutOfRange(
-                "Audit notification batch must not be empty".into(),
+            return Err(Error::invalid_argument(
+                "Audit notification batch must not be empty",
             ));
         }
         if receipt::contains(

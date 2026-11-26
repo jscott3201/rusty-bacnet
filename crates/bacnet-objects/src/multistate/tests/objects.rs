@@ -594,7 +594,7 @@ fn msi_new_rejects_zero_states() {
     let err = MultiStateInputObject::new(1, "MSI-1", 0);
     assert!(err.is_err(), "expected an error, got Ok");
     if let Err(e) = err {
-        assert!(matches!(e, Error::OutOfRange(_)), "got {e:?}");
+        assert!(matches!(e, Error::Range(_)), "got {e:?}");
     }
 }
 
@@ -603,7 +603,7 @@ fn mso_new_rejects_zero_states() {
     let err = MultiStateOutputObject::new(1, "MSO-1", 0);
     assert!(err.is_err(), "expected an error, got Ok");
     if let Err(e) = err {
-        assert!(matches!(e, Error::OutOfRange(_)), "got {e:?}");
+        assert!(matches!(e, Error::Range(_)), "got {e:?}");
     }
 }
 
@@ -612,7 +612,7 @@ fn msv_new_rejects_zero_states() {
     let err = MultiStateValueObject::new(1, "MSV-1", 0);
     assert!(err.is_err(), "expected an error, got Ok");
     if let Err(e) = err {
-        assert!(matches!(e, Error::OutOfRange(_)), "got {e:?}");
+        assert!(matches!(e, Error::Range(_)), "got {e:?}");
     }
 }
 

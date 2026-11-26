@@ -44,16 +44,23 @@ impl NetworkPortObject {
 
     /// Reserve the built-in object for a live owner. Until the owner
     /// publishes, the port reads as NORMAL with its configured number.
+    ///
+    /// Refused, with one text, by why the port can't take it (#1833): a
+    /// port with no IP configuration is no B/IP port (`Unsupported`); one
+    /// another owner holds is a one-holder resource taken (`LimitReached`);
+    /// one the application left Out_Of_Service is refused as the database
+    /// it started the owner with (`InvalidConfig`).
     pub(crate) fn reserve_internal(&mut self, lease: &Arc<()>) -> Result<(), Error> {
-        let Some(config) = self
-            .ip
-            .as_ref()
-            .filter(|_| !self.is_bound() && !self.out_of_service)
-        else {
-            return Err(Error::Encoding(
-                "Network Port is unavailable for B/IP registration".into(),
-            ));
+        const UNAVAILABLE: &str = "Network Port is unavailable for B/IP registration";
+        let Some(config) = self.ip.as_ref() else {
+            return Err(Error::unsupported(UNAVAILABLE));
         };
+        if self.is_bound() {
+            return Err(Error::limit_reached(UNAVAILABLE));
+        }
+        if self.out_of_service {
+            return Err(Error::invalid_config(UNAVAILABLE));
+        }
         self.network_number =
             NetworkNumber::configured(config.network_number()).expect("validated Network Number");
         self.mode = bip_mode::LiveMode::Normal;
@@ -105,14 +112,14 @@ impl NetworkPortObject {
             .upgrade()
             .is_some_and(|current| Arc::ptr_eq(&current, lease))
         {
-            return Err(Error::Encoding(
-                "Network Port registration owner mismatch".into(),
+            return Err(Error::invalid_argument(
+                "Network Port registration owner mismatch",
             ));
         }
         let config = self
             .ip
             .as_ref()
-            .ok_or_else(|| Error::Encoding("not B/IP".into()))?
+            .ok_or_else(|| Error::unsupported("not B/IP"))?
             .with_bind(bind, capacity)?;
         config.validate(self.oid.instance_number())?;
         let mode = bip_mode::LiveMode::from_port(mode)?;

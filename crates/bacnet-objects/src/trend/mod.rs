@@ -144,7 +144,7 @@ impl TrendLogObject {
     /// recorded for the restore. BUFFER_READY counts from the restored
     /// count, as when detection starts.
     ///
-    /// Fails with [`Error::OutOfRange`], or a record's encoding error,
+    /// Fails with [`Error::Range`], or a record's encoding error,
     /// leaving the log unchanged, when there are more records than
     /// Buffer_Size, when records come with a count of zero, when Stop_When_Full
     /// and Enable are both TRUE and the records fill the buffer (such a log
@@ -184,7 +184,7 @@ impl TrendLogObject {
     /// the log's own status records do. Without a clock bound, as before the
     /// log is added to a database, the time has to come from the caller: a
     /// `date` and `time` that aren't an actual moment (every field given,
-    /// the weekday matching the date) fail with [`Error::OutOfRange`] and
+    /// the weekday matching the date) fail with [`Error::Range`] and
     /// change nothing.
     ///
     /// A log reopened from storage ([`with_persistence`](Self::with_persistence))

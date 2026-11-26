@@ -450,7 +450,7 @@ fn snapshots_that_do_not_hold_together_are_never_written() {
 fn an_empty_base_path_is_refused() {
     assert!(matches!(
         FileLogPersistence::new(""),
-        Err(Error::OutOfRange(_))
+        Err(Error::InvalidConfig(_))
     ));
 }
 

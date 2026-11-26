@@ -1,6 +1,5 @@
 //! Bounded retained encoding with full strict projection validation.
 use super::*;
-use alloc::string::String;
 use alloc::vec;
 use bacnet_encoding::{primitives, tags};
 
@@ -29,22 +28,23 @@ impl Default for GetEventInformationBudget {
 impl GetEventInformationBudget {
     /// Reject zero configuration before startup or SC dialing.
     pub fn validate(&self) -> Result<(), Error> {
-        for (name, value) in [
-            ("event_information_max_objects", self.max_objects),
+        // Whole static messages: the core formats nothing (#2187).
+        for (message, value) in [
             (
-                "event_information_max_returned_summaries",
+                "event_information_max_objects must be positive",
+                self.max_objects,
+            ),
+            (
+                "event_information_max_returned_summaries must be positive",
                 self.max_returned_summaries,
             ),
             (
-                "event_information_max_service_ack_bytes",
+                "event_information_max_service_ack_bytes must be positive",
                 self.max_service_ack_bytes,
             ),
         ] {
             if value == 0 {
-                // Built from fragments: the core formats nothing (#2187).
-                let mut message = String::from(name);
-                message.push_str(" must be positive");
-                return Err(Error::Encoding(message));
+                return Err(Error::invalid_config(message));
             }
         }
         Ok(())
@@ -243,10 +243,10 @@ mod tests {
                 },
             ),
         ] {
-            let Err(Error::Encoding(message)) = budget.validate() else {
-                panic!("a zero {name} must be refused");
+            let Err(Error::InvalidConfig(message)) = budget.validate() else {
+                panic!("a zero {name} must be refused as configuration");
             };
-            assert_eq!(message, format!("{name} must be positive"));
+            assert_eq!(message.to_string(), format!("{name} must be positive"));
         }
         default.validate().unwrap();
     }

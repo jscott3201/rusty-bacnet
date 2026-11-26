@@ -43,12 +43,12 @@ pub struct FileLogPersistence {
 
 impl FileLogPersistence {
     /// Use `base_path.slot0` and `base_path.slot1`. An empty path is refused
-    /// with [`Error::OutOfRange`].
+    /// with [`Error::InvalidConfig`].
     pub fn new(base_path: impl AsRef<Path>) -> Result<Self, Error> {
         let base = base_path.as_ref().as_os_str();
         if base.is_empty() {
-            return Err(Error::OutOfRange(
-                "log persistence base path must not be empty".into(),
+            return Err(Error::invalid_config(
+                "log persistence base path must not be empty",
             ));
         }
         let slot = |suffix: &str| {

@@ -271,13 +271,13 @@ impl ProfileState {
         crate::snapshot::tags::check_loaded(&snapshot)
             .map_err(|error| Error::from(error.in_format("Tags snapshot")))?;
         if !keeps_description && snapshot.description.is_some() {
-            return Err(Error::Encoding(
-                "saved Tags hold a Description, which this object type doesn't keep there".into(),
+            return Err(Error::invalid_config(
+                "saved Tags hold a Description, which this object type doesn't keep there",
             ));
         }
         if !keeps_zone && !snapshot.zone.is_empty() {
-            return Err(Error::Encoding(
-                "saved Tags hold a zone, which only a Device keeps there".into(),
+            return Err(Error::invalid_config(
+                "saved Tags hold a zone, which only a Device keeps there",
             ));
         }
         let writer = SaveWriter::new(

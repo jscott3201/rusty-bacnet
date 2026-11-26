@@ -350,8 +350,8 @@ impl DeviceObject {
         // names, so the list starts empty.
         if config.backup_and_restore {
             if config.backup_failure_timeout == 0 {
-                return Err(Error::Encoding(
-                    "Backup_Failure_Timeout must be positive when backup and restore is on".into(),
+                return Err(Error::invalid_config(
+                    "Backup_Failure_Timeout must be positive when backup and restore is on",
                 ));
             }
             properties.insert(
@@ -377,8 +377,8 @@ impl DeviceObject {
         // Max_Segments_Accepted — only included when segmentation is supported.
         if config.identity.segmentation() != Segmentation::NO_SEGMENTATION {
             if config.identity.apdu_segment_timeout_ms() == 0 {
-                return Err(Error::Encoding(
-                    "APDU_Segment_Timeout must be positive when segmentation is supported".into(),
+                return Err(Error::invalid_config(
+                    "APDU_Segment_Timeout must be positive when segmentation is supported",
                 ));
             }
             properties.insert(

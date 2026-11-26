@@ -11,12 +11,12 @@ fn read(port: &NetworkPortObject, property: P) -> PropertyValue {
     port.read_property(property, None).unwrap()
 }
 
-/// The `Error::Encoding` message of building `entry`.
+/// The `Error::InvalidConfig` message of building `entry` (#1833).
 fn build_error(entry: &NetworkPortEntry) -> String {
     match entry.build_object() {
-        Err(Error::Encoding(message)) => message,
-        Err(other) => panic!("expected an encoding error for {entry:?}, got {other:?}"),
-        Ok(_) => panic!("expected an encoding error for {entry:?}, got a port"),
+        Err(Error::InvalidConfig(message)) => message.to_string(),
+        Err(other) => panic!("expected a configuration refusal for {entry:?}, got {other:?}"),
+        Ok(_) => panic!("expected a configuration refusal for {entry:?}, got a port"),
     }
 }
 

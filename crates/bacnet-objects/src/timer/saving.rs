@@ -63,8 +63,8 @@ impl TimerObject {
             None => TimerWriteConfig::default(),
             Some(WriteConfigSnapshot::Timer(saved)) => saved,
             Some(_) => {
-                return Err(Error::Encoding(
-                    "saved write configuration is not a Timer's".into(),
+                return Err(Error::invalid_config(
+                    "saved write configuration is not a Timer's",
                 ));
             }
         };

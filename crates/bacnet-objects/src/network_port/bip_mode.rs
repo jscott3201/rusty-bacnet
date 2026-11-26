@@ -48,8 +48,8 @@ impl LiveMode {
                 tables: Some(tables),
             } => Self::Bbmd(tables),
             BipPortMode::Bbmd { tables: None } => {
-                return Err(Error::Encoding(
-                    "a registered BBMD must lend its tables once started".into(),
+                return Err(Error::invalid_argument(
+                    "a registered BBMD must lend its tables once started",
                 ));
             }
         })

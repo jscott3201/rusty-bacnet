@@ -94,7 +94,7 @@ mod tests {
                 .err();
             for error in [direct, generic, bip] {
                 assert!(
-                    matches!(error, Some(Error::Encoding(m)) if m.contains("event_information_max_"))
+                    matches!(error, Some(Error::InvalidConfig(m)) if m.to_string().contains("event_information_max_"))
                 );
             }
             #[cfg(feature = "sc-tls")]
@@ -109,7 +109,7 @@ mod tests {
                     .map_err(Error::from)
                     .err();
                 assert!(
-                    matches!(error, Some(Error::Encoding(m)) if m.contains("event_information_max_"))
+                    matches!(error, Some(Error::InvalidConfig(m)) if m.to_string().contains("event_information_max_"))
                 );
             }
         }

@@ -13,12 +13,14 @@ fn identity() -> DeviceIdentity {
     DeviceIdentity::new(1001, 42).unwrap()
 }
 
-/// The `Error::Encoding` message of `result`, or a panic naming what came back.
-fn encoding_message<T>(result: Result<T, Error>) -> String {
+/// The `Error::InvalidConfig` message of `result`, or a panic naming what
+/// came back: every refusal of an identity is one of its configuration
+/// (#1833).
+fn config_refusal<T>(result: Result<T, Error>) -> String {
     match result {
-        Err(Error::Encoding(message)) => message,
-        Err(other) => panic!("expected an encoding error, got {other:?}"),
-        Ok(_) => panic!("expected an encoding error, got success"),
+        Err(Error::InvalidConfig(message)) => message.to_string(),
+        Err(other) => panic!("expected a configuration refusal, got {other:?}"),
+        Ok(_) => panic!("expected a configuration refusal, got success"),
     }
 }
 
@@ -76,7 +78,7 @@ fn the_builders_set_what_they_name() {
 
 #[test]
 fn a_receive_ceiling_below_fifty_is_refused() {
-    assert!(encoding_message(identity().with_max_apdu(49)).contains("at least 50"));
+    assert!(config_refusal(identity().with_max_apdu(49)).contains("at least 50"));
     assert_eq!(identity().with_max_apdu(50).unwrap().max_apdu_length(), 50);
 }
 
@@ -99,7 +101,7 @@ fn ports_are_kept_in_order_and_a_duplicate_or_invalid_one_is_refused() {
     assert_eq!(ports[2], NetworkPortEntry::sc(3, 30, [1, 2, 3, 4, 5, 6]));
 
     let duplicate = identity.clone().with_sc_port(1, 40, [9; 6]);
-    assert!(encoding_message(duplicate).contains("duplicate Network-Port instance 1"));
+    assert!(config_refusal(duplicate).contains("duplicate Network-Port instance 1"));
     // A network number past 16 bits never reaches the list.
     assert!(
         identity
@@ -121,19 +123,19 @@ fn resolve_takes_the_lower_ceiling_and_leaves_the_request_alone() {
     // A larger transport keeps the requested value.
     assert_eq!(requested.resolve(u16::MAX).unwrap().max_apdu_length(), 1476);
     // A transport that can't take 50 octets leaves no valid Device.
-    assert!(encoding_message(requested.resolve(49)).contains("at least 50"));
+    assert!(config_refusal(requested.resolve(49)).contains("at least 50"));
 }
 
 #[test]
 fn validate_refuses_an_unknown_segmentation_and_a_zero_segment_timeout() {
     let mut unknown = identity();
     unknown.segmentation_supported = Segmentation::from_raw(4);
-    assert!(encoding_message(unknown.validate()).contains("segmentation"));
+    assert!(config_refusal(unknown.validate()).contains("segmentation"));
 
     let zero = identity()
         .with_segmentation(Segmentation::SEGMENTED_TRANSMIT)
         .with_apdu_segment_timeout_ms(0);
-    assert!(encoding_message(zero.validate()).contains("APDU_Segment_Timeout"));
+    assert!(config_refusal(zero.validate()).contains("APDU_Segment_Timeout"));
     // Without segmentation the timeout isn't served, so zero is fine.
     identity()
         .with_segmentation(Segmentation::NO_SEGMENTATION)
@@ -142,12 +144,12 @@ fn validate_refuses_an_unknown_segmentation_and_a_zero_segment_timeout() {
         .unwrap();
     // The default segments, so it needs one.
     let zero = identity().with_apdu_segment_timeout_ms(0);
-    assert!(encoding_message(zero.validate()).contains("APDU_Segment_Timeout"));
+    assert!(config_refusal(zero.validate()).contains("APDU_Segment_Timeout"));
 
     // The fields are private to the crate, but a stale one is still caught.
     let mut small = identity();
     small.max_apdu_length = 49;
-    assert!(encoding_message(small.validate()).contains("at least 50"));
+    assert!(config_refusal(small.validate()).contains("at least 50"));
 }
 
 /// The database `identity` builds.
@@ -169,7 +171,7 @@ fn validate_device_accepts_the_devices_own_build_and_names_each_mismatch() {
         .unwrap()
         .with_segmentation(Segmentation::SEGMENTED_BOTH)
         .with_apdu_segment_timeout_ms(6000);
-    assert!(encoding_message(other.validate_device(device)).contains("identifier"));
+    assert!(config_refusal(other.validate_device(device)).contains("identifier"));
 
     for (expected, name) in [
         (segmented.clone().with_name("renamed"), None),
@@ -199,7 +201,7 @@ fn validate_device_accepts_the_devices_own_build_and_names_each_mismatch() {
             // The name isn't one of the checked declarations.
             None => expected.validate_device(device).unwrap(),
             Some(name) => {
-                let message = encoding_message(expected.validate_device(device));
+                let message = config_refusal(expected.validate_device(device));
                 assert!(message.contains(name), "{name}: {message}");
             }
         }
@@ -208,11 +210,11 @@ fn validate_device_accepts_the_devices_own_build_and_names_each_mismatch() {
     // An invalid identity is refused before the Device is looked at.
     let mut invalid = segmented.clone();
     invalid.apdu_segment_timeout_ms = 0;
-    assert!(encoding_message(invalid.validate_device(device)).contains("APDU_Segment_Timeout"));
+    assert!(config_refusal(invalid.validate_device(device)).contains("APDU_Segment_Timeout"));
 
     // An object that is no Device at all.
     let point = AnalogInputObject::new(1, "ai-1", EngineeringUnits::NO_UNITS).unwrap();
-    assert!(encoding_message(segmented.validate_device(&point)).contains("identifier"));
+    assert!(config_refusal(segmented.validate_device(&point)).contains("identifier"));
 }
 
 #[test]
@@ -379,10 +381,8 @@ fn a_stale_port_entry_fails_both_database_builders() {
     let mut entry = NetworkPortEntry::bip(1, 10, LAN, 47808);
     entry.udp_port = 47809;
     identity.network_ports.push(entry);
-    assert!(encoding_message(identity.build_database()).contains("B/IP MAC"));
-    assert!(
-        encoding_message(build_database_with_extra(&identity, Vec::new())).contains("B/IP MAC")
-    );
+    assert!(config_refusal(identity.build_database()).contains("B/IP MAC"));
+    assert!(config_refusal(build_database_with_extra(&identity, Vec::new())).contains("B/IP MAC"));
 }
 
 fn bip_config(network_number: u16, ip: Ipv4Addr, udp_port: u16) -> BipPortConfig {
@@ -419,18 +419,18 @@ fn a_registered_bip_port_must_match_the_database_configuration() {
         bip_config(11, LAN, 47808),
     ] {
         let message =
-            encoding_message(identity.validate_registered_bip_internal(port_oid(1), &config));
+            config_refusal(identity.validate_registered_bip_internal(port_oid(1), &config));
         assert!(message.contains("differs"), "{config:?}: {message}");
     }
     // The B/IPv6 entry is the wrong type for a B/IP check.
     assert!(
-        encoding_message(
+        config_refusal(
             identity.validate_registered_bip_internal(port_oid(2), &bip_config(20, LAN, 47808))
         )
         .contains("differs")
     );
     assert!(
-        encoding_message(
+        config_refusal(
             identity.validate_registered_bip_internal(port_oid(9), &bip_config(10, LAN, 47808))
         )
         .contains("missing")
@@ -456,17 +456,17 @@ fn a_registered_bip6_port_must_match_the_database_configuration() {
         bip6_config(21, LAN6, 47808),
     ] {
         let message =
-            encoding_message(identity.validate_registered_bip6_internal(port_oid(2), &config));
+            config_refusal(identity.validate_registered_bip6_internal(port_oid(2), &config));
         assert!(message.contains("differs"), "{config:?}: {message}");
     }
     assert!(
-        encoding_message(
+        config_refusal(
             identity.validate_registered_bip6_internal(port_oid(1), &bip6_config(10, LAN6, 47808))
         )
         .contains("differs")
     );
     assert!(
-        encoding_message(
+        config_refusal(
             identity.validate_registered_bip6_internal(port_oid(3), &bip6_config(20, LAN6, 47808))
         )
         .contains("missing")

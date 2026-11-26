@@ -151,7 +151,7 @@ fn cov_policy_validate_rejects_zero_limits_and_unmatchable_reservations() {
         ),
     ] {
         assert!(
-            matches!(policy.validate(), Err(Error::Encoding(m)) if m == message),
+            matches!(policy.validate(), Err(Error::InvalidConfig(m)) if m.to_string() == message),
             "{policy:?}"
         );
     }
@@ -183,7 +183,7 @@ fn cov_policy_reserved_macs_hold_to_the_bacnet_address_bound() {
     }
     for policy in entries(&[7; BACnetAddress::MAX_MAC_LEN + 1]) {
         assert!(
-            matches!(policy.validate(), Err(Error::Encoding(m)) if m.ends_with("need a MAC of 1..=18 octets")),
+            matches!(policy.validate(), Err(Error::InvalidConfig(m)) if m.to_string().ends_with("need a MAC of 1..=18 octets")),
             "{policy:?}"
         );
     }
@@ -219,7 +219,7 @@ async fn invalid_cov_policy_fails_start_before_transport() {
         .await;
     for error in [direct.err(), generic.err(), bip.err()].map(|error| error.map(Error::from)) {
         assert!(
-            matches!(&error, Some(Error::Encoding(m)) if m.contains("max_notifications_per_event")),
+            matches!(&error, Some(Error::InvalidConfig(m)) if m.to_string().contains("max_notifications_per_event")),
             "{error:?}"
         );
     }

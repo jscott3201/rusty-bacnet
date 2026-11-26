@@ -10,7 +10,7 @@ use crate::{
 };
 use bacnet_types::{
     enums::{NetworkType, ObjectType, PropertyIdentifier as P, Segmentation, ServiceSupported},
-    error::Error,
+    error::{Error, Refusal},
     primitives::{ObjectIdentifier, PropertyValue},
 };
 use core::net::{Ipv4Addr, Ipv6Addr};
@@ -79,9 +79,7 @@ impl DeviceIdentity {
     /// it against the owned transport's stable local receive capacity.
     pub fn with_max_apdu(mut self, max_apdu: u16) -> Result<Self, Error> {
         if max_apdu < 50 {
-            return Err(Error::Encoding(
-                "Device max-APDU must be at least 50".into(),
-            ));
+            return Err(Error::invalid_config("Device max-APDU must be at least 50"));
         }
         self.max_apdu_length = max_apdu;
         Ok(self)
@@ -148,10 +146,10 @@ impl DeviceIdentity {
             .iter()
             .any(|e| e.instance == entry.instance)
         {
-            return Err(Error::Encoding(format!(
-                "duplicate Network-Port instance {}",
-                entry.instance
-            )));
+            return Err(Error::InvalidConfig(
+                Refusal::new("duplicate Network-Port instance {}")
+                    .with_value(u64::from(entry.instance)),
+            ));
         }
         self.network_ports.push(entry);
         Ok(self)
@@ -207,7 +205,7 @@ impl DeviceIdentity {
             .network_ports
             .iter()
             .find(|entry| entry.instance == oid.instance_number())
-            .ok_or_else(|| Error::Encoding("selected Network Port missing from identity".into()))?;
+            .ok_or_else(|| Error::invalid_config("selected Network Port missing from identity"))?;
         entry.build_object()?;
         Ok(entry)
     }
@@ -224,8 +222,8 @@ impl DeviceIdentity {
             || entry.udp_port != config.udp_port
             || entry.network_number != u32::from(config.network_number)
         {
-            return Err(Error::Encoding(
-                "selected identity Network Port differs from database".into(),
+            return Err(Error::invalid_config(
+                "selected identity Network Port differs from database",
             ));
         }
         Ok(())
@@ -247,8 +245,8 @@ impl DeviceIdentity {
             || entry.udp_port != config.udp_port
             || entry.network_number != u32::from(config.network_number)
         {
-            return Err(Error::Encoding(
-                "selected identity Network Port differs from database".into(),
+            return Err(Error::invalid_config(
+                "selected identity Network Port differs from database",
             ));
         }
         Ok(())
@@ -333,20 +331,16 @@ impl DeviceIdentity {
     pub fn validate(&self) -> Result<(), Error> {
         ObjectIdentifier::new_addressable(ObjectType::DEVICE, self.instance)?;
         if self.max_apdu_length < 50 {
-            return Err(Error::Encoding(
-                "Device max-APDU must be at least 50".into(),
-            ));
+            return Err(Error::invalid_config("Device max-APDU must be at least 50"));
         }
         if self.segmentation_supported.to_raw() > Segmentation::NO_SEGMENTATION.to_raw() {
-            return Err(Error::Encoding(
-                "invalid Device segmentation support".into(),
-            ));
+            return Err(Error::invalid_config("invalid Device segmentation support"));
         }
         if self.segmentation_supported != Segmentation::NO_SEGMENTATION
             && self.apdu_segment_timeout_ms == 0
         {
-            return Err(Error::Encoding(
-                "APDU_Segment_Timeout must be positive when segmentation is supported".into(),
+            return Err(Error::invalid_config(
+                "APDU_Segment_Timeout must be positive when segmentation is supported",
             ));
         }
         Ok(())
@@ -356,40 +350,44 @@ impl DeviceIdentity {
     pub fn validate_device(&self, device: &dyn BACnetObject) -> Result<(), Error> {
         self.validate()?;
         if device.object_identifier() != self.device_oid() {
-            return Err(Error::Encoding(
-                "selected Device identifier must match identity".into(),
+            return Err(Error::invalid_config(
+                "selected Device identifier must match identity",
             ));
         }
-        for (property, expected) in [
+        // One whole static message per property, which names it as its
+        // `Debug` form does (#1833).
+        for (property, expected, refusal) in [
             (
                 P::OBJECT_IDENTIFIER,
                 PropertyValue::ObjectIdentifier(self.device_oid()),
+                "selected Device PropertyIdentifier::OBJECT_IDENTIFIER must match identity",
             ),
             (
                 P::VENDOR_IDENTIFIER,
                 PropertyValue::Unsigned(u64::from(self.vendor_id)),
+                "selected Device PropertyIdentifier::VENDOR_IDENTIFIER must match identity",
             ),
             (
                 P::MAX_APDU_LENGTH_ACCEPTED,
                 PropertyValue::Unsigned(u64::from(self.max_apdu_length)),
+                "selected Device PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED must match identity",
             ),
             (
                 P::SEGMENTATION_SUPPORTED,
                 PropertyValue::Enumerated(u32::from(self.segmentation_supported.to_raw())),
+                "selected Device PropertyIdentifier::SEGMENTATION_SUPPORTED must match identity",
             ),
         ] {
             if device.read_property(property, None)? != expected {
-                return Err(Error::Encoding(format!(
-                    "selected Device {property:?} must match identity"
-                )));
+                return Err(Error::invalid_config(refusal));
             }
         }
         if self.segmentation_supported != Segmentation::NO_SEGMENTATION
             && device.read_property(P::APDU_SEGMENT_TIMEOUT, None)?
                 != PropertyValue::Unsigned(self.apdu_segment_timeout_ms)
         {
-            return Err(Error::Encoding(
-                "selected Device APDU_Segment_Timeout must match identity".into(),
+            return Err(Error::invalid_config(
+                "selected Device APDU_Segment_Timeout must match identity",
             ));
         }
         Ok(())

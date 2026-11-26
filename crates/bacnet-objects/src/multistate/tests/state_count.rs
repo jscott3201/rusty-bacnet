@@ -327,12 +327,12 @@ fn an_output_relinquish_default_alone_blocks_a_shrink_past_it() {
 fn a_local_count_meets_the_cap_a_client_count_does() {
     let past = MAX_NUMBER_OF_STATES + 1;
     let refused = |result: Result<(), Error>, what: &str| match result {
-        Err(Error::OutOfRange(message)) => assert_eq!(
-            message,
+        Err(Error::Range(refused)) => assert_eq!(
+            refused.message().to_string(),
             format!("number_of_states must be at most {MAX_NUMBER_OF_STATES}"),
             "{what}"
         ),
-        other => panic!("{what}: expected OutOfRange, got {other:?}"),
+        other => panic!("{what}: expected Range, got {other:?}"),
     };
     let writable = crate::present_value_access::PresentValueAccess::Writable;
     for states in [past, u32::MAX] {

@@ -7,7 +7,7 @@ use core::time::Duration;
 
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, NotifyType, ObjectType, PropertyIdentifier as P};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Refusal};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::parameters;
@@ -445,6 +445,21 @@ fn operational_problem() -> Error {
     common::protocol_error(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM)
 }
 
+/// The refusal of saved reporting settings that hold what `reason` names,
+/// one of the snapshot codec's static reasons. A hosted build says whose
+/// settings they are; without `std` a refusal owns no text, so the reason
+/// stands alone (#1833).
+fn saved_reporting_refusal(reason: &'static str) -> Refusal {
+    #[cfg(feature = "std")]
+    {
+        Refusal::text(format!("saved reporting settings {reason}"))
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        Refusal::new(reason)
+    }
+}
+
 /// Keep `object`'s reporting settings in `persistence`, serving what it saved
 /// for the object, if anything. Fails when it can't be loaded, holds another
 /// kind of configuration, or holds what no write leaves.
@@ -457,8 +472,8 @@ pub(crate) fn attach<T: KeepsReporting>(
         None => ReportingWriteConfig::default(),
         Some(WriteConfigSnapshot::Reporting(saved)) => saved,
         Some(_) => {
-            return Err(Error::Encoding(
-                "saved write configuration is not reporting settings".into(),
+            return Err(Error::invalid_config(
+                "saved write configuration is not reporting settings",
             ));
         }
     };
@@ -472,16 +487,14 @@ pub(crate) fn attach<T: KeepsReporting>(
     let invalid = crate::snapshot::write_config::reporting_invalid(&saved)
         .or_else(|| parameter_format::invalid(oid.object_type(), &saved.algorithm));
     if let Some(reason) = invalid {
-        return Err(Error::Encoding(format!(
-            "saved reporting settings {reason}"
-        )));
+        return Err(Error::InvalidConfig(saved_reporting_refusal(reason)));
     }
     if saved
         .notify_type
         .is_some_and(|notify_type| !object.takes_notify_type(notify_type))
     {
-        return Err(Error::Encoding(
-            "saved reporting settings hold a Notify_Type this object refuses".into(),
+        return Err(Error::invalid_config(
+            "saved reporting settings hold a Notify_Type this object refuses",
         ));
     }
     object.restore_reporting_rows(&saved);

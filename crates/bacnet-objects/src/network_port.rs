@@ -272,6 +272,8 @@ mod nat_pending_tests;
 #[cfg(test)]
 mod pending_tests;
 #[cfg(test)]
+mod registration_tests;
+#[cfg(test)]
 mod required_rows_tests;
 #[cfg(test)]
 mod round_trip_tests;

@@ -58,8 +58,8 @@ impl ColorTemperatureObject {
             {
                 Ok(Some(kelvin))
             }
-            Some(_) => Err(Error::Encoding(
-                "saved Color Temperature output is not a temperature the object can hold".into(),
+            Some(_) => Err(Error::invalid_config(
+                "saved Color Temperature output is not a temperature the object can hold",
             )),
         };
         if let Some(kelvin) = kelvin(saved.present_value, false)? {

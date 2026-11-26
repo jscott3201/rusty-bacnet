@@ -646,7 +646,7 @@ fn a_stored_parameter_is_validated_as_a_write_of_it_is() {
             match built {
                 Ok(object) => assert_eq!(read(object.as_ref(), property), value),
                 Err(error) => {
-                    assert!(matches!(error, Error::Encoding(_)), "{error:?}");
+                    assert!(matches!(error, Error::InvalidConfig(_)), "{error:?}");
                     refused += 1;
                 }
             }
@@ -669,7 +669,7 @@ fn a_type_keeps_only_its_own_parameters() {
         let mut plain = open(kind, None);
         for (property, value, stored) in rows {
             let built = try_open(kind, Some(&holding(stored)));
-            assert!(matches!(built, Err(Error::Encoding(_))), "{kind}");
+            assert!(matches!(built, Err(Error::InvalidConfig(_))), "{kind}");
             let expected = plain.write_property(property, None, value.clone(), None);
             let result = kept.write_property(property, None, value, None);
             assert_eq!(
