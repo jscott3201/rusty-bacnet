@@ -62,7 +62,7 @@ pub use super::options::{
 pub use super::sample::{Sample, Samples};
 pub use super::settings::Lifetime;
 use super::shared::{Arrival, DeviceSlot, Registry, Running, Shared};
-use super::{Point, Target, WatchError, device, dispatch, shared};
+use super::{Binding, Point, WatchError, device, dispatch, shared};
 use crate::client::Client;
 use crate::device::{DeviceAddress, FollowKey, Followed};
 use crate::limits::Account;
@@ -386,7 +386,7 @@ impl<T: TransportPort + 'static> Hub<T> {
     /// with it when the device has none. A station on the client's own
     /// network is keyed as the local station at its MAC once the client
     /// knows the network's number, as the device handles key it. A
-    /// following point ([`Target::Follows`]) is
+    /// following point ([`Binding::Follows`]) is
     /// watched where the hub follows its device already, else where the
     /// client's handles following it reach it, else at the one address
     /// claiming it in the discovery table (#2795).
@@ -482,8 +482,8 @@ impl<T: TransportPort + 'static> Hub<T> {
         }
         let follows = self.follow_key(&point);
         let at = match (&point.device, follows) {
-            (Target::At(address), _) => address.clone(),
-            (Target::Follows { .. }, key) => {
+            (Binding::At(address), _) => address.clone(),
+            (Binding::Follows { .. }, key) => {
                 let key = key.expect("a following point has a key");
                 table.follow(key, || {
                     let place = place.expect("placed before the table's lock");
@@ -534,8 +534,10 @@ impl<T: TransportPort + 'static> Hub<T> {
     /// handles' (its network named, or any); `None` for a pinned point.
     pub(in crate::watch) fn follow_key(&self, point: &Point) -> Option<FollowKey> {
         match point.device {
-            Target::At(_) => None,
-            Target::Follows { instance, network } => Some(self.inner.client.key(network, instance)),
+            Binding::At(_) => None,
+            Binding::Follows { instance, network } => {
+                Some(self.inner.client.key(network, instance))
+            }
         }
     }
 
@@ -551,13 +553,13 @@ impl<T: TransportPort + 'static> Hub<T> {
     /// once the client knows its number.
     pub(in crate::watch) fn keyed(&self, mut point: Point) -> Point {
         point.device = match point.device {
-            Target::At(address) => {
+            Binding::At(address) => {
                 let own = self.inner.client.low_level().network_number();
-                Target::At(address.localized(own))
+                Binding::At(address.localized(own))
             }
-            Target::Follows { instance, network } => {
+            Binding::Follows { instance, network } => {
                 let (network, _) = self.inner.client.key(network, instance);
-                Target::Follows { instance, network }
+                Binding::Follows { instance, network }
             }
         };
         point

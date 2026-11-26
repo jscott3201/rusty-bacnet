@@ -58,7 +58,7 @@ async def main():
             async for update in watch:
                 if update.moved is not None and update.state == "starting":
                     # The watch followed the device; values come from there.
-                    print(f"device {update.device} moved from {update.moved.from_} "
+                    print(f"device {update.instance} moved from {update.moved.from_} "
                           f"to {update.moved.to}")
                 if update.state == "gone":
                     # A watch of one address only: another device took it

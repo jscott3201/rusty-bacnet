@@ -50,7 +50,7 @@ async fn a_device_that_comes_back_is_followed_back() {
     })
     .await;
     let moved = back.moved.clone().unwrap();
-    assert_eq!((moved.from, back.at), (at(3), at(2)));
+    assert_eq!((moved.from, back.at, moved.count), (at(3), at(2), 2));
     until(&mut lab.watch, |u| u.state == State::Subscribed).await;
     lab.goes_on(51.0).await;
     lab.bus.unsilence(3);
@@ -362,7 +362,7 @@ async fn a_following_point_takes_nothing_from_another_device_at_its_start() {
     bus.i_am(2, N);
     settle().await;
     let point = Point {
-        device: Target::Follows {
+        device: Binding::Follows {
             instance: N,
             network: None,
         },

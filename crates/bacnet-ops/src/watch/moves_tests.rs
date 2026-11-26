@@ -249,7 +249,7 @@ async fn a_following_device_that_moves_is_followed_by_the_hub() {
     let point = device.point("ai:1").unwrap();
     assert_eq!(
         point.device,
-        Target::Follows {
+        Binding::Follows {
             instance: N,
             network: None
         }
@@ -258,7 +258,7 @@ async fn a_following_device_that_moves_is_followed_by_the_hub() {
     let mut watch = client.watch([point.clone()]).unwrap();
     let first = until(&mut watch, |u| u.state == State::Subscribed).await;
     assert_eq!(
-        (first.at, first.device, first.moved),
+        (first.at, first.instance, first.moved),
         (at(2), Some(N), None)
     );
     servers.push(server(bus.port(3), N, "new").await);
@@ -275,6 +275,7 @@ async fn a_following_device_that_moves_is_followed_by_the_hub() {
         (&at(2), &at(3), &at(3))
     );
     assert!(moved.when.elapsed().is_ok());
+    assert_eq!(moved.count, 1);
     assert_eq!(
         events.try_recv().unwrap(),
         ClientEvent::Moved {
@@ -366,7 +367,7 @@ async fn one_station_named_two_ways_is_one_point() {
     let device = client.device(at(2)).await.unwrap();
     let local = device.point("ai:1").unwrap();
     let routed = Point {
-        device: Target::At(crate::DeviceAddress::new(1, &mac(2)).unwrap()),
+        device: Binding::At(crate::DeviceAddress::new(1, &mac(2)).unwrap()),
         ..local.clone()
     };
     assert_ne!(local, routed, "two ways of writing it");

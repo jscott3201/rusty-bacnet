@@ -19,7 +19,7 @@
 //! application does takes a [`Watch`] from its hub
 //! ([`Hub::stream`](hub::Hub::stream)).
 //!
-//! A point names its device by address or by instance ([`Target`]): a
+//! A point names its device by address or by instance ([`Binding`]): a
 //! pinned handle's points are at its address, a following handle's follow
 //! its instance (#2795). The hub keys its entries on the point, and runs
 //! one scheduler a device address, which a following point is handed to
@@ -125,7 +125,7 @@ mod stream;
 mod support;
 
 pub use self::control::WatchControl;
-pub use self::point::{Moved, Point, Target, Watched, Why};
+pub use self::point::{Binding, Moved, Point, Watched, Why};
 pub use self::sample::Via;
 pub(crate) use self::settings::Pool;
 pub use self::settings::WatchSettings;
@@ -186,8 +186,8 @@ pub enum WatchError {
     Ambiguous {
         /// The instance.
         instance: u32,
-        /// Every address claiming it.
-        claims: Vec<crate::DeviceAddress>,
+        /// Every address claiming it, ordered by network and then MAC.
+        candidates: Vec<crate::DeviceAddress>,
     },
 }
 
@@ -215,8 +215,11 @@ impl std::fmt::Display for WatchError {
             Self::UnknownDevice { instance, .. } => {
                 write!(f, "no address claims device {instance}")
             }
-            Self::Ambiguous { instance, claims } => {
-                let claims: Vec<String> = claims.iter().map(ToString::to_string).collect();
+            Self::Ambiguous {
+                instance,
+                candidates,
+            } => {
+                let claims: Vec<String> = candidates.iter().map(ToString::to_string).collect();
                 write!(
                     f,
                     "device {instance} is claimed by {} addresses ({}): name it by one",

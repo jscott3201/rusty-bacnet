@@ -111,7 +111,7 @@ async fn shutdown_waits_for_the_cancel_of_a_point_given_up() {
     lab.route().await;
     lab.quirks.swallow_cov.store(1, Ordering::Relaxed);
     let point = Point {
-        device: Target::At(routed_at()),
+        device: Binding::At(routed_at()),
         ..object(ai(1))
     };
     let lease = lab.hub.watch(point).unwrap();

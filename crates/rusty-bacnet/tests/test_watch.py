@@ -334,7 +334,7 @@ class FollowTests(Lab):
             watch = await dev.watch(["ai:1"], lifetime=4, poll_interval=1)
             self.assertTrue(watch.follows)
             first = await next_where(watch, subscribed)
-            self.assertEqual((first.address, first.device, first.moved),
+            self.assertEqual((first.address, first.instance, first.moved),
                              (self.address, DEVICE, None))
             self.relay.passing = 0
             await c.clear_devices()
@@ -344,11 +344,12 @@ class FollowTests(Lab):
             self.assertEqual((went.moved.from_, went.moved.to, went.address),
                              (self.address, new, new))
             self.assertLess(abs(went.moved.timestamp - time.time()), 60)
+            self.assertEqual(went.moved.count, 1)
             self.assertEqual(repr(went.moved), f"WatchMove({self.address} -> {new})")
             with self.assertRaises(TypeError):
                 pickle.dumps(went.moved)
             # The same point, now from the device's own address.
-            self.assertEqual((went.object_id, went.device), (AI, DEVICE))
+            self.assertEqual((went.object_id, went.instance), (AI, DEVICE))
             await next_where(watch, lambda u: subscribed(u) and u.address == new, 30)
             await moved.set_present_value_local(AI, PropertyValue.real(56.5))
             update = await next_where(watch, valued(56.5))
@@ -363,7 +364,7 @@ class FollowTests(Lab):
             watch = await dev.watch(["ai:1"])
             self.assertFalse(watch.follows)
             update = await next_where(watch, subscribed)
-            self.assertEqual((update.address, update.device, update.moved),
+            self.assertEqual((update.address, update.instance, update.moved),
                              (self.address, DEVICE, None))
             await watch.close()
 

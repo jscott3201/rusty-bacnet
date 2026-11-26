@@ -63,7 +63,7 @@ use tokio::time::Instant;
 
 use super::super::hub::Phase;
 use super::super::jobs::{self, Answer};
-use super::super::{Target, Why};
+use super::super::{Binding, Why};
 use super::identity::{Pace, give_up};
 use super::{Device, Done, Job, Mode, Op, Row};
 use crate::device::DeviceAddress;
@@ -122,11 +122,11 @@ fn goes(row: &Row, instance: u32) -> bool {
 /// `to` is on: its watch goes there when the device does.
 fn follows_to(row: &Row, instance: u32, to: &DeviceAddress) -> bool {
     match row.shared.point.device {
-        Target::Follows {
+        Binding::Follows {
             instance: followed,
             network,
         } => followed == instance && network.is_none_or(|network| network == to.network()),
-        Target::At(_) => false,
+        Binding::At(_) => false,
     }
 }
 
@@ -362,7 +362,7 @@ impl<T: TransportPort + 'static> Device<T> {
             }
             if follows_to(row, instance, &to) {
                 going.push(*process);
-                if let Target::Follows { instance, network } = row.shared.point.device {
+                if let Binding::Follows { instance, network } = row.shared.point.device {
                     keys.push(self.inner.client.key(network, instance));
                 }
             } else {

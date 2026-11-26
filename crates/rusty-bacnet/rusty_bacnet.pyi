@@ -3570,7 +3570,7 @@ class WatchUpdate:
         ...
 
     @property
-    def device(self) -> Optional[int]:
+    def instance(self) -> Optional[int]:
         """The device's instance, when known: the one a following watch
         follows, else the one the device at the address named, or the
         discovery table's."""
@@ -3582,7 +3582,7 @@ class WatchUpdate:
         took (it watches the point at ``moved.to``, which is ``address``,
         since ``moved.timestamp``); None before any move, and always for a
         watch of one address. A consumer that falls behind sees the latest
-        move only: compare ``timestamp`` to tell a new one. The update a
+        move only: compare its ``count`` to tell a new one. The update a
         move makes is ``"starting"``, with the value read before; values
         from the new address follow."""
         ...
@@ -3760,6 +3760,12 @@ class WatchMove:
     def to(self) -> str:
         """Where it answers now, as text ``BACnetClient.device`` reads
         back."""
+        ...
+
+    @property
+    def count(self) -> int:
+        """How many moves the watch has taken for the point, this one
+        included: compare it to tell a new move."""
         ...
 
     @property

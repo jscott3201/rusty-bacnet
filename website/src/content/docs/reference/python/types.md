@@ -990,8 +990,8 @@ yet.
 Properties:
 
 - `address: str`: Where the point is watched now, as text `BACnetClient.device` reads back: the watch's address, or, for a watch that follows its device, where the device answers now.
-- `device: Optional[int]`: The device's instance, when known: the one a following watch follows, else the one the device at the address named, or the discovery table's.
-- `moved: Optional[WatchMove]`: For a watch that follows its device: the latest move the watch took (it watches the point at `moved.to`, which is `address`, since `moved.timestamp`); None before any move, and always for a watch of one address. A consumer that falls behind sees the latest move only: compare `timestamp` to tell a new one. The update a move makes is `"starting"`, with the value read before; values from the new address follow.
+- `instance: Optional[int]`: The device's instance, when known: the one a following watch follows, else the one the device at the address named, or the discovery table's.
+- `moved: Optional[WatchMove]`: For a watch that follows its device: the latest move the watch took (it watches the point at `moved.to`, which is `address`, since `moved.timestamp`); None before any move, and always for a watch of one address. A consumer that falls behind sees the latest move only: compare its `count` to tell a new one. The update a move makes is `"starting"`, with the value read before; values from the new address follow.
 - `object_id: ObjectIdentifier`: The object.
 - `property_id: PropertyIdentifier`: The property whose value `value` is: Present\_Value for a point named by its object alone.
 - `array_index: Optional[int]`: The array element watched, None for the whole property.
@@ -1030,6 +1030,7 @@ Properties:
 
 - `from_: str`: Where the device answered before, as text `BACnetClient.device` reads back. `from_`, as `from` is a keyword.
 - `to: str`: Where it answers now, as text `BACnetClient.device` reads back.
+- `count: int`: How many moves the watch has taken for the point, this one included: compare it to tell a new move.
 - `timestamp: float`: When the watch took the move, as POSIX seconds by the wall clock, as `time.time()`.
 
 ## Discovered

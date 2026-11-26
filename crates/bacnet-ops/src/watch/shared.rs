@@ -384,6 +384,11 @@ impl Shared {
             from: from.clone(),
             to: to.clone(),
             when: SystemTime::now(),
+            count: entry
+                .snapshot
+                .moved
+                .as_ref()
+                .map_or(1, |moved| moved.count + 1),
         };
         let snapshot = &mut entry.snapshot;
         snapshot.state = Phase::Starting;

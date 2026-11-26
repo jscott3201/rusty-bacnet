@@ -61,7 +61,7 @@ fn via_name(via: Via) -> &'static str {
 #[pyclass(name = "WatchUpdate", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyWatchUpdate {
     address: String,
-    device: Option<u32>,
+    instance: Option<u32>,
     moved: Option<Py<PyWatchMove>>,
     object: ObjectIdentifier,
     property: PropertyIdentifier,
@@ -117,7 +117,7 @@ impl PyWatchUpdate {
             .transpose()?;
         Ok(Self {
             address,
-            device: update.device,
+            instance: update.instance,
             moved,
             object,
             property,
@@ -154,15 +154,15 @@ impl PyWatchUpdate {
     /// follows, else the one the device at the address named, or the
     /// discovery table's.
     #[getter]
-    fn device(&self) -> Option<u32> {
-        self.device
+    fn instance(&self) -> Option<u32> {
+        self.instance
     }
 
     /// For a watch that follows its device: the latest move the watch took,
     /// a `WatchMove` (it watches the point at `moved.to`, which is
     /// `address`, since `moved.timestamp`); None before any move, and
     /// always for a watch of one address. A consumer that falls behind sees
-    /// the latest move only: compare `timestamp` to tell a new one. The
+    /// the latest move only: compare its `count` to tell a new one. The
     /// update a move makes is `"starting"`, with the value read before;
     /// values from the new address follow.
     #[getter]
@@ -444,6 +444,7 @@ pub(crate) struct PyWatchMove {
     from: String,
     to: String,
     timestamp: f64,
+    count: u64,
 }
 
 impl PyWatchMove {
@@ -453,6 +454,7 @@ impl PyWatchMove {
             from: moved.from.styled(style),
             to: moved.to.styled(style),
             timestamp: crate::frames::posix_seconds(moved.when),
+            count: moved.count,
         }
     }
 }
@@ -470,6 +472,13 @@ impl PyWatchMove {
     #[getter]
     fn to(&self) -> &str {
         &self.to
+    }
+
+    /// How many moves the watch has taken for the point, this one
+    /// included: compare it to tell a new move.
+    #[getter]
+    fn count(&self) -> u64 {
+        self.count
     }
 
     /// When the watch took the move, as POSIX seconds by the wall clock, as

@@ -38,7 +38,7 @@ use std::time::Duration;
 use bacnet_ops::target::AddressStyle;
 use bacnet_ops::watch::hub::{Lifetime, MAX_POLL, POLL_FLOOR};
 use bacnet_ops::watch::{
-    MAX_WATCHED, Point, Target, Update, Watch, WatchControl, WatchError, WatchSettings, Watched,
+    Binding, MAX_WATCHED, Point, Update, Watch, WatchControl, WatchError, WatchSettings, Watched,
 };
 use bacnet_ops::{OpsError, PropertyRef};
 use bacnet_types::enums::PropertyIdentifier;
@@ -340,7 +340,7 @@ pub(super) fn points_arg(points: &Bound<'_, PyAny>) -> PyResult<Vec<PropertyRef>
 /// `wanted` as the point the hub watches of the device `target` names (its
 /// address, or its instance followed): Present_Value by its object, as
 /// `Device::point` names it.
-fn point_of(target: &Target, wanted: &PropertyRef) -> Point {
+fn point_of(target: &Binding, wanted: &PropertyRef) -> Point {
     let watched = match (wanted.property, wanted.index) {
         (PropertyIdentifier::PRESENT_VALUE, None) => Watched::Object,
         (property, index) => Watched::Property { property, index },
@@ -380,7 +380,7 @@ pub(super) async fn open(
             shared,
             tie,
             address: device.address().styled(style),
-            target: device.watch_target(),
+            target: device.binding(),
             points: Arc::new(Mutex::new(wanted)),
             settings,
             style,
@@ -495,7 +495,7 @@ pub(crate) struct PyWatch {
     address: String,
     /// What the points are bound to: the handle's address, or the instance
     /// it follows (#2795).
-    target: Target,
+    target: Binding,
     /// The points watched, in the order named, added ones last. Held
     /// across each change of the hub's, so the two agree.
     points: Arc<Mutex<Vec<PropertyRef>>>,
@@ -533,7 +533,7 @@ impl PyWatch {
     /// address.
     #[getter]
     fn follows(&self) -> bool {
-        matches!(self.target, Target::Follows { .. })
+        matches!(self.target, Binding::Follows { .. })
     }
 
     /// The points watched, in the order named, added ones last, each once,

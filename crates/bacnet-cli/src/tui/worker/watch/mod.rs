@@ -31,7 +31,7 @@ use bacnet_ops::target::AddressStyle;
 use bacnet_ops::watch::hub::{
     self, Backoff, Hub, Lease, Lifetime, MissingDevice, Reads, Samples, Snapshot,
 };
-use bacnet_ops::watch::{Moved, Point as WatchPoint, Target, Watched, Why};
+use bacnet_ops::watch::{Binding, Moved, Point as WatchPoint, Watched, Why};
 use bacnet_ops::{Client, DeviceAddress};
 use bacnet_transport::port::TransportPort;
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -131,7 +131,7 @@ pub(crate) fn hub_point(point: &Point) -> WatchPoint {
         }
     };
     WatchPoint {
-        device: Target::Follows {
+        device: Binding::Follows {
             instance: point.device,
             network: point.network,
         },

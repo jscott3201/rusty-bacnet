@@ -283,7 +283,7 @@ async fn a_missing_device_can_be_given_up() {
     };
     let lab = Lab::start(options).await;
     let point = Point {
-        device: Target::At(routed_at()),
+        device: Binding::At(routed_at()),
         ..object(ai(1))
     };
     let lease = lab.hub.watch(point).unwrap();
@@ -542,7 +542,7 @@ fn from(instance: u32, mac: &[u8], routed: Option<(u16, &[u8])>) -> ReceivedCOVN
 fn a_routed_device_is_matched_by_its_address() {
     const DEVICE: u32 = 2001;
     let point = Point {
-        device: Target::At(DeviceAddress::new(10, &[3]).unwrap()),
+        device: Binding::At(DeviceAddress::new(10, &[3]).unwrap()),
         ..object(ai(1))
     };
     let target = Station::routed(&[2], 10, &[3]);

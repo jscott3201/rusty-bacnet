@@ -14,7 +14,7 @@ use super::{Device, DeviceAddress, Pin};
 use crate::client::{Client, device_error, failed_locally, lock, unreachable};
 use crate::error::OpsError;
 use crate::reading::{IntoProperty, one_property};
-use crate::watch::{CovSupport, Point, Target, Watched};
+use crate::watch::{Binding, CovSupport, Point, Watched};
 
 impl<T: TransportPort + 'static> Device<T> {
     /// A point of this device to watch ([`Client::watch`]): `property` in
@@ -25,12 +25,12 @@ impl<T: TransportPort + 'static> Device<T> {
     /// by SubscribeCOVProperty.
     ///
     /// A pinned handle's point is at its address
-    /// ([`Target::At`]), and a watch of it follows the device that address
+    /// ([`Binding::At`]), and a watch of it follows the device that address
     /// names when the watch starts: when that device answers elsewhere the
     /// watch reports the move ([`Why::Moved`](crate::watch::Why::Moved))
     /// once the device there names itself so to the hub's read (#2812).
     /// A following handle's point follows its instance
-    /// ([`Target::Follows`], #2795): the hub watches it where the handle
+    /// ([`Binding::Follows`], #2795): the hub watches it where the handle
     /// reaches the device, and moves the watch, with the handle, once its
     /// own reads name the device at a new address and its old one no
     /// longer answers as it
@@ -49,7 +49,7 @@ impl<T: TransportPort + 'static> Device<T> {
             (property, index) => Watched::Property { property, index },
         };
         Ok(Point {
-            device: self.watch_target(),
+            device: self.binding(),
             object: wanted.object,
             watched,
         })
@@ -57,12 +57,12 @@ impl<T: TransportPort + 'static> Device<T> {
 
     /// What this handle's points are bound to: its address when pinned,
     /// its instance (on the network it was named on) when following.
-    pub fn watch_target(&self) -> Target {
+    pub fn binding(&self) -> Binding {
         match &self.pin {
-            Pin::At(_) => Target::At(self.address()),
+            Pin::At(_) => Binding::At(self.address()),
             Pin::Follows {
                 instance, network, ..
-            } => Target::Follows {
+            } => Binding::Follows {
                 instance: *instance,
                 network: *network,
             },

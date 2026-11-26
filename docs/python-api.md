@@ -568,8 +568,8 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
   follows its device (`watch.follows`, #2795). Once the watch's own reads
   find the device at another address (the device there names itself so)
   and its old address no longer answers as it, the points move there:
-  each update says so (`.moved`, a `WatchMove` with `.from_`, `.to` and
-  `.timestamp`) and where the point is watched (`.address`); the move's
+  each update says so (`.moved`, a `WatchMove` with `.from_`, `.to`,
+  `.timestamp` and `.count`) and where the point is watched (`.address`); the move's
   own update is `"starting"`, then values come from the new address. An
   I-Am, or a handle that moved, only has the watch check; two addresses
   answering as the device move nothing. While another device answers at
@@ -602,8 +602,8 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
 | Property | Type | Description |
 |----------|------|-------------|
 | `.address` | `str` | Where the point is watched now, as `device()` reads back: for a following watch, where its device answers now |
-| `.device` | `int \| None` | The device's instance, when known |
-| `.moved` | `WatchMove \| None` | A following watch's latest move (`.from_`, `.to`, `.timestamp`); None before any, and for a watch of one address |
+| `.instance` | `int \| None` | The device's instance, when known |
+| `.moved` | `WatchMove \| None` | A following watch's latest move (`.from_`, `.to`, `.timestamp`, `.count`); None before any, and for a watch of one address |
 | `.object_id`, `.property_id`, `.array_index` | `ObjectIdentifier`, `PropertyIdentifier`, `int \| None` | The point: Present_Value for one named by its object alone |
 | `.state` | `str` | `"starting"`, `"subscribed"`, `"polled"`, `"unreachable"` or `"gone"` (a watch of one address only) |
 | `.why` | `WatchReason \| None` | Why the point isn't subscribed; None while it is, or while starting |
@@ -634,8 +634,9 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
 
 Where a following watch's device moved, as the watch took it: `.from_`
 (where it answered before; `from` is a keyword), `.to` (where it answers
-now) and `.timestamp` (POSIX seconds). Addresses read as `device()` reads
-them back.
+now), `.timestamp` (POSIX seconds) and `.count` (the moves the watch has
+taken for the point, this one included: compare it to tell a new move).
+Addresses read as `device()` reads them back.
 
 ### Writing
 

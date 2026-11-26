@@ -1,5 +1,5 @@
 //! What a watch names and reports: a [`Point`] by what its device is
-//! bound to ([`Target`]), [`Why`] a point is polled, unreachable or given
+//! bound to ([`Binding`]), [`Why`] a point is polled, unreachable or given
 //! up, and where a followed device [`Moved`].
 
 use std::fmt;
@@ -20,7 +20,7 @@ use crate::label::kebab;
 /// identity: an [`Update`](super::Update) carries the point as watched, and
 /// says where its device answers now ([`Update::at`](super::Update::at)).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Target {
+pub enum Binding {
     /// The device at this address, whichever it is: given up as
     /// [`Why::Moved`] when its device answers elsewhere, or
     /// [`Why::Replaced`] when another answers here.
@@ -39,7 +39,7 @@ pub enum Target {
     },
 }
 
-impl Target {
+impl Binding {
     /// The address a pinned point is at; `None` for a following one, whose
     /// address is state ([`Update::at`](super::Update::at)).
     pub fn address(&self) -> Option<&DeviceAddress> {
@@ -58,13 +58,13 @@ impl Target {
     }
 }
 
-impl From<DeviceAddress> for Target {
+impl From<DeviceAddress> for Binding {
     fn from(address: DeviceAddress) -> Self {
         Self::At(address)
     }
 }
 
-impl fmt::Display for Target {
+impl fmt::Display for Binding {
     /// In the target grammar: the address, or the instance (`1234`, or
     /// `2:1234` on network 2).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -89,6 +89,10 @@ pub struct Moved {
     pub to: DeviceAddress,
     /// When the hub took the move, by the wall clock.
     pub when: SystemTime,
+    /// How many moves the hub has taken for the point, this one included:
+    /// a consumer that fell behind compares it to tell a new move, whatever
+    /// the wall clock did meanwhile.
+    pub count: u64,
 }
 
 /// What a watch follows on an object.
@@ -107,7 +111,7 @@ pub enum Watched {
 }
 
 /// A watched point: an object, whole or one property, of the device its
-/// [`Target`] names: at an address, or followed by its instance. The hub
+/// [`Binding`] names: at an address, or followed by its instance. The hub
 /// keys its entries on it, so two devices sharing an instance, each named
 /// by its address, are two points, and a followed device's point stays the
 /// same point when the device moves (#2795).
@@ -120,7 +124,7 @@ pub enum Watched {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Point {
     /// What the device is bound to: an address, or an instance followed.
-    pub device: Target,
+    pub device: Binding,
     /// The object.
     pub object: ObjectIdentifier,
     /// The object or one property.
@@ -202,7 +206,7 @@ pub enum Why {
     /// neither alone gives the point up. The point is given up
     /// ([`State::Gone`](super::State::Gone)); watch the point at `to`
     /// instead, or watch it following its instance
-    /// ([`Target::Follows`]). The hub starts the point again if the old
+    /// ([`Binding::Follows`]). The hub starts the point again if the old
     /// address answers for the instance again.
     ///
     /// A following point is never given up for a move: on the same

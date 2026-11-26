@@ -59,7 +59,7 @@ fn rows_map_to_hub_points() {
             index: None,
         }
     );
-    let follows = Target::Follows {
+    let follows = Binding::Follows {
         instance: 2001,
         network: Some(2),
     };

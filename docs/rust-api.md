@@ -13194,10 +13194,10 @@ watches; `watch::hub` is the layer under it. A point comes from a handle:
 `device.point("ai:1")`, `device.point("bv:3 pv")` or
 `device.point("ao:2 priority-array[8]")`, in the grammar `Device::read`
 takes, and `device.watch(["ai:1", "bv:3 pv"])` is shorthand for a watch of
-those. A point names its device by a `watch::Target`: a pinned handle's
-`Target::At(address)`, or a following handle's `Target::Follows { instance,
+those. A point names its device by a `watch::Binding`: a pinned handle's
+`Binding::At(address)`, or a following handle's `Binding::Follows { instance,
 network }` (#2795), which the hub follows from address to address
-(`device.watch_target()` gives a handle's). Two
+(`device.binding()` gives a handle's). Two
 devices sharing an instance, each named by its address, are two points,
 and one station named two ways is one. A Present_Value is watched by
 SubscribeCOV on its object; any other property, or an element, by
@@ -13238,9 +13238,9 @@ while let Some(u) = watch.next().await {
 An `Update` (`#[non_exhaustive]`) carries:
 
 - `point`, as watched (the key a caller's map keeps across a move), `at`
-  (the `DeviceAddress` it is watched at now), `device` (the instance, when
+  (the `DeviceAddress` it is watched at now), `instance` (the instance, when
   known) and `moved` (a following point's latest move the hub took, a
-  `watch::Moved { from, to, when }`; `None` for a pinned point and before
+  `watch::Moved { from, to, when, count }`; `None` for a pinned point and before
   any move);
 - `state`, one `watch::State`: `Starting`, `Subscribed`, `Polled { why }`,
   `Unreachable { why }` or `Gone { why }`, where `why` is a `watch::Why`:
@@ -13402,7 +13402,7 @@ given-up points start again once the address announces itself for the
 instance, or answers a start while the discovery table names it there.
 Watch a pinned point at `to`, or follow its instance.
 
-**Following (#2795).** A following point (`Target::Follows`) is never
+**Following (#2795).** A following point (`Binding::Follows`) is never
 given up for a move. On the same answers the hub hands it to the
 scheduler at the new address with its subscriber process identifier and
 its values: its update says so (`moved`, `at`) with `State::Starting`,
@@ -13570,8 +13570,8 @@ row constants.
 |---|---|
 | `Hub::new(..) -> Result<Hub, String>`, subscriber ranges handed out in turn, wrapping after 256 hubs made | `Result<Hub, WatchError>` (`Settings`, `NoRuntime`, `Hubs`); the next range no live hub holds, going round, given back once the hub is gone (#2561) |
 | `watch::Point { device: u32, .. }`, `Copy` | `watch::Point { device: DeviceAddress, .. }`, `Clone`, from `Device::point`; entries, schedulers and subscription targets key on the address, never an instance lookup |
-| `watch::Point { device: DeviceAddress, .. }` | `watch::Point { device: Target, .. }`: `Target::At(address)`, or `Target::Follows { instance, network }`, which the hub follows; `Device::point` picks by the handle (#2795) |
-| a following handle's points pinned at its address, given up with `Why::Moved` | following its instance: `Update::{at, device, moved}`, `Snapshot::moved`, `Lease::at` |
+| `watch::Point { device: DeviceAddress, .. }` | `watch::Point { device: Target, .. }`: `Binding::At(address)`, or `Binding::Follows { instance, network }`, which the hub follows; `Device::point` picks by the handle (#2795) |
+| a following handle's points pinned at its address, given up with `Why::Moved` | following its instance: `Update::{at, instance, moved}`, `Snapshot::moved`, `Lease::at` |
 | a following handle moving on the discovery table's rows, and with the hub's look | only once the device at the new address names the instance to its read (#2795) |
 | `watch::{Hub, Lease, Changes, Snapshot, Samples, Sample, WatchOptions, Reads, Backoff, Fallback, MissingDevice, Lifetime, HubStats, renewal_margin, first, POINT_PROPERTIES, MISSING, MIN_POLL, POLL_FLOOR, MAX_ROWS, MAX_SAMPLES}` | the same names under `watch::hub` |
 | `watch::{State, Source}` (the snapshot's) | `watch::hub::{Phase, Source}`; `watch::State` is the update's one state with its reason |

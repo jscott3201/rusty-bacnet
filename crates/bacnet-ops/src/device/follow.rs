@@ -261,7 +261,12 @@ impl<T: TransportPort + 'static> Client<T> {
         let address = match claims.as_slice() {
             [address] => address.clone(),
             [] => return Err(WatchError::UnknownDevice { instance, network }),
-            _ => return Err(WatchError::Ambiguous { instance, claims }),
+            _ => {
+                return Err(WatchError::Ambiguous {
+                    instance,
+                    candidates: claims,
+                });
+            }
         };
         let followed = Arc::new(Mutex::new(Place {
             at: address,

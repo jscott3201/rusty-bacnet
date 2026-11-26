@@ -72,7 +72,7 @@ pub enum State {
     /// once it answers. `why` it isn't subscribed: any of the reasons a
     /// polled point carries, or [`Why::Missing`] while no route to a
     /// remote address is known. A following point
-    /// ([`Target::Follows`](super::Target::Follows)) whose address another
+    /// ([`Binding::Follows`](super::Binding::Follows)) whose address another
     /// device answers at now is unreachable for [`Why::Replaced`] while the
     /// hub looks for its device (#2795).
     Unreachable {
@@ -144,13 +144,13 @@ pub struct Update {
     /// The device's instance, when known: a following point's own, else
     /// the one the device at the address named, or the discovery table's
     /// row there.
-    pub device: Option<u32>,
+    pub instance: Option<u32>,
     /// The latest move of a following point's device the hub took: it
     /// watches the point at `moved.to` (`at`) since `moved.when`, and
     /// nothing from `moved.from` is the point's. The update a move makes
     /// is [`State::Starting`], with the values read before; values from the
     /// new address follow. A consumer that falls behind sees the latest
-    /// move only: compare `when` to tell a new one. `None` for a pinned
+    /// move only: compare its `count` to tell a new one. `None` for a pinned
     /// point, and before any move.
     pub moved: Option<Moved>,
     /// How its watch goes.
@@ -328,7 +328,7 @@ pub(super) fn listen(shared: &Shared, listener: Listener) {
 fn update(shared: &Shared, mark: Mark) -> Update {
     let point = shared.point.clone();
     let (property, _) = point.property();
-    let ((rows, via, state, cov, failure, updated), (at, device, moved)) = {
+    let ((rows, via, state, cov, failure, updated), (at, instance, moved)) = {
         let entry = shared.lock();
         let snapshot = &entry.snapshot;
         (
@@ -351,7 +351,7 @@ fn update(shared: &Shared, mark: Mark) -> Update {
     Update {
         point,
         at,
-        device,
+        instance,
         moved,
         state,
         value,

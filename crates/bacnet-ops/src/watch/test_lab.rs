@@ -571,7 +571,7 @@ pub(super) fn nc(instance: u32) -> ObjectIdentifier {
 
 pub(super) fn object(object: ObjectIdentifier) -> Point {
     Point {
-        device: super::Target::At(lab_at()),
+        device: super::Binding::At(lab_at()),
         object,
         watched: Watched::Object,
     }
