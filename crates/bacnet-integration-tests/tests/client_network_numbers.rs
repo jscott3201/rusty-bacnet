@@ -13,6 +13,18 @@ use tokio::{
 mod port_retry;
 
 const BROADCAST: Ipv4Addr = Ipv4Addr::new(127, 255, 255, 255);
+/// The client's APDU timeout here, the window its question opens (#2826).
+const WINDOW_MS: u64 = 500;
+const PAST_THE_WINDOW: Duration = Duration::from_millis(WINDOW_MS + 200);
+/// The B/IP MAC of `socket`, its address and port.
+fn sink_mac(socket: &UdpSocket) -> Vec<u8> {
+    let SocketAddr::V4(address) = socket.local_addr().unwrap() else {
+        panic!("IPv4 socket")
+    };
+    let mut mac = address.ip().octets().to_vec();
+    mac.extend_from_slice(&address.port().to_be_bytes());
+    mac
+}
 fn frame(function: u8, npdu: &[u8]) -> Vec<u8> {
     let mut wire = vec![0x81, function];
     wire.extend_from_slice(&((4 + npdu.len()) as u16).to_be_bytes());
@@ -56,9 +68,14 @@ async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
         let port = observer.local_addr().unwrap().port();
         let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
         transport.set_share_wildcard_port(true);
-        let mut client = BACnetClient::start(ClientConfig::default(), transport)
-            .await
-            .unwrap();
+        // The client takes a number only from the answers to its own
+        // question, for one APDU timeout after it (#2826): a short timeout
+        // keeps this wall-clock test quick.
+        let config = ClientConfig {
+            apdu_timeout_ms: WINDOW_MS,
+            ..ClientConfig::default()
+        };
+        let mut client = BACnetClient::start(config, transport).await.unwrap();
         let mac = client.local_mac();
         assert_eq!(&mac[..4], &[127, 0, 0, 1]);
         assert_eq!(u16::from_be_bytes([mac[4], mac[5]]), port);
@@ -72,9 +89,15 @@ async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
         peer.send_to(&frame(11, &[1, 0x80, 0x12]), group)
             .await
             .unwrap();
+        // The client's question goes to a sink alone, so the observer sees
+        // no broadcast of it; the peer's announcement answers it.
+        let sink = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let sink = sink_mac(&sink);
+        client.what_is_network_number(Some(&sink)).await.unwrap();
         peer.send_to(&frame(11, &[1, 0x80, 0x13, 0, 77, 1]), group)
             .await
             .unwrap();
+        tokio::time::sleep(PAST_THE_WINDOW).await;
         peer.send_to(&frame(10, &[1, 0x80, 0x12]), local)
             .await
             .unwrap();
@@ -82,10 +105,13 @@ async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
         // No broadcast question once the number is known: its answer
         // waits up to ten seconds (Clause 6.4.19, #2597), which is tested
         // on paused time, not on this wall clock.
-        // Unicast NNI cannot replace the learned number; the next reply is its fence.
+        // Unicast NNI cannot replace the learned number, even inside a
+        // question's window; the next reply is its fence.
+        client.what_is_network_number(Some(&sink)).await.unwrap();
         peer.send_to(&frame(10, &[1, 0x80, 0x13, 0, 99, 1]), local)
             .await
             .unwrap();
+        tokio::time::sleep(PAST_THE_WINDOW).await;
         peer.send_to(&frame(10, &[1, 0x80, 0x12]), local)
             .await
             .unwrap();

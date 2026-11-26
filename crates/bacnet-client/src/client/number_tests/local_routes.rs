@@ -11,9 +11,12 @@
 //! every network while the number is unknown.
 //!
 //! The peer is `[3]`, behind router `[9]` when routed. The number is learned
-//! through the client's own Network-Number-Is intake. The client asks for it
-//! when it first stores a routed row or sends a Who-Is while it is unknown
-//! (#2572), and each test takes that question where it goes.
+//! through the client's own Network-Number-Is intake, from the router's
+//! answer to the client's question, taken when the window that question
+//! opens closes (#2826). The client asks for it when it first stores a
+//! routed row or sends a Who-Is while it is unknown (#2572), and each test
+//! takes that question where it goes. The tests run on paused time, so the
+//! window, the harness's 5 s APDU timeout, passes at once.
 use super::*;
 use crate::client::Station;
 use crate::client::{BACnetClient, Broadcast};
@@ -69,16 +72,20 @@ async fn client(
 ) {
     let (client, inbound, mut outbound, _) = harness(false).await;
     if learned {
-        learn(&inbound, &mut outbound).await;
+        learn(&client, &inbound, &mut outbound).await;
     }
     (client, inbound, outbound)
 }
 
-/// Have the client learn `THIS_NETWORK` through its Network-Number-Is intake.
-async fn learn(inbound: &mpsc::Sender<ReceivedNpdu>, outbound: &mut mpsc::Receiver<Sent>) {
-    inject(inbound, &number(THIS_NETWORK, 0), true).await;
-    // The worker takes controls in order: once it answers, it holds the
-    // number the announcement gave.
+/// Have the client learn `THIS_NETWORK` through its Network-Number-Is
+/// intake: it asks, the router answers, and the window closes.
+async fn learn(
+    client: &BACnetClient<TestTransport>,
+    inbound: &mpsc::Sender<ReceivedNpdu>,
+    outbound: &mut mpsc::Receiver<Sent>,
+) {
+    teach(client, inbound, outbound, THIS_NETWORK, 0).await;
+    // Asked of the client alone, it answers at once with what it holds.
     inject(inbound, QUERY, false).await;
     reply(outbound, THIS_NETWORK).await;
 }
@@ -193,14 +200,14 @@ async fn request(learned: bool, network: u16) -> Route {
     route
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_routed_request_naming_this_network_goes_local_and_its_direct_answer_completes_it() {
     assert_eq!(request(true, THIS_NETWORK).await, local());
     assert_eq!(request(true, REMOTE_NETWORK).await, routed(REMOTE_NETWORK));
     assert_eq!(request(false, THIS_NETWORK).await, routed(THIS_NETWORK));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_device_added_as_routed_on_this_network_is_written_locally() {
     for (learned, network, expected) in [
         (true, THIS_NETWORK, local()),
@@ -245,7 +252,7 @@ async fn a_device_added_as_routed_on_this_network_is_written_locally() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_who_is_on_this_network_by_number_goes_as_a_local_broadcast() {
     for (learned, network, dnet) in [
         (true, THIS_NETWORK, None),
@@ -300,14 +307,14 @@ async fn client_with_routed_row(
         .await
         .unwrap();
     asked(&mut outbound).await;
-    learn(&inbound, &mut outbound).await;
+    learn(&client, &inbound, &mut outbound).await;
     (client, inbound, outbound)
 }
 
 /// The limits the device was added with as routed still bound a request
 /// that goes locally: a peer that takes no segmented request gets nothing
 /// too long for it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_routed_row_on_this_network_still_bounds_a_local_request() {
     let (mut client, _inbound, mut outbound) =
         client_with_routed_row(Segmentation::NO_SEGMENTATION).await;
@@ -325,7 +332,7 @@ async fn a_routed_row_on_this_network_still_bounds_a_local_request() {
 /// A local request longer than the routed row allows goes to the peer in
 /// segments, each with no DNET, and the peer's own SegmentACKs and SimpleACK,
 /// with no SNET, carry it through.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_long_request_to_this_network_is_segmented_to_the_peer() {
     let (mut client, inbound, mut outbound) =
         client_with_routed_row(Segmentation::SEGMENTED_BOTH).await;
@@ -498,11 +505,18 @@ async fn with_the_number_unknown_a_relayed_answer_leaves_a_local_request_open() 
 /// relays with this network as its SNET still completes it at once, as it
 /// would have before the number was known. That answer is checked as any
 /// routed answer is (#2831): the same answer from another station on this
-/// link is dropped and counted first.
+/// link is dropped and counted first. The router answered the client's
+/// question before the request went; the number is taken when that
+/// question's window closes, a second after the request went.
 #[tokio::test(start_paused = true)]
 async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed_answer() {
     const STRANGER: [u8; 1] = [4];
     let (mut client, inbound, mut outbound) = client(false).await;
+    client.what_is_network_number(None).await.unwrap();
+    asked(&mut outbound).await;
+    broadcast_from(&inbound, &number(THIS_NETWORK, 0), &ROUTER).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(client.network_number(), None, "the window is still open");
     let peer = async {
         let sent = outbound.recv().await.unwrap();
         assert_eq!(sent.destination.as_slice(), ROUTER, "through the router");
@@ -511,7 +525,9 @@ async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed
         let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
             panic!("a confirmed request")
         };
-        learn(&inbound, &mut outbound).await;
+        while client.network_number() != Some(THIS_NETWORK) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         let relayed = relayed_from(THIS_NETWORK, &PEER);
         let ack = simple_ack(&request);
         send_to_client(&inbound, &ack, &STRANGER, relayed.clone()).await;
@@ -532,7 +548,7 @@ async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed
 /// is a routed station of its own, and the instance is ambiguous: learning
 /// the number folds that row into the local one (below, #2572); a number
 /// never learned leaves it until the purge takes it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_i_am_relayed_from_this_network_is_the_local_device() {
     use crate::client::DeviceEventKind;
 
@@ -590,7 +606,7 @@ async fn learning_the_number_folds_the_routed_row_an_echo_made() {
     tokio::time::sleep(Duration::from_secs(60)).await;
     let mut events = client.device_events();
     let mut collisions = client.device_collision_events();
-    learn(&inbound, &mut outbound).await;
+    learn(&client, &inbound, &mut outbound).await;
     let lost = bounded(events.recv()).await.unwrap();
     assert_eq!(lost.kind, DeviceEventKind::Lost);
     assert_eq!(lost.device.source_network, Some(THIS_NETWORK));
@@ -620,7 +636,7 @@ async fn a_routed_registration_on_this_network_folds_to_the_local_row() {
     let relayed = relayed_from(THIS_NETWORK, &PEER);
     send_to_client(&inbound, &i_am(9), &ROUTER, relayed).await;
     asked(&mut outbound).await;
-    learn(&inbound, &mut outbound).await;
+    learn(&client, &inbound, &mut outbound).await;
     client
         .add_routed_device(RoutedDeviceConfig {
             instance: 9,

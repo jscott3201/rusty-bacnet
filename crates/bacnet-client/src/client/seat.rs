@@ -316,11 +316,13 @@ fn spawn_seated_number<T: TransportPort + 'static>(
 ) -> (mpsc::Sender<NumberControl>, JoinHandle<()>) {
     let (tx, mut rx) = mpsc::channel(network_number::CAPACITY);
     let task = tokio::spawn(async move {
+        // The node's owner decides the number: no window opens here.
         let Owner {
             discovery,
             device_tx,
             collision_tx,
             mut link_returns,
+            window: _,
         } = owner;
         let network = &held.network;
         let asking = &discovery.asking;

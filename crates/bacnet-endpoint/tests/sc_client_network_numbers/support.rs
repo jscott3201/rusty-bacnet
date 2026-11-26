@@ -13,6 +13,8 @@ pub const NODE: [u8; 6] = [0x20; 6];
 pub const PEER: [u8; 6] = [0x30; 6];
 pub const QUERY: &[u8] = &[1, 0x80, 0x12];
 pub type Client = BACnetClient<ScTransport<TlsWebSocket>>;
+/// The client's APDU timeout here, the window its question opens (#2826).
+const WINDOW_MS: u64 = 1_000;
 pub async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(3), future)
         .await
@@ -96,7 +98,14 @@ impl Fixture {
             .await
             .unwrap();
         let states = transport.connection_state_changes();
-        let client = bounded(BACnetClient::start(ClientConfig::default(), transport))
+        // The client takes a number only from the answers to its own
+        // question, for one APDU timeout after it (#2826): a short timeout
+        // keeps this wall-clock test quick.
+        let config = ClientConfig {
+            apdu_timeout_ms: WINDOW_MS,
+            ..ClientConfig::default()
+        };
+        let client = bounded(BACnetClient::start(config, transport))
             .await
             .unwrap();
         let peer = Peer::connect(
@@ -130,6 +139,23 @@ impl Fixture {
             direct,
         }
     }
+    /// Have the client ask the peer alone, take its question off the peer's
+    /// connection, send `npdu` from the peer to `destination` inside the
+    /// window the question opens, and wait for the window to close. The
+    /// client takes a number only from such answers (#2826): one it admits
+    /// here decides, one it refuses decides nothing.
+    pub async fn in_a_window(&mut self, destination: [u8; 6], npdu: &[u8]) {
+        let client = self.client.as_ref().unwrap();
+        bounded(client.what_is_network_number(Some(&PEER)))
+            .await
+            .unwrap();
+        let question = self.peer.receive().await;
+        assert_eq!(question.destination_vmac, None, "to the peer alone");
+        assert_eq!(question.payload.as_ref(), QUERY);
+        self.peer.send(destination, npdu).await;
+        tokio::time::sleep(Duration::from_millis(WINDOW_MS + 200)).await;
+    }
+
     /// Stops the client (or drops it bare), waits until the hub and direct
     /// listener see it gone, then stops both listeners and binds each address
     /// again to prove it was released. Both are stopped whatever the first

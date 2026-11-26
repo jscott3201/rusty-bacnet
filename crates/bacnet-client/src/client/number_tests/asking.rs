@@ -63,17 +63,24 @@ pub(super) async fn open_site(numbers: bool) -> Site {
     }
 }
 
+/// Past the window the client gives the answers to its question: the
+/// default APDU timeout, 6 s, and a little more (#2826).
+pub(super) const PAST_THE_WINDOW: Duration = Duration::from_millis(6_100);
+
 impl Site {
-    /// Have a node broadcast that this network is `network`, with `flag`,
-    /// and wait until the client holds it.
-    pub(super) async fn announce(&self, network: u16, flag: u8) {
-        inject(&self.inbound, &number(network, flag), true).await;
-        bounded(async {
-            while self.client.network_number() != Some(network) {
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
-        })
-        .await;
+    /// Have `ROUTER` answer the client's latest question, which went less
+    /// than a window ago, with `network` and `flag`, and wait for the
+    /// window to close: the client then holds `network` (#2826).
+    pub(super) async fn answered(&self, network: u16, flag: u8) {
+        broadcast_from(&self.inbound, &number(network, flag), &ROUTER).await;
+        tokio::time::sleep(PAST_THE_WINDOW).await;
+        assert_eq!(self.client.network_number(), Some(network));
+    }
+
+    /// Have the client ask, and `ROUTER` answer with `network` and `flag`.
+    pub(super) async fn taught(&self, network: u16, flag: u8) {
+        self.client.what_is_network_number(None).await.unwrap();
+        self.answered(network, flag).await;
     }
 
     /// The link is back.
@@ -297,7 +304,7 @@ async fn a_link_return_asks_again_after_a_first_question_while_unknown() {
         assert_eq!(frames.len(), asks, "{frames:?}");
         assert_ask(&frames[asks - 1]);
     }
-    site.announce(THIS_NETWORK, 0).await;
+    site.answered(THIS_NETWORK, 0).await;
     site.link_returns();
     let frames = site.settled().await;
     assert_eq!(frames.len(), 4, "a known number is not asked for");
@@ -322,7 +329,7 @@ async fn a_relayed_device_is_one_device_once_the_answer_comes() {
         Err(Error::AmbiguousDevice { instance: 9, .. })
     ));
 
-    site.announce(THIS_NETWORK, 0).await;
+    site.answered(THIS_NETWORK, 0).await;
     let device = site
         .client
         .get_device(9)
@@ -444,8 +451,9 @@ async fn two_who_is_at_once_ask_once() {
 
 /// A routed I-Am while a Who-Is's question is held in its send: the Number
 /// owner finds the question going out and asks nothing, and meanwhile keeps
-/// taking announcements. The number one teaches is known before the held
-/// question even goes.
+/// taking announcements. The question was noted before its send, so an
+/// answer to it counts, and the number it teaches is known when the window
+/// closes, before the held question even goes.
 #[tokio::test(start_paused = true)]
 async fn the_owner_neither_asks_twice_nor_stops_while_a_question_is_held() {
     let mut site = gated().await;
@@ -455,17 +463,16 @@ async fn the_owner_neither_asks_twice_nor_stops_while_a_question_is_held() {
         send_to_client(&site.inbound, &i_am(10), &ROUTER, routed).await;
         tokio::time::sleep(Duration::from_millis(10)).await;
         inject(&site.inbound, &number(THIS_NETWORK, 0), true).await;
-        bounded(async {
-            while site.client.network_number() != Some(THIS_NETWORK) {
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
-        })
-        .await;
+        tokio::time::sleep(PAST_THE_WINDOW).await;
+        assert_eq!(site.client.network_number(), Some(THIS_NETWORK));
         assert_eq!(site.asks(), 1, "the held question alone");
         site.gate.add_permits(10);
     };
-    let (who_is, ()) =
-        bounded(async { tokio::join!(site.client.who_is(Broadcast::Global, None), driver) }).await;
+    // Bounded past the window the driver waits out.
+    let both = async { tokio::join!(site.client.who_is(Broadcast::Global, None), driver) };
+    let (who_is, ()) = tokio::time::timeout(Duration::from_secs(30), both)
+        .await
+        .expect("the held question goes once released");
     who_is.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     let frames = site.sent.frames();

@@ -144,8 +144,10 @@ impl Site {
     }
 
     /// Teach the client that its own network is `network`, by the
-    /// Network-Number-Is a router broadcasts.
+    /// Network-Number-Is a router broadcasts in answer to the client's
+    /// question, taken when the question's window closes (#2826).
     async fn learn(&self, network: u16) {
+        self.client.what_is_network_number(None).await.unwrap();
         let [hi, lo] = network.to_be_bytes();
         let npdu = Bytes::from(vec![0x01, 0x80, 0x13, hi, lo, 1]);
         let received =

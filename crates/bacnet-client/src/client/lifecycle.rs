@@ -338,6 +338,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 device_tx: device_tx.clone(),
                 collision_tx: device_collision_tx.clone(),
                 link_returns,
+                window: Duration::from_millis(config.apdu_timeout_ms),
             };
             let (tx, task) = inbound.spawn_number_owner(owner);
             (Some(tx), Some(task))

@@ -350,6 +350,21 @@ impl Peer {
             }
         }
     }
+    /// Play the node's other master for `span` of paused time, as
+    /// [`Self::data`] does, while the node sends no data frame: the link
+    /// stays as busy as a real one while a standalone client's question
+    /// window runs (#2826). Then keep the next token the node passes, so
+    /// the node is idle, and takes the peer's next frames, when this
+    /// returns.
+    pub async fn quiet_for(&mut self, span: Duration) {
+        let link = self.link.clone();
+        let quiet = async {
+            let frame = self.next_data().await;
+            panic!("unexpected data frame {frame:?}; {}", link.report());
+        };
+        let _ = tokio::time::timeout(span, quiet).await;
+        self.await_token().await;
+    }
     /// Wait until the node passes the token to the peer, answering its
     /// polls on the way: a master sends a request only while it holds the
     /// token.

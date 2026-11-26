@@ -3452,7 +3452,11 @@ unknown (#2572). A client that only reads and writes by address never asks.
 After that question, it asks again when its link comes back (a BACnet/SC
 hub reconnect, a foreign device registering again) while no answer has
 come. A router answers at once; where only nodes that are not routers hold
-the number, the answer can take up to ten seconds (#2597). A relay heard
+the number, the answer can take up to ten seconds (#2597). The client takes
+the number only from the answers to its own question that agree, when one
+APDU timeout has passed since it asked; a Network-Number-Is it did not ask
+for that names another number makes it ask (at most once a minute, then
+less often), and never sets the number by itself (#2826). A relay heard
 before the answer is listed as a routed device of its own, and the instance
 is ambiguous (`BacnetAmbiguousDeviceError`) until
 then; learning the number folds the routed entry into the local one, or

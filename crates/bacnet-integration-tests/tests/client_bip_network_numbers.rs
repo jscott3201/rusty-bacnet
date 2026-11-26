@@ -32,7 +32,14 @@ async fn client(transport: BipTransport) -> std::io::Result<(Client, SocketAddrV
         transport.bip_port().unwrap().mode.ip_mode(),
         bacnet_types::enums::IPMode::NORMAL
     );
-    let client = bounded(BACnetClient::start(ClientConfig::default(), transport))
+    // The client takes a number only from the answers to its own question,
+    // for one APDU timeout after it (#2826): a short timeout keeps these
+    // wall-clock tests quick.
+    let config = ClientConfig {
+        apdu_timeout_ms: WINDOW_MS,
+        ..ClientConfig::default()
+    };
+    let client = bounded(BACnetClient::start(config, transport))
         .await
         .map_err(port_retry::bind_error)?;
     let mac = client.local_mac();
@@ -68,6 +75,25 @@ async fn ask(socket: &UdpSocket, target: SocketAddrV4) {
     send(socket, target, &frame(10, QUERY)).await;
 }
 
+/// The client's APDU timeout here, the window its question opens (#2826).
+const WINDOW_MS: u64 = 500;
+
+/// Have `client` ask its own question of `sink` alone, so no broadcast of
+/// it reaches the observers or the BBMD's peers, and run `announce` inside
+/// the window it opens; then wait for the window to close. An announcement
+/// the client admits there decides its number; one it refuses decides
+/// nothing (#2826).
+async fn in_a_window(client: &Client, sink: &UdpSocket, announce: impl Future<Output = ()>) {
+    let to = address(sink);
+    let mut mac = to.ip().octets().to_vec();
+    mac.extend_from_slice(&to.port().to_be_bytes());
+    bounded(client.what_is_network_number(Some(&mac)))
+        .await
+        .unwrap();
+    announce.await;
+    tokio::time::sleep(std::time::Duration::from_millis(WINDOW_MS + 200)).await;
+}
+
 #[tokio::test]
 async fn client_number_bbmd_wire_admission_and_release() {
     rerun_on_lost_port(async || {
@@ -93,29 +119,48 @@ async fn client_number_bbmd_wire_admission_and_release() {
             receive(&bdt).await,
             (forwarded(address(&peer), QUERY), local)
         );
+        // Each announcement below comes inside the window of a question the
+        // client asked a sink alone (#2826), so one it admits decides.
+        let sink = udp().await;
         // UNKNOWN and a unicast NNI cannot create an own response before the fence.
-        send(&peer, local, &frame(10, &number(999, 1))).await;
+        in_a_window(
+            &client,
+            &sink,
+            send(&peer, local, &frame(10, &number(999, 1))),
+        )
+        .await;
         ask(&peer, local).await;
-        send(&peer, group, &frame(11, &number(77, 0))).await;
+        in_a_window(
+            &client,
+            &sink,
+            send(&peer, group, &frame(11, &number(77, 0))),
+        )
+        .await;
         ask(&peer, local).await;
         own_number(&captured, local, 11, 77).await;
 
-        forward(&denied, local, &number(200, 1)).await;
-        fence(&denied, local).await; // receive loop only, not Number completion
+        in_a_window(&client, &sink, async {
+            forward(&denied, local, &number(200, 1)).await;
+            fence(&denied, local).await; // receive loop only, not Number completion
+        })
+        .await;
         ask(&peer, local).await;
         own_number(&captured, local, 11, 77).await;
-        send(&fd, local, &frame(9, &number(200, 1))).await;
-        assert_eq!(receive(&fd).await, (frame(0, &[0, 0x60]), local));
+        in_a_window(&client, &sink, async {
+            send(&fd, local, &frame(9, &number(200, 1))).await;
+            assert_eq!(receive(&fd).await, (frame(0, &[0, 0x60]), local));
+        })
+        .await;
         ask(&peer, local).await;
         own_number(&captured, local, 11, 77).await;
 
         // Same IP with a different port is an admitted BDT peer, not a self echo.
-        forward(&bdt, local, &number(78, 1)).await;
+        in_a_window(&client, &sink, forward(&bdt, local, &number(78, 1))).await;
         ask(&peer, local).await;
         own_number(&captured, local, 11, 78).await;
         send(&fd, local, &frame(5, &60u16.to_be_bytes())).await;
         assert_eq!(receive(&fd).await, (frame(0, &[0, 0]), local));
-        send(&fd, local, &frame(9, &number(79, 1))).await;
+        in_a_window(&client, &sink, send(&fd, local, &frame(9, &number(79, 1)))).await;
         ask(&peer, local).await;
         own_number(&captured, local, 11, 79).await;
 
@@ -125,13 +170,16 @@ async fn client_number_bbmd_wire_admission_and_release() {
             vec![1, 0x80, 0x13, 0, 200],
             vec![1, 0x88, 0, 4, 1, 9, 0x13, 0, 200, 1],
         ] {
-            send(&peer, group, &frame(11, &invalid)).await;
+            in_a_window(&client, &sink, send(&peer, group, &frame(11, &invalid))).await;
             ask(&peer, local).await;
             own_number(&captured, local, 11, 79).await;
         }
         // An incorrectly accepted malformed query would emit old 79 before new 81.
-        send(&peer, group, &frame(11, &[1, 0x80, 0x12, 0])).await;
-        send(&peer, group, &frame(11, &number(81, 1))).await;
+        in_a_window(&client, &sink, async {
+            send(&peer, group, &frame(11, &[1, 0x80, 0x12, 0])).await;
+            send(&peer, group, &frame(11, &number(81, 1))).await;
+        })
+        .await;
         ask(&peer, local).await;
         own_number(&captured, local, 11, 81).await;
         drop(captured);
@@ -154,21 +202,32 @@ async fn client_number_foreign_wire_alternate_sender_retry_and_progress() {
         let (client, local) = client(transport).await.unwrap(); // port 0: nothing to lose
         assert_eq!(receive(&bbmd).await, (frame(5, &[0, 60]), local));
         send(&bbmd, local, &frame(0, &[0, 0])).await;
+        // Each announcement below comes inside the window of a question the
+        // client asked a sink alone (#2826), so one it admits decides.
+        let sink = udp().await;
         ask(&alternate, local).await;
-        send(&alternate, local, &frame(10, &number(999, 1))).await;
+        in_a_window(
+            &client,
+            &sink,
+            send(&alternate, local, &frame(10, &number(999, 1))),
+        )
+        .await;
         ask(&alternate, local).await;
         fence(&alternate, local).await;
-        forward(&bbmd, local, &number(77, 0)).await;
+        in_a_window(&client, &sink, forward(&bbmd, local, &number(77, 0))).await;
         ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 77).await;
         // A foreign device takes a Forwarded-NPDU only from its BBMD by unicast
         // (#1622): another sender's announcement teaches nothing, and its query
         // draws no reply, so the next query is answered with 77.
-        forward(&alternate, local, &number(78, 1)).await;
-        forward(&alternate, local, QUERY).await;
+        in_a_window(&client, &sink, async {
+            forward(&alternate, local, &number(78, 1)).await;
+            forward(&alternate, local, QUERY).await;
+        })
+        .await;
         ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 77).await;
-        forward(&bbmd, local, &number(78, 1)).await;
+        in_a_window(&client, &sink, forward(&bbmd, local, &number(78, 1))).await;
         ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 78).await;
         for invalid in [
@@ -177,12 +236,15 @@ async fn client_number_foreign_wire_alternate_sender_retry_and_progress() {
             vec![1, 0x80, 0x13, 0, 200],
             vec![1, 0x88, 0, 4, 1, 9, 0x13, 0, 200, 1],
         ] {
-            forward(&bbmd, local, &invalid).await;
+            in_a_window(&client, &sink, forward(&bbmd, local, &invalid)).await;
             ask(&bbmd, local).await;
             own_number(&bbmd, local, 9, 78).await;
         }
-        forward(&bbmd, local, &[1, 0x80, 0x12, 0]).await;
-        forward(&bbmd, local, &number(79, 1)).await;
+        in_a_window(&client, &sink, async {
+            forward(&bbmd, local, &[1, 0x80, 0x12, 0]).await;
+            forward(&bbmd, local, &number(79, 1)).await;
+        })
+        .await;
         ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 79).await;
         send(&bbmd, local, &frame(0, &[0, 0x30])).await;
@@ -197,7 +259,7 @@ async fn client_number_foreign_wire_alternate_sender_retry_and_progress() {
         ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 79).await;
         send(&bbmd, local, &frame(0, &[0, 0])).await;
-        forward(&bbmd, local, &number(80, 1)).await;
+        in_a_window(&client, &sink, forward(&bbmd, local, &number(80, 1))).await;
         ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 80).await;
 
@@ -239,7 +301,7 @@ async fn client_number_foreign_wire_alternate_sender_retry_and_progress() {
                 [0x44, 0x42, 0x28, 0, 0]
             );
         }
-        forward(&bbmd, local, &number(81, 1)).await;
+        in_a_window(&client, &sink, forward(&bbmd, local, &number(81, 1))).await;
         ask(&bbmd, local).await;
         own_number(&bbmd, local, 9, 81).await;
         stop(client, local).await

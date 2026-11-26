@@ -30,6 +30,11 @@ const ROUTER: u8 = 1;
 const ASKER: u8 = 99;
 /// A step on the paused clock that gives every node's tasks a turn.
 const TURN: Duration = Duration::from_millis(5);
+/// The clients among the nodes, which ask about an announcement (#2826).
+const CLIENTS: usize = 2;
+/// Past the window a client gives the answers to its question: its APDU
+/// timeout, the default 6 s, and a little more (#2826).
+const PAST_THE_WINDOW: Duration = Duration::from_millis(6_500);
 
 fn number_is(number: u16, flag: u8) -> Vec<u8> {
     let [high, low] = number.to_be_bytes();
@@ -231,12 +236,16 @@ async fn a_router_and_five_nodes_give_one_answer() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
+    // The announcement teaches the servers. Each client asks about it, and
+    // takes the router's answer when its question's window closes (#2826);
+    // the servers hear the router's answers and stay quiet.
     let announced = segment.answers();
-    assert_eq!(announced.len(), 1, "{announced:?}");
-    assert_eq!(
-        (announced[0].from, announced[0].number, announced[0].flag),
-        (ROUTER, NETWORK, 1)
-    );
+    assert_eq!(announced.len(), 1 + CLIENTS, "{announced:?}");
+    for heard in &announced {
+        assert_eq!((heard.from, heard.number, heard.flag), (ROUTER, NETWORK, 1));
+    }
+    tokio::time::sleep(PAST_THE_WINDOW).await;
+    assert_eq!(segment.answers(), []);
     each_answers_when_asked_alone(&segment).await;
 
     let asked = Instant::now();
@@ -266,12 +275,20 @@ async fn without_a_router_the_first_node_answers_for_all() {
     tokio::time::sleep(ANSWER_DELAY_MAX * 2).await;
     assert_eq!(segment.answers(), []);
 
-    // A station announces the number, as configured there; the nodes learn
-    // it, and none answers an announcement.
+    // A station announces the number, as configured there. The servers
+    // learn it; each client asks about it (#2826). The servers hold their
+    // answers to the first question, which the second one shares, for the
+    // waits queued here: the first to end answers, the others hear it and
+    // stay quiet, and the clients take that answer when their windows close.
+    queue_answer_waits([1, 2, 3].map(Duration::from_secs));
     segment.say(None, &number_is(NETWORK, 1)).await;
+    tokio::time::sleep(PAST_THE_WINDOW).await;
     let announced = segment.answers();
-    assert_eq!(announced.len(), 1, "{announced:?}");
+    assert_eq!(announced.len(), 2, "{announced:?}");
     assert_eq!(announced[0].from, ASKER);
+    let server = &announced[1];
+    assert!(NODES[..3].contains(&server.from), "{server:?}");
+    assert_eq!((server.number, server.flag), (NETWORK, 0));
     each_answers_when_asked_alone(&segment).await;
 
     queue_answer_waits([5, 3, 7, 2, 9].map(Duration::from_secs));

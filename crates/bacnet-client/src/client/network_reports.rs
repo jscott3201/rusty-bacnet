@@ -179,14 +179,31 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
-    /// The number of the network this client is on, once a
-    /// Network-Number-Is has taught it ([`Self::what_is_network_number`]
-    /// asks, and the client asks by itself before its first Who-Is or when
-    /// it first stores a routed device, #2572); `None` until then, and
-    /// always on a link that takes no network number controls. A routed
-    /// address naming this network is a station on this one.
+    /// The number of the network this client is on, once the answers to
+    /// one of its What-Is-Network-Number questions have agreed on it
+    /// ([`Self::what_is_network_number`] asks, and the client asks by
+    /// itself before its first Who-Is, when it first stores a routed
+    /// device, #2572, and when an announcement it did not ask for names
+    /// another number, #2826). The answers count for one APDU timeout after
+    /// the question, so a number is known that long after the question that
+    /// drew it.
+    /// `None` until then, and always on a link that takes no network number
+    /// controls. A routed address naming this network is a station on this
+    /// one. A client on an endpoint's seat holds the number its node holds.
     pub fn network_number(&self) -> Option<u16> {
         self.network.local_network_number().get()
+    }
+
+    /// How many times the answers to this client's What-Is-Network-Number
+    /// named more than one number, so the client kept what it held, a
+    /// number or none (#2826). Answers flagged configured outrank learned ones, so
+    /// only answers at the same flag disagree. A rise means two stations on
+    /// this link claim different numbers for it: a misconfigured router, or
+    /// a station announcing a number that is not this network's. Always
+    /// zero for a client on an endpoint's seat, whose node holds the
+    /// number.
+    pub fn network_number_disagreements(&self) -> u64 {
+        self.device_table.asking.disagreements()
     }
 
     /// The numbers of the networks this client's local broadcast reaches,
@@ -211,19 +228,20 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// [`Self::network_reports`]. Ask once and keep the answer: the
     /// standard doesn't want the question repeated. A question sent counts
     /// as the one the client otherwise asks on first need (#2572), so a
-    /// later Who-Is doesn't ask again.
+    /// later Who-Is doesn't ask again, and the answers that agree within
+    /// the window it opens teach the client its number (#2826,
+    /// [`Self::network_number`]).
     pub async fn what_is_network_number(
         &self,
         destination_mac: Option<&[u8]>,
     ) -> Result<(), Error> {
         self.link_open()?;
-        self.network
-            .send_network_message(
-                NetworkMessageType::WHAT_IS_NETWORK_NUMBER,
-                &[],
-                destination_mac,
-            )
-            .await?;
+        let ask = self.network.send_network_message(
+            NetworkMessageType::WHAT_IS_NETWORK_NUMBER,
+            &[],
+            destination_mac,
+        );
+        self.device_table.asking.noting(ask).await?;
         // It is the client's question too: a later Who-Is or routed row
         // doesn't ask again (#2572).
         self.device_table.asking.asked_by_caller();

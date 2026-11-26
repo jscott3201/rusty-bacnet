@@ -34,6 +34,36 @@ enum Clock {
     Wall,
 }
 
+/// Past the window a standalone client gives the answers to its question:
+/// its APDU timeout, the default 6 s, and a little more (#2826).
+const PAST_THE_WINDOW: Duration = Duration::from_millis(6_500);
+
+/// Broadcast the Network-Number-Is `npdu` from the peer. The server and the
+/// endpoint take one as it comes (Clause 6.4.20). A standalone client takes
+/// a number only from the answers to its own question (#2826), so for it
+/// the client asks first, the peer takes the question off the link, the
+/// announcement answers it, and the peer keeps the link going until the
+/// window closes; one the client refuses decides nothing there either.
+async fn announce(owner: &Owner, peer: &mut Peer, npdu: &[u8]) {
+    let Owner::Client(client) = owner else {
+        peer.control(BROADCAST, npdu).await;
+        return;
+    };
+    let link = peer.link.clone();
+    let (asked, question) = link
+        .bounded(async { tokio::join!(client.what_is_network_number(None), peer.data()) })
+        .await;
+    asked.unwrap();
+    assert_eq!(question.destination, BROADCAST);
+    assert_eq!(
+        question.data.as_ref(),
+        [1, 0x80, 0x12],
+        "the client's question"
+    );
+    peer.control(BROADCAST, npdu).await;
+    peer.quiet_for(PAST_THE_WINDOW).await;
+}
+
 async fn controls(role: Role, mode: MstpExecutionMode, clock: Clock) {
     let (mut owner, mut peer) = fixture(role, mode, Gates::new(false, false, false)).await;
     let link = peer.link.clone();
@@ -42,7 +72,7 @@ async fn controls(role: Role, mode: MstpExecutionMode, clock: Clock) {
     peer.control(NODE, &[1, 0x80, 0x12]).await;
     peer.control(NODE, &[1, 0x80, 0x13, 0, 99, 1]).await;
     peer.control(BROADCAST, &[1, 0x80, 0x12]).await;
-    peer.control(BROADCAST, &[1, 0x80, 0x13, 0, 77, 0]).await;
+    announce(&owner, &mut peer, &[1, 0x80, 0x13, 0, 77, 0]).await;
     if clock == Clock::Paused {
         // A node that is not a router holds its answer to a broadcast
         // question (Clause 6.4.19, #2597): never sooner than the shortest
@@ -61,8 +91,7 @@ async fn controls(role: Role, mode: MstpExecutionMode, clock: Clock) {
     peer.control(NODE, &[1, 0x80, 0x12]).await;
     peer.number(77).await;
     for (number, flag, expected) in [(78, 0, 78), (79, 1, 79), (80, 0, 79), (81, 1, 81)] {
-        peer.control(BROADCAST, &[1, 0x80, 0x13, 0, number, flag])
-            .await;
+        announce(&owner, &mut peer, &[1, 0x80, 0x13, 0, number, flag]).await;
         peer.control(NODE, &[1, 0x80, 0x12]).await;
         peer.number(expected).await;
     }
@@ -90,7 +119,7 @@ async fn controls(role: Role, mode: MstpExecutionMode, clock: Clock) {
     {
         peer.control(NODE, bad).await;
         let next = 82 + i as u8;
-        peer.control(BROADCAST, &[1, 0x80, 0x13, 0, next, 1]).await;
+        announce(&owner, &mut peer, &[1, 0x80, 0x13, 0, next, 1]).await;
         peer.control(NODE, &[1, 0x80, 0x12]).await;
         // An erroneous response to the earlier query would carry the old value.
         peer.number(next.into()).await;
@@ -102,7 +131,7 @@ async fn blocked_producer_progress(role: Role, mode: MstpExecutionMode) {
     let gates = Gates::new(true, false, false);
     let (mut owner, mut peer) = fixture(role, mode, gates.clone()).await;
     let link = peer.link.clone();
-    peer.control(BROADCAST, &[1, 0x80, 0x13, 0, 77, 1]).await;
+    announce(&owner, &mut peer, &[1, 0x80, 0x13, 0, 77, 1]).await;
     peer.control(NODE, &[1, 0x80, 0x12]).await;
     link.bounded(gates.queued.acquire()).await.unwrap().forget();
     // Drain the real queued frame; the producer stays held after enqueue, but
@@ -197,7 +226,7 @@ async fn stopped_producer(role: Role, mode: MstpExecutionMode, bare_drop: bool) 
     let gates = Gates::new(true, true, !bare_drop);
     let (mut owner, mut peer) = fixture(role, mode, gates.clone()).await;
     let link = peer.link.clone();
-    peer.control(BROADCAST, &[1, 0x80, 0x13, 0, 77, 0]).await;
+    announce(&owner, &mut peer, &[1, 0x80, 0x13, 0, 77, 0]).await;
     peer.control(NODE, &[1, 0x80, 0x12]).await;
     link.bounded(gates.queued.acquire()).await.unwrap().forget();
     // Actual queue admission happened. The optional serial gate also prevents
