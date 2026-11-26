@@ -103,6 +103,8 @@ mod tests {
     use super::*;
     use bacnet_types::enums::EngineeringUnits;
 
+    /// What a failing hook returns: an I/O failure, as reading its sensor
+    /// would be (#1833). The detector only logs it, rate-limited by text.
     const HOOK_ERROR: &str = "test reliability hook failed";
 
     struct WarningCounter {

@@ -11,17 +11,14 @@
 //!
 //! Each format has a module with `encode`, which returns the octets to
 //! store, and `decode`, which takes them back, plus its magic tag and
-//! version as constants. Both refuse with a
-//! [`PersistenceError`](bacnet_types::error::PersistenceError), whose
-//! [`kind`](bacnet_types::error::PersistenceError::kind) says why: octets
-//! cut short, a version or kind this build doesn't read, a snapshot of
-//! another object, or a value no save writes, treated as damage. `decode`
-//! checks everything `encode` does, so whatever loads saves again. The
-//! stack's error carries it as `Error::Persistence`, which is what the
-//! storage traits return; a backend of the application's own reports its
-//! own failure there with
-//! [`PersistenceError::new`](bacnet_types::error::PersistenceError::new), of
-//! kind `BackendFailed`.
+//! version as constants. Both refuse with a [`PersistenceError`], whose
+//! [`kind`](PersistenceError::kind) says why: octets cut short, a version or
+//! kind this build doesn't read, a snapshot of another object, or a value
+//! no save writes, treated as damage. `decode` checks everything `encode`
+//! does, so whatever loads saves again. The stack's error carries it as
+//! `Error::Persistence`, which is what the storage traits return; a backend
+//! of the application's own reports its own failure there with
+//! [`PersistenceError::new`], of kind `BackendFailed`.
 //!
 //! A backend that keeps two copies, as the log and Audit Log file backends
 //! keep two slots, gets the file backend's choice between them from

@@ -1,7 +1,7 @@
 ---
 section: Changed
 ---
-- **Python API:** an empty SC credential path, a second endpoint start and a
-  client stop refused while high-level references remain keep their
-  exception classes, but their messages no longer start with
-  `encoding error: ` (#1833).
+- **Python API:** an endpoint's second `start()` raises `BacnetStateError`
+  (a `BacnetError`, `state` `"already_started"`); an empty SC credential
+  path and a refused client stop keep their classes. None of these
+  messages starts with `encoding error: ` any more (#1833).

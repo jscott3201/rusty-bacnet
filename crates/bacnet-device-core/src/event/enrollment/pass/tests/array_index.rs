@@ -126,6 +126,9 @@ impl BACnetObject for IndexedReadProbe {
         }
         self.control.reads.lock().unwrap().push(array_index);
         if self.control.transient_failure.load(Ordering::SeqCst) {
+            // A transient failure of the object's own, not a protocol
+            // refusal: any local error the pass doesn't read as an answer
+            // does, and this one alloc-only builds have (#1833).
             return Err(Error::state(
                 bacnet_types::error::Lifecycle::NotRunning,
                 "transient indexed read",

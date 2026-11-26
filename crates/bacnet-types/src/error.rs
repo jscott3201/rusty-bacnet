@@ -408,7 +408,7 @@ pub enum Error {
     /// [`is_damage`](PersistenceError::is_damage) says whether a backend
     /// that keeps two copies should pass over this one for the other. Its
     /// own text is static, so it exists in every build; with `std`,
-    /// [`Error::with_context`] can put a path or other context in front.
+    /// `Error::with_context` can put a path or other context in front.
     #[error("{0}")]
     Persistence(PersistenceError),
 

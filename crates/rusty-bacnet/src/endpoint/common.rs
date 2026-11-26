@@ -273,8 +273,13 @@ pub(crate) fn build_pending_boxes(
 
 pub(crate) fn lifecycle_error(error: super::lifecycle::LifecycleError<PyErr>) -> PyErr {
     match error {
+        // A lifecycle refusal: BacnetStateError, `state` already_started
+        // (#1833).
         super::lifecycle::LifecycleError::AlreadyStarted => {
-            crate::errors::BacnetError::new_err("endpoint already started")
+            to_py_err(bacnet_types::error::Error::state(
+                bacnet_types::error::Lifecycle::AlreadyStarted,
+                "endpoint already started",
+            ))
         }
         super::lifecycle::LifecycleError::StartupCancelled => {
             pyo3::exceptions::PyRuntimeError::new_err("endpoint startup cancelled by close")
@@ -306,7 +311,7 @@ mod build_database_tests {
     use super::*;
     use bacnet_objects::analog::AnalogInputObject;
     use bacnet_types::enums::EngineeringUnits;
-    use pyo3::Python;
+    use pyo3::prelude::*;
 
     fn point(instance: u32, name: &str) -> Box<dyn BACnetObject> {
         Box::new(AnalogInputObject::new(instance, name, EngineeringUnits::NO_UNITS).unwrap())
@@ -336,5 +341,25 @@ mod build_database_tests {
                 assert!(error.to_string().contains(expected), "{error}");
             });
         }
+    }
+
+    /// A second start is a lifecycle refusal: `BacnetStateError` with
+    /// `state` "already_started" and the text alone (#1833).
+    #[test]
+    fn a_second_start_raises_the_state_error() {
+        Python::initialize();
+        let error =
+            lifecycle_error(super::super::lifecycle::LifecycleError::<PyErr>::AlreadyStarted);
+        Python::attach(|py| {
+            let class = crate::errors::state_error_type(py).unwrap().bind(py);
+            let value = error.value(py);
+            assert!(value.get_type().is(class));
+            assert_eq!(
+                value.str().unwrap().to_str().unwrap(),
+                "endpoint already started"
+            );
+            let state: String = value.getattr("state").unwrap().extract().unwrap();
+            assert_eq!(state, "already_started");
+        });
     }
 }

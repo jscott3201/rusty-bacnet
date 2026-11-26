@@ -420,6 +420,9 @@ impl BACnetObject for ObservationTarget {
         property: PropertyIdentifier,
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
+        // Transient failures of the object's own, not protocol refusals:
+        // any local error the pass doesn't read as an answer does, and this
+        // one alloc-only builds have (#1833).
         if self.fail_reliability && property == PropertyIdentifier::RELIABILITY {
             return Err(Error::state(
                 bacnet_types::error::Lifecycle::NotRunning,

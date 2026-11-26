@@ -6,5 +6,4 @@ section: Migration notes
   _)`, `Error::InvalidConfig(_)`, `Error::InvalidArgument(_)`,
   `Error::Unsupported(_)` or `Error::LimitReached(_)`, with the old text and
   no prefix; a session that isn't running says `NotRunning`, `Stopping` or
-  `Closed`. Match those variants: an `Error::Encoding(_)` arm still
-  compiles, but silently stops matching them.
+  `Closed`. Match those variants.

@@ -257,6 +257,8 @@ pub async fn foreign(param: u64, duration: Duration) -> Result<DegradationPoint,
     }
     if found.as_deref() != Some(&encode_bip_mac(address, 47808)[..]) {
         let _ = client.stop().await;
+        // No address of server-a's own claims it: the client's unknown
+        // device (#1833). What did answer, if anything, is printed above.
         return Err(Error::UnknownDevice {
             device: SERVER_A.0.to_string(),
         });

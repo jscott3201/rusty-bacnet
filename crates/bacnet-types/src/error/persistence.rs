@@ -43,7 +43,7 @@ pub enum PersistenceErrorKind {
 /// and only when the application asks. The text names the format, then the
 /// field at fault when there is one, then the reason. With `std` a caller
 /// may put context in front, such as a file's path
-/// ([`Error::with_context`](super::Error::with_context)); the kind stays.
+/// (`Error::with_context`); the kind stays.
 ///
 /// A storage backend of the application's own reports its failure with
 /// [`new`](Self::new), of kind
@@ -136,7 +136,7 @@ impl PersistenceError {
     }
 
     /// The same error with `context` and `: ` in front of its text, which
-    /// [`Error::with_context`](super::Error::with_context) adds. Only with
+    /// `Error::with_context` adds. Only with
     /// `std`.
     #[cfg(feature = "std")]
     pub(super) fn with_context(self, context: &str) -> Self {
