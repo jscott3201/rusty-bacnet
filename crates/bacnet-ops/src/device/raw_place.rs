@@ -69,7 +69,7 @@ impl Placement {
                 )
             }
             (_, OpsError::Ambiguous { candidates, .. }) => {
-                let each: Vec<String> = candidates.iter().map(|at| show(at)).collect();
+                let each: Vec<String> = candidates.iter().map(show).collect();
                 format!(
                     "device {name} is claimed at {} addresses ({}), too many to ask; name one \
                      by its address",
@@ -85,7 +85,7 @@ impl Placement {
 /// Place device `instance` (on `network` when the target names one) from
 /// `client`'s discovery table (#2824): unless a row registered by hand
 /// claims it, one Who-Is for it to `look`'s scope first (none without
-/// `look`), its answers given [`SETTLE`], or, with no claim at all, `look`'s
+/// `look`), its answers given half a second, or, with no claim at all, `look`'s
 /// wait for a first answer; then each claim asked which device answers
 /// there ([`identify`], all at once, each at its gate under `limits`), and
 /// [`placed`] decides. More claims needing a question than

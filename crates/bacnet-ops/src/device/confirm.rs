@@ -35,9 +35,9 @@ use crate::format::RawRow;
 use crate::limits::RequestLimits;
 
 /// The most addresses a handle's first placement asks which device
-/// answers there (#2824): an instance claimed at more, of which no one is
-/// confirmed already, is refused as ambiguous, with nothing sent
-/// ([`over_cap`]).
+/// answers there (#2824): an instance claimed at more addresses needing a
+/// question is refused as ambiguous, with nothing sent, unless a single
+/// claim among them is confirmed already, which places the handle.
 pub const MAX_ASKED: usize = 8;
 
 /// What the device at an address said of itself, asked which device it is
