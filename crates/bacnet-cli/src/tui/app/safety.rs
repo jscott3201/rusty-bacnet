@@ -388,8 +388,15 @@ impl App {
         }
     }
 
-    /// Start a write or a batch the command bar parsed.
-    pub(super) fn prepare(&mut self, specs: Vec<WriteSpec>, batch: bool, out: &mut Vec<Command>) {
+    /// Start a write or a batch the command bar parsed, its device `named`
+    /// by its instance when it was (#2824).
+    pub(super) fn prepare(
+        &mut self,
+        specs: Vec<WriteSpec>,
+        batch: bool,
+        named: Option<(u32, Option<u16>)>,
+        out: &mut Vec<Command>,
+    ) {
         if !self.may_transmit() {
             return;
         }
@@ -403,6 +410,7 @@ impl App {
             req,
             specs,
             batch,
+            named,
         }));
         self.overlay = modal(Modal::Waiting {
             req,
@@ -499,7 +507,7 @@ impl App {
                 ModalKey::Esc => None,
                 _ if form.key(key) => match write_spec((&at, device), object, relinquish, &form) {
                     Ok(spec) => {
-                        self.prepare(vec![spec], false, out);
+                        self.prepare(vec![spec], false, None, out);
                         return;
                     }
                     Err(error) => {

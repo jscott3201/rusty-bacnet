@@ -1,9 +1,10 @@
 //! An instance target is reached only where its device answered as it
 //! (#2824): `bacnet write 1234 ...` and every other command by instance
-//! first asks each address the discovery table has claiming 1234 which
-//! device answers there, and the refusal names each address asked and
-//! what answered. Station 2 is device 1234; station 3 answers as `three`
-//! says, or not at all.
+//! first sends one Who-Is for 1234 (no row registered by hand claims it),
+//! then asks each address the discovery table has claiming it which device
+//! answers there, and the refusal names each address asked and what
+//! answered. Station 2 is device 1234; station 3 answers as `three` says,
+//! or not at all.
 
 use bacnet_client::client::ClientConfig;
 use bacnet_encoding::apdu::{Apdu, ComplexAck, UnconfirmedRequest, decode_apdu, encode_apdu};
@@ -136,6 +137,17 @@ async fn site(claims: &[[u8; 6]], three: Option<u32>) -> (BACnetClient<TestTrans
     (client, sent)
 }
 
+/// The Who-Is frames sent.
+fn who_is(sent: &SendLog) -> usize {
+    sent.broadcasts()
+        .iter()
+        .filter(|frame| {
+            matches!(frame.apdu(), Apdu::UnconfirmedRequest(request)
+                if request.service_choice == UnconfirmedServiceChoice::WHO_IS)
+        })
+        .count()
+}
+
 /// Requests sent to `to`.
 fn asked(sent: &SendLog, to: [u8; 6]) -> usize {
     sent.unicasts()
@@ -156,10 +168,11 @@ async fn a_forged_claim_is_asked_and_refused() {
         refused.contains("claimed at 10.0.0.3:47808") && refused.contains("it didn't answer"),
         "{refused}"
     );
-    let refused = resolve_mac(&client, "1234").await.unwrap_err();
+    let refused = resolve_mac(&client, "1234", wait).await.unwrap_err();
     assert!(refused.contains("claimed at 10.0.0.3:47808"), "{refused}");
     assert_eq!(asked(&sent, THREE), 2, "one question a lookup");
     assert_eq!(asked(&sent, TWO), 0);
+    assert_eq!(who_is(&sent), 2, "one Who-Is a lookup, first");
 }
 
 /// 1234 claimed at both stations: both are asked, and the one that answers

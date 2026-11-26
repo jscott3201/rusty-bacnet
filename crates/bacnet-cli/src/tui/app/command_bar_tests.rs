@@ -58,7 +58,7 @@ fn a_routed_station_names_the_device_the_table_lists_there() {
         super::parse("w 2:0x7f000001bac0 ai:1", &devices),
         watch(2002, 2)
     );
-    let Ok(Line::Writem(specs)) = super::parse("writem 2:0x05 av:1 pv 4", &devices) else {
+    let Ok(Line::Writem(specs, _)) = super::parse("writem 2:0x05 av:1 pv 4", &devices) else {
         panic!("expected writem");
     };
     assert_eq!(specs[0].device, 2001);
@@ -97,7 +97,7 @@ fn writem_names_the_claimants_of_a_contested_instance() {
          name one by its address"
     );
     let written_at = |line: &str, devices: &DeviceTable| match super::parse(line, devices) {
-        Ok(Line::Writem(specs)) => (specs[0].device, specs[0].address.to_string()),
+        Ok(Line::Writem(specs, _)) => (specs[0].device, specs[0].address.to_string()),
         other => panic!("{line}: {other:?}"),
     };
     assert_eq!(
@@ -179,7 +179,9 @@ fn find_takes_a_scope_flag_before_the_name() {
 fn writem_takes_quoted_values() {
     let values = |line: &str| -> Vec<(Option<String>, Option<u8>)> {
         match parse(line) {
-            Ok(Line::Writem(specs)) => specs.into_iter().map(|s| (s.value, s.priority)).collect(),
+            Ok(Line::Writem(specs, _)) => {
+                specs.into_iter().map(|s| (s.value, s.priority)).collect()
+            }
             other => panic!("{line}: {other:?}"),
         }
     };
@@ -348,7 +350,7 @@ fn mstp_scan_commands_require_an_explicit_bounded_window() {
 
 #[test]
 fn writem_lines_take_object_property_value_groups() {
-    let Ok(Line::Writem(specs)) = parse("writem 100 ao:1 pv 42@8 av:1 description \"x\"") else {
+    let Ok(Line::Writem(specs, _)) = parse("writem 100 ao:1 pv 42@8 av:1 description \"x\"") else {
         panic!("expected writem");
     };
     assert_eq!(specs.len(), 2);
@@ -365,7 +367,7 @@ fn writem_lines_take_object_property_value_groups() {
         parse("writem 100 analog-output,1 pv 42@8"),
         parse("writem 100 ao:1 pv 42@8")
     );
-    let Ok(Line::Writem(specs)) = parse("writem 100 nc,1 pv object:ai,1") else {
+    let Ok(Line::Writem(specs, _)) = parse("writem 100 nc,1 pv object:ai,1") else {
         panic!("expected writem");
     };
     assert_eq!(
@@ -381,7 +383,7 @@ fn row_of(line: &Line) -> &'static str {
     match line {
         Line::Watch(_) => "watch",
         Line::Csv(_) => "csv",
-        Line::Writem(_) => "writem",
+        Line::Writem(..) => "writem",
         Line::Bbmd(_) => "bbmd",
         Line::Find(..) => "find",
         Line::Mstp(_) | Line::Scan(_) => "mstp",

@@ -43,6 +43,39 @@ use crate::tui::safety::ledger::{Entry, Ledger};
 use crate::tui::safety::{Change, Level, MAX_MINUTES, Outcome, SafetyCommand, SafetyEvent};
 
 pub(crate) use bacnet_tool::safety::desk::PASSIVE;
+/// Where the device the command bar named as `instance` (on `network`, for
+/// `dnet:N`) answers as it (#2824), placed as a handle is: one Who-Is for
+/// it to that network (this one for a bare instance) unless a row
+/// registered by hand claims it, then every claim asked which device
+/// answers there. The refusal names each address asked and what answered.
+async fn placed<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    rate: &RequestLimits,
+    instance: u32,
+    network: Option<u16>,
+) -> Result<bacnet_ops::DeviceAddress, String> {
+    let own = client.network_number();
+    let scope = match network {
+        Some(network) if Some(network) != own => bacnet_ops::Scope::Network(network),
+        _ => bacnet_ops::Scope::Local,
+    };
+    let look = bacnet_ops::device::Look {
+        scope,
+        wait: bacnet_ops::client::RESOLVE_WAIT,
+    };
+    let placement =
+        bacnet_ops::device::place_instance(client, rate, instance, network, Some(look)).await;
+    let name = match network {
+        Some(network) => format!("{network}:{instance}"),
+        None => instance.to_string(),
+    };
+    let style = bacnet_ops::target::AddressStyle::of(client.transport());
+    match placement.refusal(&name, &|at| at.styled(style)) {
+        Some(refusal) => Err(refusal),
+        None => placement.placed.map_err(|error| error.to_string()),
+    }
+}
+
 #[cfg(test)]
 pub(crate) use bacnet_tool::safety::desk::{STALE, UNKNOWN_PRE_IMAGE};
 
@@ -434,12 +467,32 @@ impl<'a> Runner<'a> {
             SafetyCommand::Manage { req, request } => {
                 self.manage(client, sink, rate, req, *request).await;
             }
-            SafetyCommand::Prepare { req, specs, batch } => {
+            SafetyCommand::Prepare {
+                req,
+                mut specs,
+                batch,
+                named,
+            } => {
                 let caller = self.caller(sink);
                 if let Some(why) = caller.refusal() {
                     return self
                         .refuse(sink, Some(req), "prepare", why, json!({}))
                         .await;
+                }
+                // A device named by its instance goes where its device
+                // answers as it, asked after one Who-Is for it (#2824).
+                if let Some((instance, network)) = named {
+                    match placed(client, rate, instance, network).await {
+                        Ok(address) => {
+                            for spec in &mut specs {
+                                spec.address = address.clone();
+                            }
+                        }
+                        Err(why) => {
+                            let fields = json!({ "device": instance });
+                            return self.refuse(sink, Some(req), "prepare", why, fields).await;
+                        }
+                    }
                 }
                 let dangerous = self.options.policy.dangerous;
                 let prepared = self

@@ -21,7 +21,6 @@ use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, Broadcast, DeviceEvent, DeviceEventKind};
 use bacnet_client::discovery::DiscoveredDevice;
-use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::PropertyIdentifier;
@@ -50,10 +49,6 @@ pub struct Destination {
 /// The client's error as the CLI prints it.
 fn text(error: Error) -> String {
     error.to_string()
-}
-
-fn not_found(instance: u32) -> String {
-    format!("Device {instance} not found. Run 'discover' first or use an address.")
 }
 
 /// A target's refusal, naming the flag that picks the link it needs when
@@ -85,45 +80,19 @@ pub async fn resolve<T: TransportPort + 'static>(
                 .await
                 .map_err(|e| with_link_flag(e.to_string()))?,
         ),
-        Target::Instance(instance) => {
-            let claims = claims(client, instance).await?;
-            confirm::confirmed(client, &instance.to_string(), instance, claims).await
-        }
+        Target::Instance(instance) => confirm::confirmed(client, instance, None, wait).await,
         Target::Routed { dnet, instance } => {
-            let found = find_routed(client, dnet, &Station::Instance(instance), wait).await?;
-            let name = format!("{dnet}:{instance}");
-            confirm::confirmed(client, &name, instance, vec![found]).await
+            confirm::confirmed(client, instance, Some(dnet), wait).await
         }
         Target::RoutedMac {
             dnet,
             mac,
             one_station,
         } => {
-            let station = Station::Mac { mac, one_station };
+            let station = Station { mac, one_station };
             station.check(dnet, client.network_number())?;
             find_routed(client, dnet, &station, wait).await
         }
-    }
-}
-
-/// Every address the discovery table has claiming `instance`: one, or each
-/// an ambiguous lookup names.
-async fn claims<T: TransportPort + 'static>(
-    client: &BACnetClient<T>,
-    instance: u32,
-) -> Result<Vec<Destination>, String> {
-    match client.get_device(instance).await {
-        Ok(Some(device)) => Ok(vec![Destination::of(&device)?]),
-        Ok(None) => Err(not_found(instance)),
-        Err(Error::AmbiguousDevice { candidates, .. }) => Ok(candidates
-            .iter()
-            .filter_map(|c| DeviceAddress::new(c.network_number, &c.mac_address).ok())
-            .map(|address| Destination {
-                address,
-                instance: Some(instance),
-            })
-            .collect()),
-        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -135,25 +104,6 @@ impl Destination {
             instance: None,
         })
     }
-
-    /// Where `device`, a row of the discovery table, answers.
-    fn of(device: &DiscoveredDevice) -> Result<Self, String> {
-        let instance = device.object_identifier.instance_number();
-        let address =
-            DeviceAddress::of(device).ok_or_else(|| {
-                match DeviceAddress::one_station_form(device) {
-                    Some(form) => format!(
-                        "device {instance} answered from {form}, an address that needs the \
-                     one-station form: name it by that address"
-                    ),
-                    None => format!("device {instance} has no address the CLI can write"),
-                }
-            })?;
-        Ok(Self {
-            address,
-            instance: Some(instance),
-        })
-    }
 }
 
 /// Resolve `text` to a MAC on this network, for the commands that only go
@@ -162,6 +112,7 @@ impl Destination {
 pub async fn resolve_mac<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     text: &str,
+    wait: Duration,
 ) -> Result<Vec<u8>, String> {
     match parse_target_on(client.transport(), text).map_err(with_link_flag)? {
         Target::Mac(mac) => Ok(mac),
@@ -175,12 +126,20 @@ pub async fn resolve_mac<T: TransportPort + 'static>(
                      alarm-summary, enrollment-summary, file-read, file-write, write, writem, subscribe, control, reinit, time-sync, create-object, delete-object and ack-alarm reach routed devices"
                 )
             };
-            let claims = claims(client, instance).await?;
-            // Refused before anything is asked when every claim is routed.
-            if claims.iter().all(|claim| !claim.address.is_local()) {
+            // Refused before anything is sent when every claim is routed.
+            let own = client.network_number();
+            let claims: Vec<DeviceAddress> = client
+                .discovered_devices()
+                .await
+                .iter()
+                .filter(|row| row.object_identifier.instance_number() == instance)
+                .filter_map(DeviceAddress::of)
+                .map(|at| at.localized(own))
+                .collect();
+            if !claims.is_empty() && claims.iter().all(|at| !at.is_local()) {
                 return Err(behind_a_router());
             }
-            let found = confirm::confirmed(client, &instance.to_string(), instance, claims).await?;
+            let found = confirm::confirmed(client, instance, None, wait).await?;
             match found.address.is_local() {
                 true => Ok(found.address.mac().to_vec()),
                 false => Err(behind_a_router()),
@@ -193,15 +152,12 @@ pub async fn resolve_mac<T: TransportPort + 'static>(
     }
 }
 
-/// How a routed target names its device.
-enum Station {
-    Instance(u32),
-    /// A station by its MAC, marked one station by the target's
-    /// `:one-station` suffix (#2738).
-    Mac {
-        mac: Vec<u8>,
-        one_station: bool,
-    },
+/// A routed station named by its MAC, marked one station by the target's
+/// `:one-station` suffix (#2738). A device named by its instance is placed
+/// by [`confirm`] instead.
+struct Station {
+    mac: Vec<u8>,
+    one_station: bool,
 }
 
 impl Station {
@@ -211,9 +167,7 @@ impl Station {
     /// client's own network, where it is on this link and the mark lifts
     /// nothing.
     fn check(&self, dnet: u16, own: Option<u16>) -> Result<(), String> {
-        let Self::Mac { mac, one_station } = self else {
-            return Ok(());
-        };
+        let Self { mac, one_station } = self;
         if !one_station {
             return DeviceAddress::new(dnet, mac).map(drop).map_err(|why| {
                 // On the client's own network the MAC is a local one, and
@@ -241,18 +195,13 @@ impl Station {
     /// can't mark itself), so a marked target takes the row by its raw
     /// address.
     fn address_of(&self, dnet: u16, device: &DiscoveredDevice) -> Option<DeviceAddress> {
-        match self {
-            Self::Mac {
-                mac,
-                one_station: true,
-            } => {
-                let at = device.address()?;
-                (at.network_number == dnet && at.mac_address.as_slice() == mac.as_slice())
-                    .then(|| DeviceAddress::marked(dnet, mac).ok())
-                    .flatten()
-            }
-            _ => DeviceAddress::of(device),
+        if !self.one_station {
+            return DeviceAddress::of(device);
         }
+        let at = device.address()?;
+        (at.network_number == dnet && at.mac_address.as_slice() == self.mac.as_slice())
+            .then(|| DeviceAddress::marked(dnet, &self.mac).ok())
+            .flatten()
     }
 
     /// Match a received or cached row with one snapshot of the local number.
@@ -265,10 +214,7 @@ impl Station {
         let address = self.address_of(dnet, device)?.localized(own);
         let network = if Some(dnet) == own { 0 } else { dnet };
         let instance = device.object_identifier.instance_number();
-        let selected = match self {
-            Self::Instance(wanted) => *wanted == instance,
-            Self::Mac { mac, .. } => mac.as_slice() == address.mac(),
-        };
+        let selected = self.mac.as_slice() == address.mac();
         (selected && address.network() == network).then_some(Destination {
             address,
             instance: Some(instance),
@@ -287,26 +233,7 @@ impl Station {
             .filter_map(|row| self.destination(dnet, own, row))
             .collect();
         match found.as_slice() {
-            [] => {
-                // An instance whose only claimant answered from an address
-                // the mark lifts has no `DeviceAddress`: say so, and how to
-                // name it, instead of waiting for an answer (#2738).
-                let Self::Instance(wanted) = self else {
-                    return None;
-                };
-                let form = devices
-                    .iter()
-                    .filter(|row| {
-                        row.object_identifier.instance_number() == *wanted
-                            && row.source_network == Some(dnet)
-                    })
-                    .find_map(DeviceAddress::one_station_form)?;
-                Some(Err(format!(
-                    "device {} answered from {form}, an address that needs the one-station \
-                     form: name it by that address",
-                    self.name(dnet)
-                )))
-            }
+            [] => None,
             [station] => Some(Ok(station.clone())),
             several => {
                 let at: Vec<_> = several
@@ -323,24 +250,18 @@ impl Station {
     }
 
     fn name(&self, dnet: u16) -> String {
-        match self {
-            Self::Instance(instance) => format!("{dnet}:{instance}"),
-            // The target parser takes no empty MAC, so this is always a
-            // station; the fallback is never printed.
-            Self::Mac { mac, one_station } => {
-                bacnet_ops::target::routed_target(dnet, mac, *one_station)
-                    .unwrap_or_else(|| format!("{dnet}:*"))
-            }
-        }
+        // The target parser takes no empty MAC, so this is always a
+        // station; the fallback is never printed.
+        bacnet_ops::target::routed_target(dnet, &self.mac, self.one_station)
+            .unwrap_or_else(|| format!("{dnet}:*"))
     }
 }
 
 /// The device `station` names on network `dnet`: its address, from the
-/// discovery table or, failing that, from its answer to a Who-Is sent to
-/// that instance on its network or directly to the named MAC. A routed
-/// MAC the table holds needs nothing sent, and nor does one on this
-/// client's own network, once it knows the number: that is the local
-/// station. `dnet:instance` claimed twice on that network is ambiguous.
+/// discovery table or, failing that, from its answer to a Who-Is sent
+/// directly to the named MAC, then to its network. A routed MAC the table
+/// holds needs nothing sent, and nor does one on this client's own
+/// network, once it knows the number: that is the local station.
 async fn find_routed<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     dnet: u16,
@@ -351,57 +272,38 @@ async fn find_routed<T: TransportPort + 'static>(
     if let Some(found) = station.known(dnet, own, &cached) {
         return found;
     }
-    if let Station::Mac { mac, .. } = station
-        && own == Some(dnet)
-    {
-        return Destination::local(mac);
+    if own == Some(dnet) {
+        return Destination::local(&station.mac);
     }
     // Subscribe before asking, so the answer can't slip in between.
     let mut events = client.device_events();
-    // How many Who-Is went out, each with its own wait, for the message.
-    let (asked, sent) = match station {
-        Station::Instance(instance) => {
-            let range = DeviceInstanceRange::new(*instance, *instance).map_err(text)?;
-            client
-                .who_is(Broadcast::Network(dnet), Some(range))
-                .await
-                .map_err(text)?;
-            (format!("a Who-Is on network {dnet}"), 1)
-        }
-        Station::Mac { mac, one_station } => {
-            let to = bacnet_client::client::Station::remote(dnet, mac);
-            let to = if *one_station { to.one_station() } else { to };
-            client.who_is_directed(&to, None).await.map_err(text)?;
-            if let Some(found) = answer(client, &mut events, dnet, station, wait).await {
-                return found;
-            }
-            // No answer to the Who-Is addressed to the station: one to its
-            // network, for a station a slave proxy answers for (Clause
-            // 16.10.2). Only the station's own address answers it, and
-            // nothing goes further. A one-shot command keeps no memory of
-            // the miss; bacnet-ops' clients do.
-            client
-                .who_is(Broadcast::Network(dnet), None)
-                .await
-                .map_err(text)?;
-            (
-                format!("neither a Who-Is addressed to it nor one on network {dnet}"),
-                2,
-            )
-        }
+    let to = bacnet_client::client::Station::remote(dnet, &station.mac);
+    let to = if station.one_station {
+        to.one_station()
+    } else {
+        to
     };
+    client.who_is_directed(&to, None).await.map_err(text)?;
+    if let Some(found) = answer(client, &mut events, dnet, station, wait).await {
+        return found;
+    }
+    // No answer to the Who-Is addressed to the station: one to its
+    // network, for a station a slave proxy answers for (Clause 16.10.2).
+    // Only the station's own address answers it, and nothing goes further.
+    // A one-shot command keeps no memory of the miss; bacnet-ops' clients
+    // do.
+    client
+        .who_is(Broadcast::Network(dnet), None)
+        .await
+        .map_err(text)?;
     match answer(client, &mut events, dnet, station, wait).await {
         Some(found) => found,
-        None if sent == 1 => Err(format!(
-            "device {} did not answer {asked} within {} ms",
-            station.name(dnet),
-            wait.as_millis()
-        )),
         None => Err(format!(
-            "device {} answered {asked}, waiting {} ms for each ({} ms in all)",
+            "device {} answered neither a Who-Is addressed to it nor one on network {dnet}, \
+             waiting {} ms for each ({} ms in all)",
             station.name(dnet),
             wait.as_millis(),
-            wait.as_millis() * sent
+            wait.as_millis() * 2
         )),
     }
 }
@@ -423,15 +325,9 @@ async fn answer<T: TransportPort + 'static>(
                 // The queued copy can name a previous instance of the local
                 // station. Match its link identity first and consult the
                 // current snapshot for its network, instance and route.
-                let relevant = match station {
-                    Station::Mac { mac, .. } => station
-                        .address_of(dnet, &event.device)
-                        .is_some_and(|at| at.mac() == mac),
-                    Station::Instance(instance) => {
-                        event.device.object_identifier.instance_number() == *instance
-                            || event.device.source_network == Some(dnet)
-                    }
-                };
+                let relevant = station
+                    .address_of(dnet, &event.device)
+                    .is_some_and(|at| at.mac() == station.mac.as_slice());
                 if event.kind != DeviceEventKind::Lost && relevant {
                     let (own, cached) = client.localized_device_snapshot();
                     if let Some(found) = station.known(dnet, own, &cached) {

@@ -180,6 +180,7 @@ async fn read_only_shows_the_arm_hint_and_sends_no_write() {
         req: 7,
         specs: vec![spec(Some("42"), 8)],
         batch: false,
+        named: None,
     };
     site.send(vec![Command::Safety(prepare)]).await;
     site.pump_events_until(|event| {
@@ -432,6 +433,7 @@ async fn the_worker_disarms_at_expiry_on_its_own_clock() {
         req: 3,
         specs: vec![spec(Some("42"), 12)],
         batch: false,
+        named: None,
     };
     site.send(vec![Command::Safety(prepare)]).await;
     site.pump_events_until(|event| {

@@ -210,8 +210,9 @@ pub(crate) enum Line {
     Watch(Point),
     /// Start or stop CSV logging.
     Csv(bool),
-    /// A WritePropertyMultiple batch.
-    Writem(Vec<WriteSpec>),
+    /// A WritePropertyMultiple batch, with the instance (and network) its
+    /// device was named by, if it was (#2824).
+    Writem(Vec<WriteSpec>, Option<(u32, Option<u16>)>),
     /// Show a BBMD's tables.
     Bbmd(Option<std::net::SocketAddrV4>),
     /// Search for an object by name, where the scope says; an empty name
@@ -327,6 +328,16 @@ fn device(word: &str, command: &str, devices: &DeviceTable) -> Result<(u32, Opti
             "'{word}': {command} takes a device from the device table \
              (N, dnet:N or dnet:0xMAC)"
         )),
+    }
+}
+
+/// The instance (and network, for `dnet:N`) `word` names its device by:
+/// `None` for an address.
+fn named(word: &str) -> Option<(u32, Option<u16>)> {
+    match parse_target(word) {
+        Ok(Target::Instance(instance)) => Some((instance, None)),
+        Ok(Target::Routed { dnet, instance }) => Some((instance, Some(dnet))),
+        _ => None,
     }
 }
 
@@ -534,10 +545,10 @@ pub(crate) fn parse(text: &str, devices: &DeviceTable) -> Result<Line, String> {
     let wrong = || format!("usage: {}", syntax.usage.join(" | "));
     let plain: Vec<&str> = args.iter().map(|w| w.text.as_str()).collect();
     match (syntax.name, plain.as_slice()) {
-        ("writem", [target, ..]) => Ok(Line::Writem(writes(
-            row(target, "writem", devices)?,
-            &args[1..],
-        )?)),
+        ("writem", [target, ..]) => Ok(Line::Writem(
+            writes(row(target, "writem", devices)?, &args[1..])?,
+            named(target),
+        )),
         ("watch", [target, object_word, rest @ ..]) => {
             let (device, network) = device(target, "watch", devices)?;
             let object = object(object_word)?;
@@ -606,7 +617,7 @@ impl App {
                 match parse(&line, &self.devices) {
                     Ok(Line::Watch(point)) => self.watch_point(point, out),
                     Ok(Line::Csv(on)) => out.push(Command::Watch(WatchCommand::Csv(on))),
-                    Ok(Line::Writem(specs)) => self.prepare(specs, true, out),
+                    Ok(Line::Writem(specs, named)) => self.prepare(specs, true, named, out),
                     Ok(Line::Bbmd(bbmd)) => self.show_bbmd(bbmd, out),
                     Ok(Line::Find(name, scope)) => self.find(name, scope, out),
                     Ok(Line::Mstp(setting)) => self.mstp_setting(setting),

@@ -84,6 +84,11 @@ pub(crate) enum SafetyCommand {
         specs: Vec<WriteSpec>,
         /// Send them as one WritePropertyMultiple.
         batch: bool,
+        /// The device instance (and network, as `dnet:N`) the command bar
+        /// named the device by: it is placed where its device answers as it
+        /// before anything is read (#2824), and the writes go there. `None`
+        /// for a device named by its address.
+        named: Option<(u32, Option<u16>)>,
     },
     /// Send a confirmed preview.
     Execute {

@@ -1,89 +1,90 @@
 //! A device named by its instance is reached only at an address whose
 //! device answered as that instance to a question of this client's own
-//! (#2824), as a `bacnet_ops` handle is placed. The discovery table is
-//! filled by I-Ams nobody asked for, which anyone can send, so a claim in
-//! it is asked which device answers there first: one read of its Device
-//! object by the wildcard instance, or, refused, of the instance's own
-//! (`bacnet_ops::device::identify`). The refusal names each address asked
-//! and what answered there.
+//! (#2824), placed as a `bacnet_ops` handle is: unless a row registered by
+//! hand claims it, one Who-Is for it first (the settle time for its
+//! answers, or the wait for a first answer when nothing claims it), then
+//! every claim asked which device answers there, all at once
+//! (`bacnet_ops::device::place_instance`). The refusal names each address
+//! asked and what answered there.
+
+use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::DeviceAddress;
-use bacnet_ops::device::{Answer, identify, placed};
+use bacnet_ops::device::{Look, place_instance};
 use bacnet_ops::limits::RequestLimits;
+use bacnet_ops::{DeviceAddress, OpsError, Scope};
 use bacnet_transport::port::TransportPort;
 
 use super::Destination;
 
-/// The one of `claims`, the addresses claiming device `instance` (named
-/// `name` as the target wrote it), whose device answers as it, while no
-/// other may be it ([`placed`]). Each is asked in turn, but a row the
-/// application registered by hand, never announced, which is its own word
-/// as an address it names is.
+/// The destination of device `instance`, on network `dnet` when the target
+/// names one (a bare instance asks this network alone, as the high-level
+/// client's default resolve scope does), at the address whose device
+/// answers as it, its Who-Is waiting up to `wait` for a first answer when
+/// nothing claims it.
 pub(super) async fn confirmed<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
-    name: &str,
     instance: u32,
-    claims: Vec<Destination>,
+    dnet: Option<u16>,
+    wait: Duration,
 ) -> Result<Destination, String> {
     // A one-shot command has the device to itself: no rate cap beyond the
     // client's own.
     let limits = RequestLimits::new(0);
-    let mut asked = Vec::with_capacity(claims.len());
-    for claim in claims {
-        let at = claim.address;
-        let row = client.get_device_at(at.network(), at.mac()).await;
-        let registered = row.is_some_and(|row| {
-            row.last_announced.is_none() && row.object_identifier.instance_number() == instance
+    let own = client.network_number();
+    let scope = match dnet {
+        Some(dnet) if Some(dnet) != own => Scope::Network(dnet),
+        _ => Scope::Local,
+    };
+    let name = match dnet {
+        Some(dnet) => format!("{dnet}:{instance}"),
+        None => instance.to_string(),
+    };
+    // A claimant that answered from an address the one-station mark lifts
+    // has no address of its own to ask: say so, and how to name it, with
+    // nothing sent (#2738).
+    let rows = client.discovered_devices().await;
+    let rows: Vec<_> = rows
+        .iter()
+        .filter(|row| row.object_identifier.instance_number() == instance)
+        .filter(|row| dnet.is_none_or(|dnet| row.source_network == Some(dnet)))
+        .collect();
+    if !rows.iter().any(|row| DeviceAddress::of(row).is_some())
+        && let Some(form) = rows
+            .iter()
+            .find_map(|row| DeviceAddress::one_station_form(row))
+    {
+        return Err(format!(
+            "device {name} answered from {form}, an address that needs the one-station \
+             form: name it by that address"
+        ));
+    }
+    let look = Look { scope, wait };
+    let placement = place_instance(client, &limits, instance, dnet, Some(look)).await;
+    if let Err(OpsError::UnknownDevice { asked, .. }) = &placement.placed {
+        return Err(match asked {
+            Some(Scope::Network(network)) => format!(
+                "Device {name} not found: it did not answer a Who-Is on network {network} \
+                 within {} ms",
+                wait.as_millis()
+            ),
+            Some(_) => format!(
+                "Device {name} not found: it did not answer a Who-Is on this network within \
+                 {} ms",
+                wait.as_millis()
+            ),
+            None => format!(
+                "Device {name} not found: the discovery table holds no row for it, and the \
+                 Who-Is for it couldn't be sent"
+            ),
         });
-        let answer = match registered {
-            true => Answer::Is(instance),
-            false => identify(client, &limits, &at, instance).await,
-        };
-        asked.push((at, answer));
     }
-    match placed(instance, &asked) {
-        Ok(address) => Ok(Destination {
-            address,
-            instance: Some(instance),
-        }),
-        Err(_) => Err(refusal(name, instance, &asked)),
+    if let Some(refusal) = placement.refusal(&name, &|at| at.to_string()) {
+        return Err(refusal);
     }
-}
-
-/// Why device `name` is reached nowhere: each address asked, and what
-/// answered there.
-fn refusal(name: &str, instance: u32, asked: &[(DeviceAddress, Answer)]) -> String {
-    match asked {
-        [(at, answer)] => format!(
-            "device {name} is claimed at {at}, but asked which device answers there, {}: \
-             nothing was sent to it. Name the device by its address to reach whatever \
-             answers there",
-            said(*answer, instance)
-        ),
-        _ => {
-            let each: Vec<String> = asked
-                .iter()
-                .map(|(at, answer)| format!("{at} ({})", said(*answer, instance)))
-                .collect();
-            format!(
-                "device {name} is claimed at {}, and not one of them alone answered as \
-                 device {instance}; name one by its address",
-                each.join(" and ")
-            )
-        }
-    }
-}
-
-/// What `answer` says, asked for device `instance`.
-fn said(answer: Answer, instance: u32) -> String {
-    match answer {
-        Answer::Is(found) => format!("it answered as device {found}"),
-        Answer::Has(found) => format!("it has device {found}'s Device object"),
-        Answer::Not => format!("it has no Device object {instance}"),
-        Answer::Unclear => "it turned the question away".into(),
-        Answer::Failed => "the question couldn't be sent".into(),
-        Answer::Silent => "it didn't answer".into(),
-        _ => "its answer named no device".into(),
-    }
+    let address = placement.placed.map_err(|error| error.to_string())?;
+    Ok(Destination {
+        address,
+        instance: Some(instance),
+    })
 }

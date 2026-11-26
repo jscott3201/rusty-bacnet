@@ -104,7 +104,7 @@ async fn a_one_station_target_is_sent_to_its_dnet_and_dadr() {
 /// this link, so the target is refused whatever the table holds.
 #[test]
 fn a_one_station_target_on_the_own_network_is_refused() {
-    let marked = Station::Mac {
+    let marked = Station {
         mac: vec![0xFF],
         one_station: true,
     };
@@ -132,7 +132,7 @@ async fn the_refusals_say_how_to_name_the_station() {
     assert!(sent.is_empty(), "nothing sent, nothing waited for");
     client.stop().await.unwrap();
 
-    let unmarked = Station::Mac {
+    let unmarked = Station {
         mac: vec![0x00, 0x12],
         one_station: false,
     };

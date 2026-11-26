@@ -15,16 +15,16 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, Broadcast};
-use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 
 use super::ledger::Entry;
-use bacnet_ops::DeviceAddress;
+use bacnet_ops::device::{Look, place_instance};
 use bacnet_ops::limits::{RequestLimits, Turn};
 use bacnet_ops::raw::{self, Halt, Reader};
 use bacnet_ops::target::AddressStyle;
+use bacnet_ops::{DeviceAddress, OpsError};
 
 /// How long a revert waits for a device it had to look for.
 const FIND_FOR: Duration = Duration::from_secs(3);
@@ -85,6 +85,17 @@ pub enum Unsent {
         /// The device as the entry names it: its address, or its instance.
         device: String,
     },
+    /// A revert of an entry kept without an address whose instance one
+    /// address claims, whose device, asked which it is, didn't answer as it
+    /// (#2824): nothing was sent there.
+    Unconfirmed {
+        /// The entry's device instance.
+        instance: u32,
+        /// The address asked.
+        at: DeviceAddress,
+        /// The address asked and what answered there, as text.
+        said: String,
+    },
 }
 
 impl std::fmt::Display for Unsent {
@@ -131,6 +142,11 @@ impl std::fmt::Display for Unsent {
                 f,
                 "{device} is not in the discovery table, and this revert sends no Who-Is to \
                  find it: discover the device, then revert again"
+            ),
+            Self::Unconfirmed { said, .. } => write!(
+                f,
+                "{said}; this entry predates the ledger keeping addresses, so it goes only \
+                 where its device answers as it"
             ),
         }
     }
@@ -291,25 +307,29 @@ async fn claimed<T: TransportPort + 'static>(
 
 /// Where the revert of `entry` goes, settled before anything is sent there
 /// (the identity read included), in its local form once the client knows
-/// its own network's number. Sends nothing unless `look`.
+/// its own network's number. Sends nothing unless `look`, but questions.
 ///
 /// An entry with an address goes there. A routed one with no row has no
 /// route: with `look` (the caller may look, [`Caller::may_look`]) its
 /// network is asked with a Who-Is for the instance first; without, it is
 /// reported. An entry written before #2560 kept no address: its device is
-/// the one address claiming its instance, after a Who-Is for it when none
-/// does and `look`.
+/// placed as a handle by instance is (#2824), each address claiming its
+/// instance asked which device answers there (each at its gate under
+/// `rate`), after one Who-Is for it on every network when `look` and no
+/// row registered by hand claims it.
 ///
 /// # Errors
 ///
 /// [`Unsent::NotLooking`] for a device that can't be placed without a
 /// Who-Is when `look` is false, [`Unsent::Contested`] for an entry without
-/// an address whose instance two or more addresses claim, and
-/// [`Unsent::Client`] when a Who-Is found nothing.
+/// an address whose instance two or more addresses may be,
+/// [`Unsent::Unconfirmed`] for one whose one claim didn't answer as it,
+/// and [`Unsent::Client`] when a Who-Is found nothing.
 ///
 /// [`Caller::may_look`]: super::desk::Caller::may_look
 pub async fn revert_address<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
+    rate: &RequestLimits,
     entry: &Entry,
     look: bool,
 ) -> Result<DeviceAddress, Unsent> {
@@ -317,34 +337,32 @@ pub async fn revert_address<T: TransportPort + 'static>(
     let style = AddressStyle::of(client.transport());
     let instance = entry.device;
     let Some(address) = &entry.address else {
-        if look {
-            look_for(client, instance).await;
-        }
-        return match DeviceAddress::claiming(client, instance).await {
+        let look = look.then(|| Look {
+            scope: bacnet_ops::Scope::Global,
+            wait: bacnet_ops::client::RESOLVE_WAIT,
+        });
+        let placement = place_instance(client, rate, instance, None, look).await;
+        let said = placement.refusal(&instance.to_string(), &|at| at.styled(style));
+        return match placement.placed {
             Ok(at) => Ok(at.localized(own)),
-            Err(Error::AmbiguousDevice { candidates, .. }) => {
-                // A routed row on this network not yet folded into the
-                // local one (#2572) is no second claim.
-                let mut claims: Vec<DeviceAddress> = candidates
-                    .iter()
-                    .filter_map(|c| DeviceAddress::new(c.network_number, &c.mac_address).ok())
-                    .map(|at| at.localized(own))
-                    .collect();
-                claims.sort();
-                claims.dedup();
-                match <[DeviceAddress; 1]>::try_from(claims) {
-                    Ok([at]) => Ok(at),
-                    Err(claims) => Err(Unsent::Contested {
-                        instance,
-                        claims,
-                        style,
-                    }),
-                }
-            }
-            Err(Error::UnknownDevice { .. }) if !look => Err(Unsent::NotLooking {
-                device: format!("device {instance}"),
+            Err(OpsError::Ambiguous { candidates, .. }) => Err(Unsent::Contested {
+                instance,
+                claims: candidates,
+                style,
             }),
-            Err(error) => Err(Unsent::Client(error)),
+            Err(OpsError::NotConfirmed { at, .. }) => Err(Unsent::Unconfirmed {
+                instance,
+                at,
+                said: said.unwrap_or_default(),
+            }),
+            Err(OpsError::UnknownDevice { asked: None, .. }) if placement.asked.is_empty() => {
+                Err(Unsent::NotLooking {
+                    device: format!("device {instance}"),
+                })
+            }
+            Err(_) => Err(Unsent::Client(Error::UnknownDevice {
+                device: instance.to_string(),
+            })),
         };
     };
     let at = address.clone().localized(own);
@@ -375,7 +393,7 @@ pub async fn reach<T: TransportPort + 'static>(
         .clone()
         .localized(client.network_number())
         .is_local();
-    let heard = Heard::At(address);
+    let heard = Heard(address);
     if local || heard.holds(client).await {
         return;
     }
@@ -394,46 +412,13 @@ pub async fn reach<T: TransportPort + 'static>(
     }
 }
 
-/// For a ledger entry written before #2560, which kept no address: when no
-/// row claims the device `instance`, a Who-Is for that instance, and a
-/// little wait for an answer.
-async fn look_for<T: TransportPort + 'static>(client: &BACnetClient<T>, instance: u32) {
-    let heard = Heard::Claims(instance);
-    if heard.holds(client).await {
-        return;
-    }
-    let Ok(range) = DeviceInstanceRange::new(instance, instance) else {
-        return;
-    };
-    match client.who_is(Broadcast::Global, Some(range)).await {
-        Ok(()) => {
-            if !heard.wait(client).await {
-                tracing::warn!("device {instance} did not answer a Who-Is");
-            }
-        }
-        Err(error) => tracing::warn!("looking for device {instance}: {error}"),
-    }
-}
-
-/// What a Who-Is to find a device waits to hear of.
-enum Heard<'a> {
-    /// A row at this address.
-    At(&'a DeviceAddress),
-    /// A row claiming this instance.
-    Claims(u32),
-}
+/// What a Who-Is to find a device waits to hear of: a row at this address.
+struct Heard<'a>(&'a DeviceAddress);
 
 impl Heard<'_> {
     /// True when the discovery table holds it now.
     async fn holds<T: TransportPort + 'static>(&self, client: &BACnetClient<T>) -> bool {
-        match self {
-            Self::At(address) => address.row(client).await.is_some(),
-            Self::Claims(instance) => client
-                .discovered_devices()
-                .await
-                .iter()
-                .any(|d: &DiscoveredDevice| d.object_identifier.instance_number() == *instance),
-        }
+        self.0.row(client).await.is_some()
     }
 
     /// Check every 100 ms for up to [`FIND_FOR`]; true once it holds.

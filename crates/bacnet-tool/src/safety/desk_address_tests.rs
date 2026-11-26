@@ -627,3 +627,66 @@ async fn a_write_to_a_one_station_address_goes_there() {
         assert_eq!(reopened.entries()[0].address.as_ref(), Some(&address));
     }
 }
+
+/// An I-Am for device `instance` from `from`, as the client hears it.
+fn i_am(from: &[u8], instance: u32) -> ReceivedNpdu {
+    let mut service = BytesMut::new();
+    bacnet_services::who_is::IAmRequest {
+        object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
+        max_apdu_length: 1476,
+        segmentation_supported: bacnet_types::enums::Segmentation::NO_SEGMENTATION,
+        vendor_id: 42,
+    }
+    .encode(&mut service);
+    let apdu = Apdu::UnconfirmedRequest(bacnet_encoding::apdu::UnconfirmedRequest {
+        service_choice: UnconfirmedServiceChoice::I_AM,
+        service_request: service.freeze(),
+    });
+    let mut payload = BytesMut::new();
+    encode_apdu(&mut payload, &apdu).unwrap();
+    let mut npdu = BytesMut::new();
+    let frame = Npdu {
+        payload: payload.freeze(),
+        ..Npdu::default()
+    };
+    encode_npdu(&mut npdu, &frame).unwrap();
+    ReceivedNpdu::unverified(
+        npdu.freeze(),
+        bacnet_types::MacAddr::from_slice(from),
+        true,
+        Vec::new(),
+        None,
+    )
+}
+
+/// The old ledger's entry, kept by instance, while an I-Am for 7 from B
+/// put B in the table, and the device at B answers as device 8: the revert
+/// asks B which device it is (after one Who-Is for 7) and is not sent,
+/// saying what B answered; nothing is written anywhere (#2824).
+#[tokio::test(start_paused = true)]
+async fn an_old_entry_is_not_reverted_where_another_device_claims_it() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(super::super::ledger::FILE),
+        LEDGER_BEFORE_ADDRESSES,
+    )
+    .unwrap();
+    let mut desk = Desk::open(Some(dir.path()), context(), Origin::default());
+    let lab = lab_as(Some(DEVICE + 1)).await;
+    lab.inbox.send(i_am(&B, DEVICE)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let done = desk.revert(&lab.client, &lab.rate, &Armed, |_| true).await;
+    let Outcome::NotSent(why) = &done[0].1 else {
+        panic!("{done:?}");
+    };
+    assert!(
+        why.contains("10.0.0.3:47808") && why.contains("answered as device 8"),
+        "{why}"
+    );
+    let writes = requests(&lab.sent)
+        .into_iter()
+        .filter(|(service, _)| *service == ConfirmedServiceChoice::WRITE_PROPERTY)
+        .count();
+    assert_eq!(writes, 0);
+    assert_eq!(desk.entries().len(), 1, "kept");
+}

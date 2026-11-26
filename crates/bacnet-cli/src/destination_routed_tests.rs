@@ -117,7 +117,9 @@ async fn site() -> (BACnetClient<TestTransport>, SendLog) {
 }
 
 /// A queued routed I-Am and its local table row designate one station
-/// after the client's own network number becomes known.
+/// after the client's own network number becomes known. (A device named
+/// by its instance is placed by `confirm`, whose claims are folded the
+/// same way, #2824.)
 #[tokio::test(start_paused = true)]
 async fn a_queued_routed_answer_and_its_local_alias_match_the_canonical_destination() {
     let (mut client, _) = site().await;
@@ -130,39 +132,22 @@ async fn a_queued_routed_answer_and_its_local_alias_match_the_canonical_destinat
         address: DeviceAddress::local(&[STATION]).unwrap(),
         instance: Some(INSTANCE),
     };
-    let mac = || Station::Mac {
+    let mac = || Station {
         mac: vec![STATION],
         one_station: false,
     };
-    for target in [Station::Instance(INSTANCE), mac()] {
-        assert_eq!(
-            target.destination(DNET, Some(DNET), &queued),
-            Some(expected.clone())
-        );
-        assert_eq!(
-            target.known(DNET, Some(DNET), std::slice::from_ref(&local)),
-            Some(Ok(expected.clone()))
-        );
-    }
-    queued.object_identifier = ObjectIdentifier::new(ObjectType::DEVICE, INSTANCE + 1).unwrap();
-    let stale = Station::Instance(INSTANCE + 1);
-    assert!(stale.destination(DNET, Some(DNET), &queued).is_some());
-    assert!(
-        stale
-            .known(DNET, Some(DNET), std::slice::from_ref(&local))
-            .is_none()
+    assert_eq!(
+        mac().destination(DNET, Some(DNET), &queued),
+        Some(expected.clone())
     );
     assert_eq!(
         mac().known(DNET, Some(DNET), std::slice::from_ref(&local)),
-        Some(Ok(expected))
+        Some(Ok(expected.clone()))
     );
-    let mut different = local.clone();
-    different.mac_address = bacnet_types::MacAddr::from_slice(&[STATION + 1]);
-    assert!(
-        Station::Instance(INSTANCE)
-            .known(DNET, Some(DNET), &[local, different])
-            .unwrap()
-            .is_err()
+    queued.object_identifier = ObjectIdentifier::new(ObjectType::DEVICE, INSTANCE + 1).unwrap();
+    assert_eq!(
+        mac().known(DNET, Some(DNET), std::slice::from_ref(&local)),
+        Some(Ok(expected))
     );
     client.stop().await.unwrap();
 }

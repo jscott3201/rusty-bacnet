@@ -559,7 +559,7 @@ async fn revert_entry<T: TransportPort + 'static>(
     let Some(object) = entry.object() else {
         return Outcome::NotSent(UNKNOWN_PRE_IMAGE.into());
     };
-    let at = match revert_address(client, entry, caller.may_look()).await {
+    let at = match revert_address(client, rate, entry, caller.may_look()).await {
         Ok(at) => at,
         Err(error) => return Outcome::NotSent(error.to_string()),
     };

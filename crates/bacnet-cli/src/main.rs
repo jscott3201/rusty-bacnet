@@ -63,7 +63,9 @@ fn resolve_target_mac<'a, T: TransportPort + 'static>(
     client: &'a BACnetClient<T>,
     target_str: &'a str,
 ) -> Boxed<'a, Vec<u8>> {
-    boxed(move || async move { Ok(destination::resolve_mac(client, target_str).await?) })
+    boxed(
+        move || async move { Ok(destination::resolve_mac(client, target_str, routed_wait()).await?) },
+    )
 }
 
 /// How long a routed target waits for its device to answer a Who-Is sent
