@@ -21,7 +21,7 @@ use super::State;
 use super::stream_tests::{latest, number, ready, until};
 use super::*;
 use crate::Device;
-use crate::device::test_bus::{Bus, N, at, client, mac, server, settle, stop};
+use crate::device::test_bus::{Bus, N, at, client, mac, past_provisional, server, settle, stop};
 use crate::device::{ClientEvent, DeviceAddress};
 
 /// How the watched point's handle is held while the frames come.
@@ -60,6 +60,11 @@ impl Lab {
             Handle::Follows | Handle::Dropped => client.device(N).await.unwrap(),
         };
         assert_eq!(device.follows(), !matches!(handle, Handle::Pinned));
+        if device.follows() {
+            // Claims elsewhere from here on are the hub's and the handles'
+            // to judge, not a provisional placement's (#2824).
+            past_provisional().await;
+        }
         let events = client.events();
         let mut watch = client.watch([device.point("ai:1").unwrap()]).unwrap();
         until(&mut watch, |u| u.state == State::Subscribed).await;

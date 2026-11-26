@@ -13,7 +13,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use tokio::time::Instant;
 
 use super::first_contact_tests::{lab_with, writes};
-use super::test_bus::{N, at, requests, settle, stop, who_is};
+use super::test_bus::{N, at, requests, server, settle, stop, who_is};
 use super::*;
 use crate::client::RESOLVE_WAIT;
 use crate::watch::{Binding, Point, State, Watched};
@@ -254,4 +254,51 @@ async fn a_who_is_the_link_cannot_send_places_nothing() {
     assert!(placement.asked.is_empty(), "{placement:?}");
     assert_eq!(requests(&sent, READ, 2), 0, "nothing asked");
     stop(servers).await;
+}
+
+/// A device slower than the settle time (#2824): the responder at station
+/// 3 claims N alone when the Who-Is settles, answers as N, and the handle
+/// is placed there, provisionally for the resolve wait. The device at
+/// station 2 claims N a second later: that clears the placement's
+/// confirmation, so a write through the handle asks again and is refused
+/// as ambiguous, writing nothing, and so is a new handle. A claim after
+/// the resolve wait changes nothing: the write goes, and a new handle joins
+/// the place.
+#[tokio::test(start_paused = true)]
+async fn a_lone_claim_places_the_handle_for_the_resolve_wait_only_provisionally() {
+    for late in [false, true] {
+        let (bus, client, sent, mut servers) = lab_with(false, true).await;
+        bus.i_am(3, N);
+        settle().await;
+        let device = client.device(N).await.unwrap();
+        assert_eq!(device.address(), at(3));
+        let after = match late {
+            true => RESOLVE_WAIT + Duration::from_millis(100),
+            false => Duration::from_secs(1),
+        };
+        tokio::time::sleep(after).await;
+        servers.push(server(bus.port(2), N, "A").await);
+        bus.i_am(2, N);
+        settle().await;
+        let written = device.write("ai:1 oos", "true", None).await;
+        let again = client.device(N).await;
+        match late {
+            true => {
+                written.unwrap();
+                assert_eq!(again.unwrap().address(), at(3));
+            }
+            false => {
+                assert!(
+                    matches!(&written, Err(OpsError::Ambiguous { .. })),
+                    "{written:?}"
+                );
+                assert!(
+                    matches!(&again, Err(OpsError::Ambiguous { .. })),
+                    "{again:?}"
+                );
+                assert_eq!(writes(&sent), 0);
+            }
+        }
+        stop(servers).await;
+    }
 }

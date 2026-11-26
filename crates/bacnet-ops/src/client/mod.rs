@@ -332,6 +332,9 @@ impl<T: TransportPort + 'static> Client<T> {
     /// whose following
     /// handles, after a request times out, ask once where the device went
     /// and give the answers that long (see [`QUIET`](crate::device::QUIET)).
+    /// A first placement by instance gives its Who-Is's answers `wait`
+    /// where it goes beyond this network or a claim is routed, and a
+    /// handle placed on a lone claim stays provisional that long (#2824).
     /// `None` sends no Who-Is: such a handle fails at once with
     /// [`OpsError::UnknownDevice`](crate::OpsError::UnknownDevice), as does a routed address the discovery
     /// table holds no router for, and a following one goes by the

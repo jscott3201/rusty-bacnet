@@ -101,8 +101,10 @@ impl Placement {
 /// Place device `instance` (on `network` when the target names one) from
 /// `client`'s discovery table (#2824): unless a row registered by hand
 /// claims it, one Who-Is for it to `look`'s scope first (none without
-/// `look`), its answers given half a second, or, with no claim at all, `look`'s
-/// wait for a first answer; then each claim asked which device answers
+/// `look`), its answers given half a second, or `look`'s wait where the
+/// scope goes beyond this network or a claim is routed (a device behind a
+/// router answers later), or, with no claim at all, `look`'s wait for a
+/// first answer; then each claim asked which device answers
 /// there ([`identify`], all at once, each at its gate under `limits`), and
 /// [`placed`] decides. More claims needing a question than
 /// [`MAX_ASKED`](super::MAX_ASKED) place only a single one registered by
@@ -125,6 +127,13 @@ pub async fn place_instance<T: TransportPort + 'static>(
         asked: Vec::new(),
         placed: Err(error),
     };
+    let unknown = |asked: Option<Scope>| OpsError::UnknownDevice {
+        target: match network {
+            Some(network) => format!("{network}:{instance}"),
+            None => instance.to_string(),
+        },
+        asked,
+    };
     let own = client.network_number();
     let scoped = network.map(|n| if Some(n) == own { 0 } else { n });
     let mut claims = claims(client, instance, scoped).await;
@@ -141,9 +150,21 @@ pub async fn place_instance<T: TransportPort + 'static>(
         // A Who-Is the link can't send places nothing: no claim is asked
         // without one, as a handle's placement asks none.
         if let Err(error) = crate::raw::who_is(client, &look.scope, Some(range)).await {
-            return Ok(failed(error));
+            return Ok(failed(match claims.is_empty() {
+                // Nothing claims it: it isn't found, and nothing was sent.
+                true => unknown(None),
+                false => error,
+            }));
         }
         asked = Some(look.scope.clone());
+        // A device behind a router answers later: beyond this network, or
+        // with a routed claim, the answers are given the whole wait.
+        let local =
+            matches!(look.scope, Scope::Local) && claims.iter().all(|(at, _)| at.is_local());
+        let settle = match local {
+            true => SETTLE,
+            false => look.wait.max(SETTLE),
+        };
         if claims.is_empty() {
             let wanted = |row: &DiscoveredDevice| {
                 row.object_identifier.instance_number() == instance
@@ -160,14 +181,14 @@ pub async fn place_instance<T: TransportPort + 'static>(
                     {
                         if !heard {
                             heard = true;
-                            deadline = deadline.min(tokio::time::Instant::now() + SETTLE);
+                            deadline = deadline.min(tokio::time::Instant::now() + settle);
                         }
                     }
                     Ok(Ok(_) | Err(RecvError::Lagged(_))) => {}
                 }
             }
         } else {
-            tokio::time::sleep(SETTLE).await;
+            tokio::time::sleep(settle).await;
         }
         claims = self::claims(client, instance, scoped).await;
     }
@@ -178,13 +199,7 @@ pub async fn place_instance<T: TransportPort + 'static>(
         return Err(Withheld { at, why });
     }
     if claims.is_empty() {
-        return Ok(failed(OpsError::UnknownDevice {
-            target: match network {
-                Some(network) => format!("{network}:{instance}"),
-                None => instance.to_string(),
-            },
-            asked,
-        }));
+        return Ok(failed(unknown(asked)));
     }
     let before: Vec<(DeviceAddress, Option<Answer>, bool)> = claims
         .iter()

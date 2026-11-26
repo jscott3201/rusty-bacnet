@@ -14,7 +14,9 @@ use bacnet_server::server::BACnetServer;
 use bacnet_transport::test_transport::{SendLog, TestTransport};
 use bacnet_types::enums::ConfirmedServiceChoice;
 
-use super::test_bus::{Bus, N, TurnAway, at, client, mac, name_of, requests, server, settle, stop};
+use super::test_bus::{
+    Bus, N, TurnAway, at, client, mac, name_of, past_provisional, requests, server, settle, stop,
+};
 use super::*;
 
 const WRITE: ConfirmedServiceChoice = ConfirmedServiceChoice::WRITE_PROPERTY;
@@ -321,6 +323,7 @@ async fn a_new_handle_asks_its_place_before_joining_it() {
         bus.i_am(2, N);
         settle().await;
         let first = client.device(N).await.unwrap();
+        past_provisional().await;
         servers.push(server(bus.port(3), N, "impostor").await);
         bus.i_am(2, N + 1);
         bus.i_am(3, N);

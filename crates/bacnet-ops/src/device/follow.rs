@@ -59,6 +59,13 @@ pub(crate) struct Place {
     /// A watch hub settled the place once already ([`Client::settle_place`]):
     /// its later starts there go by the hub's own reads, sending no Who-Is.
     pub(super) settled: bool,
+    /// A handle's placement on a lone claim, the one address claiming the
+    /// instance when the Who-Is settled (#2824): from when the resolution
+    /// began until the resolve wait after the placement. Another address
+    /// claiming the instance within that time clears `confirmed`, as the
+    /// device may only have been slow to answer, so the next handle or
+    /// write asks again ([`Client::sweep`]).
+    pub(super) provisional: Option<(Instant, Instant)>,
 }
 
 /// What the device at an address said of itself to one of the client's
@@ -205,17 +212,35 @@ impl<T: TransportPort + 'static> Device<T> {
     /// here, and an answer as the instance, an unclear one or the client's
     /// own failure keeps the write there. A write never moves a handle
     /// (#2795): else nothing is sent, and the error names where the table
-    /// has the instance now, unconfirmed.
+    /// has the instance now, unconfirmed. A place a lone claim's placement
+    /// gave, which another address then contested within the resolve wait
+    /// ([`Place::provisional`]), is placed again first, as a new handle is.
     ///
     /// # Errors
     ///
     /// [`OpsError::NotConfirmed`] when the device at the held place, asked,
-    /// is silent or another device. Nothing but the ask is sent then.
+    /// is silent or another device. Nothing but the ask is sent then. For a
+    /// place placed again, as a new handle's placement fails
+    /// ([`OpsError::Ambiguous`] when another address answers as the
+    /// instance too).
     pub(crate) async fn write_target(&self) -> Result<DeviceAddress, OpsError> {
         let here = self.address();
-        let Pin::Follows { instance, .. } = &self.pin else {
+        let Pin::Follows {
+            instance,
+            network,
+            at,
+        } = &self.pin
+        else {
             return Ok(here);
         };
+        self.client.sweep();
+        if !lock(at).confirmed {
+            // A lone claim's placement another address contested within the
+            // resolve wait (#2824): placed again first, as a new handle is,
+            // which never moves the handles.
+            let key = self.client.key(*network, *instance);
+            self.client.reconfirm(key, *network).await?;
+        }
         if self.client.holds(&here, *instance).await {
             return Ok(here);
         }
@@ -326,6 +351,9 @@ impl<T: TransportPort + 'static> Client<T> {
     /// placed by asking, the place's address with the claims, and with
     /// what its device answered already.
     pub(super) async fn joining(&self, key: FollowKey) -> Joining {
+        // A lone claim's placement another address contested within the
+        // resolve wait loses its confirmation here (#2824).
+        self.sweep();
         let Some(followed) = self.live_place(key) else {
             return Joining::Ask(None);
         };
@@ -359,9 +387,10 @@ impl<T: TransportPort + 'static> Client<T> {
     /// The place of the handles following `key`, at `address`, where its
     /// device has just confirmed the instance (#2824), with what each claim
     /// `asked` answered: a new one, or the live one there, marked
-    /// confirmed. A new handle's placement never moves the handles or a
-    /// watch hub following the instance already (#2795: only their own
-    /// reads move them).
+    /// confirmed, `provisional` for a placement on a lone claim
+    /// ([`Place::provisional`]). A new handle's placement never moves the
+    /// handles or a watch hub following the instance already (#2795: only
+    /// their own reads move them).
     ///
     /// # Errors
     ///
@@ -374,6 +403,7 @@ impl<T: TransportPort + 'static> Client<T> {
         key: FollowKey,
         address: DeviceAddress,
         asked: &[(DeviceAddress, Answer)],
+        provisional: Option<(Instant, Instant)>,
     ) -> Result<Followed, OpsError> {
         let held = {
             let mut follows = lock(&self.shared.follows);
@@ -385,6 +415,7 @@ impl<T: TransportPort + 'static> Client<T> {
                         asked: None,
                         confirmed: true,
                         settled: false,
+                        provisional,
                     }));
                     keep_room(&mut follows, |entry| entry.strong_count() > 0);
                     follows.insert(key, Arc::downgrade(&followed));
@@ -396,6 +427,7 @@ impl<T: TransportPort + 'static> Client<T> {
         let here = self.localized(place.at.clone());
         if here == address {
             place.confirmed = true;
+            place.provisional = provisional;
             drop(place);
             return Ok(held);
         }
@@ -459,6 +491,7 @@ impl<T: TransportPort + 'static> Client<T> {
             asked: None,
             confirmed: false,
             settled: false,
+            provisional: None,
         }));
         keep_room(&mut follows, |entry| entry.strong_count() > 0);
         follows.insert(key, Arc::downgrade(&followed));
@@ -677,6 +710,7 @@ impl<T: TransportPort + 'static> Client<T> {
             }
             place.at = to.clone();
             place.confirmed = true;
+            place.provisional = None;
         }
         self.moved(key.1, from.clone(), to.clone());
         // Shared again by the next handle made for it, if none holds it.
@@ -783,6 +817,8 @@ impl<T: TransportPort + 'static> Client<T> {
         // Each address changed, with the instance announced there; `None`
         // for a row lost.
         let mut changed = Vec::new();
+        // Each I-Am among them: its address, instance and time.
+        let mut announced = Vec::new();
         let mut missed = false;
         {
             let mut changes = lock(&self.shared.changes);
@@ -794,7 +830,11 @@ impl<T: TransportPort + 'static> Client<T> {
                         };
                         let named = (event.kind != DeviceEventKind::Lost)
                             .then(|| event.device.object_identifier.instance_number());
-                        changed.push((self.localized(address), named));
+                        let address = self.localized(address);
+                        if let (Some(instance), Some(at)) = (named, event.device.last_announced) {
+                            announced.push((address.clone(), instance, at));
+                        }
+                        changed.push((address, named));
                     }
                     Err(TryRecvError::Lagged(_)) => missed = true,
                     Err(TryRecvError::Empty | TryRecvError::Closed) => break,
@@ -804,6 +844,7 @@ impl<T: TransportPort + 'static> Client<T> {
         if changed.is_empty() && !missed {
             return;
         }
+        self.contest(&announced, missed);
         {
             let mut instances = lock(&self.shared.instances);
             if missed {
@@ -838,6 +879,39 @@ impl<T: TransportPort + 'static> Client<T> {
 
         // And the COV support learned there, on the same terms (#2603).
         self.forget_cov(&changed, missed);
+    }
+}
+
+impl<T: TransportPort + 'static> Client<T> {
+    /// Clear the confirmation of each live place a lone claim's placement
+    /// gave ([`Place::provisional`]) whose instance another address
+    /// `announced` within its window (#2824): its next handle or write asks
+    /// again. A burst of the table's changes missed (`missed`) clears them
+    /// all.
+    fn contest(&self, announced: &[(DeviceAddress, u32, Instant)], missed: bool) {
+        let places: Vec<(u32, Followed)> = lock(&self.shared.follows)
+            .iter()
+            .filter_map(|(key, place)| Some((key.1, place.upgrade()?)))
+            .collect();
+        for (instance, place) in places {
+            let mut place = lock(&place);
+            let Some((from, until)) = place.provisional else {
+                continue;
+            };
+            let here = self.localized(place.at.clone());
+            let contested = missed
+                || announced.iter().any(|(at, claimed, when)| {
+                    *claimed == instance && *at != here && (from..=until).contains(when)
+                });
+            if contested {
+                tracing::debug!(
+                    "device {instance}, placed at {here} on its one claim, is claimed elsewhere \
+                     too: its next handle or write asks again"
+                );
+                place.confirmed = false;
+                place.provisional = None;
+            }
+        }
     }
 }
 

@@ -199,7 +199,8 @@ impl<T: TransportPort + 'static> Client<T> {
                 let (address, asked) = self
                     .resolve_claims((key, named), live, (&mut turn, since))
                     .await?;
-                self.place_confirmed(key, address, &asked)?
+                let provisional = self.provisional(instance, &address, &asked, since).await;
+                self.place_confirmed(key, address, &asked, provisional)?
             }
         };
         drop(turn);
@@ -247,7 +248,8 @@ impl<T: TransportPort + 'static> Client<T> {
     /// The device claiming `instance` that answers one Who-Is for it, to
     /// the network the target `named` (this client's own as a local
     /// broadcast) and to this clone's [`resolve_scope`](Self::resolve_scope)
-    /// otherwise, listening [`SETTLE`] past its answer for a second. A miss
+    /// otherwise, listening past its answer for a second as long as
+    /// [`settle_time`](Self::settle_time) says. A miss
     /// names the target as written and says where it asked: the network
     /// named, or the resolve scope.
     pub(super) async fn find_instance(
@@ -259,8 +261,9 @@ impl<T: TransportPort + 'static> Client<T> {
         let own = self.low_level().network_number();
         let network = self.scope(named);
         let sent_to = network.map_or(self.resolve_scope(), ResolveScope::on);
+        let settle = self.settle_time(network, &[]);
         let found = self
-            .wait_for(&sent_to.into(), Some(range), SETTLE, |row| {
+            .wait_for(&sent_to.into(), Some(range), settle, |row| {
                 row.object_identifier.instance_number() == instance
                     && network.is_none_or(|n| {
                         DeviceAddress::of(row)

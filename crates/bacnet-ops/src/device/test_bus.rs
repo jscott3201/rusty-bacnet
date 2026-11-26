@@ -76,6 +76,13 @@ pub(crate) async fn settle() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 }
 
+/// Wait out the provisional window of a handle placed on a lone claim
+/// (#2824), the resolve wait: a claim elsewhere after it is judged by the
+/// handles' own rules (#2795) rather than clearing the placement.
+pub(crate) async fn past_provisional() {
+    tokio::time::sleep(crate::client::RESOLVE_WAIT + Duration::from_millis(100)).await;
+}
+
 pub(crate) async fn stop(servers: Vec<BACnetServer<TestTransport>>) {
     for mut server in servers {
         server.stop().await.unwrap();

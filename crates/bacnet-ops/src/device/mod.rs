@@ -28,10 +28,13 @@
 //!   bare instance to the client's resolve scope, this network alone by
 //!   default ([`Client::with_resolve_scope`]), so the device itself, on
 //!   the network but quiet, claims it too: its answers are given half a
-//!   second, or, with no claim at all, the resolve wait
-//!   ([`Client::with_resolve_wait`]) for a first one, a miss failing as
-//!   [`OpsError::UnknownDevice`] saying where it asked. One resolution of
-//!   an instance runs at a time; the others wait, and share its Who-Is.
+//!   second on this network, and the resolve wait
+//!   ([`Client::with_resolve_wait`], 3 s by default) where the Who-Is goes
+//!   beyond it or a claim is routed, as a device behind a router answers
+//!   later; with no claim at all, the resolve wait for a first one, a miss
+//!   failing as [`OpsError::UnknownDevice`] saying where it asked. One
+//!   resolution of an instance runs at a time; the others wait, and share
+//!   its Who-Is once its settle time is over.
 //!   Then each claim is asked which device answers there, all at once:
 //!   one read of its Device object by the wildcard instance, or, for a
 //!   device refusing that, of the instance's own Device object. The
@@ -40,11 +43,17 @@
 //!   [`OpsError::NotConfirmed`] naming it and what it answered, and
 //!   several that don't, or two or more left open, as
 //!   [`OpsError::Ambiguous`], listing them, with nothing but the Who-Is
-//!   and those questions sent. More claims needing a question than
+//!   and those questions sent. A handle placed on a lone claim is so for
+//!   the resolve wait only provisionally: another address claiming the
+//!   instance in that time, as a device slower than the settle time does,
+//!   clears its confirmation, and the next handle made for the instance, or
+//!   write through it, is placed again (both answering: ambiguous). More
+//!   claims needing a question than
 //!   [`MAX_ASKED`] are ambiguous unasked, but a single row registered by
 //!   hand among them places the handle. A placement so costs about half a
-//!   second and one read a claim, about the resolve wait when nothing
-//!   answers. A device's answer is remembered for its address (and
+//!   second on this network (about 3 s for a routed target) and one read a
+//!   claim, about the resolve wait when nothing answers. A device's answer
+//!   is remembered for its address (and
 //!   forgotten as the instance read for an address is), which spares its
 //!   read the next time and nothing more: once the last handle following
 //!   the instance is dropped, the next is placed again, Who-Is included,
