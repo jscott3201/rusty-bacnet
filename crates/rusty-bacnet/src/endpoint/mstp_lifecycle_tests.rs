@@ -487,7 +487,14 @@ async def refused(call, kind):
         return error
     else:
         raise AssertionError(f"{call} was not refused")
+async def not_running(call):
+    # Before start and after close (#2819): the endpoint can start.
+    error = await refused(call, "BacnetStateError")
+    assert isinstance(error, RuntimeError) and error.state == "not_running", repr(error)
+    assert str(error).startswith("endpoint not started"), repr(error)
 async def go():
+    for call in (endpoint.status, endpoint.broadcast_i_am):
+        await not_running(call)
     await endpoint.start()
     client = await endpoint.client()
     assert type(client).__name__ == "BACnetClient", type(client)
@@ -502,6 +509,8 @@ async def go():
     # The endpoint's client never starts again (#2819): still a RuntimeError.
     stopped = await refused(fresh.who_is, "BacnetStateError")
     assert isinstance(stopped, RuntimeError) and stopped.state == "closed", repr(stopped)
+    for call in (endpoint.status, endpoint.broadcast_i_am):
+        await not_running(call)
 asyncio.run(go())
 "#
             ),

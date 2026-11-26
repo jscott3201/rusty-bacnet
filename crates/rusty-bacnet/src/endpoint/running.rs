@@ -115,6 +115,8 @@ impl Running {
         }
         let core = self.session.client().map_err(to_py_err)?;
         let own_instance = self.session.identity().map(|identity| identity.instance());
+        // Not reached: the candidate is new and its slot empty, and nothing
+        // else holds it yet. Kept as a guard against a second seat.
         if !state.seat(core, own_instance) {
             return Err(lifecycle_error(
                 Lifecycle::AlreadyStarted,

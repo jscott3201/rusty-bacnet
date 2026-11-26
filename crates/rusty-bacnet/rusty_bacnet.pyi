@@ -4990,7 +4990,9 @@ class BacnetStateError(BacnetError, RuntimeError):
     have always given. Nothing was done, and the link did not fail:
     ``except BacnetTransportError`` does not catch it. Also a
     ``RuntimeError``, the class those checks raised before, so ``except
-    RuntimeError`` still catches them.
+    RuntimeError`` still catches them; ``except BacnetError`` now does too,
+    so a loop that retries on ``BacnetError`` should let this class through
+    (or retry only ``"not_connected"``).
 
     A request that went out before the client or its link stopped under it
     is not one: it raises ``BacnetError`` whose message says the device may
@@ -5000,8 +5002,8 @@ class BacnetStateError(BacnetError, RuntimeError):
         state: Which state refused the call: ``"not_running"`` (not started
             yet, or stopped and able to start again), ``"closed"`` (stopped
             for good, or the channel closed), ``"stopping"`` (a stop is under
-            way, or an abort ended it and a start waits for the stop to
-            finish), ``"already_started"`` (a second start, or a change only
+            way, a stop failed and awaits another ``stop()``, or an abort
+            ended it and a start waits for the stop to finish), ``"already_started"`` (a second start, or a change only
             a component not started yet takes, such as adding objects) or
             ``"not_connected"`` (running, but its hub or BBMD isn't
             connected). None on the class.

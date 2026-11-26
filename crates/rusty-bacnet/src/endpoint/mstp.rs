@@ -13,8 +13,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::endpoint::common::{
-    PendingObject, build_database, build_identity, build_pending_boxes, lifecycle_error,
-    not_running, parse_device_uuid, parse_segmentation, pending_group,
+    PendingObject, build_database, build_identity, build_pending_boxes, not_running, owner_error,
+    parse_device_uuid, parse_segmentation, pending_group,
 };
 use crate::endpoint::lifecycle::Lifecycle;
 use crate::endpoint::running::Running;
@@ -452,7 +452,7 @@ impl PyMstpEndpoint {
             lifecycle
                 .start(false, |objects| config.prepare(objects))
                 .await
-                .map_err(lifecycle_error)?;
+                .map_err(owner_error)?;
             crate::py_async::attach(|py| Ok(py.None()))
         })
     }
@@ -461,7 +461,7 @@ impl PyMstpEndpoint {
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let lifecycle = self.lifecycle.clone();
         crate::py_async::future_into_py(py, async move {
-            lifecycle.close().await.map_err(lifecycle_error)?;
+            lifecycle.close().await.map_err(owner_error)?;
             crate::py_async::attach(|py| Ok(py.None()))
         })
     }
@@ -479,7 +479,7 @@ impl PyMstpEndpoint {
             lifecycle
                 .start(true, |objects| config.prepare(objects))
                 .await
-                .map_err(lifecycle_error)?;
+                .map_err(owner_error)?;
             Ok(self_ref)
         })
     }

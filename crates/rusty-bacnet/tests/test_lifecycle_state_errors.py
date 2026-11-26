@@ -69,9 +69,14 @@ class ClientStateTests(StateErrorCase):
             await self.refused(client.__aenter__, "already_started", "client already started")
         finally:
             await finish(client.stop)
-        # A standalone client starts again after its stop.
         for call in calls:
             await self.refused(call, "not_running", CLIENT_NOT_STARTED)
+        # "not_running": a standalone client starts again after its stop.
+        await asyncio.wait_for(client.__aenter__(), 10)
+        try:
+            self.assertIsInstance(await client.discovered_devices(), list)
+        finally:
+            await finish(client.stop)
 
 
 class ServerStateTests(StateErrorCase):
@@ -84,9 +89,24 @@ class ServerStateTests(StateErrorCase):
                                "cannot start() — server is already running")
             self.refused_now(lambda: server.add_analog_input(2, "AI 2"), "already_started",
                              "cannot add objects after start() — server is already running")
+            self.refused_now(
+                lambda: server.configure_audit_notification_sink(1, policy="deny_all"),
+                "already_started",
+                "cannot configure Audit receipt after start() — server is already running")
         finally:
             await finish(server.stop)
         await self.refused(server.local_address, "not_running", "server not started")
+        # The first start consumed the forwarding configuration for good: a
+        # stopped server still refuses it.
+        self.refused_now(
+            lambda: server.add_device_binding(281999, "127.0.0.1:47808"), "already_started",
+            "cannot configure bindings or Audit parents after start() has consumed configuration")
+        # "not_running": a standalone server starts again after its stop.
+        await asyncio.wait_for(server.start(), 10)
+        try:
+            self.assertIsInstance(await server.local_address(), str)
+        finally:
+            await finish(server.stop)
 
 
 class HubStateTests(StateErrorCase):
@@ -120,8 +140,34 @@ class RouterStateTests(StateErrorCase):
             self.assertEqual(len(await router.ports()), 1)
         finally:
             await finish(router.close)
-        # A router closed cleanly starts again.
         await self.refused(router.ports, "not_running", ROUTER_NOT_STARTED)
+        # "not_running": a router closed cleanly starts again.
+        await asyncio.wait_for(router.start(), 10)
+        try:
+            self.assertEqual(len(await router.ports()), 1)
+        finally:
+            await finish(router.close)
+
+
+class ScAndMstpEndpointStateTests(StateErrorCase):
+    async def test_before_start(self):
+        # Neither reads a file, dials or opens a port before start().
+        sc = rb.ScEndpoint(281903, sc_hub="wss://localhost:1", sc_vmac=b"\x02\0\0\0\0\x03",
+                           sc_ca_cert="absent-ca.pem", sc_client_cert="absent-cert.pem",
+                           sc_client_key="absent-key.pem",
+                           sc_device_uuid=bytes.fromhex("8e62ac46d7084226913776a32b619316"))
+        mstp = rb.MstpEndpoint(281904, serial_port="/tmp/nonexistent")
+        for call, text in (
+            (sc.status, "endpoint not started"),
+            (sc.connection_status, ENDPOINT_NOT_STARTED),
+            (sc.connection_events, ENDPOINT_NOT_STARTED),
+            (sc.broadcast_i_am, ENDPOINT_NOT_STARTED),
+            (sc.client, ENDPOINT_NOT_STARTED),
+            (mstp.status, "endpoint not started"),
+            (mstp.broadcast_i_am, ENDPOINT_NOT_STARTED),
+            (mstp.server, ENDPOINT_NOT_STARTED),
+        ):
+            await self.refused(call, "not_running", text)
 
 
 class EndpointStateTests(StateErrorCase):
@@ -161,6 +207,19 @@ class EndpointStateTests(StateErrorCase):
             server.local_address, "closed",
             "the endpoint this server came from is closed, and its server stopped with it; "
             "after a restart, await endpoint.server() for the new one")
+        # "not_running": the endpoint starts again, and hands out a new
+        # client and server; the old ones stay closed.
+        await asyncio.wait_for(endpoint.start(), 10)
+        try:
+            self.assertTrue((await endpoint.status())["is_running"])
+            self.assertIsNot(await endpoint.client(), client)
+            self.assertIsInstance(await (await endpoint.server()).local_address(), str)
+            await self.refused(server.local_address, "closed",
+                               "the endpoint this server came from is closed, and its server "
+                               "stopped with it; after a restart, await endpoint.server() for "
+                               "the new one")
+        finally:
+            await finish(endpoint.close)
 
 
 if __name__ == "__main__":

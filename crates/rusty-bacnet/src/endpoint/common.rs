@@ -281,7 +281,10 @@ pub(crate) fn build_pending_boxes(
     params.iter().map(PendingObject::build).collect()
 }
 
-pub(crate) fn lifecycle_error(error: super::lifecycle::LifecycleError<PyErr>) -> PyErr {
+/// What the endpoint owner's start or close failed with: a second start
+/// (`BacnetStateError`), a start that a close cancelled, the start's or
+/// stop's own error, or a worker that ended (`RuntimeError`).
+pub(crate) fn owner_error(error: super::lifecycle::LifecycleError<PyErr>) -> PyErr {
     match error {
         // A lifecycle refusal: BacnetStateError, `state` already_started
         // (#1833).
@@ -358,8 +361,7 @@ mod build_database_tests {
     #[test]
     fn a_second_start_raises_the_state_error() {
         Python::initialize();
-        let error =
-            lifecycle_error(super::super::lifecycle::LifecycleError::<PyErr>::AlreadyStarted);
+        let error = owner_error(super::super::lifecycle::LifecycleError::<PyErr>::AlreadyStarted);
         Python::attach(|py| {
             let class = crate::errors::state_error_type(py).unwrap().bind(py);
             let value = error.value(py);
