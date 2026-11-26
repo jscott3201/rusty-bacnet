@@ -198,60 +198,46 @@ struct DispatchTask<S> {
 
 /// Every [`DEVICE_PURGE_INTERVAL`], drop the devices not heard from in
 /// [`DEVICE_MAX_AGE`] and announce each as lost, then each contest that
-/// lost a claimant. Between purges, check the routed paths the dispatch
-/// task has cues for, as they fall due (`route_checks`, #2823). A task of
-/// its own, so the dispatch loop doesn't poll this timer on every turn
-/// (#1978 item 8); the loop ends it when it ends itself, and `stop()` and
-/// drop abort both.
+/// lost a claimant. Beside it, polled in the same task, the checks of the
+/// routed paths the dispatch task marked (`route_checks`, #2823): a check's
+/// waits never hold a purge back. A task of its own, so the dispatch loop
+/// doesn't poll this timer on every turn (#1978 item 8); the loop ends it
+/// when it ends itself, and `stop()` and drop abort both, the checks with
+/// it.
 fn spawn_device_purge<T: TransportPort + 'static>(
     device_table: Arc<network_number::Discovery>,
     device_tx: broadcast::Sender<DeviceEvent>,
     device_collision_tx: broadcast::Sender<DeviceCollisionEvent>,
-    mut route_checks: route_checks::RouteChecks<T>,
+    route_checks: route_checks::RouteChecks<T>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(DEVICE_PURGE_INTERVAL);
-        // Tokio intervals tick immediately; consume that tick so purges run
-        // on the configured cadence.
-        interval.tick().await;
-        loop {
-            let due = route_checks.next_due();
-            tokio::select! {
-                _ = interval.tick() => {
-                    // The events go out under the table's lock, as a
-                    // broadcast send never waits. The dispatch task adds a
-                    // device and announces it in that order, so a device it
-                    // adds back after this purge is announced after its Lost
-                    // event, never before.
-                    let mut table = device_table.lock();
-                    let purged = table.purge_stale_collect(DEVICE_MAX_AGE);
-                    for device in purged.lost {
-                        let _ = device_tx.send(DeviceEvent {
-                            kind: DeviceEventKind::Lost,
-                            device,
-                        });
-                    }
-                    for instance in purged.contested {
-                        let _ =
-                            device_collision_tx.send(DeviceCollisionEvent::of(&table, instance));
-                    }
+        let purge = async {
+            let mut interval = tokio::time::interval(DEVICE_PURGE_INTERVAL);
+            // Tokio intervals tick immediately; consume that tick so purges
+            // run on the configured cadence.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                // The events go out under the table's lock, as a broadcast
+                // send never waits. The dispatch task adds a device and
+                // announces it in that order, so a device it adds back after
+                // this purge is announced after its Lost event, never before.
+                let mut table = device_table.lock();
+                let purged = table.purge_stale_collect(DEVICE_MAX_AGE);
+                for device in purged.lost {
+                    let _ = device_tx.send(DeviceEvent {
+                        kind: DeviceEventKind::Lost,
+                        device,
+                    });
                 }
-                () = device_table.route_cue.notified() => {}
-                () = sleep_until_due(due) => {}
+                for instance in purged.contested {
+                    let _ = device_collision_tx.send(DeviceCollisionEvent::of(&table, instance));
+                }
             }
-            route_checks
-                .run(&device_table, (&device_tx, &device_collision_tx))
-                .await;
-        }
+        };
+        let checks = route_checks.run(&device_table, (&device_tx, &device_collision_tx));
+        tokio::join!(purge, checks);
     })
-}
-
-/// Sleep until `due`, or forever with nothing due.
-async fn sleep_until_due(due: Option<tokio::time::Instant>) {
-    match due {
-        Some(due) => tokio::time::sleep_until(due).await,
-        None => std::future::pending().await,
-    }
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -277,7 +263,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         options.validate()?;
 
         let mut network = NetworkLayer::new(transport);
-        let network_control_rx = network.enable_network_control_receiver()?;
+        let (network_control_rx, control_drops) =
+            network.enable_network_control_receiver_counting_drops()?;
         let apdu_rx = network.start().await?;
         let _bucket = cap_max_apdu_to_transport(
             config.max_apdu_length,
@@ -285,18 +272,27 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         )?;
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
         let inbound = Own::new(Arc::new(network), apdu_rx, network_control_rx);
-        Ok(Self::assemble(config, options, inbound, coordinator))
+        Ok(Self::assemble(
+            config,
+            options,
+            inbound,
+            coordinator,
+            control_drops,
+        ))
     }
 
     /// Build the client on a started network layer: its state, its dispatch
     /// task and its Number work. `inbound` is where its APDUs and controls
     /// come from: its own layer's receivers, or a seat's queues (#2617).
-    /// Nothing here waits, and the caller has checked `config` and `options`.
+    /// `control_drops` counts the controls its own layer's queue turned
+    /// away; a seat's has no such count here. Nothing here waits, and the
+    /// caller has checked `config` and `options`.
     pub(super) fn assemble<S: Inbound<T>>(
         mut config: ClientConfig,
         options: ClientOptions,
         mut inbound: S,
         coordinator: Arc<OutboundTransactionCoordinator>,
+        control_drops: bacnet_network::layer::QueueAdmissionCounters,
     ) -> Self {
         // A client that takes no segments states no segment count either:
         // settled here once, so no request's header asks.
@@ -383,6 +379,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let route_checks = route_checks::RouteChecks::new(
             Arc::clone(&network),
             network_report_tx.clone(),
+            control_drops,
             Duration::from_millis(config.apdu_timeout_ms),
         );
         let device_purge_task = spawn_device_purge(

@@ -293,6 +293,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         req: ConfirmedRequestPdu,
         limits: ResponseLimits,
     ) {
+        // Any frame a routed row's own router carries from the device keeps
+        // the row young (#2823).
+        if source_network.is_some() {
+            device_events::heard_routed(&context.device_table.table, source_mac, source_network);
+        }
         let DispatchContext {
             tsm,
             network,
@@ -401,6 +406,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             decode_warning,
             ..
         } = *context;
+        // Any frame a routed row's own router carries from the device keeps
+        // the row young (#2823); an I-Am is taken into the table below.
+        if source_network.is_some() && req.service_choice != UnconfirmedServiceChoice::I_AM {
+            device_events::heard_routed(&device_table.table, source_mac, source_network);
+        }
         if req.service_choice == UnconfirmedServiceChoice::I_AM {
             match bacnet_services::who_is::IAmRequest::decode(&req.service_request) {
                 Ok(i_am) => {

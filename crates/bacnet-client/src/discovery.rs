@@ -116,6 +116,10 @@ struct TableEntry {
     /// evidence, an I-Am heard with no SNET, clears it; a change of number
     /// drops the rows that still carry it.
     by_number: bool,
+    /// When the table first held a row at this address. A refresh, a new
+    /// instance there or a new router keeps it; it ranks the paths the
+    /// client checks (#2823).
+    since: Instant,
 }
 
 /// A row's address: the network (0 for the local one) and the MAC there.
@@ -176,13 +180,20 @@ impl Key {
 /// # Routers
 ///
 /// A routed row's router is the station its first I-Am came through, or the
-/// one a registration names. A later I-Am naming the address through
-/// another station changes nothing on the row (#2823): no frame the client
-/// did not ask for decides where its requests go. It is kept as a cue, and
-/// the client's own check moves the row only when a request of its own
-/// through the old router draws nothing and its own router-discovery query
-/// is answered by one other router alone. [`upsert`](Self::upsert) and
-/// `add_routed_device` set the router they are given.
+/// one a registration names. Once a row is known, no later frame moves its
+/// router (#2823): an I-Am naming the address through another station
+/// changes nothing on the row and marks its path for the client's own
+/// check, which moves the row only when its Who-Is through the old router
+/// draws nothing and one other router alone answers its router-discovery
+/// query. [`upsert`](Self::upsert) and `add_routed_device` set the router
+/// they are given.
+///
+/// What stays open to any station on the link: a row's first sight, also
+/// after a row ages out ([`purge_stale`](Self::purge_stale)), takes the
+/// station its I-Am came through; and since any station can answer a
+/// broadcast router query, one that answers alone while the old router and
+/// its devices are silent is taken. Confirming a device before a write is
+/// #2824. The network number a Network-Number-Is teaches folds rows too.
 ///
 /// An index maps each Device instance to the addresses whose rows claim it.
 /// Two or more addresses can claim one instance, and every one keeps its row:
@@ -219,9 +230,10 @@ pub struct DeviceTable {
     /// Every row's instance and address, so the rows that claim one
     /// instance are found without a scan.
     claims: BTreeSet<(u32, Key)>,
-    /// Routed I-Ams heard through another station than their row's router,
-    /// waiting for the client's check (#2823).
-    route_cues: routes::RouteCues,
+    /// The paths a routed I-Am through another station than their rows'
+    /// router marked, waiting for the client's check, with their pacing
+    /// (#2823).
+    route_paths: routes::RoutePaths,
 }
 
 /// What an I-Am did to the table.
@@ -342,12 +354,14 @@ impl DeviceTable {
             device,
             segmentation,
             by_number,
+            since: now(),
         };
         let full = self.rows.len() >= MAX_DEVICE_TABLE_ENTRIES;
         let previous = match self.rows.get_mut(&key) {
             Some(row) => {
                 let same = row.device.object_identifier.instance_number() == instance;
                 entry.by_number = by_number && (row.by_number || !same);
+                entry.since = row.since;
                 let old = std::mem::replace(row, entry).device;
                 let previous = old.object_identifier.instance_number();
                 if same {
@@ -474,7 +488,7 @@ impl DeviceTable {
     pub fn clear(&mut self) {
         self.rows.clear();
         self.claims.clear();
-        self.route_cues = routes::RouteCues::default();
+        self.route_paths = routes::RoutePaths::default();
     }
 
     /// Number of rows, one per address.
@@ -528,7 +542,9 @@ pub(crate) use localize::Folded;
 
 #[path = "discovery_routes.rs"]
 mod routes;
-pub(crate) use routes::PathKey;
+#[cfg(test)]
+pub(crate) use routes::FIRST_HOLD;
+pub(crate) use routes::{Checked, PathKey};
 
 #[cfg(test)]
 #[path = "discovery_collision_tests.rs"]

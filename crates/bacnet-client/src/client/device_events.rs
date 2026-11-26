@@ -122,6 +122,28 @@ pub(super) fn heard_i_am(
     }
 }
 
+/// A request or notification that came from a routed device through
+/// `source_mac`: when that is the router the device's row names, the row's
+/// age starts again, as an answer to a request starts it (#2823), so a
+/// device heard only through COV or event notifications is not aged out
+/// and opened to first sight again. Only the row's own router can send from
+/// its link address, so another station cannot keep a row young this way.
+/// Kept out of line: the dispatch loop's hot path is the replies.
+#[inline(never)]
+pub(super) fn heard_routed(
+    table: &SyncMutex<DeviceTable>,
+    source_mac: &[u8],
+    source_network: &Option<NpduAddress>,
+) {
+    if let Some(routed) = source_network
+        && !routed.mac_address.is_empty()
+    {
+        table
+            .lock()
+            .heard_through(routed.network, &routed.mac_address, source_mac);
+    }
+}
+
 /// Learn this client's network number `number`, and fold the discovery
 /// table to it in the same locked call (#2572). When it replaces a number
 /// known before, the rows local only by that number are dropped first,

@@ -10994,27 +10994,40 @@ a collision notice. If nothing on the network knows the number, the routed
 row stays until the purge takes it.
 
 A routed row's router is the station its first I-Am came through, or the
-one `add_routed_device` or `DeviceTable::upsert` names (#2823). A later
-I-Am naming the same address through another station changes nothing on
-the row and sends no device notice; it starts the client's own check of
-that path, paced per network and router: at once, then at most once a
-minute, the gap doubling up to ten minutes while such I-Ams keep coming.
-The check sends a Who-Is to the device through the row's router, and
-anything that router carries back from the network (an I-Am, or an answer
-to a request) keeps the path. Only when nothing comes does it broadcast a
-Who-Is-Router-To-Network for the network: the old router among the
-answers keeps the path, and one other router alone takes over every row
-on the network that went through the old one, each reported `Updated`.
-No answer, or several, change nothing. Each step waits the APDU timeout.
+one `add_routed_device` or `DeviceTable::upsert` names (#2823). Once a
+row is known, no later frame moves its router: an I-Am naming the same
+address through another station changes nothing on the row and sends no
+device notice. It marks the path, the network and the row's router, for
+the client's own check, which runs beside the device purge: at once, then
+at most once a minute, the gap doubling up to ten minutes while such
+I-Ams keep coming; a full store of 256 paths keeps the ones with the most
+and the longest known rows, and those are checked first. The check sends a
+Who-Is through the row's router to the station on that network the client
+heard from last through it (never the one the I-Am named), and any frame
+that router carries back from the network (an I-Am, a notification, an
+answer to a request) keeps the path. Only when nothing comes does it
+broadcast a Who-Is-Router-To-Network for the network: the old router
+among the answers keeps the path, and one other router alone takes over
+every row on the network that went through the old one, each reported
+`Updated`. No answer, several, or an answer the client may have lost (its
+report receiver fell behind, or its network layer's control queue turned
+a message away) change nothing. Each step waits the APDU timeout. A node
+that may not initiate (DeviceCommunicationControl) checks nothing.
+
 The standard lets a node learn a router from any frame a network sends it
 (Clause 6.5.3) and authenticates none of them; the client learns a change
-only from answers to its own requests. On a site whose routers never
-answer router queries, the path stays while the devices answer through
-it; when such a router is really replaced, its rows age out after ten
-silent minutes and the devices' next I-Ams through the new router make
-them again, or `add_routed_device` names the new router at once. A device
-the table has not held before still gets its row through the station its
-first I-Am came through (#2824).
+of a known row's router only from answers to its own requests. What this
+leaves to any station on the link: a row's first sight, which takes the
+station its I-Am came through, including after a row ages out of the
+table (ten silent minutes); the network number, learned from a
+Network-Number-Is, which folds routed rows on that network into local
+ones; and the router query itself, which any station can answer, so while
+the old router and its devices are silent a station that answers alone is
+taken (#2824 covers confirming a device before a write). On a site whose
+routers never answer router queries, the path stays while the devices
+answer through it; when such a router is really replaced, its rows age out
+and the devices' next I-Ams through the new router make them again, or
+`add_routed_device` names the new router at once.
 
 A known number that changes (a learned one replaced by a router's
 configured one, or two configured routers that disagree) is logged as a

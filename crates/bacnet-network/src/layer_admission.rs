@@ -417,6 +417,24 @@ impl<T: TransportPort + 'static> NetworkLayer<T> {
         self.enable_network_control(false).map(|(rx, _)| rx)
     }
 
+    /// [`Self::enable_network_control_receiver`], with a handle on the
+    /// controls its queue turns away: the raw receiver dequeues with no
+    /// accounting, so the handle's snapshot counts only the Full and Closed
+    /// drops, with no depth or high-water. A consumer that waits for an
+    /// answer among the controls can tell from it whether one may have been
+    /// dropped meanwhile (#2823).
+    pub fn enable_network_control_receiver_counting_drops(
+        &mut self,
+    ) -> Result<
+        (
+            mpsc::Receiver<ReceivedNetworkControl>,
+            QueueAdmissionCounters,
+        ),
+        Error,
+    > {
+        self.enable_network_control(false)
+    }
+
     /// Enable the control stream with queue-admission snapshots.
     ///
     /// This has the same before-start, one-consumer contract and errors as

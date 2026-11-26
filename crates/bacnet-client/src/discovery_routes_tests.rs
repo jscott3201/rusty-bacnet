@@ -1,6 +1,7 @@
-//! The router a routed row names (#2823): an I-Am through another station
-//! leaves the row as it was and waits as a cue; only the check's own
-//! `reroute` moves it, and an explicit registration sets it.
+//! The router a known routed row names (#2823): an I-Am through another
+//! station leaves the row as it was and marks its path for a check; only
+//! the check's own `reroute` moves it, and an explicit registration sets
+//! it. The paths waiting are ranked, bounded and paced here.
 
 use super::*;
 use bacnet_types::enums::ObjectType;
@@ -27,11 +28,15 @@ fn router_at(table: &DeviceTable, network: u16, station: &[u8]) -> Vec<u8> {
     table.get(network, station).unwrap().mac_address.to_vec()
 }
 
+fn path(network: u16, router: &[u8]) -> PathKey {
+    (network, MacAddr::from_slice(router))
+}
+
 /// The whole row stays: its router, and what the held I-Am said about the
-/// instance, its limits and the vendor too. The cue names the path, the
-/// network and the row's router, and the station.
+/// instance, its limits and the vendor too. Its path, the network and the
+/// row's router, waits for a check until one is recorded.
 #[test]
-fn an_i_am_through_another_station_is_held_and_cued() {
+fn an_i_am_through_another_station_is_held_and_its_path_marked() {
     let mut table = DeviceTable::new();
     let first = routed(5, 2, &[5], &ROUTER);
     table.upsert(first.clone());
@@ -49,16 +54,25 @@ fn an_i_am_through_another_station_is_held_and_cued() {
     assert_eq!(row.segmentation_supported, Segmentation::SEGMENTED_BOTH);
     assert_eq!(row.vendor_id, 42);
     assert_eq!(row.last_seen, first.last_seen);
-    assert_eq!(table.find(6).unwrap().map(|d| d.address()), None);
-    assert_eq!(
-        table.take_route_cues(),
-        [((2, MacAddr::from_slice(&ROUTER)), MacAddr::from_slice(&[5]))]
+    assert!(table.find(6).unwrap().is_none());
+    let at = now();
+    assert_eq!(table.due_paths(at, 8), [path(2, &ROUTER)]);
+    assert!(table.next_path_due().is_some_and(|due| due <= at));
+    table.path_checked(&path(2, &ROUTER), Checked::Kept, at);
+    assert!(
+        table.due_paths(at, 8).is_empty(),
+        "checked, and no new mark"
     );
-    assert!(table.take_route_cues().is_empty(), "taken once");
+    assert_eq!(table.next_path_due(), None);
+    // A new mark waits for the hold.
+    assert_eq!(table.heard(routed(5, 2, &[5], &OTHER)).change, Change::Held);
+    assert!(table.due_paths(at, 8).is_empty());
+    assert_eq!(table.next_path_due(), Some(at + FIRST_HOLD));
+    assert_eq!(table.due_paths(at + FIRST_HOLD, 8), [path(2, &ROUTER)]);
 }
 
 /// First sight makes the row through whatever station the I-Am came
-/// through, and the row's own router refreshes it: neither is a cue.
+/// through, and the row's own router refreshes it: neither marks a path.
 #[test]
 fn first_sight_and_the_rows_own_router_are_not_held() {
     let mut table = DeviceTable::new();
@@ -80,36 +94,92 @@ fn first_sight_and_the_rows_own_router_are_not_held() {
     local.source_network = None;
     local.source_address = None;
     assert_eq!(table.heard(local).change, Change::Inserted);
-    assert!(table.take_route_cues().is_empty());
+    assert!(table.due_paths(now(), 8).is_empty());
 }
 
-/// Cues coalesce per path, the latest station kept, and at most 256 paths
-/// wait at once; a held I-Am past that is still held.
+/// Marks coalesce per path, and the due paths come highest ranked first:
+/// more rows, then the longest known, up to the limit.
 #[test]
-fn cues_coalesce_per_path_and_are_bounded() {
+fn due_paths_come_highest_ranked_first() {
     let mut table = DeviceTable::new();
-    table.upsert(routed(1, 2, &[5], &ROUTER));
-    table.upsert(routed(2, 2, &[6], &ROUTER));
-    assert_eq!(table.heard(routed(1, 2, &[5], &OTHER)).change, Change::Held);
-    assert_eq!(table.heard(routed(2, 2, &[6], &OTHER)).change, Change::Held);
+    for station in [5u8, 6, 7] {
+        table.upsert(routed(u32::from(station), 3, &[station], &ROUTER));
+    }
+    table.upsert(routed(1, 1, &[5], &ROUTER));
+    for station in [5u8, 6] {
+        table.upsert(routed(u32::from(station) + 10, 2, &[station], &ROUTER));
+    }
+    for (network, station) in [(1, 5u8), (2, 5), (2, 6), (3, 5)] {
+        let claim = routed(1, network, &[station], &OTHER);
+        assert_eq!(table.heard(claim).change, Change::Held);
+    }
+    let at = now();
     assert_eq!(
-        table.take_route_cues(),
-        [((2, MacAddr::from_slice(&ROUTER)), MacAddr::from_slice(&[6]))]
+        table.due_paths(at, 8),
+        [path(3, &ROUTER), path(2, &ROUTER), path(1, &ROUTER)]
     );
-    for network in 1..=300u16 {
+    assert_eq!(table.due_paths(at, 2), [path(3, &ROUTER), path(2, &ROUTER)]);
+}
+
+/// A full store keeps the paths more rows depend on: a new path with more
+/// rows takes the place of the lowest ranked; one that ranks no higher is
+/// dropped, and its row still stays as it is.
+#[test]
+fn a_full_store_keeps_the_paths_with_more_rows() {
+    let mut table = DeviceTable::new();
+    for station in [5u8, 6, 7] {
+        table.upsert(routed(u32::from(station), 5000, &[station], &ROUTER));
+    }
+    let networks = 1..=MAX_PATHS as u16;
+    for network in networks.clone() {
         table.upsert(routed(u32::from(network), network, &[5], &ROUTER));
     }
-    for network in 1..=300u16 {
+    for network in networks {
         let claim = routed(u32::from(network), network, &[5], &OTHER);
         assert_eq!(table.heard(claim).change, Change::Held);
     }
-    assert_eq!(table.take_route_cues().len(), 256);
+    // A newer single-row path ranks below every single-row path there.
+    table.upsert(routed(1, 4000, &[5], &ROUTER));
+    assert_eq!(
+        table.heard(routed(1, 4000, &[5], &OTHER)).change,
+        Change::Held
+    );
+    assert_eq!(router_at(&table, 4000, &[5]), ROUTER);
+    // The three-row path outranks them all.
+    assert_eq!(
+        table.heard(routed(5, 5000, &[5], &OTHER)).change,
+        Change::Held
+    );
+    let due = table.due_paths(now(), usize::MAX);
+    assert_eq!(due.len(), MAX_PATHS);
+    assert_eq!(due[0], path(5000, &ROUTER));
+    assert!(!due.contains(&path(4000, &ROUTER)));
 }
 
-/// Only rows through the router count as heard through it: an I-Am it
-/// carried or an answer to a request, at the instant given or later.
+/// The station a check asks is the client's choice: the row through the
+/// router heard from last, never a broadcast or group form.
 #[test]
-fn heard_through_since_counts_the_router_alone() {
+fn the_probe_is_the_row_heard_last_and_never_a_group_form() {
+    let mut table = DeviceTable::new();
+    let mut quiet = routed(1, 2, &[5], &ROUTER);
+    quiet.last_seen = now() - Duration::from_secs(60);
+    table.upsert(quiet);
+    let mut recent = routed(2, 2, &[6], &ROUTER);
+    recent.last_seen = now() - Duration::from_secs(1);
+    table.upsert(recent);
+    table.upsert(routed(3, 2, &[0xFF], &ROUTER));
+    table.upsert(routed(4, 2, &[7], &OTHER));
+    assert_eq!(
+        table.probe_target(2, &ROUTER),
+        Some(MacAddr::from_slice(&[6]))
+    );
+    assert_eq!(table.probe_target(2, &[0x30]), None);
+}
+
+/// Only rows through the router count as heard through it, and only a
+/// frame through a row's own router refreshes it.
+#[test]
+fn only_the_rows_own_router_refreshes_it() {
     let mut table = DeviceTable::new();
     let mut quiet = routed(1, 2, &[5], &ROUTER);
     let since = now();
@@ -118,15 +188,17 @@ fn heard_through_since_counts_the_router_alone() {
     table.upsert(routed(2, 2, &[6], &OTHER));
     table.upsert(routed(3, 3, &[5], &ROUTER));
     assert!(!table.heard_through_since(2, &ROUTER, since));
+    table.heard_through(2, &[5], &OTHER);
+    assert!(!table.heard_through_since(2, &ROUTER, since));
+    table.heard_through(2, &[5], &ROUTER);
+    assert!(table.heard_through_since(2, &ROUTER, since));
     assert!(table.routes_through(2, &ROUTER));
     assert!(!table.routes_through(4, &ROUTER));
-    table.answered(2, &[5]);
-    assert!(table.heard_through_since(2, &ROUTER, since));
 }
 
 /// The check's move takes every row on the network that went through the
 /// old router, and nothing else changes; an explicit registration still
-/// sets the router it names.
+/// sets the router it names. A path no row goes through is forgotten.
 #[test]
 fn reroute_moves_the_networks_rows_through_the_old_router_only() {
     let mut table = DeviceTable::new();
@@ -134,6 +206,7 @@ fn reroute_moves_the_networks_rows_through_the_old_router_only() {
     table.upsert(routed(2, 2, &[6], &ROUTER));
     table.upsert(routed(3, 2, &[7], &[0x30]));
     table.upsert(routed(4, 3, &[5], &ROUTER));
+    assert_eq!(table.heard(routed(1, 2, &[5], &OTHER)).change, Change::Held);
     let moved = table.reroute(2, &ROUTER, &OTHER);
     let moved: Vec<u32> = moved
         .iter()
@@ -145,15 +218,19 @@ fn reroute_moves_the_networks_rows_through_the_old_router_only() {
     assert_eq!(router_at(&table, 2, &[7]), [0x30]);
     assert_eq!(router_at(&table, 3, &[5]), ROUTER);
     assert_eq!(table.get(2, &[5]).unwrap().vendor_id, 42);
+    assert!(
+        table.due_paths(now(), 8).is_empty(),
+        "no row left on the path"
+    );
     table.upsert(routed(1, 2, &[5], &[0x40]));
     assert_eq!(router_at(&table, 2, &[5]), [0x40]);
 }
 
 #[test]
-fn clear_drops_waiting_cues() {
+fn clear_drops_waiting_paths() {
     let mut table = DeviceTable::new();
     table.upsert(routed(1, 2, &[5], &ROUTER));
     assert_eq!(table.heard(routed(1, 2, &[5], &OTHER)).change, Change::Held);
     table.clear();
-    assert!(table.take_route_cues().is_empty());
+    assert_eq!(table.next_path_due(), None);
 }

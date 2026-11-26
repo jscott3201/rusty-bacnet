@@ -23,36 +23,52 @@ use tokio::time::{Duration, sleep};
 
 use super::{BACnetClient, ClientConfig, DeviceEventKind, Station};
 
-const NETWORK: u16 = 100;
+pub(super) const NETWORK: u16 = 100;
 /// The router the device's first I-Am came through.
-const ROUTER: [u8; 1] = [2];
+pub(super) const ROUTER: [u8; 1] = [2];
 /// Another station on this link: a forger, or a router that took over.
-const OTHER: [u8; 1] = [9];
-const STATION: [u8; 1] = [3];
-const INSTANCE: u32 = 7;
+pub(super) const OTHER: [u8; 1] = [9];
+pub(super) const STATION: [u8; 1] = [3];
+pub(super) const INSTANCE: u32 = 7;
 /// The client's default APDU timeout: each step of a check waits this long.
-const WAIT: Duration = Duration::from_secs(6);
+pub(super) const WAIT: Duration = Duration::from_secs(6);
 
 /// What answers the client's checks.
 #[derive(Default)]
-struct Script {
-    /// The device answers a Who-Is sent to it through [`ROUTER`].
-    device_answers: bool,
-    /// The routers that answer a Who-Is-Router-To-Network for [`NETWORK`].
-    routers: Vec<Vec<u8>>,
+pub(super) struct Script {
+    /// The devices behind [`ROUTER`] answer a Who-Is sent to them through
+    /// it, but those in `quiet`.
+    pub(super) device_answers: bool,
+    pub(super) quiet: Vec<Vec<u8>>,
+    /// The station at [`OTHER`] answers a Who-Is sent through it, naming
+    /// the station asked as one it routes to.
+    pub(super) forger_answers: bool,
+    /// The routers that answer a Who-Is-Router-To-Network.
+    pub(super) routers: Vec<Vec<u8>>,
 }
 
 impl Script {
     /// The frames that answer `frame`, each with its link source.
     fn replies(&self, frame: &SentFrame) -> Vec<(Vec<u8>, Bytes)> {
         match classify(frame) {
-            Sent::Probe { via, station } if self.device_answers && via == ROUTER => {
-                vec![(via, i_am(&station, INSTANCE))]
+            Sent::Probe {
+                via,
+                network,
+                station,
+            } if via == ROUTER && self.device_answers && !self.quiet.contains(&station) => {
+                vec![(via, i_am_on(network, &station, INSTANCE))]
             }
-            Sent::RouterQuery(NETWORK) => self
+            Sent::Probe {
+                via,
+                network,
+                station,
+            } if via == OTHER && self.forger_answers => {
+                vec![(via, i_am_on(network, &station, INSTANCE))]
+            }
+            Sent::RouterQuery(network) => self
                 .routers
                 .iter()
-                .map(|router| (router.clone(), router_announcement(&[NETWORK])))
+                .map(|router| (router.clone(), router_announcement(&[network])))
                 .collect(),
             _ => Vec::new(),
         }
@@ -61,10 +77,11 @@ impl Script {
 
 /// A frame the client sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Sent {
-    /// A Who-Is through `via` to `station` on [`NETWORK`].
+pub(super) enum Sent {
+    /// A Who-Is through `via` to `station` on `network`.
     Probe {
         via: Vec<u8>,
+        network: u16,
         station: Vec<u8>,
     },
     /// A broadcast Who-Is-Router-To-Network for a network.
@@ -77,7 +94,7 @@ enum Sent {
     Other,
 }
 
-fn classify(frame: &SentFrame) -> Sent {
+pub(super) fn classify(frame: &SentFrame) -> Sent {
     let npdu = frame.decode_npdu();
     if npdu.message_type == Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK) {
         return match npdu.payload.as_ref() {
@@ -90,11 +107,11 @@ fn classify(frame: &SentFrame) -> Sent {
     }
     match (frame.apdu(), npdu.destination) {
         (Apdu::UnconfirmedRequest(request), Some(destination))
-            if request.service_choice == UnconfirmedServiceChoice::WHO_IS
-                && destination.network == NETWORK =>
+            if request.service_choice == UnconfirmedServiceChoice::WHO_IS =>
         {
             Sent::Probe {
                 via: frame.mac.to_vec(),
+                network: destination.network,
                 station: destination.mac_address.to_vec(),
             }
         }
@@ -106,7 +123,7 @@ fn classify(frame: &SentFrame) -> Sent {
     }
 }
 
-fn npdu(source: Option<(u16, &[u8])>, apdu: Apdu) -> Bytes {
+pub(super) fn npdu(source: Option<(u16, &[u8])>, apdu: Apdu) -> Bytes {
     let mut apdu_buf = BytesMut::new();
     encode_apdu(&mut apdu_buf, &apdu).unwrap();
     let mut buf = BytesMut::new();
@@ -126,7 +143,12 @@ fn npdu(source: Option<(u16, &[u8])>, apdu: Apdu) -> Bytes {
 }
 
 /// A routed I-Am from `station` on [`NETWORK`] naming `instance`.
-fn i_am(station: &[u8], instance: u32) -> Bytes {
+pub(super) fn i_am(station: &[u8], instance: u32) -> Bytes {
+    i_am_on(NETWORK, station, instance)
+}
+
+/// A routed I-Am from `station` on `network` naming `instance`.
+pub(super) fn i_am_on(network: u16, station: &[u8], instance: u32) -> Bytes {
     let mut service_request = BytesMut::new();
     IAmRequest {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
@@ -136,7 +158,7 @@ fn i_am(station: &[u8], instance: u32) -> Bytes {
     }
     .encode(&mut service_request);
     npdu(
-        Some((NETWORK, station)),
+        Some((network, station)),
         Apdu::UnconfirmedRequest(UnconfirmedRequest {
             service_choice: UnconfirmedServiceChoice::I_AM,
             service_request: service_request.freeze(),
@@ -144,8 +166,24 @@ fn i_am(station: &[u8], instance: u32) -> Bytes {
     )
 }
 
+/// A vendor's own network message, which reaches a layer's control queue
+/// and no report.
+pub(super) fn proprietary_message() -> Bytes {
+    let mut buf = BytesMut::new();
+    encode_npdu(
+        &mut buf,
+        &Npdu {
+            message_type: Some(NetworkMessageType::from_raw(0x80)),
+            vendor_id: Some(999),
+            ..Npdu::default()
+        },
+    )
+    .unwrap();
+    buf.freeze()
+}
+
 /// An I-Am-Router-To-Network listing `networks`, sent on this link.
-fn router_announcement(networks: &[u16]) -> Bytes {
+pub(super) fn router_announcement(networks: &[u16]) -> Bytes {
     let payload: Vec<u8> = networks.iter().flat_map(|n| n.to_be_bytes()).collect();
     let mut buf = BytesMut::new();
     encode_npdu(
@@ -160,7 +198,7 @@ fn router_announcement(networks: &[u16]) -> Bytes {
     buf.freeze()
 }
 
-fn received(source: &[u8], npdu: Bytes) -> ReceivedNpdu {
+pub(super) fn received(source: &[u8], npdu: Bytes) -> ReceivedNpdu {
     ReceivedNpdu {
         direct_response: None,
         npdu,
@@ -173,23 +211,23 @@ fn received(source: &[u8], npdu: Bytes) -> ReceivedNpdu {
 }
 
 /// A client on network-less link 1, the script answering its checks.
-struct Site {
-    client: Arc<BACnetClient<TestTransport>>,
+pub(super) struct Site {
+    pub(super) client: Arc<BACnetClient<TestTransport>>,
     inbound: mpsc::Sender<ReceivedNpdu>,
-    sent: SendLog,
+    pub(super) sent: SendLog,
 }
 
 impl Site {
     /// The client, and the device's first I-Am, through [`ROUTER`].
-    async fn new(script: Script) -> Self {
+    pub(super) async fn new(script: Script) -> Self {
         let site = Self::empty(script).await;
         site.hear(&ROUTER, i_am(&STATION, INSTANCE)).await;
         site
     }
 
     /// The client, with an empty table.
-    async fn empty(script: Script) -> Self {
-        let (inbound, rx) = mpsc::channel(1024);
+    pub(super) async fn empty(script: Script) -> Self {
+        let (inbound, rx) = mpsc::channel(4096);
         let script = Mutex::new(script);
         let hook_inbound = inbound.clone();
         let builder = TestTransport::builder()
@@ -213,12 +251,12 @@ impl Site {
     }
 
     /// Hear `npdu` from `source` on this link, and let the client take it.
-    async fn hear(&self, source: &[u8], npdu: Bytes) {
+    pub(super) async fn hear(&self, source: &[u8], npdu: Bytes) {
         self.inbound.send(received(source, npdu)).await.unwrap();
         sleep(Duration::from_millis(1)).await;
     }
 
-    fn router(&self) -> Vec<u8> {
+    pub(super) fn router(&self) -> Vec<u8> {
         self.client
             .device_table
             .lock()
@@ -228,25 +266,25 @@ impl Site {
             .to_vec()
     }
 
-    fn sent(&self) -> Vec<Sent> {
+    pub(super) fn sent(&self) -> Vec<Sent> {
         self.sent.frames().iter().map(classify).collect()
     }
 
-    fn count(&self, wanted: impl Fn(&Sent) -> bool) -> usize {
+    pub(super) fn count(&self, wanted: impl Fn(&Sent) -> bool) -> usize {
         self.sent().iter().filter(|sent| wanted(sent)).count()
     }
 
-    fn probes(&self) -> usize {
+    pub(super) fn probes(&self) -> usize {
         self.count(|sent| matches!(sent, Sent::Probe { .. }))
     }
 
-    fn router_queries(&self) -> usize {
+    pub(super) fn router_queries(&self) -> usize {
         self.count(|sent| *sent == Sent::RouterQuery(NETWORK))
     }
 
     /// A WriteProperty to the device by its address, answered through the
     /// station it went to: returns that station.
-    async fn write(&self) -> Vec<u8> {
+    pub(super) async fn write(&self) -> Vec<u8> {
         let before = self.sent.len();
         let client = Arc::clone(&self.client);
         let task = tokio::spawn(async move {
@@ -285,7 +323,7 @@ impl Site {
         via
     }
 
-    async fn stop(self) {
+    pub(super) async fn stop(self) {
         let Ok(mut client) = Arc::try_unwrap(self.client) else {
             panic!("a task kept the client");
         };
@@ -336,6 +374,7 @@ async fn an_answer_through_the_router_keeps_the_path() {
     let site = Site::new(Script {
         device_answers: true,
         routers: vec![OTHER.to_vec()],
+        ..Script::default()
     })
     .await;
     site.hear(&OTHER, i_am(&STATION, INSTANCE)).await;
@@ -344,6 +383,7 @@ async fn an_answer_through_the_router_keeps_the_path() {
         site.sent(),
         [Sent::Probe {
             via: ROUTER.to_vec(),
+            network: NETWORK,
             station: STATION.to_vec()
         }]
     );
@@ -362,6 +402,7 @@ async fn a_router_that_is_gone_is_relearned_by_asking() {
     let site = Site::new(Script {
         device_answers: false,
         routers: vec![NEW.to_vec()],
+        ..Script::default()
     })
     .await;
     let mut events = site.client.device_events();
@@ -380,6 +421,7 @@ async fn a_router_that_is_gone_is_relearned_by_asking() {
         [
             Sent::Probe {
                 via: ROUTER.to_vec(),
+                network: NETWORK,
                 station: STATION.to_vec()
             },
             Sent::RouterQuery(NETWORK)
@@ -405,6 +447,7 @@ async fn the_path_stays_unless_one_other_router_alone_answers() {
         let site = Site::new(Script {
             device_answers: false,
             routers: routers.clone(),
+            ..Script::default()
         })
         .await;
         site.hear(&OTHER, i_am(&STATION, INSTANCE)).await;
@@ -472,6 +515,7 @@ async fn a_storm_over_a_quiet_device_costs_two_frames_per_hold() {
     let site = Site::new(Script {
         device_answers: false,
         routers: vec![ROUTER.to_vec()],
+        ..Script::default()
     })
     .await;
     for _ in 0..120 {
@@ -525,7 +569,7 @@ async fn a_burst_over_one_network_is_one_check() {
         site.hear(&OTHER, i_am(&[station], u32::from(station)))
             .await;
     }
-    sleep(super::FIRST_HOLD - Duration::from_secs(1)).await;
+    sleep(crate::discovery::FIRST_HOLD - Duration::from_secs(1)).await;
     assert_eq!((site.probes(), site.router_queries()), (1, 0));
     site.stop().await;
 }

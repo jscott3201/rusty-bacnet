@@ -1,69 +1,51 @@
-//! The client's own check of a routed path (#2823).
+//! The client's own check of a known routed path (#2823).
 //!
 //! The discovery table holds a routed I-Am that names a known address
-//! through another station than the router its row names: the row keeps its
-//! router, and the I-Am is a cue (`DeviceTable::held_route`). The purge task
-//! takes the cues and checks each path, a network and the router its rows
-//! name, with requests of its own:
+//! through another station than the router its row names: the row keeps
+//! its router, and the path, the network and that router, is marked for a
+//! check (`DeviceTable::held_route`). This loop checks each marked path
+//! with requests of its own:
 //!
-//! 1. A Who-Is to the cued station, sent through the router the row names.
-//!    Any row on the network heard through that router since the check began
-//!    (an I-Am it carried, or an answer to a request sent through it) keeps
-//!    the path. The other station cannot send as the router, so it cannot
-//!    fake that answer.
+//! 1. A Who-Is through the path's router to the station on that network
+//!    the table heard from last through it, the client's choice, never the
+//!    one the I-Am named. Any frame that router carries back from the
+//!    network after the check began keeps the path. The other station
+//!    cannot send as the router, so it cannot fake that.
 //! 2. Only if nothing came, a broadcast Who-Is-Router-To-Network for the
 //!    network (Clause 6.6.3.2). The old router among the answers keeps the
-//!    path: the device is quiet, not the router gone. One other router alone
-//!    moves every row on the network that went through the old one to it
-//!    (`DeviceTable::reroute`). No answer, several, or an answer lost to a
-//!    lagging receiver keep the path.
+//!    path: the device is quiet, not the router gone. One other router
+//!    alone moves every row on the network that went through the old one to
+//!    it (`DeviceTable::reroute`). No answer, several, or an answer that
+//!    may have been lost (a lagging report receiver, or a network control
+//!    the layer's queue turned away during the wait) keep the path.
 //!
-//! A router that never answers router-discovery queries, as some older ones
-//! don't, keeps its rows for as long as its devices answer through it; when
-//! it is really gone, its rows age out of the table and the devices' next
-//! I-Ams through the new router make them again, or `add_routed_device` or
-//! a [`Station::routed`] call names the new one at once.
+//! A router that never answers router-discovery queries, as some older
+//! ones don't, keeps its rows for as long as its devices answer through
+//! it; when it is really gone, its rows age out of the table and the
+//! devices' next I-Ams through the new router make them again, or
+//! `add_routed_device` or a [`Station::routed`] call names the new one at
+//! once.
 //!
-//! Each path is checked at once on its first cue, then at most once per
-//! hold, which starts at a minute and doubles to the ten minutes a silent
-//! row takes to age out, while cues keep coming. Cues for one path between
-//! checks cost nothing more: a storm of I-Ams costs one check per hold per
-//! path, never one per I-Am.
+//! The loop runs in the purge task beside the purge, polled with it, so a
+//! check's waits never hold a purge back. Each path is checked at once on
+//! its first mark, then at most once per hold, which starts at a minute and
+//! doubles to ten while marks keep coming; a wake runs at most
+//! [`CHECKS_PER_WAKE`] checks, the paths with the most and the longest
+//! known rows first.
 
 use super::device_events::TableNotices;
 use super::i_have::collect_until;
 use super::network_number::Discovery;
 use super::*;
-use crate::discovery::PathKey;
-use bacnet_network::layer::{NetworkReport, ReceivedNetworkReport};
+use crate::discovery::{Checked, PathKey};
+use bacnet_network::layer::{NetworkReport, QueueAdmissionCounters, ReceivedNetworkReport};
 use bacnet_npdu::NetworkMessageType;
-use std::collections::BTreeMap;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant as TokioInstant;
 
-/// How long after a path's first check the next may run. Each check that
-/// leaves the path as it was doubles the hold, up to [`LAST_HOLD`].
-pub(super) const FIRST_HOLD: Duration = Duration::from_secs(60);
-
-/// The longest hold: as long as a silent row takes to age out of the table.
-pub(super) const LAST_HOLD: Duration = super::lifecycle::DEVICE_MAX_AGE;
-
-/// The most paths paced at once. A cue for another path past that is
-/// dropped, and the path stays as it is.
-const MAX_PATHS: usize = 256;
-
-/// One path's pacing.
-#[derive(Debug)]
-struct Paced {
-    /// The station the latest cue named, which the next check asks.
-    probe: MacAddr,
-    /// A cue came since the last check.
-    wanted: bool,
-    /// The next check runs no sooner.
-    due: TokioInstant,
-    /// The hold after the next check.
-    hold: Duration,
-}
+/// The most checks one wake runs before the loop looks again for marks and
+/// for the paths ranked highest.
+pub(super) const CHECKS_PER_WAKE: usize = 4;
 
 /// What a check found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,14 +54,15 @@ pub(super) enum Found {
     /// began.
     Answered,
     /// The router still answers for the network, or no one other router
-    /// alone does.
+    /// alone does, or an answer may have been lost.
     Kept,
     /// Another router alone answered for the network, and the rows that
     /// went through the old one go through it now.
     Moved(MacAddr),
     /// No row on the network goes through the router any more.
     Gone,
-    /// Nothing decided: the node may not initiate, or a send failed.
+    /// Nothing decided: the node may not initiate, no row there can be
+    /// asked, or a send failed.
     Skipped,
 }
 
@@ -92,14 +75,16 @@ struct Routers {
     others: Vec<MacAddr>,
 }
 
-/// The path checks the purge task runs, and their pacing, which lives in
-/// that task alone.
+/// The path checks and what they send with.
 pub(super) struct RouteChecks<T: TransportPort> {
     network: Arc<NetworkLayer<T>>,
     reports: broadcast::Sender<ReceivedNetworkReport>,
+    /// The network controls the layer's queue turned away: one during a
+    /// router query's wait may have been an answer. A seated client's
+    /// controls come through its node, which keeps no such count here.
+    control_drops: QueueAdmissionCounters,
     /// How long each step waits for its answer: the client's APDU timeout.
     wait: Duration,
-    paths: BTreeMap<PathKey, Paced>,
     /// A claim the check did not take: a second router to the network, a
     /// router that took over unconfirmed, or a forged announcement.
     kept: WarnThrottle,
@@ -109,64 +94,42 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
     pub(super) fn new(
         network: Arc<NetworkLayer<T>>,
         reports: broadcast::Sender<ReceivedNetworkReport>,
+        control_drops: QueueAdmissionCounters,
         wait: Duration,
     ) -> Self {
         Self {
             network,
             reports,
+            control_drops,
             wait,
-            paths: BTreeMap::new(),
             kept: WarnThrottle::default(),
         }
     }
 
-    /// When the next check is due: the earliest path with a cue waiting.
-    pub(super) fn next_due(&self) -> Option<TokioInstant> {
-        self.paths
-            .values()
-            .filter(|paced| paced.wanted)
-            .map(|paced| paced.due)
-            .min()
-    }
-
-    /// Take the table's cues, then run every check that is due, one at a
-    /// time. No lock is held across a send or a wait.
-    pub(super) async fn run(&mut self, discovery: &Discovery, notices: TableNotices<'_>) {
-        let cues = discovery.table.lock().take_route_cues();
-        let now = TokioInstant::now();
-        for (path, probe) in cues {
-            if let Some(paced) = self.paths.get_mut(&path) {
-                paced.probe = probe;
-                paced.wanted = true;
-            } else if self.paths.len() < MAX_PATHS {
-                let paced = Paced {
-                    probe,
-                    wanted: true,
-                    due: now,
-                    hold: FIRST_HOLD,
-                };
-                self.paths.insert(path, paced);
+    /// Check the marked paths as they fall due, for as long as the client
+    /// runs. No lock is held across a send or a wait, so the task can be
+    /// aborted at any await.
+    pub(super) async fn run(self, discovery: &Discovery, notices: TableNotices<'_>) {
+        loop {
+            let due = discovery.table.lock().next_path_due();
+            tokio::select! {
+                () = discovery.route_cue.notified() => {}
+                () = sleep_until_due(due) => {}
             }
-        }
-        // A path left alone for a whole hold past its due is forgotten:
-        // its next cue is checked at once again.
-        self.paths.retain(|_, paced| {
-            paced.wanted || paced.due.checked_add(LAST_HOLD).is_none_or(|end| now < end)
-        });
-        let due: Vec<(PathKey, MacAddr)> = self
-            .paths
-            .iter()
-            .filter(|(_, paced)| paced.wanted && paced.due <= now)
-            .map(|(path, paced)| (path.clone(), paced.probe.clone()))
-            .collect();
-        for (path, probe) in due {
-            let found = self.check(discovery, &path, &probe, notices).await;
-            if matches!(found, Found::Moved(_) | Found::Gone) {
-                self.paths.remove(&path);
-            } else if let Some(paced) = self.paths.get_mut(&path) {
-                paced.wanted = false;
-                paced.due = TokioInstant::now() + paced.hold;
-                paced.hold = (paced.hold * 2).min(LAST_HOLD);
+            let paths = discovery
+                .table
+                .lock()
+                .due_paths(crate::discovery::now(), CHECKS_PER_WAKE);
+            for path in paths {
+                let found = self.check(discovery, &path, notices).await;
+                let checked = match found {
+                    Found::Moved(_) | Found::Gone => Checked::Ended,
+                    Found::Answered | Found::Kept | Found::Skipped => Checked::Kept,
+                };
+                discovery
+                    .table
+                    .lock()
+                    .path_checked(&path, checked, crate::discovery::now());
             }
         }
     }
@@ -177,13 +140,19 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
         &self,
         discovery: &Discovery,
         (network, router): &PathKey,
-        probe: &MacAddr,
         (device_tx, _): TableNotices<'_>,
     ) -> Found {
         let network = *network;
-        if !discovery.table.lock().routes_through(network, router) {
-            return Found::Gone;
-        }
+        let probe = {
+            let table = discovery.table.lock();
+            if !table.routes_through(network, router) {
+                return Found::Gone;
+            }
+            table.probe_target(network, router)
+        };
+        let Some(probe) = probe else {
+            return Found::Skipped;
+        };
         // A node that may not initiate sends no Who-Is (#2617): with nothing
         // asked, nothing moves.
         if discovery.asking.refusal().is_some() {
@@ -193,7 +162,7 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
         // Subscribed before the send, so no answer comes before the
         // receiver.
         let mut events = device_tx.subscribe();
-        if let Err(error) = self.probe(network, probe, router).await {
+        if let Err(error) = self.probe(network, &probe, router).await {
             debug!(%error, network, "a routed path's check sent no Who-Is; the path stays");
             return Found::Skipped;
         }
@@ -215,11 +184,7 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
         let routers = match self.routers_to(network, router).await {
             Ok(Some(routers)) => routers,
             Ok(None) => {
-                self.kept(
-                    network,
-                    router,
-                    "router answers were lost to a lagging receiver",
-                );
+                self.kept(network, router, "router answers may have been lost");
                 return Found::Kept;
             }
             Err(error) => {
@@ -286,12 +251,19 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
             .await
     }
 
+    /// The controls the layer's queue has turned away so far.
+    fn controls_dropped(&self) -> u64 {
+        let counts = self.control_drops.snapshot();
+        counts.full_drops.saturating_add(counts.closed_drops)
+    }
+
     /// Broadcast a Who-Is-Router-To-Network for `network` and collect, for
-    /// the wait, the routers on this link that answer for it: `None` when
-    /// answers were lost to a lagging receiver, which leaves the question
-    /// open.
+    /// the wait, the routers on this link that answer for it: `None` when an
+    /// answer may have been lost, to a lagging report receiver or to the
+    /// layer's control queue, which leaves the question open.
     async fn routers_to(&self, network: u16, old: &MacAddr) -> Result<Option<Routers>, Error> {
         let mut rx = self.reports.subscribe();
+        let dropped = self.controls_dropped();
         self.network
             .send_network_message(
                 NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK,
@@ -316,7 +288,8 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
             }
         })
         .await;
-        Ok((lost == 0).then_some(routers))
+        let whole = lost == 0 && self.controls_dropped() == dropped;
+        Ok(whole.then_some(routers))
     }
 
     /// Another station claimed to reach devices on `network`, and the check
@@ -331,6 +304,14 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
              requests keep going through the router: a second router to the network, a \
              router that took over and must be confirmed, or a forged announcement"
         );
+    }
+}
+
+/// Sleep until `due`, or forever with nothing due.
+async fn sleep_until_due(due: Option<std::time::Instant>) {
+    match due {
+        Some(due) => tokio::time::sleep_until(TokioInstant::from_std(due)).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -361,3 +342,7 @@ async fn heard_through(
 #[cfg(test)]
 #[path = "route_checks_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "route_checks_attack_tests.rs"]
+mod attack_tests;
