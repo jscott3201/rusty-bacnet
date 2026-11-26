@@ -248,7 +248,10 @@ async fn two_networks_holding_one_instance_are_two_devices() {
 
 /// With both networks allowed, `2001:instance` resolves within its
 /// network to the routed station, and the local one is still its own
-/// device: each call is pinned to the address it named.
+/// device: each call is pinned to the address it named. Announced only
+/// (nothing answers at the routed station), the claim is asked which
+/// device answers there and refused as unconfirmed, naming it (#2824);
+/// registered by hand, the application's own word, it is taken unasked.
 #[tokio::test(start_paused = true)]
 async fn a_scoped_instance_names_the_claim_on_its_network() {
     let mut lab = Lab::start(Policy::default()).await;
@@ -267,6 +270,34 @@ async fn a_scoped_instance_names_the_claim_on_its_network() {
     until(&lab, routed, "the routed claim is known").await;
     let ctx = lab.mcp.ctx();
     let call = Call::new(Duration::from_secs(5), ctx.account());
+    let unconfirmed = ctx
+        .device(&call, &DeviceArg::Text(format!("2001:{LAB}")))
+        .await
+        .map(|_| ())
+        .unwrap_err()
+        .json();
+    assert_eq!(
+        unconfirmed["reason"],
+        json!("unconfirmed-device"),
+        "{unconfirmed}"
+    );
+    let message = unconfirmed["message"].as_str().unwrap();
+    assert!(
+        message.contains("isn't confirmed at 2001:0x33"),
+        "{message}"
+    );
+    lab.low
+        .add_routed_device(bacnet_client::discovery::RoutedDeviceConfig {
+            instance: LAB,
+            router_mac: LAB_MAC.to_vec(),
+            remote_network: 2001,
+            remote_mac: vec![0x33],
+            max_apdu_length: 1476,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
+            max_segments_accepted: None,
+        })
+        .await
+        .unwrap();
     let routed = ctx
         .device(&call, &DeviceArg::Text(format!("2001:{LAB}")))
         .await

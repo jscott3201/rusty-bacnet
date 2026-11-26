@@ -73,52 +73,73 @@ fn ledger(entries: &[(u64, u32, Option<&str>)]) -> String {
 }
 
 /// Device 1201 moves between the preview and the confirmation: its
-/// address announces another instance, and an alias's address announces
-/// 1201. The retry resolves 1201 again, to the alias, and its preview
-/// there differs from the confirmed one by its address alone (the alias
-/// holds the same objects and values), so it is refused as stale. Nothing
-/// is written at either address. The form names the address.
+/// address announces another instance, and 1201 is claimed at an alias's
+/// address. Announced there (by anyone: the alias's device is 1202), the
+/// retry asks the alias which device answers there, and is refused as
+/// unconfirmed, naming the address asked (#2824). Registered there by hand
+/// (the application's own word), the retry resolves 1201 to the alias,
+/// and its preview there differs from the confirmed one by its address
+/// alone (the alias holds the same objects and values), so it is refused
+/// as stale. Either way nothing is written at either address. The form
+/// names the address.
 #[tokio::test(start_paused = true)]
 async fn a_device_that_moves_before_the_confirmation_is_not_written() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut lab = Lab::start(writes(dir.path(), ArmMode::Elicit)).await;
-    lab.agent.initialize().await;
-    let args = one(json!(42.5), 12);
-    let first = call(&mut lab, "bacnet_write", args.clone(), json!({})).await;
-    let message = first["inputRequests"]["confirm"]["params"]["message"]
-        .as_str()
-        .unwrap();
-    assert!(
-        message.contains("to device 1201 at 10.0.0.2:47808:"),
-        "{message}"
-    );
+    for announced in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut lab = Lab::start(writes(dir.path(), ArmMode::Elicit)).await;
+        lab.agent.initialize().await;
+        let args = one(json!(42.5), 12);
+        let first = call(&mut lab, "bacnet_write", args.clone(), json!({})).await;
+        let message = first["inputRequests"]["confirm"]["params"]["message"]
+            .as_str()
+            .unwrap();
+        assert!(
+            message.contains("to device 1201 at 10.0.0.2:47808:"),
+            "{message}"
+        );
 
-    let alias = ALIASES.start;
-    lab.inject(&i_am(9999), &LAB_MAC).await;
-    lab.inject(&i_am(LAB), &alias_mac(alias)).await;
-    let moved = |lab: &Lab| lab.mcp.ctx().known_at(LAB).map(|at| at.to_string());
-    until(
-        &lab,
-        |lab| moved(lab).as_deref() == Some("10.0.0.3:47808"),
-        "1201 is at the alias's address",
-    )
-    .await;
-    let confirm = answered(&first["requestState"], "accept", true);
-    let reply = call(&mut lab, "bacnet_write", args, confirm).await;
-    let body = &reply["structuredContent"];
-    assert_eq!(body["reason"], json!("stale"), "{reply}");
-    assert!(
-        body["message"].as_str().unwrap().contains("address"),
-        "{body}"
-    );
-    assert_eq!(slot(&lab, 12).await, PropertyValue::Null);
-    assert_eq!(
-        alias_slot(&lab, alias, 12).await,
-        PropertyValue::Null,
-        "not written at the new address"
-    );
-    assert!(Ledger::open(dir.path()).unwrap().entries().is_empty());
-    lab.stop().await;
+        let alias = ALIASES.start;
+        lab.inject(&i_am(9999), &LAB_MAC).await;
+        if announced {
+            lab.inject(&i_am(LAB), &alias_mac(alias)).await;
+            let moved = |lab: &Lab| lab.mcp.ctx().known_at(LAB).map(|at| at.to_string());
+            until(
+                &lab,
+                |lab| moved(lab).as_deref() == Some("10.0.0.3:47808"),
+                "1201 is at the alias's address",
+            )
+            .await;
+        } else {
+            let left = |lab: &Lab| lab.mcp.ctx().known_at(LAB).is_none();
+            until(&lab, left, "1201 left the lab's address").await;
+            lab.low.add_device(LAB, &alias_mac(alias)).await.unwrap();
+        }
+        let confirm = answered(&first["requestState"], "accept", true);
+        let reply = call(&mut lab, "bacnet_write", args, confirm).await;
+        let body = &reply["structuredContent"];
+        let message = body["message"].as_str().unwrap();
+        match announced {
+            true => {
+                assert_eq!(body["reason"], json!("unconfirmed-device"), "{reply}");
+                assert!(
+                    message.contains("isn't confirmed at 10.0.0.3:47808"),
+                    "{body}"
+                );
+            }
+            false => {
+                assert_eq!(body["reason"], json!("stale"), "{reply}");
+                assert!(message.contains("address"), "{body}");
+            }
+        }
+        assert_eq!(slot(&lab, 12).await, PropertyValue::Null);
+        assert_eq!(
+            alias_slot(&lab, alias, 12).await,
+            PropertyValue::Null,
+            "not written at the new address"
+        );
+        assert!(Ledger::open(dir.path()).unwrap().entries().is_empty());
+        lab.stop().await;
+    }
 }
 
 /// A write to a routed station is kept with its address; with the
@@ -347,4 +368,41 @@ fn an_mcp_revert_is_checked_at_the_address_the_desk_found() {
         None,
         "not reverting"
     );
+}
+
+/// An I-Am for 7777, a device no one has, from an alias's address, whose
+/// device is 1202 (#2824): a read and a write naming 7777 ask the alias
+/// which device answers there and are refused as unconfirmed, naming the
+/// address asked; nothing is read or written there.
+#[tokio::test(start_paused = true)]
+async fn a_forged_claim_is_asked_and_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut lab = Lab::start(writes(dir.path(), ArmMode::Elicit)).await;
+    lab.agent.initialize().await;
+    let alias = ALIASES.start;
+    lab.inject(&i_am(7777), &alias_mac(alias)).await;
+    let claimed = |lab: &Lab| lab.mcp.ctx().known_at(7777).is_some();
+    until(&lab, claimed, "7777 is claimed at the alias's address").await;
+    let read = json!({ "device": 7777, "reads": [{ "object": "ao:1" }] });
+    let write = json!({
+        "device": 7777,
+        "writes": [{ "object": "ao:1", "value": 42.5, "priority": 12 }],
+    });
+    for (tool, arguments) in [("bacnet_read", read), ("bacnet_write", write)] {
+        let reply = call(&mut lab, tool, arguments, json!({})).await;
+        let body = &reply["structuredContent"];
+        assert_eq!(
+            body["reason"],
+            json!("unconfirmed-device"),
+            "{tool}: {reply}"
+        );
+        let message = body["message"].as_str().unwrap();
+        assert!(
+            message.contains("isn't confirmed at 10.0.0.3:47808"),
+            "{tool}: {message}"
+        );
+    }
+    assert_eq!(alias_slot(&lab, alias, 12).await, PropertyValue::Null);
+    assert!(Ledger::open(dir.path()).unwrap().entries().is_empty());
+    lab.stop().await;
 }

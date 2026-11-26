@@ -5,6 +5,9 @@
 //! address that claims it in the client's discovery table, and a device
 //! behind a router (`dnet:instance`, `dnet:0xMAC`) to its station there,
 //! asking for the named instance or station with a Who-Is when the table doesn't hold it yet.
+//! An instance is reached only where its device answered as it to this
+//! client's own question of which device answers there (#2824,
+//! [`confirm`]): one read more, before the command's own requests.
 //! Every service then goes to that address through the client's address
 //! entry points: to a local station at its MAC, and to a routed one
 //! through the router its row names, with its network and MAC in the NPDU
@@ -31,6 +34,7 @@ use bacnet_ops::format::{LogColumns, PropertyError, RawRow, StateTexts};
 use bacnet_ops::raw::{RpmFailure, failed_locally, rpm_failure, rpm_rows, unreachable};
 use bacnet_ops::target::{Target, bip6_vmac, parse_target_on};
 
+mod confirm;
 mod services;
 
 /// Where a service request goes: one station, by its address.
@@ -81,16 +85,14 @@ pub async fn resolve<T: TransportPort + 'static>(
                 .await
                 .map_err(|e| with_link_flag(e.to_string()))?,
         ),
-        Target::Instance(instance) => match client
-            .get_device(instance)
-            .await
-            .map_err(|e| e.to_string())?
-        {
-            Some(device) => Destination::of(&device),
-            None => Err(not_found(instance)),
-        },
+        Target::Instance(instance) => {
+            let claims = claims(client, instance).await?;
+            confirm::confirmed(client, &instance.to_string(), instance, claims).await
+        }
         Target::Routed { dnet, instance } => {
-            find_routed(client, dnet, &Station::Instance(instance), wait).await
+            let found = find_routed(client, dnet, &Station::Instance(instance), wait).await?;
+            let name = format!("{dnet}:{instance}");
+            confirm::confirmed(client, &name, instance, vec![found]).await
         }
         Target::RoutedMac {
             dnet,
@@ -101,6 +103,27 @@ pub async fn resolve<T: TransportPort + 'static>(
             station.check(dnet, client.network_number())?;
             find_routed(client, dnet, &station, wait).await
         }
+    }
+}
+
+/// Every address the discovery table has claiming `instance`: one, or each
+/// an ambiguous lookup names.
+async fn claims<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    instance: u32,
+) -> Result<Vec<Destination>, String> {
+    match client.get_device(instance).await {
+        Ok(Some(device)) => Ok(vec![Destination::of(&device)?]),
+        Ok(None) => Err(not_found(instance)),
+        Err(Error::AmbiguousDevice { candidates, .. }) => Ok(candidates
+            .iter()
+            .filter_map(|c| DeviceAddress::new(c.network_number, &c.mac_address).ok())
+            .map(|address| Destination {
+                address,
+                instance: Some(instance),
+            })
+            .collect()),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -145,18 +168,24 @@ pub async fn resolve_mac<T: TransportPort + 'static>(
         Target::Bip6(peer) => bip6_vmac(client.transport(), peer)
             .await
             .map_err(|e| with_link_flag(e.to_string())),
-        Target::Instance(instance) => match client
-            .get_device(instance)
-            .await
-            .map_err(|e| e.to_string())?
-        {
-            Some(device) if device.source_network.is_some() => Err(format!(
-                "Device {instance} is behind a router; only read, readm, read-range, alarms, \
-                 alarm-summary, enrollment-summary, file-read, file-write, write, writem, subscribe, control, reinit, time-sync, create-object, delete-object and ack-alarm reach routed devices"
-            )),
-            Some(device) => Ok(device.mac_address.to_vec()),
-            None => Err(not_found(instance)),
-        },
+        Target::Instance(instance) => {
+            let behind_a_router = || {
+                format!(
+                    "Device {instance} is behind a router; only read, readm, read-range, alarms, \
+                     alarm-summary, enrollment-summary, file-read, file-write, write, writem, subscribe, control, reinit, time-sync, create-object, delete-object and ack-alarm reach routed devices"
+                )
+            };
+            let claims = claims(client, instance).await?;
+            // Refused before anything is asked when every claim is routed.
+            if claims.iter().all(|claim| !claim.address.is_local()) {
+                return Err(behind_a_router());
+            }
+            let found = confirm::confirmed(client, &instance.to_string(), instance, claims).await?;
+            match found.address.is_local() {
+                true => Ok(found.address.mac().to_vec()),
+                false => Err(behind_a_router()),
+            }
+        }
         Target::Routed { .. } | Target::RoutedMac { .. } => Err(format!(
             "'{text}' is a routed target; only read, readm, read-range, alarms, \
              alarm-summary, enrollment-summary, file-read, file-write, write, writem, subscribe, control, reinit, time-sync, create-object, delete-object and ack-alarm reach routed devices"
@@ -583,3 +612,7 @@ mod one_station_tests;
 #[cfg(test)]
 #[path = "destination_proxy_tests.rs"]
 mod proxy_tests;
+
+#[cfg(test)]
+#[path = "destination_confirm_tests.rs"]
+mod confirm_tests;
