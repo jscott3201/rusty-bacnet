@@ -482,6 +482,10 @@ async fn an_i_am_with_trailing_octets_binds_nothing() {
     unconfirmed(&h, i_am, &[&body(1235)[..], &[0x00]].concat()).await;
     assert_eq!(h.server.device_bindings.read().await.len(), bindings);
     unconfirmed(&h, i_am, &body(1234)).await;
+    for instance in [1234, 1235] {
+        let mut table = h.server.device_bindings.write().await;
+        table.decide_for_test(device(instance));
+    }
     let table = h.server.device_bindings.read().await;
     assert_eq!(table.len(), bindings + 1);
     assert!(matches!(

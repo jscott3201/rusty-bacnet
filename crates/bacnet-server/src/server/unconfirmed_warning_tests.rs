@@ -46,6 +46,9 @@ async fn malformed_requests_and_a_full_binding_table_warn_once_per_interval() {
             .write()
             .await
             .ask_for_test(fresh, Duration::from_secs(3));
+        // Late, the probe's only answer binds as it comes, so the full
+        // table refuses it there.
+        bindings.write().await.probes.end_wait_for_test(&fresh);
         BACnetServer::<TestTransport>::handle_unconfirmed_request(
             &services,
             i_am_request(fresh),

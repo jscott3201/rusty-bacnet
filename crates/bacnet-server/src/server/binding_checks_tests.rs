@@ -60,9 +60,10 @@ async fn only_an_answer_to_the_servers_who_is_binds() {
     assert_eq!(hear(&mut table, 9, CLAIMANT), Heard::Ignored);
     assert_eq!(bound_at(&table, 9), None);
     table.ask_for_test(device(9), WAIT);
-    assert_eq!(hear(&mut table, 9, BOUND), Heard::Inserted);
+    assert_eq!(hear(&mut table, 9, BOUND), Heard::Claimed);
+    table.decide_for_test(device(9));
     assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND));
-    // The answer ended the question: the next I-Am from elsewhere is a cue.
+    // The device is bound: the next I-Am from elsewhere is a cue.
     assert!(matches!(hear(&mut table, 9, CLAIMANT), Heard::Cue(_)));
 }
 
@@ -260,4 +261,35 @@ async fn a_sole_late_answer_binds_within_the_hold_off() {
     tokio::time::advance(WAIT + Duration::from_secs(10)).await;
     assert_eq!(hear(&mut table, 9, BOUND), Heard::Inserted);
     assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND));
+}
+
+/// First contact is decided when the server's Who-Is's wait ends (decision,
+/// maintainer, 2026-11-26): one station answered, the real device or a
+/// forger with the device absent, and it is bound; two or more, and none
+/// is, counted once; a late answer from another station contests too.
+#[tokio::test(start_paused = true)]
+async fn first_contact_binds_only_a_sole_answer_once_the_wait_ends() {
+    let mut both = DeviceBindingTable::new();
+    both.ask_for_test(device(9), WAIT);
+    assert_eq!(hear(&mut both, 9, BOUND), Heard::Claimed);
+    assert_eq!(hear(&mut both, 9, CLAIMANT), Heard::Claimed);
+    assert_eq!(bound_at(&both, 9), None, "nothing before the wait ends");
+    let mut alone = DeviceBindingTable::new();
+    alone.ask_for_test(device(9), WAIT);
+    hear(&mut alone, 9, CLAIMANT);
+    let mut late = DeviceBindingTable::new();
+    late.ask_for_test(device(9), WAIT);
+    hear(&mut late, 9, BOUND);
+    tokio::time::advance(WAIT).await;
+    assert_eq!(hear(&mut late, 9, CLAIMANT), Heard::Claimed);
+    for _ in 0..2 {
+        for table in [&mut both, &mut alone, &mut late] {
+            table.after_probe(&device(9), now());
+        }
+    }
+    assert_eq!(bound_at(&both, 9), None);
+    assert_eq!(both.conflicts(), 1, "counted once");
+    assert_eq!(bound_at(&alone, 9).as_deref(), Some(CLAIMANT));
+    assert_eq!(alone.conflicts(), 0);
+    assert_eq!(bound_at(&late, 9), None);
 }

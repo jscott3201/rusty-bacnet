@@ -290,7 +290,7 @@ async fn concurrent_writes_to_an_unbound_device_share_one_who_is() {
     deliver(&h, &i_am(9), &PEER, None).await;
     // The one I-Am lets both writes go, each under its own invoke ID.
     let log = h.server.test_network().transport().sent();
-    let sent = tokio::time::timeout(Duration::from_secs(1), async {
+    let sent = tokio::time::timeout(Duration::from_secs(10), async {
         let mut sent = Vec::new();
         loop {
             let pushed = log.len() + 1;

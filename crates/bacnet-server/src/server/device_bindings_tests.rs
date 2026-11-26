@@ -357,6 +357,9 @@ async fn i_ams_answering_the_servers_who_is_bind_and_disable_initiation_keeps_he
         mac_address: MacAddr::from_slice(FINAL_PEER),
     };
     hear(i_am_request(routed_device), ROUTER, Some(routed)).await;
+    for device in [local_device, routed_device] {
+        bindings.write().await.decide_for_test(device);
+    }
 
     let now = Instant::now();
     let table = bindings.read().await;
@@ -393,6 +396,7 @@ async fn i_ams_answering_the_servers_who_is_bind_and_disable_initiation_keeps_he
     comm_state.set_for_test(DccState::DisableInitiation);
     hear(i_am_request(local_device), UPDATED_PEER, None).await;
     hear(i_am_request(device(102)), LOCAL_PEER, None).await;
+    bindings.write().await.decide_for_test(device(102));
     assert_eq!(bindings.read().await.len(), 3, "DCC leaves answers binding");
     assert!(matches!(
         bindings

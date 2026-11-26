@@ -96,8 +96,8 @@ struct ProbeState {
     answered: bool,
 }
 
-/// What other addresses than a lapsed binding's answered a probe for its
-/// device (#2825).
+/// The stations that answered a probe for its device, other than a lapsed
+/// binding's own (#2825), which answers it at once.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) enum Claim {
     /// None did.
@@ -105,9 +105,16 @@ pub(super) enum Claim {
     None,
     /// One did, last at this instant.
     One(DeviceBindingTarget, Instant),
-    /// More than one did: nothing is decided.
-    Contested,
+    /// More than one did, the first [`MAX_CONTESTANTS`] of them kept to
+    /// name: nothing is bound. `reported` once counted and logged.
+    Contested {
+        stations: Vec<DeviceBindingTarget>,
+        reported: bool,
+    },
 }
+
+/// The most contesting stations a probe keeps to name in its warning.
+const MAX_CONTESTANTS: usize = 4;
 
 /// One device's Who-Is.
 #[derive(Debug)]
@@ -286,8 +293,57 @@ impl BindingProbes {
             probe.claim = match std::mem::take(&mut probe.claim) {
                 Claim::None => Claim::One(target, at),
                 Claim::One(first, _) if first == target => Claim::One(first, at),
-                Claim::One(..) | Claim::Contested => Claim::Contested,
+                Claim::One(first, _) => Claim::Contested {
+                    stations: vec![first, target],
+                    reported: false,
+                },
+                Claim::Contested {
+                    mut stations,
+                    reported,
+                } => {
+                    if stations.len() < MAX_CONTESTANTS && !stations.contains(&target) {
+                        stations.push(target);
+                    }
+                    Claim::Contested { stations, reported }
+                }
             };
+        }
+    }
+
+    /// Whether `target`'s late answer to `device`'s probe is its only one:
+    /// no other station answered it.
+    pub(super) fn sole_answer(
+        &self,
+        device: &ObjectIdentifier,
+        target: &DeviceBindingTarget,
+    ) -> bool {
+        self.probes
+            .get(device)
+            .is_some_and(|probe| match &probe.claim {
+                Claim::None => true,
+                Claim::One(first, _) => first == target,
+                Claim::Contested { .. } => false,
+            })
+    }
+
+    /// The stations that contested `device`'s probe, the first time this
+    /// is asked once its wait is over; `None` after, or for a probe with
+    /// one answer or none.
+    pub(super) fn report_contest(
+        &mut self,
+        device: &ObjectIdentifier,
+        now: TokioInstant,
+    ) -> Option<Vec<DeviceBindingTarget>> {
+        let probe = self
+            .probes
+            .get_mut(device)
+            .filter(|probe| now >= probe.deadline)?;
+        match &mut probe.claim {
+            Claim::Contested { stations, reported } if !*reported => {
+                *reported = true;
+                Some(stations.clone())
+            }
+            _ => None,
         }
     }
 
@@ -324,6 +380,16 @@ impl BindingProbes {
     #[cfg(test)]
     pub(super) fn run_out_for_test(&mut self) {
         self.probes.clear();
+    }
+
+    /// End `device`'s probe's wait now, as its deadline passing would.
+    #[cfg(test)]
+    pub(super) fn end_wait_for_test(&mut self, device: &ObjectIdentifier) {
+        if let Some(probe) = self.probes.get_mut(device) {
+            probe.deadline = TokioInstant::now();
+            let deadline = probe.deadline;
+            probe.state.send_modify(|state| state.deadline = deadline);
+        }
     }
 }
 
@@ -443,12 +509,28 @@ impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
         if self.comm_state.initiation_restricted() {
             return Err(LookupMiss::Disabled);
         }
-        let resolution = {
+        let (resolution, contest) = {
             let mut table = self.bindings.write().await;
             let now = runtime_clock::now();
-            table.after_probe(&device, now);
-            table.resolve_at(&device, now, |mac| self.is_group(mac))
+            let contest = table.after_probe(&device, now);
+            (
+                table.resolve_at(&device, now, |mac| self.is_group(mac)),
+                contest,
+            )
         };
+        if let Some(stations) = contest {
+            let transport = self.network.transport();
+            let stations: Vec<_> = stations
+                .iter()
+                .map(|station| station_text(transport, station))
+                .collect();
+            warn!(
+                %device,
+                stations = %stations.join(", "),
+                "Several stations answered the Who-Is for one Device: none is bound, and \
+                 the device is asked again after a minute"
+            );
+        }
         if is_bound(&resolution) {
             Ok(resolution)
         } else {
@@ -501,6 +583,36 @@ impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
         let mut table = self.bindings.write().await;
         table.probes.sent(&device, probe, now, self.wait());
         true
+    }
+}
+
+/// `target` as an operator reads it: a B/IP station as its IP address and
+/// port, another link's as its MAC in hex, a routed one as its network and
+/// MAC there, with the router it came through.
+fn station_text<T: TransportPort>(transport: &T, target: &DeviceBindingTarget) -> String {
+    let link = |mac: &[u8]| match bacnet_transport::bvll::decode_bip_mac(mac) {
+        Ok((ip, port)) if transport.as_bip().is_ok() => {
+            format!("{}:{port}", std::net::Ipv4Addr::from(ip))
+        }
+        _ => {
+            let hex: String = mac.iter().map(|octet| format!("{octet:02X}")).collect();
+            format!("0x{hex}")
+        }
+    };
+    match target {
+        DeviceBindingTarget::Local { peer_mac } => link(peer_mac),
+        DeviceBindingTarget::Routed {
+            network,
+            final_mac,
+            router_mac,
+            ..
+        } => {
+            let hex: String = final_mac
+                .iter()
+                .map(|octet| format!("{octet:02X}"))
+                .collect();
+            format!("{network}:0x{hex} through {}", link(router_mac))
+        }
     }
 }
 

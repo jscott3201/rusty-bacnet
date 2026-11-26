@@ -90,7 +90,7 @@ pub(super) fn sent_writes(h: &Harness) -> Vec<(u8, WritePropertyRequest)> {
 /// Wait for the one WriteProperty request the run sends, and check it carries
 /// the command.
 pub(super) async fn remote_write(h: &Harness) -> u8 {
-    let sent = tokio::time::timeout(Duration::from_secs(1), async {
+    let sent = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let sent = sent_writes(h);
             if !sent.is_empty() {

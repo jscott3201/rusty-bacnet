@@ -68,6 +68,24 @@ async fn an_unsolicited_i_am_binds_no_command_target() {
     assert_eq!(write_stations(&h), [PEER.to_vec()]);
 }
 
+/// The device and another station both answer the server's Who-Is: none
+/// is bound, the write sends nothing to either and fails as undiscovered,
+/// and the contest is counted (decision, maintainer, 2026-11-26).
+#[tokio::test(start_paused = true)]
+async fn two_answers_to_the_first_who_is_bind_nothing() {
+    let h = start_unbound().await;
+    let write = start_write(&h, 9);
+    assert_eq!(next_who_is(&h).await, (everywhere(), targeted(9)));
+    deliver(&h, &i_am(9), &PEER, None).await;
+    deliver(&h, &i_am(9), &STRANGER, None).await;
+    assert_eq!(
+        write.await.unwrap().0,
+        Err(RemoteRequestError::Undiscovered)
+    );
+    assert!(write_stations(&h).is_empty());
+    assert_eq!(h.server.device_binding_conflicts().await, 1);
+}
+
 /// Device 9 bound to the harness peer by its answer to the server's own
 /// Who-Is, its first write answered.
 async fn bound_to_peer(h: &Harness) {

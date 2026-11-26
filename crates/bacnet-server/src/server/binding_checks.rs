@@ -198,13 +198,23 @@ impl DeviceBindingTable {
                 bound.clone(),
                 now.saturating_duration_since(*observed_at) >= OBSERVED_BINDING_TTL,
             ),
-            // A late answer counts too, the probe's only one: an earlier
-            // answer would have bound the device and ended the probe.
-            None if asked
-                || self
-                    .probes
-                    .asked_lately_at(&device, TokioInstant::from_std(now)) =>
+            // First contact is decided when the wait ends
+            // (`after_probe`): one station answered, it is bound; more,
+            // none is.
+            None if asked => {
+                self.probes.claim(&device, target, now);
+                return Heard::Claimed;
+            }
+            // A late answer still binds while the probe holds the device
+            // back, if no other station answered the question.
+            None if self
+                .probes
+                .asked_lately_at(&device, TokioInstant::from_std(now)) =>
             {
+                if !self.probes.sole_answer(&device, &target) {
+                    self.probes.claim(&device, target, now);
+                    return Heard::Claimed;
+                }
                 return match self.record_observation(device, target, now) {
                     ObservationOutcome::Inserted => {
                         self.probes.answer(&device);

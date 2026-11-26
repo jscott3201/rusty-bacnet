@@ -90,10 +90,20 @@ impl EventParity {
             .write()
             .await
             .ask_for_test(bound_device(), Duration::from_secs(3));
-        let frames = self
+        let mut frames = self
             .parity
             .deliver(&unconfirmed(UnconfirmedServiceChoice::I_AM, body))
             .await;
+        // Its wait ends with this one answer: the device is bound, and what
+        // waited for it goes.
+        self.parity
+            .server
+            .device_bindings
+            .write()
+            .await
+            .decide_for_test(bound_device());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        frames.extend(self.parity.sent.take());
         let from = BACnetAddress {
             network_number: 0,
             mac_address: self.parity.source(),

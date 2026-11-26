@@ -50,6 +50,13 @@ async fn hear(wire: &Wire, instance: u32, mac: &[u8], source: Option<NpduAddress
         .await
         .ask_for_test(peer(instance), Duration::from_secs(3));
     send_i_am(wire, instance, mac, source).await;
+    // The Who-Is's wait ends: its one answer, heard or still on its way,
+    // binds the device.
+    wire.server
+        .device_bindings
+        .write()
+        .await
+        .decide_for_test(peer(instance));
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let resolution = wire.server.device_bindings.read().await.resolve_at(

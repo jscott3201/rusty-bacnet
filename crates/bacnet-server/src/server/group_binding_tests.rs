@@ -122,6 +122,10 @@ async fn an_i_am_from_a_group_address_binds_nothing() {
         )
         .await;
     }
+    for instance in 10..=12 {
+        let mut table = services.device_bindings.write().await;
+        table.decide_for_test(device(instance));
+    }
 
     let table = services.device_bindings.read().await;
     let resolve = |instance| table.resolve_at(&device(instance), Instant::now(), |_| false);

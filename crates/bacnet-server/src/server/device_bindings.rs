@@ -239,6 +239,8 @@ pub(super) struct DeviceBindingTable {
     /// Checks of bound devices' addresses that I-Ams from other addresses
     /// cued, out or held off (#2825).
     checks: checks::BindingChecks,
+    /// See [`Self::conflicts`].
+    conflicts: u64,
 }
 
 impl DeviceBindingTable {
@@ -434,6 +436,15 @@ impl DeviceBindingTable {
         }
     }
 
+    /// End `device`'s probe's wait now and decide it, as the writes waiting
+    /// on it do when its deadline passes: for tests whose I-Am answered the
+    /// server's own question.
+    #[cfg(test)]
+    pub(super) fn decide_for_test(&mut self, device: ObjectIdentifier) {
+        self.probes.end_wait_for_test(&device);
+        self.after_probe(&device, runtime_clock::now());
+    }
+
     /// Bind `device` where an I-Am from `source_mac`, relayed from
     /// `source_network`, says it is, as an answer to the server's own
     /// Who-Is would, whether or not one is out: for tests that start from a
@@ -461,26 +472,43 @@ impl DeviceBindingTable {
         outcome
     }
 
-    /// After `device`'s probe, once its wait is over: a lapsed binding whose
-    /// old address stayed silent while exactly one other address answered
-    /// moves there; one that drew no answer at all is dropped
-    /// ([`Self::forget_stale`]); one two addresses answered for stays as it
-    /// is, nothing decided, so the next look asks the same network again.
-    /// Every writer waiting on the probe calls it; each call after the
-    /// first finds the same and changes nothing more.
-    pub(super) fn after_probe(&mut self, device: &ObjectIdentifier, now: Instant) {
-        match self.probes.claim_after(device, TokioInstant::from_std(now)) {
-            Some(Claim::One(claimant, at)) => {
-                if matches!(
-                    self.entries.get(device),
-                    Some(BindingEntry::Observed { .. })
-                ) {
+    /// After `device`'s probe, once its wait is over (#2825): a device with
+    /// no binding, or a lapsed one whose old station stayed silent, is bound
+    /// where exactly one station answered; one that drew no answer at all
+    /// loses a lapsed binding ([`Self::forget_stale`]); one two or more
+    /// stations answered for is bound nowhere new, a lapsed binding kept so
+    /// the next look asks the same network again, after the probe's
+    /// hold-off. The stations of such a contest are returned, and counted
+    /// in [`Self::conflicts`], the first time only. Every writer waiting on
+    /// the probe calls it; each call after the first changes nothing more.
+    pub(super) fn after_probe(
+        &mut self,
+        device: &ObjectIdentifier,
+        now: Instant,
+    ) -> Option<Vec<DeviceBindingTarget>> {
+        let tokio_now = TokioInstant::from_std(now);
+        match self.probes.claim_after(device, tokio_now)? {
+            Claim::One(claimant, at) => {
+                if !matches!(self.entries.get(device), Some(BindingEntry::Configured(_))) {
                     self.record_observation(*device, claimant, at);
                 }
+                None
             }
-            Some(Claim::None) => self.forget_stale(device, now),
-            Some(Claim::Contested) | None => {}
+            Claim::None => {
+                self.forget_stale(device, now);
+                None
+            }
+            Claim::Contested { .. } => {
+                let stations = self.probes.report_contest(device, tokio_now)?;
+                self.conflicts = self.conflicts.saturating_add(1);
+                Some(stations)
+            }
         }
+    }
+
+    /// Probes two or more stations answered, so none was bound (#2825).
+    pub(super) fn conflicts(&self) -> u64 {
+        self.conflicts
     }
 
     fn record_observation(
