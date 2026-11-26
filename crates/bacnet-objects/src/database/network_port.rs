@@ -208,6 +208,8 @@ impl ObjectDatabase {
         capacity: u32,
         mode: BipPortMode,
     ) -> Result<(), Error> {
+        // An oid with no live reservation or built-in port behind it is the
+        // caller's argument refused (#1833), not a lifecycle state of the database.
         let registration = self
             .network_port
             .as_ref()

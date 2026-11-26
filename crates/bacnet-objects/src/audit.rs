@@ -52,6 +52,9 @@ pub use receipt::{
     CompletedAuditReceipt, ConfirmedAuditNotificationOutcome, MAX_AUDIT_RECEIPT_KEY_BYTES,
     MAX_COMPLETED_AUDIT_RECEIPTS,
 };
+// For the crate's table of range refusal texts (#1833).
+#[cfg(test)]
+pub(crate) use receipt::validate_receipts;
 pub use reporter_change::{
     AuditReporterAuthority, AuditReporterChangeSink, AuditReporterConfiguration,
 };

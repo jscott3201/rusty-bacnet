@@ -385,10 +385,10 @@ alone; `Error::with_context` puts context in front and keeps the variant.
 label. `bacnet-transport`, `bacnet-network`, `bacnet-endpoint-core`,
 `bacnet-endpoint`, `bacnet-server`, `bacnet-client`, `bacnet-objects` and
 `bacnet-device-core` report their refusals this way (a few of the objects'
-storage refusals aside), and `bacnet-transport` its I/O failures as
+persisted-state refusals aside), and `bacnet-transport` its I/O failures as
 `Error::Transport` with
 the OS error kept as the source and an NPDU too long for the link as
-`Error::SendTooLong`; the other hosted crates still report theirs as
+`Error::SendTooLong`; the CLI and the bindings still report theirs as
 `Error::Encoding` or `Error::OutOfRange` text until #1833 reaches them. An
 endpoint session or ingress that is not running says why with its
 `Lifecycle`: `NotRunning` before its start, `Stopping` while a stop runs, and
@@ -14054,7 +14054,7 @@ All async operations return `Result<T, bacnet_types::error::Error>`. Key variant
 | `Error::Unsupported(Refusal)` | Not offered on this platform, in this build, or by this kind of component |
 | `Error::LimitReached(Refusal)` | A resource cap reached: a full table, a counter run out, a one-holder resource another holds |
 | `Error::SendTooLong { length, limit }` | A send refused for its length before anything was written: an NPDU too long for B/IP, MS/TP or Ethernet, and BACnet/SC's NPDU and frame bounds (#1833). A router answers it with reject reason 4; the high-level client asks again with smaller requests |
-| `Error::Encoding(msg)` | A formatted local error from the crates #1833 has not reached yet (objects, device-core and the crates above the client and server) |
+| `Error::Encoding(msg)` | A formatted local error #1833 has not typed yet: a few of `bacnet-objects`' persisted-state refusals (a snapshot that doesn't decode or that the format can't keep, and a failed save), and refusals from the CLI and the Python bindings; a few matchers in the client, `bacnet-ops` and the bindings still read it |
 | `Error::Transport(io_error)` | Transport I/O failure, with the OS error as its source where one caused it: a socket's, a serial port's open, read or write, GPIO, the RS-485 ioctl, entropy (#1833), an SC dial's TLS handshake. A send this side's link didn't carry before its deadline (an endpoint's deadline-bound send, a server's audit forwarding) is one of kind `TimedOut`, not `Error::Timeout` (#1833). A stopped transport's send is `Error::State` |
 | `Error::AmbiguousDevice { instance, candidates }` | Two or more addresses claim the instance a request named; name one by its address |
 | `Error::RequestCutOff { sent }` | A request ended before an answer came because the client or its link stopped under it (#1833): the client's stop, its endpoint's or node's, or the link stopping after the request went out, refusing its retry or a later segment or dropping a B/IP BVLC management request's wait. `sent: false`: it was still waiting for its turn and nothing left. `sent: true`: it, or some of its segments, may have gone out and been carried out, so don't send a write again blindly. The text says which; an endpoint whose audited request's task its stop ended reports it with `sent: true` too. The source Audit records one with `sent: true`, its outcome unknown (COMMUNICATION, OTHER), and not one with `sent: false` |

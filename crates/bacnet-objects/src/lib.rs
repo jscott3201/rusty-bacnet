@@ -96,6 +96,9 @@ mod property_metadata_audit;
 mod present_value_access_tests;
 
 #[cfg(test)]
+mod range_refusal_text_tests;
+
+#[cfg(test)]
 mod local_input_tests;
 
 #[cfg(all(test, feature = "event-reporting"))]

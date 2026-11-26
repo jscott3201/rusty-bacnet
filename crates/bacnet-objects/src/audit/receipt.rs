@@ -66,7 +66,7 @@ pub(super) fn validate_key(key: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-pub(super) fn validate_receipts(receipts: &[CompletedAuditReceipt]) -> Result<(), Error> {
+pub(crate) fn validate_receipts(receipts: &[CompletedAuditReceipt]) -> Result<(), Error> {
     if receipts.len() > MAX_COMPLETED_AUDIT_RECEIPTS {
         return Err(
             RangeError::new("AuditLog completed receipt count {} exceeds {}")
