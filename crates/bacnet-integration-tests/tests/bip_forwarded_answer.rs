@@ -13,7 +13,8 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_client::client::BACnetClient;
 use bacnet_transport::bvll::{decode_bip_mac, encode_bip_mac};
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{AbortReason, ObjectType, PropertyIdentifier};
+use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 use tokio::net::UdpSocket;
 use tokio::time::{Duration, timeout};
@@ -82,10 +83,13 @@ async fn a_forwarded_answer_naming_the_device_never_completes_its_read() {
         }
     };
     let (read, ()) = tokio::join!(read, forge);
-    // With no answer, it ends unanswered after its one attempt.
+    // With no answer, it ends by its timeout after its one attempt.
     assert!(
-        read.is_err(),
-        "a forwarded ComplexACK answered the read: {read:?}"
+        matches!(
+            &read,
+            Err(Error::Remote(RemoteError::Abort { reason })) if *reason == AbortReason::TSM_TIMEOUT
+        ),
+        "the read ended otherwise than by its timeout: {read:?}"
     );
     let counters = client.transport().receive_counters();
     assert_eq!(counters.forwarded_not_broadcast, 256);

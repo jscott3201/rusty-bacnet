@@ -15,7 +15,7 @@ use core::net::SocketAddrV4;
 
 use bacnet_bip_codec::Bvll;
 use bacnet_bip_core::node::{
-    Addressed, Discard, ForBbmd, ForwardedTrust, Link, Mode, Received, forward_is_broadcast,
+    Addressed, Discard, ForBbmd, ForwardedTrust, Link, Mode, Received, forward_content_allowed,
 };
 use node_support::*;
 
@@ -187,7 +187,7 @@ fn a_forward_for_another_network_or_unreadable_goes_to_the_network_layer() {
 
 /// A BBMD hands its share of a peer's forward to the host, which forwards
 /// it whatever it carries; whether the BBMD hands it up itself is the
-/// host's to ask, with `forward_is_broadcast`, the rule a node applies.
+/// host's to ask, with `forward_content_allowed`, the rule a node applies.
 #[test]
 fn a_bbmd_still_takes_every_peer_forward_to_pass_on() {
     let bbmd = link(Mode::Bbmd);
@@ -198,9 +198,9 @@ fn a_bbmd_still_takes_every_peer_forward_to_pass_on() {
             receive(&bbmd, &frame, BBMD, UNICAST),
             Received::Bbmd(ForBbmd::Forwarded { origin: REMOTE, .. })
         ));
-        assert!(!forward_is_broadcast(&npdu), "{kind}");
+        assert!(!forward_content_allowed(&npdu), "{kind}");
     }
     for (kind, apdu) in UNCONFIRMED {
-        assert!(forward_is_broadcast(&npdu(LOCAL, apdu)), "{kind}");
+        assert!(forward_content_allowed(&npdu(LOCAL, apdu)), "{kind}");
     }
 }

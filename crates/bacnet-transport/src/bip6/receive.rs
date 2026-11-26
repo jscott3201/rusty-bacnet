@@ -6,7 +6,7 @@ use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bacnet_bip_core::node::forward_is_broadcast;
+use bacnet_bip_core::node::forward_content_allowed;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_types::MacAddr;
 use bytes::Bytes;
@@ -540,7 +540,7 @@ impl Receiver {
                 // never the origin's in a forward (#2829). On B/IPv6 a
                 // directed frame can name any VMAC too, so this keeps the
                 // two B/IP links' rule the same rather than closing a gap.
-                if !forward_is_broadcast(&npdu) {
+                if !forward_content_allowed(&npdu) {
                     self.drops.count(DropReason::ForwardedNotBroadcast);
                     debug!(
                         source = %source_addr,

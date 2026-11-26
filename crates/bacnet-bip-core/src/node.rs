@@ -142,7 +142,7 @@ pub use engine::{Inbound, Node};
 pub use exchange::{ExchangeId, ExchangeRefusal, LocalFailure, Operation};
 pub use receive::{
     Datagram, Delivery, Discard, ForBbmd, Path, Permissive, Policy, Received, Response,
-    forward_is_broadcast,
+    forward_content_allowed,
 };
 pub use registration::{Admission, AttemptOutcome, Lease, RegistrationEvent, RegistrationSnapshot};
 pub use send::{Cast, Outgoing, SendRefusal};
