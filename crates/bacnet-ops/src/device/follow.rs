@@ -886,29 +886,32 @@ impl<T: TransportPort + 'static> Client<T> {
     /// Clear the confirmation of each live place a lone claim's placement
     /// gave ([`Place::provisional`]) whose instance another address
     /// `announced` within its window (#2824): its next handle or write asks
-    /// again. A burst of the table's changes missed (`missed`) clears them
-    /// all.
+    /// again. A burst of the table's changes missed (`missed`) clears those
+    /// whose window is still open. A window that is over, every I-Am within
+    /// it seen by now, ends: the place is the handles' own rules' to judge.
     fn contest(&self, announced: &[(DeviceAddress, u32, Instant)], missed: bool) {
         let places: Vec<(u32, Followed)> = lock(&self.shared.follows)
             .iter()
             .filter_map(|(key, place)| Some((key.1, place.upgrade()?)))
             .collect();
+        let now = now();
         for (instance, place) in places {
             let mut place = lock(&place);
             let Some((from, until)) = place.provisional else {
                 continue;
             };
             let here = self.localized(place.at.clone());
-            let contested = missed
-                || announced.iter().any(|(at, claimed, when)| {
-                    *claimed == instance && *at != here && (from..=until).contains(when)
-                });
-            if contested {
+            let claimed = announced.iter().any(|(at, claimed, when)| {
+                *claimed == instance && *at != here && (from..=until).contains(when)
+            });
+            if claimed || (missed && now <= until) {
                 tracing::debug!(
-                    "device {instance}, placed at {here} on its one claim, is claimed elsewhere \
-                     too: its next handle or write asks again"
+                    "device {instance}, placed at {here} on its one claim, may be claimed \
+                     elsewhere too: its next handle or write asks again"
                 );
                 place.confirmed = false;
+                place.provisional = None;
+            } else if now > until {
                 place.provisional = None;
             }
         }
