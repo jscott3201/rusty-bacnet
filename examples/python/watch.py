@@ -3,7 +3,9 @@
 Demonstrates:
 - `Device.watch()`: each point read, then subscribed for COV and renewed
   before each lifetime ends, as an async iterator of `WatchUpdate`s
-- telling a value that changed from a point the watch gave up
+- a watch of a handle made from an instance, which follows the device to a
+  new address (`update.moved`), and telling a value that changed from a
+  point the watch gave up
 - the client's watch defaults (`watch_lifetime=`), which a watch may override
 - `Watch.add()` and `Watch.remove()`, changing the points while iterating
 - `async with`, which cancels the subscriptions on the way out
@@ -42,7 +44,11 @@ async def main():
     # names its own; watches with equal settings share their subscriptions.
     async with BACnetClient(interface="127.0.0.1", port=0, broadcast_address="127.0.0.1",
                             watch_lifetime=60) as client:
-        ahu = await client.device(address)
+        # A handle made from the device's instance follows it: a watch of it
+        # moves with the device once its own reads find it at a new address.
+        # One made from an address (`client.device(address)`) watches there.
+        await client.discover(scope=address, wait=0.5)
+        ahu = await client.device(1234)
         changes = asyncio.ensure_future(change_values(server))
         seen = 0
         changed = False
@@ -50,9 +56,13 @@ async def main():
         # seconds instead (`subscribe=False` polls every point).
         async with await ahu.watch(["ai:1", "bv:1"]) as watch:
             async for update in watch:
+                if update.moved is not None and update.state == "starting":
+                    # The watch followed the device; values come from there.
+                    print(f"device {update.instance} moved from {update.moved.from_} "
+                          f"to {update.moved.to}")
                 if update.state == "gone":
-                    # Another device took the address ("replaced"), or the
-                    # device answers elsewhere now ("moved").
+                    # A watch of one address only: another device took it
+                    # ("replaced"), or the device answers elsewhere ("moved").
                     print(f"{update.object_id} given up: {update.why}")
                     break
                 if update.why is not None:

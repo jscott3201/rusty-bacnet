@@ -239,7 +239,11 @@ Raised when no device could be placed for the name a call gave
 answered a Who-Is for it, or no router is known for a routed address's
 network. Also a `LookupError`. Nothing was sent to the device. The
 typed `_from_device` and `_to_device` calls raise it for an
-instance the table doesn't hold.
+instance the table doesn't hold. A write or relinquish through a handle
+made from an instance raises it when the device isn't taken for the
+instance at the address the handle holds (#2795): a write never goes to
+another address on its own. Read through the handle to have it look
+for the device, then write again.
 
 Attributes:
 target: The device as it was named: an instance (`"1234"`,
@@ -247,12 +251,21 @@ target: The device as it was named: an instance (`"1234"`,
 instance: The instance named (`1234` for `"1234"` or
 `"2:1234"`); None when the device was named by an address.
 candidates: An empty list here.
+at: For a write a following handle didn't send, the address it
+holds, as `(network, mac)` (network 0 the local one); else
+None.
+candidate: For that write, the one other address the discovery
+table has the instance at, as `(network, mac)`, or None. An
+unconfirmed hint: the table takes I-Ams nobody asked for, and
+nothing asked the device there which it is.
 
 Attributes:
 
 - `target: Optional[str]`
 - `instance: Optional[int]`
 - `candidates: list[tuple[int, bytes]]`
+- `at: Optional[tuple[int, bytes]]`
+- `candidate: Optional[tuple[int, bytes]]`
 
 ## BacnetAmbiguousDeviceError
 

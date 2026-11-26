@@ -586,10 +586,16 @@ impl PyDevice {
     /// `watch_subscribe`); watches with equal settings share their
     /// subscriptions.
     ///
-    /// The points are at the device's address now: a following handle
-    /// whose device moves later reports it (`why.kind == "moved"`) rather
-    /// than following, and another device answering at the address is
-    /// reported (`"replaced"`) and never taken for this one.
+    /// A handle made from an instance (`follows`) watches its device
+    /// wherever it answers: once the watch's own reads find the device at
+    /// another address and its old one no longer answering as it, the
+    /// points move there, each update saying so (`moved`, a `WatchMove`)
+    /// and where it is watched (`address`); while another device answers
+    /// at its address the points are `"unreachable"` (`why.kind ==
+    /// "replaced"`), never taken for it. A handle made from an address
+    /// watches that address: a device that moves away is reported
+    /// (`"gone"`, `why.kind == "moved"`), another device there too
+    /// (`"replaced"`). An announcement alone moves nothing.
     ///
     /// The watch runs on its own until it ends: `close()` (or leaving
     /// `async with`), the object going away, or the client's `stop()`.

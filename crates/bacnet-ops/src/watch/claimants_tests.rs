@@ -15,10 +15,11 @@ use super::stream_tests::{number, until};
 use crate::device::ClientEvent;
 use crate::device::test_bus::{N, at, server, settle, stop};
 
-/// A responder at station 3 answers as the watched device. The forged pair
-/// moves the handle there; the hub reads station 3, which names the device,
-/// asks station 2 once more, which still answers as it, and the watch goes
-/// on.
+/// A responder at station 3 answers as the watched device, and the forged
+/// pair names it there. Station 2 answered the hub's ask about the forged
+/// claim as the device, which the client remembers: the handle's next
+/// request goes there without asking again, and station 3 is never asked
+/// (#2795). The watch goes on.
 #[tokio::test(start_paused = true)]
 async fn a_responder_naming_the_device_elsewhere_ends_no_watch() {
     let mut lab = Lab::new(Handle::Follows).await;
@@ -29,18 +30,26 @@ async fn a_responder_naming_the_device_elsewhere_ends_no_watch() {
     let before = lab.reads_at(2);
     let device = lab.device.as_ref().unwrap();
     device.read("ai:1 pv").await.unwrap();
-    assert_eq!(device.address(), at(3), "the handle moved");
+    assert_eq!(device.address(), at(2), "the handle stays");
     lab.goes_on(31.0).await;
     lab.none_given_up(10).await;
-    assert_eq!(lab.reads_at(3), 1, "one read at station 3");
-    assert_eq!(lab.reads_at(2) - before, 1, "one ask at station 2");
+    assert_eq!(lab.reads_at(3), 0, "station 3 never asked");
+    assert_eq!(
+        lab.reads_at(2) - before,
+        0,
+        "the device's answer remembered"
+    );
+    assert_eq!(lab.servers[1].cov_counters().subscriptions_active, 0);
     lab.goes_on(32.0).await;
     lab.stop().await;
 }
 
 /// The same with station 2 gone quiet after it answered the forged claim:
-/// asked once more, it doesn't answer, and the point is given up as moved
-/// to station 3.
+/// the handle's read there times out, the handle asks station 2 once
+/// more (silent) and station 3 (the device), and moves there. The hub,
+/// told, reads station
+/// 3, asks station 2 once more, which doesn't answer, and the following
+/// point goes to station 3.
 #[tokio::test(start_paused = true)]
 async fn a_responder_naming_the_device_is_a_move_once_its_old_address_is_silent() {
     let mut lab = Lab::new(Handle::Follows).await;
@@ -51,10 +60,16 @@ async fn a_responder_naming_the_device_is_a_move_once_its_old_address_is_silent(
     let before = lab.reads_at(2);
     lab.bus.silence(2);
     lab.device.as_ref().unwrap().read("ai:1 pv").await.unwrap();
-    let update = until(&mut lab.watch, |u| matches!(u.state, State::Gone { .. })).await;
-    assert_eq!(moved_to(&update), Some(&at(3)), "{update:?}");
-    assert_eq!(lab.reads_at(3), 1, "one read at station 3");
-    assert_eq!(lab.reads_at(2) - before, 1, "asked once more");
+    assert_eq!(lab.device.as_ref().unwrap().address(), at(3));
+    let update = until(&mut lab.watch, |u| u.moved.is_some()).await;
+    assert_eq!(update.at, at(3), "{update:?}");
+    assert!(lab.reads_at(3) >= 2, "the handle's read and the hub's");
+    assert_eq!(
+        lab.reads_at(2) - before,
+        2,
+        "the handle's ask and the hub's"
+    );
+    until(&mut lab.watch, |u| u.state == State::Subscribed).await;
     lab.bus.unsilence(2);
     lab.stop().await;
 }
@@ -105,8 +120,10 @@ async fn a_cue_read_in_its_turn_asks_the_old_address_again() {
 }
 
 /// The forged pair every 20 s for an hour, naming the next of ten silent
-/// stations each time: the pace is the watched address's, so the hub reads
-/// the stations 14 times in the hour between them, and the watch goes on.
+/// stations each time, and the hub told each time that a handle moved
+/// there: the pace is the watched address's, so the hub reads the stations
+/// 14 times in the hour between them, and the watch goes on. The pairs
+/// move no handle (#2795).
 #[tokio::test(start_paused = true)]
 async fn rotating_new_addresses_share_the_watched_addresss_pace() {
     let mut lab = Lab::new(Handle::Follows).await;
@@ -118,17 +135,19 @@ async fn rotating_new_addresses_share_the_watched_addresss_pace() {
         lab.bus.i_am(station, N);
         settle().await;
         let there = lab.client.device(N).await.unwrap();
-        lab.bus.i_am(2, N);
-        lab.bus.i_am(station, N + 2);
-        settle().await;
-        let back = lab.client.device(N).await.unwrap();
-        drop((there, back));
         while let Ok(event) = lab.events.try_recv() {
             moves += usize::from(matches!(event, ClientEvent::Moved { from, .. } if from == at(2)));
         }
+        lab.tell(station);
+        // The test's own word to the hub, not a handle's move.
+        while lab.events.try_recv().is_ok() {}
+        lab.bus.i_am(2, N);
+        lab.bus.i_am(station, N + 2);
+        settle().await;
+        drop(there);
         tokio::time::sleep(Duration::from_secs(20)).await;
     }
-    assert_eq!(moves, 180, "the handle moved away each time");
+    assert_eq!(moves, 0, "no handle moved");
     let reads: usize = stations.map(|station| lab.reads_at(station)).sum();
     // At once, after 60, 120 and 240 s, then every 300 s.
     assert_eq!(reads, 14, "reads at the stations in the hour");

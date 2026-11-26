@@ -82,6 +82,12 @@ pub(crate) struct Lookup {
     /// for this one: a `BACnetClient.device()` target each. Empty for a
     /// device no address claims.
     pub(crate) candidates: Vec<(u16, Vec<u8>)>,
+    /// For a write a following handle didn't send (#2795): the address the
+    /// handle holds, as (network, MAC).
+    pub(crate) at: Option<(u16, Vec<u8>)>,
+    /// For that write: the one other address the discovery table has the
+    /// instance at, unconfirmed, as (network, MAC).
+    pub(crate) candidate: Option<(u16, Vec<u8>)>,
 }
 
 impl Lookup {
@@ -98,6 +104,8 @@ impl Lookup {
             instance,
             ambiguous: false,
             candidates: Vec::new(),
+            at: None,
+            candidate: None,
         }
     }
 
@@ -108,6 +116,8 @@ impl Lookup {
             instance: Some(instance),
             ambiguous: true,
             candidates,
+            at: None,
+            candidate: None,
         }
     }
 }
@@ -126,6 +136,8 @@ pub(crate) fn lookup_error(message: String, lookup: Lookup) -> PyErr {
         error.setattr("target", lookup.target)?;
         error.setattr("instance", lookup.instance)?;
         error.setattr("candidates", lookup.candidates)?;
+        error.setattr("at", lookup.at)?;
+        error.setattr("candidate", lookup.candidate)?;
         Ok(PyErr::from_value(error))
     })
     .unwrap_or_else(|_| BacnetError::new_err(fallback))

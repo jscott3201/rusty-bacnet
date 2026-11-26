@@ -502,6 +502,8 @@ property, or an element, by SubscribeCOVProperty.
 ```python
 async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
     async for update in watch:
+        if update.moved is not None:
+            print("followed to", update.moved.to, "from", update.moved.from_)
         if update.state == "gone":
             print(update.object_id, "given up:", update.why)
         elif update.value is not None:
@@ -526,16 +528,18 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
   point's state. A consumer that falls behind gets one update a point with
   its latest value and state, never a queue of old ones: `.folded` counts
   the changes folded away.
-- `await watch.add(points)` watches more points at the watch's address
-  (resolving to how many were new: a point held already is left as it
-  is), and `await watch.remove(points)` stops watching some (resolving to
+- `await watch.add(points)` watches more points of the watch's device,
+  at its address or following it as the watch does (resolving to how many
+  were new: a point held already is left as it is), and
+  `await watch.remove(points)` stops watching some (resolving to
   how many it held), both while another task iterates. Once `remove` has
   run, no step begun after hands out a removed point, an update already
   waiting included; a step already waiting may still get one it had
   taken. A removed point no other watch holds is cancelled on the wire
   afterwards, best effort; one added again is read afresh. Both take
-  `points` as `watch` does and raise `RuntimeError` once the watch has
-  ended; `add` raises it too when the points would take the watch's hub
+  `points` as `watch` does and raise `BacnetStateError` (`state` is
+  `"closed"`, also a `RuntimeError`) once the watch has ended (#2819);
+  `add` raises `RuntimeError` when the points would take the watch's hub
   past 4096.
 - The watch never ends on its own, not even with every point removed. It
   ends on `close()` (or leaving `async with`), when the object goes away,
@@ -561,12 +565,23 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
   retries, or for a client from `endpoint.client()` the endpoint's
   `apdu_timeout_ms` and `apdu_retries` (#2603). At the default 6 s that is
   48 s before a five-minute lifetime ends.
-- The points are at the device's address now. A following handle whose
-  device moves later is reported (`why.kind == "moved"`, `why.to`) rather
-  than followed: watch again from the handle, which has moved. Another
-  device answering at the address is reported (`"replaced"`, with
-  `why.watched` and `why.found`), and nothing from it is ever taken for
-  the point; the point comes back if its device answers there again.
+- A handle made from an instance (`ahu.follows`) makes a watch that
+  follows its device (`watch.follows`, #2795). Once the watch's own reads
+  find the device at another address (the device there names itself so)
+  and its old address no longer answers as it, the points move there:
+  each update says so (`.moved`, a `WatchMove` with `.from_`, `.to`,
+  `.timestamp` and `.count`) and where the point is watched (`.address`); the move's
+  own update is `"starting"`, then values come from the new address. An
+  I-Am, or a handle that moved, only has the watch check; two addresses
+  answering as the device move nothing. While another device answers at
+  its address the points are `"unreachable"` (`why.kind == "replaced"`),
+  never taken for it, as the watch looks for its device.
+- A handle made from an address watches that address. A device that moves
+  away is reported (`"gone"`, `why.kind == "moved"`, `why.to`): watch it
+  there, or from a handle made from its instance. Another device answering
+  at the address is reported (`"gone"`, `"replaced"`, with `why.watched`
+  and `why.found`), and nothing from it is ever taken for the point; the
+  point comes back if its device answers there again.
 - Cancelling a step loses no update: one on its way when the cancel
   landed comes first next time. Concurrent steps complete one at a time,
   each with the next update.
@@ -577,7 +592,8 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
   raises on a stopped client, `BacnetLookupError` for a following handle
   whose device can't be placed, and `RuntimeError` past 256 settings.
   Nothing is sent until the watch starts.
-- `.address`, `.points` (`(object, property, array_index)` tuples, added
+- `.address` (where the device answered when the watch was made),
+  `.follows`, `.points` (`(object, property, array_index)` tuples, added
   ones last), `.lifetime`, `.poll_interval`, `.subscribe`, `.folded`,
   `.closed`, `len()`.
 
@@ -586,9 +602,11 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `.address` | `str` | Where the point's device answers, as `device()` reads back |
+| `.address` | `str` | Where the point is watched now, as `device()` reads back: for a following watch, where its device answers now |
+| `.instance` | `int \| None` | The device's instance, when known |
+| `.moved` | `WatchMove \| None` | A following watch's latest move (`.from_`, `.to`, `.timestamp`, `.count`); None before any, and for a watch of one address |
 | `.object_id`, `.property_id`, `.array_index` | `ObjectIdentifier`, `PropertyIdentifier`, `int \| None` | The point: Present_Value for one named by its object alone |
-| `.state` | `str` | `"starting"`, `"subscribed"`, `"polled"`, `"unreachable"` or `"gone"` |
+| `.state` | `str` | `"starting"`, `"subscribed"`, `"polled"`, `"unreachable"` or `"gone"` (a watch of one address only) |
 | `.why` | `WatchReason \| None` | Why the point isn't subscribed; None while it is, or while starting |
 | `.value` | `Value \| None` | The value as last read or notified; its text names the units or the state |
 | `.error` | `BacnetError \| None` | Why the latest read gave no value, unraised; with `.value` set too, that value is an earlier one |
@@ -610,14 +628,44 @@ async with await ahu.watch(["ai:1", "ao:2", "bv:3"]) as watch:
 | `"lapsed"` | `.error` (or None) | A renewal failed; asked again after a backoff |
 | `"missing"` | | No router to the device's remote network is known |
 | `"foreign-sender"` | `.sender` | Its notifications name device `sender`, which can't be told from another device at the address; polled |
-| `"moved"` | `.to` | The device answers at `to` now: the point is given up |
-| `"replaced"` | `.watched`, `.found` | Device `found` answers at the address now, not `watched`: the point is given up |
+| `"moved"` | `.to` | The device answers at `to` now: a watch of one address gives the point up |
+| `"replaced"` | `.watched`, `.found` | Device `found` answers at the address now, not `watched`: a watch of one address gives the point up; a following watch is `"unreachable"` while it looks for its device |
+| `"unconfirmed"` | | A following watch's device refuses the read that names it at its address, so nothing it answers is taken: watch it by its address |
+
+#### `WatchMove`
+
+Where a following watch's device moved, as the watch took it: `.from_`
+(where it answered before; `from` is a keyword), `.to` (where it answers
+now), `.timestamp` (POSIX seconds) and `.count` (the moves the watch has
+taken for the point, this one included: compare it to tell a new move).
+Addresses read as `device()` reads them back.
 
 ### Writing
 
 #### `write(object, property, value, *, priority=None, index=None) -> Written`
 
 One WriteProperty, acknowledged.
+
+**The rule for writes through a handle made from an instance (#2795):** a
+write (or `relinquish`) goes only to the address the handle already
+holds, while the device there is taken for the instance, as it is when its discovery-table row
+is absent or names the instance (neither is the device's own answer, and
+neither has an age limit), or the device's last own answer there named
+it; else one identity read is sent within the call, and an answer as
+the instance, an unclear one (a Reject, an Abort, another error) or the
+client's own failure keeps the write there. Otherwise nothing is sent and it raises
+`BacnetLookupError`, its message naming both addresses, with `instance`,
+`at` (the address held) and `candidate` (the one other address the table
+has the instance at, an unconfirmed hint, or None) as `(network, mac)`. A
+write never moves the handle: a read through it looks for the device,
+asking its old address first and moving only when that isn't the device
+and the new address names it, and a write after it goes to the new place.
+What this leaves: a read moves a following handle once its old address
+misses one identity question (about 24 s at the default timers; about 3
+to 6 s for a routed address with no row) while another address names the
+instance, and later writes go to the new place. A routed device's path
+through its router is #2823, and a new handle's first resolution of an
+instance is #2824.
 
 ```python
 await ahu.write("av:1", "pv", "72.5@8")            # priority 8, in the text
@@ -830,7 +878,7 @@ ask only the instances between them: give both or neither.
 | Raised | When |
 |--------|------|
 | `TypeError`, `ValueError` | An argument that names nothing: when the call is made for a wrong type or bad text, on await for what needs the started client's link. Nothing was sent |
-| `BacnetLookupError` (also `LookupError`) | No device could be placed for the name. `target` is the name, and `instance` the instance it holds (None for an address) |
+| `BacnetLookupError` (also `LookupError`) | No device could be placed for the name, or a write through a following handle wasn't sent because the device isn't taken for the instance where the handle holds it. `target` is the name, and `instance` the instance it holds (None for an address); for that write, `at` is the address held and `candidate` an unconfirmed hint, as `(network, mac)` |
 | `BacnetAmbiguousDeviceError` | A `BacnetLookupError`: two or more addresses claim the instance. `candidates` are targets |
 | `BacnetWriteDeniedError` | The write policy refuses the priority. Nothing was sent |
 | `BacnetProtocolError`, `BacnetRejectError`, `BacnetAbortError` | The device's own Error, Reject or Abort |

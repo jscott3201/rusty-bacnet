@@ -5,7 +5,9 @@
 //!
 //! [`Hub::watch`] hands out a [`Lease`] on a [`Point`]. The first lease on
 //! a point starts its entry, which goes to its device's scheduler (#2115):
-//! one task per watched address, running one job at a time. The scheduler
+//! one task per watched address, running one job at a time (a following
+//! point's goes where the hub follows its device, and moves with it,
+//! #2795; [`Lease::at`] says where). The scheduler
 //! reads the point once (what it reads is [`WatchOptions::reads`]), then
 //! asks for a finite COV subscription, renewed before it lapses; points
 //! the device won't subscribe are polled, all of a device's together in
@@ -41,6 +43,7 @@ pub mod first;
 pub(crate) mod ranges;
 mod snapshot;
 
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -59,9 +62,9 @@ pub use super::options::{
 pub use super::sample::{Sample, Samples};
 pub use super::settings::Lifetime;
 use super::shared::{Arrival, DeviceSlot, Registry, Running, Shared};
-use super::{Point, WatchError, device, dispatch, shared};
+use super::{Binding, Point, WatchError, device, dispatch, shared};
 use crate::client::Client;
-use crate::device::DeviceAddress;
+use crate::device::{DeviceAddress, FollowKey, Followed};
 use crate::limits::Account;
 
 /// The properties an object watch reads: what an agent or an operator needs
@@ -167,9 +170,15 @@ pub struct Lease {
 }
 
 impl Lease {
-    /// The point, its device's address as the hub keys it.
+    /// The point, as the hub keys it.
     pub fn point(&self) -> Point {
         self.shared.point.clone()
+    }
+
+    /// Where the point is watched now: a pinned point's address, or where
+    /// the hub follows a following point's device (#2795).
+    pub fn at(&self) -> DeviceAddress {
+        self.shared.at()
     }
 
     /// Its latest values and state.
@@ -252,6 +261,21 @@ pub(crate) struct Inner<T: TransportPort + 'static> {
     /// The range of subscriber process identifiers the hub holds, and
     /// whether it gives it back when it goes (a test keeps one).
     range: (u32, bool),
+}
+
+impl<T: TransportPort + 'static> Inner<T> {
+    /// Start the scheduler of the device at `address`, which the table
+    /// knows as `slot` from now on.
+    pub(in crate::watch) fn spawn_device(
+        self: &Arc<Self>,
+        address: DeviceAddress,
+        slot: Arc<DeviceSlot>,
+    ) {
+        let task = tokio::spawn(device::run(Arc::clone(self), address, slot));
+        let mut handles = self.handles.locked();
+        handles.retain(|handle| !handle.is_finished());
+        handles.push(task);
+    }
 }
 
 impl<T: TransportPort + 'static> Drop for Inner<T> {
@@ -361,7 +385,17 @@ impl<T: TransportPort + 'static> Hub<T> {
     /// watch goes to its device's scheduler, one a device address, started
     /// with it when the device has none. A station on the client's own
     /// network is keyed as the local station at its MAC once the client
-    /// knows the network's number, as the device handles key it.
+    /// knows the network's number, as the device handles key it. A
+    /// following point ([`Binding::Follows`]) is
+    /// watched where the hub follows its device already, else where the
+    /// client's handles following it reach it, else at the one address
+    /// claiming it in the discovery table (#2795).
+    ///
+    /// # Errors
+    ///
+    /// As [`stream`](Self::stream), and for a following point no address
+    /// can be found for, [`WatchError::UnknownDevice`] or
+    /// [`WatchError::Ambiguous`].
     ///
     /// # Panics
     ///
@@ -374,10 +408,24 @@ impl<T: TransportPort + 'static> Hub<T> {
 
     /// A lease on each of `points`, keyed ([`keyed`](Self::keyed)) and
     /// distinct, or none: under one lock of the table, so a call that
-    /// would take the hub past [`WatchOptions::max_points`] takes nothing
-    /// and sends nothing.
+    /// would take the hub past [`WatchOptions::max_points`], or names a
+    /// following point whose device can't be found, takes nothing and
+    /// sends nothing.
     pub(in crate::watch) fn watch_all(&self, points: Vec<Point>) -> Result<Vec<Lease>, WatchError> {
         let registry = &self.inner.registry;
+        let client = &self.inner.client;
+        // Where each followed instance is, before the table's lock: the
+        // client's own locks are never taken under it.
+        let mut places = HashMap::new();
+        for point in &points {
+            if let Some(key) = self.follow_key(point)
+                && !places.contains_key(&key)
+            {
+                let place = client.follow_place(key)?;
+                let at = client.place_of(&place);
+                places.insert(key, (place, at));
+            }
+        }
         let mut fresh = Vec::new();
         let shared: Vec<Arc<Shared>> = {
             let mut table = registry.table();
@@ -394,14 +442,15 @@ impl<T: TransportPort + 'static> Hub<T> {
             }
             points
                 .into_iter()
-                .map(|point| self.take(&mut table, point, &mut fresh))
+                .map(|point| {
+                    let follows = self.follow_key(&point);
+                    let place = follows.and_then(|key| places.get(&key).cloned());
+                    self.take(&mut table, point, place, &mut fresh)
+                })
                 .collect()
         };
         for (address, slot) in fresh {
-            let task = tokio::spawn(device::run(Arc::clone(&self.inner), address, slot));
-            let mut handles = self.inner.handles.locked();
-            handles.retain(|handle| !handle.is_finished());
-            handles.push(task);
+            self.inner.spawn_device(address, slot);
         }
         Ok(shared
             .into_iter()
@@ -418,11 +467,14 @@ impl<T: TransportPort + 'static> Hub<T> {
 
     /// `point`'s entry, the running one or a new one handed to its
     /// device's scheduler; a device that has none is noted in `fresh`, to
-    /// start one once the table's lock is let go.
+    /// start one once the table's lock is let go. A new following point
+    /// starts where the hub follows its device, else where `place` (the
+    /// client's handles') reaches it.
     fn take(
         &self,
         table: &mut shared::Table,
         point: Point,
+        place: Option<(Followed, DeviceAddress)>,
         fresh: &mut Vec<(DeviceAddress, Arc<DeviceSlot>)>,
     ) -> Arc<Shared> {
         let registry = &self.inner.registry;
@@ -430,6 +482,14 @@ impl<T: TransportPort + 'static> Hub<T> {
             slot.leases += 1;
             return Arc::clone(&slot.shared);
         }
+        let follows = self.follow_key(&point);
+        let at = match (&point.device, follows) {
+            (Binding::At(address), _) => address.clone(),
+            (Binding::Follows { .. }, key) => {
+                let key = key.expect("a following point has a key");
+                table.follow(key, || place.expect("placed before the table's lock"))
+            }
+        };
         // Within the hub's own range, never 0 or another hub's.
         let base = registry.process_base;
         let mut process = table.next_process;
@@ -441,34 +501,42 @@ impl<T: TransportPort + 'static> Hub<T> {
             point.clone(),
             process,
             self.inner.options.samples,
+            at.clone(),
         ));
         table.entries.insert(
-            point.clone(),
+            point,
             shared::Slot {
                 shared: Arc::clone(&shared),
                 leases: 1,
+                follows,
             },
         );
         table.by_process.insert(process, Arc::clone(&shared));
         let mut started = false;
-        let device = Arc::clone(
-            table
-                .devices
-                .entry(point.device.clone())
-                .or_insert_with(|| {
-                    started = true;
-                    Arc::new(DeviceSlot::new())
-                }),
-        );
+        let device = Arc::clone(table.devices.entry(at.clone()).or_insert_with(|| {
+            started = true;
+            Arc::new(DeviceSlot::new())
+        }));
         device.inbox().push(Arrival {
             shared: Arc::clone(&shared),
             running: Running::new(registry),
         });
         device.wake.notify_one();
         if started {
-            fresh.push((point.device, device));
+            fresh.push((at, device));
         }
         shared
+    }
+
+    /// The follow-table key of a following point, as the client keys its
+    /// handles' (its network named, or any); `None` for a pinned point.
+    pub(in crate::watch) fn follow_key(&self, point: &Point) -> Option<FollowKey> {
+        match point.device {
+            Binding::At(_) => None,
+            Binding::Follows { instance, network } => {
+                Some(self.inner.client.key(network, instance))
+            }
+        }
     }
 
     /// `point`'s latest values, if it is watched: nothing is sent.
@@ -478,10 +546,20 @@ impl<T: TransportPort + 'static> Hub<T> {
         Some(shared.snapshot())
     }
 
-    /// `point` as the hub keys it: its device's address localized.
+    /// `point` as the hub keys it: a pinned point's address localized, and
+    /// a following point's network the client's own as the local one (0),
+    /// once the client knows its number.
     pub(in crate::watch) fn keyed(&self, mut point: Point) -> Point {
-        let own = self.inner.client.low_level().network_number();
-        point.device = point.device.localized(own);
+        point.device = match point.device {
+            Binding::At(address) => {
+                let own = self.inner.client.low_level().network_number();
+                Binding::At(address.localized(own))
+            }
+            Binding::Follows { instance, network } => {
+                let (network, _) = self.inner.client.key(network, instance);
+                Binding::Follows { instance, network }
+            }
+        };
         point
     }
 
@@ -530,6 +608,7 @@ impl<T: TransportPort + 'static> Hub<T> {
             let mut table = self.inner.registry.table();
             table.shut = true;
             table.by_process.clear();
+            table.follows.clear();
             let entries = table.entries.drain().map(|(_, slot)| slot.shared).collect();
             (entries, table.devices.values().cloned().collect())
         };
