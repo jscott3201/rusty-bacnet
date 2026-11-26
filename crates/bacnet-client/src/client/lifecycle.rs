@@ -198,13 +198,16 @@ struct DispatchTask<S> {
 
 /// Every [`DEVICE_PURGE_INTERVAL`], drop the devices not heard from in
 /// [`DEVICE_MAX_AGE`] and announce each as lost, then each contest that
-/// lost a claimant. A task of its own, so the dispatch loop doesn't poll
-/// this timer on every turn (#1978 item 8); the loop ends it when it ends
-/// itself, and `stop()` and drop abort both.
-fn spawn_device_purge(
+/// lost a claimant. Between purges, check the routed paths the dispatch
+/// task has cues for, as they fall due (`route_checks`, #2823). A task of
+/// its own, so the dispatch loop doesn't poll this timer on every turn
+/// (#1978 item 8); the loop ends it when it ends itself, and `stop()` and
+/// drop abort both.
+fn spawn_device_purge<T: TransportPort + 'static>(
     device_table: Arc<network_number::Discovery>,
     device_tx: broadcast::Sender<DeviceEvent>,
     device_collision_tx: broadcast::Sender<DeviceCollisionEvent>,
+    mut route_checks: route_checks::RouteChecks<T>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(DEVICE_PURGE_INTERVAL);
@@ -212,24 +215,43 @@ fn spawn_device_purge(
         // on the configured cadence.
         interval.tick().await;
         loop {
-            interval.tick().await;
-            // The events go out under the table's lock, as a broadcast send
-            // never waits. The dispatch task adds a device and announces it
-            // in that order, so a device it adds back after this purge is
-            // announced after its Lost event, never before.
-            let mut table = device_table.lock();
-            let purged = table.purge_stale_collect(DEVICE_MAX_AGE);
-            for device in purged.lost {
-                let _ = device_tx.send(DeviceEvent {
-                    kind: DeviceEventKind::Lost,
-                    device,
-                });
+            let due = route_checks.next_due();
+            tokio::select! {
+                _ = interval.tick() => {
+                    // The events go out under the table's lock, as a
+                    // broadcast send never waits. The dispatch task adds a
+                    // device and announces it in that order, so a device it
+                    // adds back after this purge is announced after its Lost
+                    // event, never before.
+                    let mut table = device_table.lock();
+                    let purged = table.purge_stale_collect(DEVICE_MAX_AGE);
+                    for device in purged.lost {
+                        let _ = device_tx.send(DeviceEvent {
+                            kind: DeviceEventKind::Lost,
+                            device,
+                        });
+                    }
+                    for instance in purged.contested {
+                        let _ =
+                            device_collision_tx.send(DeviceCollisionEvent::of(&table, instance));
+                    }
+                }
+                () = device_table.route_cue.notified() => {}
+                () = sleep_until_due(due) => {}
             }
-            for instance in purged.contested {
-                let _ = device_collision_tx.send(DeviceCollisionEvent::of(&table, instance));
-            }
+            route_checks
+                .run(&device_table, (&device_tx, &device_collision_tx))
+                .await;
         }
     })
+}
+
+/// Sleep until `due`, or forever with nothing due.
+async fn sleep_until_due(due: Option<tokio::time::Instant>) {
+    match due {
+        Some(due) => tokio::time::sleep_until(due).await,
+        None => std::future::pending().await,
+    }
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -358,10 +380,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         #[cfg(test)]
         let response_warning_hook = Arc::clone(&response_warning);
 
+        let route_checks = route_checks::RouteChecks::new(
+            Arc::clone(&network),
+            network_report_tx.clone(),
+            Duration::from_millis(config.apdu_timeout_ms),
+        );
         let device_purge_task = spawn_device_purge(
             Arc::clone(&device_table),
             device_tx.clone(),
             device_collision_tx.clone(),
+            route_checks,
         );
         let device_purge = device_purge_task.abort_handle();
         let dispatch_task = tokio::spawn(Self::dispatch_task(DispatchTask {

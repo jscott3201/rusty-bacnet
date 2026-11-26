@@ -18,11 +18,21 @@ pub(super) type TableNotices<'a> = (
     &'a broadcast::Sender<DeviceCollisionEvent>,
 );
 
+/// What an I-Am taken in calls for beyond the table.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct IAmWants {
+    /// It stored a routed row while this client's network number is
+    /// unknown, which wants the number asked for (#2572).
+    pub(super) number: bool,
+    /// It named a routed row through another station than the row's router,
+    /// which wants that path checked (#2823).
+    pub(super) route_check: bool,
+}
+
 /// Take an I-Am into the discovery table and tell the subscribers what it
 /// changed. The notices go out under the table's lock, as the purge's do (a
 /// broadcast send never waits), so the two can't interleave out of order.
-/// Whether it stored a routed row while this client's network number is
-/// unknown, which wants the number asked for (#2572). Kept out of line: the
+/// Returns what it wants done beyond the table. Kept out of line: the
 /// dispatch loop's hot path is the replies.
 #[inline(never)]
 pub(super) fn heard_i_am(
@@ -30,7 +40,7 @@ pub(super) fn heard_i_am(
     from: IAmSource<'_>,
     i_am: &bacnet_services::who_is::IAmRequest,
     (device_tx, collision_tx): TableNotices<'_>,
-) -> bool {
+) -> IAmWants {
     let mut table = table.lock();
     // A router relaying back an I-Am from this client's own network names a
     // local device: one row, as it is one peer (#1358, #1465). The number is
@@ -73,6 +83,18 @@ pub(super) fn heard_i_am(
     } else {
         table.heard(device.clone())
     };
+    if heard.change == Change::Held {
+        // The row keeps its router and everything else: the frame is a cue
+        // for the client's own check, never a change (#2823).
+        debug!(
+            device = i_am.object_identifier.instance_number(),
+            "a routed I-Am came through another station than its row's router; checking the path"
+        );
+        return IAmWants {
+            number: false,
+            route_check: true,
+        };
+    }
     let routed_while_unknown =
         this_network.is_none() && source_network.is_some() && heard.change != Change::Dropped;
     // The device that left the address, then the one now there.
@@ -85,7 +107,7 @@ pub(super) fn heard_i_am(
     let kind = match heard.change {
         Change::Inserted | Change::Replaced => Some(DeviceEventKind::Discovered),
         Change::Updated => Some(DeviceEventKind::Updated),
-        Change::Dropped => None,
+        Change::Dropped | Change::Held => None,
     };
     if let Some(kind) = kind {
         let _ = device_tx.send(DeviceEvent { kind, device });
@@ -94,7 +116,10 @@ pub(super) fn heard_i_am(
     for instance in heard.contested {
         let _ = collision_tx.send(DeviceCollisionEvent::of(&table, instance));
     }
-    routed_while_unknown
+    IAmWants {
+        number: routed_while_unknown,
+        route_check: false,
+    }
 }
 
 /// Learn this client's network number `number`, and fold the discovery

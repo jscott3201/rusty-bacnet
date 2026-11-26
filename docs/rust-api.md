@@ -10189,8 +10189,9 @@ network goes through the same router, the one its discovery-table row names,
 and fails at once the same way while that router has no route; once the
 router has one again, the next request goes through. A `bacnet_ops` handle
 that follows a device instance asks where the device went after one, as
-after a timeout, and an I-Am heard through another router moves the row
-there. A request by local broadcast (`Station::routed_via_local_broadcast`)
+after a timeout. An I-Am heard through another router does not move the
+row: it only starts the client's own check of the path (#2823; see the
+discovery table under the client's Discovery section). A request by local broadcast (`Station::routed_via_local_broadcast`)
 takes no path, so no reject ends it: any router on the link may hear it, and
 one router's refusal says nothing of another's. A reject a router delivers
 to this station alone can still be forged: any station that can send through
@@ -10991,6 +10992,29 @@ only an `add_device` row, whose placeholders give way to what the device
 announced (`Updated` for the same instance). Each contest that changed gets
 a collision notice. If nothing on the network knows the number, the routed
 row stays until the purge takes it.
+
+A routed row's router is the station its first I-Am came through, or the
+one `add_routed_device` or `DeviceTable::upsert` names (#2823). A later
+I-Am naming the same address through another station changes nothing on
+the row and sends no device notice; it starts the client's own check of
+that path, paced per network and router: at once, then at most once a
+minute, the gap doubling up to ten minutes while such I-Ams keep coming.
+The check sends a Who-Is to the device through the row's router, and
+anything that router carries back from the network (an I-Am, or an answer
+to a request) keeps the path. Only when nothing comes does it broadcast a
+Who-Is-Router-To-Network for the network: the old router among the
+answers keeps the path, and one other router alone takes over every row
+on the network that went through the old one, each reported `Updated`.
+No answer, or several, change nothing. Each step waits the APDU timeout.
+The standard lets a node learn a router from any frame a network sends it
+(Clause 6.5.3) and authenticates none of them; the client learns a change
+only from answers to its own requests. On a site whose routers never
+answer router queries, the path stays while the devices answer through
+it; when such a router is really replaced, its rows age out after ten
+silent minutes and the devices' next I-Ams through the new router make
+them again, or `add_routed_device` names the new router at once. A device
+the table has not held before still gets its row through the station its
+first I-Am came through (#2824).
 
 A known number that changes (a learned one replaced by a router's
 configured one, or two configured routers that disagree) is logged as a

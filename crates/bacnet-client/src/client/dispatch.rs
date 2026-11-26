@@ -409,7 +409,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         vendor = i_am.vendor_id,
                         "Received IAm"
                     );
-                    let routed_while_unknown = device_events::heard_i_am(
+                    let wants = device_events::heard_i_am(
                         &device_table.table,
                         device_events::IAmSource {
                             mac: source_mac,
@@ -422,8 +422,13 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     // A routed row stored while the number is
                     // unknown may be a local device's twin: ask
                     // (#2572), through the Number owner.
-                    if routed_while_unknown {
+                    if wants.number {
                         device_table.asking.want();
+                    }
+                    // A routed row named through another station:
+                    // the purge task checks the path (#2823).
+                    if wants.route_check {
+                        device_table.route_cue.notify_one();
                     }
                 }
                 Err(e) => {

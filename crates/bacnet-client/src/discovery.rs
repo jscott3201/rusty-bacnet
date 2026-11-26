@@ -171,7 +171,18 @@ impl Key {
 /// refreshes its row in place, whatever instance, capabilities or vendor it
 /// now announces. A routed device's router MAC is how to reach its network,
 /// kept on the row, and not part of the key, so the same MAC on two networks
-/// is two devices, and one device heard through a new router keeps its row.
+/// is two devices.
+///
+/// # Routers
+///
+/// A routed row's router is the station its first I-Am came through, or the
+/// one a registration names. A later I-Am naming the address through
+/// another station changes nothing on the row (#2823): no frame the client
+/// did not ask for decides where its requests go. It is kept as a cue, and
+/// the client's own check moves the row only when a request of its own
+/// through the old router draws nothing and its own router-discovery query
+/// is answered by one other router alone. [`upsert`](Self::upsert) and
+/// `add_routed_device` set the router they are given.
 ///
 /// An index maps each Device instance to the addresses whose rows claim it.
 /// Two or more addresses can claim one instance, and every one keeps its row:
@@ -208,6 +219,9 @@ pub struct DeviceTable {
     /// Every row's instance and address, so the rows that claim one
     /// instance are found without a scan.
     claims: BTreeSet<(u32, Key)>,
+    /// Routed I-Ams heard through another station than their row's router,
+    /// waiting for the client's check (#2823).
+    route_cues: routes::RouteCues,
 }
 
 /// What an I-Am did to the table.
@@ -222,6 +236,10 @@ pub(crate) enum Change {
     Replaced,
     /// Not stored: the table is full, or the device names no address.
     Dropped,
+    /// Not stored: a routed I-Am naming a known address through another
+    /// station than the router its row names. The row stays as it was, and
+    /// the I-Am waits as a cue for the client's check of the path (#2823).
+    Held,
 }
 
 /// [`DeviceTable::heard`]'s outcome.
@@ -273,8 +291,16 @@ impl DeviceTable {
     }
 
     /// Ingest a device heard in an I-Am: [`upsert`](Self::upsert), saying
-    /// what changed.
+    /// what changed, unless it names a routed row through another router,
+    /// which it leaves as it was ([`Change::Held`]).
     pub(crate) fn heard(&mut self, device: DiscoveredDevice) -> Heard {
+        if self.held_route(&device) {
+            return Heard {
+                change: Change::Held,
+                replaced: None,
+                contested: Vec::new(),
+            };
+        }
         let segmentation = PeerSegmentation::Authoritative(device.segmentation_supported);
         self.insert(device, segmentation, false)
     }
@@ -448,6 +474,7 @@ impl DeviceTable {
     pub fn clear(&mut self) {
         self.rows.clear();
         self.claims.clear();
+        self.route_cues = routes::RouteCues::default();
     }
 
     /// Number of rows, one per address.
@@ -498,6 +525,10 @@ impl DeviceTable {
 #[path = "discovery_localize.rs"]
 mod localize;
 pub(crate) use localize::Folded;
+
+#[path = "discovery_routes.rs"]
+mod routes;
+pub(crate) use routes::PathKey;
 
 #[cfg(test)]
 #[path = "discovery_collision_tests.rs"]
