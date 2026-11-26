@@ -885,10 +885,9 @@ ask only the instances between them: give both or neither.
 | `BacnetNetworkRejectError` | A router on the way refused the request (#2724); `reached_device` is `False` when it never reached the device, `None` when an earlier attempt may have |
 | `BacnetError` | Among others, an acknowledgement of the wrong kind for the service: a write may or may not have been applied (#2721). For a device in the field that acknowledges writes with a Complex-ACK, `BACnetClient(..., accept_complex_ack_for_simple_services=True)` takes that as success |
 | `BacnetTransportError` | The link failed |
-| `BacnetStateError` (also `RuntimeError`) | The link's own state refused the request before it went: not started, stopped, or a router-application client's router closed. `state` says which. Nothing was sent, and the device wasn't asked. A request that went out before its link stopped raises `BacnetError` whose message says the device may have carried it out |
+| `BacnetStateError` (also `RuntimeError`) | The client or its link refused the request for its state before it went: the client not started yet, stopping or stopped, the link stopped, or a router-application client's router closed. `state` says which (`"not_running"` for a client not started, #2819). Nothing was sent, and the device wasn't asked. A request that went out before its link stopped raises `BacnetError` whose message says the device may have carried it out |
 | `BacnetReadBackError`, `BacnetNoPriorityArrayError` | A relinquish the device acknowledged whose read back failed, or found no Priority_Array |
 | `BacnetPagingError` | A device broke a paged read's rules. No call pages yet |
-| `RuntimeError` | The client isn't started |
 
 In a `read_many`, a property's failure is its `Reading.error`, and a device
 going silent or a link failing after the first rows is `Readings.stopped`:
@@ -7647,7 +7646,7 @@ All BACnet errors are raised as Python exceptions:
 | `BacnetReadBackError` | The device acknowledged a `relinquish`, which took effect, but the read after it failed; `written` is the relinquish and `__cause__` the read's error. Not a `BacnetTimeoutError` |
 | `BacnetNoPriorityArrayError` | A `BacnetProtocolError` (PROPERTY / UNKNOWN_PROPERTY): the device says the object has no Priority_Array. `object_id` is the object, and `written` the NULL a `relinquish` sent first (None from `priority_array`) |
 | `BacnetTransportError` | A socket or I/O failure: a bind or listen that fails (B/IP, B/IPv6, `ScHub.start`), a failed SC dial. Also an `OSError` |
-| `BacnetStateError` | A call refused for the state its component was in (#1833): a send on a transport that isn't started or has stopped, a router-application client's router closed, a second start, a channel closed under the call, a BACnet/SC node whose hub isn't connected. Nothing was done, and the link didn't fail. Also a `RuntimeError`. `state` is `"not_running"` (not started, or stopped and able to start again), `"closed"` (stopped for good), `"stopping"` (a stop under way, or an abort waiting for it), `"already_started"` or `"not_connected"`. A request that went out before the client or its link stopped under it raises `BacnetError` instead, whose message says the device may have carried it out (a `write_bdt` or `delete_fdt_entry` may have changed the table) |
+| `BacnetStateError` | A call refused for the state its component was in (#1833): a client, server, endpoint, router or hub called before its start, while or after it stops, or started twice (#2819); a send on a transport that isn't started or has stopped, a router-application client's router closed, a channel closed under the call, a BACnet/SC node whose hub isn't connected. Nothing was done, and the link didn't fail. Also a `RuntimeError`. `state` is `"not_running"` (not started, or stopped and able to start again), `"closed"` (stopped for good), `"stopping"` (a stop under way, a stop that failed and awaits another `stop()`, or an abort waiting for it), `"already_started"` (a second start, or a change only a component not started yet takes, such as adding objects) or `"not_connected"`. A request that went out before the client or its link stopped under it raises `BacnetError` instead, whose message says the device may have carried it out (a `write_bdt` or `delete_fdt_entry` may have changed the table) |
 | `BacnetRouterCloseError` | A `BACnetRouter`'s cleanup failed; `failures` holds a tuple of `RouterCleanupFailure` records (see [B/IP router](#bip-router)) |
 
 ```python
@@ -7699,7 +7698,14 @@ except OSError as e:
 
 `errno` is the operating system's own code, so platforms differ: Windows can refuse a bind to a UDP port another socket holds with `errno.WSAEACCES` rather than `errno.EADDRINUSE`, so check both there. It is not narrowed to the `OSError` subclasses (`ConnectionRefusedError` and the like), so compare `errno` rather than the class. `list_serial_ports()` raises an `OSError` (or the subclass for the failure's kind) instead, not a `BacnetTransportError`.
 
-`BacnetStateError` derives from both `BacnetError` and `RuntimeError`, so `except RuntimeError` around a call catches it as it catches the bindings' own "not started" checks. Those checks (a call on a client, server, endpoint, router or hub not started yet, or already closing) still raise plain `RuntimeError` for now, without `state`; `except RuntimeError` catches both. A `BacnetStateError`'s `state` tells a call made too early or too late from a failure on the network, without reading the message:
+`BacnetStateError` derives from both `BacnetError` and `RuntimeError`, so `except RuntimeError` and `except BacnetError` around a call both catch it. The bindings' own lifecycle checks raise it as the Rust stack's do (#2819), with the messages they always gave (`"client not started — use 'async with'"`, `"server not started"`, `"router not started or already closing"` and the rest). They raised a plain `RuntimeError` before, so `except RuntimeError` is unaffected, but `except BacnetError` now catches them too: a loop that retries on `BacnetError` should let `BacnetStateError` through (or retry only its `"not_connected"`, a link waiting for its hub), or it retries a client that isn't running forever.
+
+- `"not_running"`: a client, server, endpoint, router or hub called before its start, or after its stop (each starts again from there);
+- `"already_started"`: a second start, or what only a component not started yet takes: adding objects or configuring a server or endpoint once its start has begun. A server's `add_device_binding`, `configure_audit_reporters`, `configure_audit_recipient` and `configure_audit_log_parent` stay refused after its stop too, since its first start consumed that configuration: a stopped server answers `"not_running"` to `local_address()` but `"already_started"` to those;
+- `"stopping"`: a stop under way, or a stop that failed and awaits another `stop()`: a client called while its `stop()` runs or after one that failed (until a `stop()` succeeds), an endpoint asked for a client while its last one stops or failed to, a router a `close()` was asked of;
+- `"closed"`: an endpoint's client or server once the endpoint closed (a restarted endpoint hands out new ones), a `routing_table()` query whose client stopped under it, a router whose cleanup failed, or whose `BACnetRouter` is gone, for a stack still on it.
+
+A cancelled start (`"endpoint startup cancelled by close"`, `"router startup cancelled by close or disposal"`) is not a state and stays a plain `RuntimeError`, as do calls on the wrong event loop or from inside a server callback, a closed event loop and an exiting interpreter. A `BacnetStateError`'s `state` tells a call made too early or too late from a failure on the network, without reading the message:
 
 ```python
 from rusty_bacnet import BacnetStateError, BacnetTimeoutError
@@ -7708,9 +7714,9 @@ try:
     value = await client.read_property(addr, oid, pid)
 except BacnetStateError as e:
     if e.state == "not_running":
-        print("start the link first")
+        print("start the client (async with) first")
     else:  # "closed", "stopping", ...
-        print(f"the link is {e.state}: nothing was sent")
+        print(f"the client or its link is {e.state}: nothing was sent")
 except BacnetTimeoutError:
     print("Device not responding")
 ```

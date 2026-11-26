@@ -18,12 +18,12 @@ use bacnet_endpoint::session::SessionRole;
 use bacnet_transport::bip::{BipMode, BipTransport};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::data_link::DataLink;
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::endpoint::common::{
-    PendingObject, build_database, build_identity, build_pending_boxes, lifecycle_error,
+    PendingObject, build_database, build_identity, build_pending_boxes, not_running, owner_error,
     parse_device_uuid, parse_ipv4, parse_segmentation, pending_group, with_bip_port,
 };
 use crate::endpoint::lifecycle::Lifecycle;
@@ -70,20 +70,22 @@ async fn bvlc_tables(
         .await
         .as_ref()
         .and_then(|session| session.bvlc_tables())
-        .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))
+        .ok_or_else(|| not_running("endpoint not started"))
 }
 
 /// A table read's failure. One that `close()` cut off, or that met the
-/// transport stopping, raises what a read after `close()` does (#2612): the
-/// B/IP transport reports one refused before it went as not running, and
-/// one whose wait the stop dropped after it went as cut off (#1833). A
-/// read changes nothing at the BBMD, so neither has anything more to say.
+/// transport stopping, raises what a read after `close()` does (#2612),
+/// `BacnetStateError` with `state` `"not_running"` (#2819): the B/IP
+/// transport reports one refused before it went as not running, and one
+/// whose wait the stop dropped after it went as cut off (#1833). A read
+/// changes nothing at the BBMD, so neither has anything more to say, and
+/// one that went out still did nothing a caller must account for.
 fn table_read_error(error: bacnet_transport::bip::BvlcExchangeError) -> PyErr {
     use bacnet_types::error::{Error, Lifecycle};
     match &error {
         bacnet_transport::bip::BvlcExchangeError::Transport(
             Error::State(Lifecycle::NotRunning, _) | Error::RequestCutOff { .. },
-        ) => PyRuntimeError::new_err("endpoint not started"),
+        ) => not_running("endpoint not started"),
         _ => crate::errors::bvlc_exchange_err(error),
     }
 }
@@ -485,7 +487,7 @@ impl PyBipEndpoint {
             lifecycle
                 .start(false, |objects| config.prepare(objects))
                 .await
-                .map_err(lifecycle_error)?;
+                .map_err(owner_error)?;
             crate::py_async::attach(|py| Ok(py.None()))
         })
     }
@@ -494,7 +496,7 @@ impl PyBipEndpoint {
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let lifecycle = self.lifecycle.clone();
         crate::py_async::future_into_py(py, async move {
-            lifecycle.close().await.map_err(lifecycle_error)?;
+            lifecycle.close().await.map_err(owner_error)?;
             crate::py_async::attach(|py| Ok(py.None()))
         })
     }
@@ -512,7 +514,7 @@ impl PyBipEndpoint {
             lifecycle
                 .start(true, |objects| config.prepare(objects))
                 .await
-                .map_err(lifecycle_error)?;
+                .map_err(owner_error)?;
             Ok(self_ref)
         })
     }
@@ -543,16 +545,16 @@ impl PyBipEndpoint {
             let guard = lifecycle.session.read().await;
             let session = guard
                 .as_ref()
-                .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
+                .ok_or_else(|| not_running("endpoint not started"))?;
             let receiver = session
                 .frames(capacity)
-                .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
+                .ok_or_else(|| not_running("endpoint not started"))?;
             let address = session
                 .bip_local_address()
                 .and_then(|socket| {
                     crate::frames::local_address(DataLink::Bip, &[], Some(socket.into()))
                 })
-                .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
+                .ok_or_else(|| not_running("endpoint not started"))?;
             Ok(frames.subscribe(receiver, address, clock))
         })
     }
@@ -570,7 +572,7 @@ impl PyBipEndpoint {
         let instance = self.config.identity.instance();
         crate::py_async::future_into_py(py, async move {
             let guard = lifecycle.session.read().await;
-            let not_started = || PyRuntimeError::new_err("endpoint not started");
+            let not_started = || not_running("endpoint not started");
             let session = guard.as_ref().ok_or_else(not_started)?;
             let receiver = session.frames(capacity).ok_or_else(not_started)?;
             let own = session.bip_local_address().ok_or_else(not_started)?;
@@ -621,7 +623,7 @@ impl PyBipEndpoint {
                 .as_ref()
                 .and_then(|session| session.bip_local_address())
                 .map(|address| address.to_string())
-                .ok_or_else(|| PyRuntimeError::new_err("endpoint is not active"))
+                .ok_or_else(|| not_running("endpoint is not active"))
         })
     }
 
@@ -637,10 +639,10 @@ impl PyBipEndpoint {
                 let guard = inner.read().await;
                 let session = guard
                     .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?;
+                    .ok_or_else(|| not_running("endpoint not started"))?;
                 let address = session
                     .bip_local_address()
-                    .ok_or_else(|| PyRuntimeError::new_err("endpoint is not active"))?;
+                    .ok_or_else(|| not_running("endpoint is not active"))?;
                 let counters = session.policy_counters();
                 let leases = session.active_leases();
                 let running = session.is_running();
@@ -682,7 +684,7 @@ impl PyBipEndpoint {
                 guard
                     .as_ref()
                     .and_then(|session| session.foreign_registration())
-                    .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?
+                    .ok_or_else(|| not_running("endpoint not started"))?
             };
             crate::registration_dicts::registration_dict(registration)
         })
@@ -754,7 +756,7 @@ impl PyBipEndpoint {
         let future = async move {
             let guard = inner.read().await;
             let session = guard.as_ref().ok_or_else(|| {
-                PyRuntimeError::new_err("endpoint not started — use 'async with' or await start()")
+                not_running("endpoint not started — use 'async with' or await start()")
             })?;
             session.broadcast_i_am().await.map_err(to_py_err)?;
             Ok(())

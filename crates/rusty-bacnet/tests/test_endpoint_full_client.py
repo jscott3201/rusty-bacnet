@@ -286,10 +286,15 @@ class FullClientTests(unittest.IsolatedAsyncioTestCase):
                     await client.who_is()
                 except RuntimeError as error:
                     self.assertIn("closing", str(error))
+                    # A stop under way (#2819).
+                    self.assertIsInstance(error, rb.BacnetStateError)
+                    self.assertEqual(error.state, "stopping")
                     break
                 await asyncio.sleep(0.01)
-        with self.assertRaisesRegex(RuntimeError, "stopping"):
+        with self.assertRaisesRegex(RuntimeError, "stopping") as caught:
             await self.endpoint.client()
+        self.assertIsInstance(caught.exception, rb.BacnetStateError)
+        self.assertEqual(caught.exception.state, "stopping")
         read.cancel()
         await asyncio.gather(read, return_exceptions=True)
         await asyncio.wait_for(stop, 5)

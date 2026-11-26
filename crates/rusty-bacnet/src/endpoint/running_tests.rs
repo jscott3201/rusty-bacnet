@@ -75,6 +75,9 @@ async def failing():
     except RuntimeError as error:
         assert "failed to stop" in str(error), repr(error)
         assert "references remain" in str(error), repr(error)
+        # A stop that failed and awaits another (#2819).
+        assert type(error).__name__ == "BacnetStateError", repr(error)
+        assert error.state == "stopping", repr(error)
     else:
         raise AssertionError("client() handed out another")
     try:
@@ -82,6 +85,8 @@ async def failing():
     except RuntimeError as error:
         assert "released its link" in str(error), repr(error)
         assert "references remain" in str(error), repr(error)
+        # A stop's own failure, not a state refusal: plain RuntimeError.
+        assert type(error) is RuntimeError, repr(error)
     else:
         raise AssertionError("the close hid the failure")
     # The link is released: another endpoint binds the same port.
@@ -227,6 +232,9 @@ fn a_close_waits_for_a_server_call_in_flight_and_the_next_call_raises() {
     Python::attach(|py| {
         assert!(error.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py));
         assert!(error.to_string().contains("came from is closed"), "{error}");
+        // That run's server never starts again (#2819).
+        let state: String = error.value(py).getattr("state").unwrap().extract().unwrap();
+        assert_eq!(state, "closed");
     });
 }
 

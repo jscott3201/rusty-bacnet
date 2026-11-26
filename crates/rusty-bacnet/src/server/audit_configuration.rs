@@ -139,7 +139,7 @@ impl BACnetServer {
             .load(Ordering::Acquire)
             || self.started.load(Ordering::Acquire)
         {
-            return Err(PyRuntimeError::new_err(
+            return Err(already_started(
                 "cannot configure bindings or Audit parents after start() has consumed configuration",
             ));
         }
@@ -307,7 +307,7 @@ impl BACnetServer {
             let objects = self.lock_pending();
             self.check_start_not_in_flight()?;
             if self.started.load(Ordering::Acquire) {
-                return Err(PyRuntimeError::new_err(
+                return Err(already_started(
                     "cannot configure Audit receipt after start() — server is already running",
                 ));
             }

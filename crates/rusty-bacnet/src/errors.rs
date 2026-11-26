@@ -31,6 +31,7 @@ mod state;
 pub(crate) use lookup::{Lookup, lookup_error};
 #[cfg(test)]
 pub(crate) use lookup::{ambiguous_error_type, lookup_error_type};
+pub(crate) use state::lifecycle_error;
 #[cfg(test)]
 pub(crate) use state::state_error_type;
 
@@ -287,10 +288,13 @@ pub(crate) fn routing_table_err(err: bacnet_client::client::RoutingTableError) -
             py_err
         }
         RoutingTableError::InvalidArgument(why) => pyo3::exceptions::PyValueError::new_err(why),
-        // As the binding reports every other stopped client.
-        RoutingTableError::ClientStopped => {
-            pyo3::exceptions::PyRuntimeError::new_err("client stopped during routing_table()")
-        }
+        // The client's dispatch ended: its stop, its link closing or its
+        // endpoint's node stopping, before or during the query (#2819). A
+        // routing-table query changes nothing at the router.
+        RoutingTableError::ClientStopped => lifecycle_error(
+            bacnet_types::error::Lifecycle::Closed,
+            "client stopped during routing_table()",
+        ),
         RoutingTableError::Send(error) => to_py_err(error),
         other => BacnetError::new_err(other.to_string()),
     }

@@ -138,3 +138,60 @@ fn an_unknown_device_raises_the_lookup_error() {
         assert_eq!(instance, Some(1234));
     });
 }
+
+/// The bindings' own lifecycle checks (#2819) raise `BacnetStateError`
+/// with the text they always raised and the state they found, so
+/// `except RuntimeError`, `except BacnetError` and `e.state` all work; a
+/// routing-table query whose client stopped under it is one of them.
+#[test]
+fn the_bindings_own_lifecycle_checks_raise_the_state_error() {
+    Python::initialize();
+    Python::attach(|py| {
+        let class = state_error_type(py).unwrap().bind(py);
+        let checks = [
+            (
+                lifecycle_error(
+                    Lifecycle::NotRunning,
+                    "client not started — use 'async with'",
+                ),
+                "client not started — use 'async with'",
+                "not_running",
+            ),
+            (
+                lifecycle_error(Lifecycle::AlreadyStarted, "router already started"),
+                "router already started",
+                "already_started",
+            ),
+            (
+                lifecycle_error(
+                    Lifecycle::Stopping,
+                    "client closing — await stop() before starting new work",
+                ),
+                "client closing — await stop() before starting new work",
+                "stopping",
+            ),
+            (
+                lifecycle_error(Lifecycle::Closed, String::from("endpoint closed")),
+                "endpoint closed",
+                "closed",
+            ),
+            (
+                routing_table_err(bacnet_client::client::RoutingTableError::ClientStopped),
+                "client stopped during routing_table()",
+                "closed",
+            ),
+        ];
+        for (raised, text, state) in checks {
+            let value = raised.value(py);
+            assert!(value.get_type().is(class), "{text}");
+            assert!(value.is_instance_of::<BacnetError>(), "{text}");
+            assert!(
+                value.is_instance_of::<pyo3::exceptions::PyRuntimeError>(),
+                "{text}"
+            );
+            assert_eq!(value.str().unwrap().to_str().unwrap(), text);
+            let named: String = value.getattr("state").unwrap().extract().unwrap();
+            assert_eq!(named, state, "{text}");
+        }
+    });
+}

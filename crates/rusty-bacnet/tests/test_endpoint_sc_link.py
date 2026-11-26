@@ -6,8 +6,8 @@ import pickle
 import unittest
 
 from rusty_bacnet import (
-    ObjectIdentifier, ObjectType, PropertyIdentifier, ScEndpoint, ScEvent, ScLinkStatus,
-    ScReconnect,
+    BacnetStateError, ObjectIdentifier, ObjectType, PropertyIdentifier, ScEndpoint, ScEvent,
+    ScLinkStatus, ScReconnect,
 )
 from sc_client_fixture import ClientScFixture, mtls
 from test_endpoint_stub_parity import (
@@ -115,9 +115,13 @@ class ScEndpointLinkTests(ClientScFixture):
                                              max_retries=1))
         endpoint = self.endpoint(relay.url, **options)
         client = self.client(relay.url, apdu_timeout_ms=3_000, **options)
-        for method in (endpoint.connection_events, endpoint.connection_status):
-            with self.assertRaisesRegex(RuntimeError, "not started"):
+        for method in (endpoint.connection_events, endpoint.connection_status,
+                       endpoint.status, endpoint.broadcast_i_am):
+            with self.assertRaisesRegex(RuntimeError, "not started") as caught:
                 await method()
+            # The endpoint can start (#2819).
+            self.assertIsInstance(caught.exception, BacnetStateError)
+            self.assertEqual(caught.exception.state, "not_running")
         await asyncio.wait_for(endpoint.start(), 10)
         await asyncio.wait_for(client.__aenter__(), 10)
 
@@ -176,9 +180,13 @@ class ScEndpointLinkTests(ClientScFixture):
         with self.assertRaises(StopAsyncIteration):
             while True:
                 await asyncio.wait_for(events.__anext__(), 10)
-        for method in (endpoint.connection_events, endpoint.connection_status):
-            with self.assertRaisesRegex(RuntimeError, "not started"):
+        for method in (endpoint.connection_events, endpoint.connection_status,
+                       endpoint.status, endpoint.broadcast_i_am):
+            with self.assertRaisesRegex(RuntimeError, "not started") as caught:
                 await method()
+            # It starts again after its close (#2819).
+            self.assertIsInstance(caught.exception, BacnetStateError)
+            self.assertEqual(caught.exception.state, "not_running")
 
     async def test_reconnect_redials_the_hub_within_the_connect_timeout(self):
         hub = await self.started_hub()

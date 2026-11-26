@@ -4,7 +4,7 @@ from pathlib import Path
 import socket
 import ssl
 
-from rusty_bacnet import BacnetError, ScReconnect
+from rusty_bacnet import BacnetError, BacnetStateError, ScReconnect
 from sc_client_fixture import ClientScFixture, mtls
 
 
@@ -44,7 +44,11 @@ class ClientScReconnectTests(ClientScFixture):
                 try:
                     await self.read_value(client)
                     return
-                except BacnetError:
+                except BacnetError as error:
+                    # The link waiting for its hub is retried; a client
+                    # that isn't running (#2819) would never recover.
+                    if isinstance(error, BacnetStateError) and error.state != "not_connected":
+                        raise
                     await asyncio.sleep(0.02)
         await asyncio.wait_for(recovered_read(), 5)
         self.assertEqual((await replacement.status())["client_count"], 2)

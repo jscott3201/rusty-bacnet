@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from rusty_bacnet import BacnetError, BACnetServer, ScHub
+from rusty_bacnet import BacnetError, BacnetStateError, BACnetServer, ScHub
 
 from openssl_fixture import site_authority
 
@@ -281,10 +281,12 @@ class HubLifecycleTests(HubTlsFixture):
         hub = self.make_hub()
         await asyncio.wait_for(hub.start(), 10)
         self.assertEqual(await asyncio.wait_for(hub.shutdown_gracefully(), 20), "graceful")
-        with self.assertRaisesRegex(RuntimeError, "not started"):
-            await hub.status()
-        with self.assertRaisesRegex(RuntimeError, "not started"):
-            await hub.shutdown_gracefully()
+        for call in (hub.status, hub.shutdown_gracefully):
+            with self.assertRaisesRegex(RuntimeError, "not started") as caught:
+                await call()
+            # The hub starts again after its stop (#2819).
+            self.assertIsInstance(caught.exception, BacnetStateError)
+            self.assertEqual(caught.exception.state, "not_running")
         # stop() stays a safe no-op after a graceful run.
         await asyncio.wait_for(hub.stop(), 5)
 
@@ -294,8 +296,16 @@ class HubLifecycleTests(HubTlsFixture):
         self.assertIsNone(await asyncio.wait_for(hub.__aexit__(None, None, None), 5))
         self.assertIsNone(await asyncio.wait_for(hub.stop(), 5))
         self.assertIsNone(await asyncio.wait_for(hub.stop(), 5))
-        with self.assertRaisesRegex(RuntimeError, "not started"):
+        with self.assertRaisesRegex(RuntimeError, "not started") as caught:
             await hub.status()
+        self.assertIsInstance(caught.exception, BacnetStateError)
+        self.assertEqual(caught.exception.state, "not_running")
+        # And it does start again.
+        await asyncio.wait_for(hub.start(), 10)
+        try:
+            self.assertTrue((await hub.status())["listening"])
+        finally:
+            await asyncio.wait_for(hub.stop(), 5)
 
     async def test_context_manager_exit_and_double_exit(self):
         async with self.make_hub() as hub:

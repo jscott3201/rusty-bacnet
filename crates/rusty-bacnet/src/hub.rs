@@ -115,6 +115,16 @@ struct HubConfig {
     certificate_bindings: Option<bacnet_transport::sc_hub::ScHubCertificateBindings>,
 }
 
+/// A call that needs the running hub, before its start or after its stop
+/// (#2819): the hub starts again from either, so `state` is
+/// `"not_running"`.
+fn not_started() -> PyErr {
+    crate::errors::lifecycle_error(
+        bacnet_types::error::Lifecycle::NotRunning,
+        "hub not started",
+    )
+}
+
 impl HubConfig {
     /// Build the constrained native TLS policy, apply the validated bounds
     /// and static policy, and bind. Sync file reads happen here (at start),
@@ -409,9 +419,7 @@ impl PyScHub {
         crate::py_async::future_into_py(py, async move {
             let mut hub = {
                 let mut guard = inner.lock().await;
-                guard
-                    .take()
-                    .ok_or_else(|| PyRuntimeError::new_err("hub not started"))?
+                guard.take().ok_or_else(not_started)?
             };
             let outcome = hub.shutdown_gracefully().await;
             Ok(match outcome {
@@ -430,9 +438,7 @@ impl PyScHub {
         crate::py_async::future_into_py(py, async move {
             let snapshot = {
                 let guard = inner.lock().await;
-                let hub = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("hub not started"))?;
+                let hub = guard.as_ref().ok_or_else(not_started)?;
                 hub.status().await
             };
             // Owned snapshot only; the hub lock is released before touching
