@@ -133,6 +133,7 @@ impl DeviceTable {
                     device: device.clone(),
                     segmentation: entry.segmentation,
                     by_number: true,
+                    since: entry.since,
                 };
                 self.rows.insert(local.clone(), row);
                 self.claims.insert((instance, local));

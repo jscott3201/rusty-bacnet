@@ -181,19 +181,17 @@ fn one_mac_on_two_networks_is_two_devices() {
 }
 
 /// The router a device is heard through is not part of its identity: a
-/// device heard through another router keeps its row.
+/// device heard through another router keeps its row, and that row keeps
+/// its router until the client's own check moves it (#2823).
 #[test]
 fn a_new_router_keeps_the_row() {
     let mut table = DeviceTable::new();
     table.upsert(make_routed_device(5, 2, &[0x05]));
     let mut moved = make_routed_device(5, 2, &[0x05]);
     moved.mac_address = MacAddr::from_slice(&[0x20]);
-    assert_eq!(table.heard(moved).change, Change::Updated);
+    assert_eq!(table.heard(moved).change, Change::Held);
     assert_eq!(table.len(), 1);
-    assert_eq!(
-        table.find(5).unwrap().unwrap().mac_address.as_slice(),
-        [0x20]
-    );
+    assert_eq!(table.find(5).unwrap().unwrap().mac_address.as_slice(), MAC);
 }
 
 /// Routing fields that name no one station (one half of SNET/SADR, no

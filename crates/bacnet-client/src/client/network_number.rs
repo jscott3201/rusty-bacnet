@@ -205,6 +205,10 @@ pub(super) struct Discovery {
     /// after the table and the asking, so neither moves. Only a segmented
     /// request proposing a window above one touches it.
     pub(super) whole_first_window: SyncMutex<Option<Box<super::first_window::WholeFirstWindow>>>,
+    /// Wakes the purge task when the dispatch task has held a routed I-Am
+    /// that came through another station than its row's router, so the
+    /// task checks the path (#2823). Last, so nothing before it moves.
+    pub(super) route_cue: Notify,
 }
 
 impl Discovery {
@@ -216,6 +220,7 @@ impl Discovery {
                 ..Asking::new(numbers)
             },
             whole_first_window: SyncMutex::new(None),
+            route_cue: Notify::new(),
         }
     }
 }
