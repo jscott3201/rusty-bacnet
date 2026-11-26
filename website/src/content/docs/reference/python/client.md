@@ -856,6 +856,19 @@ its requests end by timeout until `configure_routed_path_max_npdu`
 sets the path's limit; `routed_path_limits()` marks the paths.
 RuntimeError before start and after stop.
 
+### BACnetClient.off_path_answer_drops
+
+```python
+def off_path_answer_drops(self) -> Awaitable[int]
+```
+
+How many answers for a device's open request the client dropped
+since start because they came by another path than the request took
+(#2831): from another station than a routed request's router, or
+relayed with this network's own number as SNET for a request sent
+straight to the device. A rise means a station is answering for
+other devices. RuntimeError before start and after stop.
+
 ### BACnetClient.network_reports
 
 ```python

@@ -87,7 +87,7 @@ async fn claimed_control_cannot_complete_reused_invoke_id_for_new_owner() {
         7,
         ConfirmedServiceChoice::READ_PROPERTY,
     );
-    limits.install_active(target, tsm_mac.clone(), 7, old.owner.clone(), 11, 0);
+    limits.install_active(target, &tsm_mac, 7, old.owner.clone(), 11, 0);
     assert!(limits.authorize_attempt(target, &tsm_mac, 7, &old.owner, 300));
     let (claimed, _, _) = limits.claim_active(&router, 100, 1).unwrap();
 
@@ -144,7 +144,10 @@ async fn a_learned_limit_is_never_below_the_conservative_floor() {
     };
     let changed = limits.state().entries[&RoutedPathKey::new(&router, 100)].changed;
     limits.commit_learned_limit(active, 16, changed);
-    assert_eq!(lease.max_apdu(11), DEFAULT_ROUTED_PATH_MAX_NPDU - 11);
+    assert_eq!(
+        lease.open(&[0xFF, b'R'], 11),
+        DEFAULT_ROUTED_PATH_MAX_NPDU - 11
+    );
 }
 
 /// A change of the path's limit may run between a reason 4's claim and its
@@ -221,7 +224,10 @@ async fn hostile_pre_tsm_paths_reclaim_idle_entries_at_capacity() {
     for path in 1..=40u16 {
         let lease = limits.acquire(&path.to_be_bytes(), path).await.unwrap();
         // 228 NPDU - (9 + two 18-octet addresses) = 183 APDU.
-        assert_eq!(lease.max_apdu(forwarded_npci_len(18, 18).unwrap()), 183);
+        assert_eq!(
+            lease.open(&[0xFF, b'R'], forwarded_npci_len(18, 18).unwrap()),
+            183
+        );
         drop(lease);
         assert!(limits.state().entries.len() <= 3);
     }
@@ -351,14 +357,7 @@ async fn control_queued_before_activation_cannot_claim_the_new_generation() {
         ConfirmedServiceChoice::READ_PROPERTY,
     );
     let tsm = Arc::new(SyncMutex::new(tsm));
-    limits.install_active(
-        target,
-        tsm_mac.clone(),
-        9,
-        registration.owner.clone(),
-        11,
-        5,
-    );
+    limits.install_active(target, &tsm_mac, 9, registration.owner.clone(), 11, 5);
     assert!(limits.authorize_attempt(target, &tsm_mac, 9, &registration.owner, 300));
 
     limits

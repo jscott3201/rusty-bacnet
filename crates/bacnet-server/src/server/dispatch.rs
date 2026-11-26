@@ -2,10 +2,11 @@ use super::request_admission::{Class, Rejection};
 use super::*;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Admit an answer to a confirmed request this server sent. With
-    /// `local_network`, this network's number, known, an answer relayed with
-    /// it as SNET answers a request sent to its SADR (#1465), and teaches no
-    /// next hop: sends to this network go out locally.
+    /// Admit an answer to a confirmed request this server sent. An answer
+    /// relayed with `local_network`, this network's known number, as SNET
+    /// completes only a request still keyed to that routed form, never one
+    /// sent straight to its SADR (#2831), and teaches no next hop: sends to
+    /// this network go out locally.
     async fn admit_notification_terminal(
         learned_routers: &Arc<Mutex<LearnedRouterCache>>,
         notification_transactions: &Arc<NotificationTransactions>,

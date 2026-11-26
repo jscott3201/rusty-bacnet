@@ -11,7 +11,7 @@ use tracing::{debug, warn};
 use bacnet_bip_codec::{BvlcFunction, BvlcResultCode, Bvll};
 use bacnet_bip_core::Arrival;
 use bacnet_bip_core::bbmd::ForwardRefusal;
-use bacnet_bip_core::node::ForBbmd;
+use bacnet_bip_core::node::{ForBbmd, forward_content_allowed};
 use bacnet_types::sync::MutexExt;
 
 use crate::bbmd::{self, Forward, Reply};
@@ -79,7 +79,15 @@ pub(super) async fn handle(share: ForBbmd<'_>, ctx: &RecvContext) {
                 }
             };
 
-            hand_up(ctx, npdu, origin, true, "forwarded");
+            // Handed up only when it carries what a broadcast may: its
+            // origin is a peer's word, and the peer forwards whatever its
+            // subnet broadcast (#2829). Forwarded on either way.
+            if forward_content_allowed(npdu) {
+                hand_up(ctx, npdu, origin, true, "forwarded");
+            } else {
+                ctx.drops.count(DropReason::ForwardedNotBroadcast);
+                debug!(%sender, %origin, "Not handing up a forwarded answer or confirmed request");
+            }
 
             match forward.local_broadcast {
                 Some(local_dest) => {

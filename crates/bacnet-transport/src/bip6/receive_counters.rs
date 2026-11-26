@@ -82,6 +82,10 @@ pub struct Bip6ReceiveCounters {
     /// Forwarded-NPDUs whose NPDU is too short to start one or doesn't
     /// decode as one.
     pub malformed_forwarded_npdu: u64,
+    /// Forwarded-NPDUs whose NPDU, for this link, carried an answer to a
+    /// confirmed request or a confirmed request, which no broadcast carries
+    /// (#2829): not handed up as its origin's.
+    pub forwarded_not_broadcast: u64,
     /// Forwarded-NPDUs whose origin, and Forwarded-Address-Resolutions for
     /// this node whose asker, is an address no answer could reach without a
     /// scope ID: unspecified, loopback, link-local, IPv4-mapped or port 0.
@@ -151,6 +155,8 @@ pub(super) enum DropReason {
     UntrustedForwardedResolution,
     /// [`Bip6ReceiveCounters::malformed_forwarded_npdu`].
     MalformedForwardedNpdu,
+    /// [`Bip6ReceiveCounters::forwarded_not_broadcast`].
+    ForwardedNotBroadcast,
     /// [`Bip6ReceiveCounters::unusable_address`].
     UnusableAddress,
     /// [`Bip6ReceiveCounters::unanswerable_request`].
@@ -213,6 +219,7 @@ pub(super) struct ReceiveDrops {
     untrusted_forwarded_npdu: AtomicU64,
     untrusted_forwarded_resolution: AtomicU64,
     malformed_forwarded_npdu: AtomicU64,
+    forwarded_not_broadcast: AtomicU64,
     unusable_address: AtomicU64,
     unanswerable_request: AtomicU64,
     own_echo: AtomicU64,
@@ -242,6 +249,7 @@ impl ReceiveDrops {
             DropReason::UntrustedForwardedNpdu => &self.untrusted_forwarded_npdu,
             DropReason::UntrustedForwardedResolution => &self.untrusted_forwarded_resolution,
             DropReason::MalformedForwardedNpdu => &self.malformed_forwarded_npdu,
+            DropReason::ForwardedNotBroadcast => &self.forwarded_not_broadcast,
             DropReason::UnusableAddress => &self.unusable_address,
             DropReason::UnanswerableRequest => &self.unanswerable_request,
             DropReason::OwnEcho => &self.own_echo,
@@ -334,6 +342,7 @@ impl ReceiveDrops {
             untrusted_forwarded_npdu: get(&self.untrusted_forwarded_npdu),
             untrusted_forwarded_resolution: get(&self.untrusted_forwarded_resolution),
             malformed_forwarded_npdu: get(&self.malformed_forwarded_npdu),
+            forwarded_not_broadcast: get(&self.forwarded_not_broadcast),
             unusable_address: get(&self.unusable_address),
             unanswerable_request: get(&self.unanswerable_request),
             own_echo: get(&self.own_echo),

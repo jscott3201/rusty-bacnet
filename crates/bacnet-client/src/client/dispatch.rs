@@ -14,6 +14,48 @@ mod answers;
 mod order_tests;
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
+    /// Whether a routed `answer` from link station `from` is refused for the
+    /// path it came by (#2831), counted in
+    /// [`BACnetClient::off_path_answer_drops`]. One relayed with this
+    /// network as its SNET, for a request sent straight to the station it
+    /// names, is not that station's own answer. One for a request through a
+    /// router counts only from that router. A client on a router's
+    /// application port names no router (the router's own table routes its
+    /// requests), so its answers are not checked for one. Out of line: only
+    /// a routed answer comes here.
+    #[inline(never)]
+    fn refused_for_its_path(
+        context: &DispatchContext<'_, T>,
+        from: &[u8],
+        answer: &TransactionPeer,
+        invoke_id: u8,
+    ) -> bool {
+        let CanonicalPeer::Routed { network: snet, .. } = answer.canonical else {
+            return false;
+        };
+        let local_network = context.network.local_network_number().get();
+        if answer.relays_for_a_direct_request(context.tsm, local_network, invoke_id) {
+            context.routed_path_limits.count_off_path_answer();
+            debug!(
+                invoke_id,
+                "Dropping an answer relayed for a request sent straight to its station"
+            );
+            return true;
+        }
+        if context.network.transport().attached_networks().is_empty()
+            && !context
+                .routed_path_limits
+                .answer_through(from, snet, &answer.tsm_mac, invoke_id)
+        {
+            debug!(
+                invoke_id,
+                "Dropping a routed device's answer from another station than its router"
+            );
+            return true;
+        }
+        false
+    }
+
     /// Dispatch a received APDU to the appropriate handler.
     ///
     /// The two answers a plain request's round trip takes, a SimpleACK and a
@@ -57,17 +99,19 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         } = inbound;
         // Each arm moves `tsm_mac` into its reassembly key and borrows it
         // back: cloning a `MacAddr` copies it a byte at a time (#1978).
+        let answer = TransactionPeer::of_answer(source_mac, source_network.as_ref());
+        // A routed answer counts only by the path its request took: its SNET
+        // and SADR are its sender's word (#2831).
+        if matches!(answer.canonical, CanonicalPeer::Routed { .. })
+            && let Some(invoke_id) = answers_own_request(&apdu)
+            && Self::refused_for_its_path(context, source_mac, &answer, invoke_id)
+        {
+            return;
+        }
         let TransactionPeer {
             tsm_mac,
             canonical: canonical_peer,
-        } = TransactionPeer::of_answer_in(
-            tsm,
-            source_mac,
-            source_network.as_ref(),
-            network.local_network_number().get(),
-            &apdu,
-        )
-        .await;
+        } = answer;
         match apdu {
             Apdu::SimpleAck(ack) => {
                 // Mid-reassembly, a SimpleACK is in Clause 5.4.4.4
@@ -512,6 +556,22 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     .await
             }
         }
+    }
+}
+
+/// The invoke ID of an answer to one of this client's own requests: an
+/// acknowledgment, an Error, a Reject, or a server's Abort or Segment-ACK.
+/// A client's Abort or Segment-ACK belongs to a request this client is
+/// answering, and is `None`, as is every request.
+fn answers_own_request(apdu: &Apdu) -> Option<u8> {
+    match apdu {
+        Apdu::SimpleAck(ack) => Some(ack.invoke_id),
+        Apdu::ComplexAck(ack) => Some(ack.invoke_id),
+        Apdu::Error(error) => Some(error.invoke_id),
+        Apdu::Reject(reject) => Some(reject.invoke_id),
+        Apdu::Abort(abort) if abort.sent_by_server => Some(abort.invoke_id),
+        Apdu::SegmentAck(ack) if ack.sent_by_server => Some(ack.invoke_id),
+        _ => None,
     }
 }
 

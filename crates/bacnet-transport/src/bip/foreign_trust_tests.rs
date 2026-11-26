@@ -10,7 +10,8 @@ use super::*;
 
 /// A device elsewhere, whose broadcast the Forwarded-NPDU carries.
 const ORIGIN: [u8; 6] = [203, 0, 113, 7, 0xBA, 0xC0];
-const NPDU: [u8; 3] = [0x01, 0x00, 0x42];
+/// A Who-Is: what a forward carries (#2829).
+const NPDU: [u8; 4] = [0x01, 0x00, 0x10, 0x08];
 
 fn forwarded() -> BvllMessage {
     BvllMessage {

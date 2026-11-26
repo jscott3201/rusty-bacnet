@@ -103,6 +103,7 @@
 //! | A datagram whose UDP source is a group address is dropped before its frame is read (#1504) | `node_receive.rs` `group_sources_and_origins_are_dropped` |
 //! | A B/IP-M node's subnet directed broadcast stays a group address, as a UDP source and as a Forwarded-NPDU origin | `node_multicast.rs` `a_members_directed_broadcast_stays_a_group` |
 //! | A Forwarded-NPDU whose origin is a group address is dropped (#1493) | `node_receive.rs` `group_sources_and_origins_are_dropped` |
+//! | A Forwarded-NPDU for this link carrying an answer or a confirmed request is dropped: nothing checks its origin, and a broadcast carries neither (Clause 6.3, J.3; #2829) | `node_forwarded_content.rs` `an_answer_or_confirmed_request_inside_a_forward_is_never_shown_as_its_origins` |
 //! | The node's own frames, and Forwarded-NPDUs naming it as the origin, are dropped | `node_receive.rs` `own_echoes_are_dropped` |
 //! | A broadcast listener keeps only this link's broadcasts, from its own interface (#1538) | `node_receive.rs` `listeners_keep_only_this_links_broadcasts` |
 //! | `Link::listener_keeps` gives a listener's datagram the verdict `receive` gives it, so a host's frame tap can't drift from the node (#1856) | `node_listener.rs` `the_predicate_and_receive_agree` |
@@ -141,6 +142,7 @@ pub use engine::{Inbound, Node};
 pub use exchange::{ExchangeId, ExchangeRefusal, LocalFailure, Operation};
 pub use receive::{
     Datagram, Delivery, Discard, ForBbmd, Path, Permissive, Policy, Received, Response,
+    forward_content_allowed,
 };
 pub use registration::{Admission, AttemptOutcome, Lease, RegistrationEvent, RegistrationSnapshot};
 pub use send::{Cast, Outgoing, SendRefusal};

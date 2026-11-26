@@ -94,7 +94,8 @@ pub(crate) fn admit_source(source: &[u8]) -> Result<Mac, Refused<'static>> {
 /// The checks after the link source: the NPDU's decode, a DADR beside
 /// DNET 0xFFFF, and what a broadcast may carry.
 pub(crate) fn admit_npdu(npdu: &[u8]) -> Result<Npdu<'_>, Refused<'_>> {
-    let npdu = match Npdu::decode(npdu) {
+    // Inlined whatever else decodes NPDUs (#2829): see `decode_inline`.
+    let npdu = match Npdu::decode_inline(npdu) {
         Ok(npdu) => npdu,
         Err(DecodeError::AddressTooLong {
             field,

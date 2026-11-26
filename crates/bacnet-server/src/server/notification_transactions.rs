@@ -462,10 +462,10 @@ impl NotificationTransactions {
 
     /// Admit and complete one terminal answer to a notification lease.
     /// `local_network` is this device's known network number, if any: an
-    /// answer relayed with it as SNET matches like one sent straight from
-    /// its SADR, or a lease reserved for the routed form while the number
-    /// was unknown
-    /// ([`OutboundTransactionCoordinator::admit_from_source`], #1465).
+    /// answer relayed with it as SNET matches only a lease reserved for that
+    /// routed form while the number was unknown, never one keyed to its
+    /// SADR's MAC
+    /// ([`OutboundTransactionCoordinator::admit_from_source`], #2831).
     #[doc(hidden)]
     pub fn admit_terminal(
         &self,

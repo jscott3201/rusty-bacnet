@@ -1506,7 +1506,13 @@ unspecified address, port 0 or the node itself), which gets no NAK (#1622); a
 Forwarded-NPDU from outside a BBMD's BDT; a Forwarded-NPDU a foreign device
 takes from no one but its BBMD by unicast, the one way a BBMD hands it the
 network's broadcasts (`forwarded_untrusted`, #1622; a node in normal mode
-takes one from any sender); and an NPDU the network-layer
+takes one from any sender); a Forwarded-NPDU for this link whose APDU is an
+answer to a confirmed request or a confirmed request, which no broadcast
+carries, so that another station can't complete a request by sending the
+answer itself in a forward that names the device as its origin
+(`forwarded_not_broadcast`, #2829; a BBMD still forwards it, and a
+broadcast inside a forward is still handed up as its origin's, unchecked);
+and an NPDU the network-layer
 channel couldn't take because it was full or, once the network layer stopped
 reading, closed. Each drop counts once, and the totals survive a restart. A
 header that fails to decode and a malformed BVLC response, which used to log a
@@ -1652,7 +1658,11 @@ Length; an unknown function; a payload that doesn't fit its function; a
 destination VMAC that isn't this node's; a function that doesn't fit the
 address it was sent to; a Forwarded-NPDU or Forwarded-Address-Resolution
 from an untrusted path; a Forwarded-NPDU whose NPDU is too short or
-malformed; an origin or asker address unusable without a scope ID; a request
+malformed, or for this link carries an answer to a confirmed request or a
+confirmed request, as on B/IP (`forwarded_not_broadcast`, #2829: on B/IPv6
+every frame's source virtual address is the sender's own claim, so this
+keeps the two links' rule the same rather than closing a gap); an origin
+or asker address unusable without a scope ID; a request
 from an unanswerable source or this node's own address; this node's own
 echo, a Forwarded-NPDU that names it as the origin included; a frame from
 another address that names this node's VMAC as its sender's, and an NPDU
@@ -10063,18 +10073,15 @@ client's own network (#1358). A routed confirmed request to it, from any of
 the methods above or for a device added with `add_routed_device`, passes the
 checks above and then goes as a local request: a unicast to the DADR with no
 DNET, not through the router, so a non-routing peer there takes it. It holds
-no routed-path state, and `router_mac` is not used. An answer from the DADR
-with no SNET completes it, and so does one a router relays back with that
-number as its SNET and the DADR as its SADR (#1465): network numbers are
-unique, so both name the same station. That holds for any request to a station
-on this network. A relayed answer still has to carry the request's invoke ID,
-one naming another network or another station completes nothing, and while
-the number is unknown only the direct answer counts. The link source of a
-relayed answer is not checked, so any node on this link could complete the
-request by claiming that SNET and SADR with the right invoke ID; a routed
-request already trusts a claimed SNET/SADR the same way. A request routed to
-this network before the number was learned keeps its routed key, and its
-relayed answer still completes it. The peer's
+no routed-path state, and `router_mac` is not used. Only an answer from the
+DADR with no SNET completes it. One relayed back with that number as its SNET
+and the DADR as its SADR completes nothing (#2831): any station on this link
+could write those, so it is dropped unanswered and counted in
+`BACnetClient::off_path_answer_drops()`. That holds for any request sent
+straight to a station on this network. A request routed to this network
+before the number was learned keeps its routed key: its answer relayed with
+this network as SNET still completes it, but only from the router the request
+went to, as for any routed request. The peer's
 limits still come from its routed device-table row, so a request past them is
 refused or segmented as for the routed peer.
 `broadcast_network_unconfirmed`, and a scoped call to `Broadcast::Network`
@@ -10085,11 +10092,13 @@ arrived by.
 
 The shared endpoint's requester does the same once its session knows the
 number (#1403). A `Routed` or `RoutedViaLocalBroadcast` destination naming it
-passes the same checks, then goes to the DADR with no DNET. The DADR's own
-answer completes the read, and so does one relayed back with that number as
-its SNET and the DADR as its SADR (#1465). The client, the endpoint and the
+passes the same checks, then goes to the DADR with no DNET. Only the DADR's
+own answer completes the read; one relayed back with that number as its SNET
+and the DADR as its SADR completes nothing, and the session's client counts
+it in `off_path_answer_drops()` (#2831). The client, the endpoint and the
 server's own confirmed requests match answers through one rule,
-`CanonicalPeer::from_source`.
+`CanonicalPeer::of_answer`; `CanonicalPeer::from_source`, which reads that
+relayed form as the station, is for the sources of requests only (#1404).
 
 State is keyed by the immediate router MAC together with DNET. One confirmed
 request at a time owns that path; requests through a different router or to a
@@ -10164,6 +10173,28 @@ the wrong request (#2651):
   on each path also marks it in `routed_path_limits()`.
 - Network controls observed at ingress before a request becomes active are
   discarded using a monotonic ingress sequence.
+
+An answer for a routed device counts only when it comes from the router its
+request went to (#2831): the acknowledgments, Error, Reject, and the server's
+Abort and Segment-ACK. A routed frame's SNET and SADR are written by its
+sender, so any station on the link could name the device in them and guess
+the invoke ID; the link station it comes from is the part a sender can't
+choose on most links. So another station can no longer complete a routed
+request by sending the answer itself: one from another station is dropped
+unanswered (no Segment-ACK, no Abort), counted in
+`BACnetClient::off_path_answer_drops()`, and the request waits for the
+device's own answer. The standard allows one path between two nodes (Clause
+4.2), so a device's answers return through the router its requests went to;
+a retry goes through the same router as the first frame. The path ties to the
+request from before the TSM holds it, so no answer arrives in between
+unchecked. An answer relayed with this network's own number as SNET, for a
+request sent straight to the station it names, is dropped and counted the
+same way. Not covered: an answer relayed through the request's own router,
+which only that router could check; a request by local broadcast
+(`Station::routed_via_local_broadcast`), which names no router, so any
+router's relay completes it; a client on a router's application port, whose
+requests the router's own table routes; and B/IPv6, where a frame's source
+virtual address is the sender's own claim.
 
 A reject is addressed to the station that sent the refused message, so one
 that came as a broadcast (a global one, DNET 65535, or a broadcast on this
@@ -14120,8 +14151,9 @@ shown as `ROUTER/NETWORK`.
 - `routed_paths()` returns `RoutedPaths`: each path holding more than the
   default as a `RoutedPathStatus` (`max_npdu`, `source` as
   `RoutedPathLimitSource`, the configured and learned values, and
-  `below_minimum_reject_seen`), with `too_long_reject_drops` and
-  `below_minimum_reject_drops`. `status(&path)` reads one path, the default
+  `below_minimum_reject_seen`), with `too_long_reject_drops`,
+  `below_minimum_reject_drops` and `off_path_answer_drops` (answers refused
+  for the path they came by, #2831). `status(&path)` reads one path, the default
   `bacnet_ops::client::DEFAULT_ROUTED_PATH_MAX_NPDU` (228 octets, the
   low-level client's `bacnet_client::client::DEFAULT_ROUTED_PATH_MAX_NPDU`)
   when it is not listed. It serializes with `source` as `default`,

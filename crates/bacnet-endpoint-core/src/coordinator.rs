@@ -64,69 +64,66 @@ impl CanonicalPeer {
         }
     }
 
-    /// The peer an inbound APDU came from, which every role matches its
-    /// answers by: the SNET/SADR a router added when there is one, ignoring
-    /// the immediate router, otherwise the immediate link MAC.
+    /// The peer an inbound request came from: the SNET/SADR a router added
+    /// when there is one, ignoring the immediate router, otherwise the
+    /// immediate link MAC.
     ///
     /// `local_network` is the number of the network the receiving link is
     /// attached to, once known. A router attached to it that passes a
     /// station's NPDU back onto it adds that number and the station's MAC as
     /// SNET/SADR (Clause 6.5.4), and network numbers are unique, so the
     /// source is that station: the same direct peer as an NPDU from its MAC
-    /// with no SNET (#1465), as the server already reads a request's source
-    /// (#1404). Any other SNET, and every SNET while the number is unknown,
-    /// stays a routed peer. A routed source with no SADR names no station, so
-    /// the immediate MAC stands.
+    /// with no SNET, as the server reads a request's source (#1404). Any
+    /// other SNET, and every SNET while the number is unknown, stays a routed
+    /// peer. A routed source with no SADR names no station, so the immediate
+    /// MAC stands.
     ///
-    /// This changes what a direct transaction trusts. Before, an answer
-    /// completed one only when its link source was the station's own MAC.
-    /// Now any node that can put a frame on this link, including any peer
-    /// the hub admits on BACnet/SC, can complete it by naming this network
-    /// as SNET and the station as SADR, provided the invoke ID, service and
-    /// owner match. The link source of such an answer is not checked. That
-    /// is the trust every routed transaction already places in a claimed
-    /// SNET/SADR, whichever router relays it, and the trust the server's
-    /// request-source rule (#1404) places in the same pairing. SNET/SADR is
-    /// never a credential here.
+    /// Answers are not read this way: [`Self::of_answer`] keeps that form
+    /// routed, so another station can't complete a request sent straight to
+    /// a device by naming the device as SADR (#2831).
     pub fn from_source(
         immediate_mac: &[u8],
         routed_source: Option<&NpduAddress>,
         local_network: Option<u16>,
     ) -> Self {
         match routed_source {
-            Some(source) if source.mac_address.is_empty() => Self::direct(immediate_mac),
-            Some(source) if Some(source.network) == local_network => {
+            Some(source)
+                if !source.mac_address.is_empty() && Some(source.network) == local_network =>
+            {
                 Self::direct(&source.mac_address)
             }
-            Some(source) => Self::routed(source.network, &source.mac_address),
-            None => Self::direct(immediate_mac),
+            _ => Self::of_answer(immediate_mac, routed_source),
         }
     }
 
-    /// The routed form of a source that [`Self::from_source`] reads as the
-    /// direct station: `Routed(SNET, SADR)` when SNET is the known
-    /// `local_network` and SADR is not empty, otherwise `None`. A request
-    /// routed to this network while its number was still unknown is keyed to
-    /// that form, and keeps that key once the number is learned, so its
-    /// relayed answer has to find it there (#1465). It is exactly the peer
-    /// such an answer matched before the number was known.
-    pub fn routed_alias(
-        routed_source: Option<&NpduAddress>,
-        local_network: Option<u16>,
-    ) -> Option<Self> {
-        routed_source
-            .filter(|source| {
-                !source.mac_address.is_empty() && Some(source.network) == local_network
-            })
-            .map(|source| Self::routed(source.network, &source.mac_address))
+    /// The peer an answer is matched to: the SNET/SADR a router added when
+    /// there is one, otherwise the immediate link MAC. A routed source with
+    /// no SADR names no station, so the immediate MAC stands.
+    ///
+    /// Unlike [`Self::from_source`], an SNET naming this network stays
+    /// routed (#2831). A request sent straight to a station on this link is
+    /// keyed to its MAC, so only an answer from that MAC with no SNET
+    /// completes it. One relayed with this network as SNET completes only a
+    /// request still keyed to that routed form, sent before the number was
+    /// known. The client then checks its sender as it checks any routed
+    /// answer's; the server takes the same admission but doesn't check the
+    /// sender yet (the server half of #2831). A frame's SNET and SADR are
+    /// its sender's own claim; the link address it comes from is the part a
+    /// sender can't choose on most links.
+    pub fn of_answer(immediate_mac: &[u8], routed_source: Option<&NpduAddress>) -> Self {
+        match routed_source {
+            Some(source) if !source.mac_address.is_empty() => {
+                Self::routed(source.network, &source.mac_address)
+            }
+            _ => Self::direct(immediate_mac),
+        }
     }
 
     /// The routed form of a direct answer's source: `Routed(local_network,
     /// immediate MAC)` when the answer has no SNET and `local_network` is
     /// known, otherwise `None`. A request routed to a network that has since
     /// become this one is keyed to that form, and its station, now on this
-    /// link, may answer with no SNET (#2371). Like [`Self::routed_alias`], it
-    /// names the same station.
+    /// link, may answer from its own MAC with no SNET (#2371).
     pub fn direct_alias(
         immediate_mac: &[u8],
         routed_source: Option<&NpduAddress>,
@@ -670,13 +667,14 @@ impl OutboundTransactionCoordinator {
 
     /// [`Self::admit`] for an answer, by its envelope: the link MAC, the
     /// SNET/SADR, and `local_network`, the receiving link's known network
-    /// number. The answer is matched against [`CanonicalPeer::from_source`].
+    /// number. The answer is matched against [`CanonicalPeer::of_answer`].
     /// Only when that misses on the peer, and the answer has a
-    /// [`CanonicalPeer::routed_alias`] or [`CanonicalPeer::direct_alias`], is
-    /// the alias tried: a lease reserved while the number was unknown then
-    /// gets the answer it would have matched before (#1465), or the station's
-    /// direct answer (#2371). The admission's metadata names the peer that
-    /// matched, which the owner keys its completion to.
+    /// [`CanonicalPeer::direct_alias`], is the alias tried: a lease reserved
+    /// for the routed form of a network that has since become this one then
+    /// gets its station's direct answer (#2371). An answer relayed with this
+    /// network as SNET never stands for the station it names (#2831). The
+    /// admission's metadata names the peer that matched, which the owner
+    /// keys its completion to.
     pub fn admit_from_source(
         &self,
         immediate_mac: &[u8],
@@ -684,12 +682,10 @@ impl OutboundTransactionCoordinator {
         local_network: Option<u16>,
         apdu: &Apdu,
     ) -> Result<AdmissionOutcome, CoordinatorError> {
-        let peer = CanonicalPeer::from_source(immediate_mac, routed_source, local_network);
+        let peer = CanonicalPeer::of_answer(immediate_mac, routed_source);
         match self.admit(&peer, apdu)? {
             AdmissionOutcome::PeerMismatch => {
-                match CanonicalPeer::routed_alias(routed_source, local_network).or_else(|| {
-                    CanonicalPeer::direct_alias(immediate_mac, routed_source, local_network)
-                }) {
+                match CanonicalPeer::direct_alias(immediate_mac, routed_source, local_network) {
                     Some(alias) => self.admit(&alias, apdu),
                     None => Ok(AdmissionOutcome::PeerMismatch),
                 }
@@ -728,8 +724,7 @@ impl OutboundTransactionCoordinator {
 
     /// [`Self::holder_of`] for an answer, by its envelope, matched as
     /// [`Self::admit_from_source`] matches it: the peer
-    /// [`CanonicalPeer::from_source`] reads, then its routed or direct
-    /// alias.
+    /// [`CanonicalPeer::of_answer`] reads, then its direct alias.
     pub fn holder_of_source(
         &self,
         immediate_mac: &[u8],
@@ -752,12 +747,9 @@ impl OutboundTransactionCoordinator {
         local_network: Option<u16>,
         invoke_id: u8,
     ) -> Option<(LeaseHolder, ConfirmedServiceChoice)> {
-        let peer = CanonicalPeer::from_source(immediate_mac, routed_source, local_network);
+        let peer = CanonicalPeer::of_answer(immediate_mac, routed_source);
         self.lease_of(&peer, invoke_id).or_else(|| {
-            let alias =
-                CanonicalPeer::routed_alias(routed_source, local_network).or_else(|| {
-                    CanonicalPeer::direct_alias(immediate_mac, routed_source, local_network)
-                })?;
+            let alias = CanonicalPeer::direct_alias(immediate_mac, routed_source, local_network)?;
             self.lease_of(&alias, invoke_id)
         })
     }

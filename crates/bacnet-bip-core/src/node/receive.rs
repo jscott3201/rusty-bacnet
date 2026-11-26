@@ -4,6 +4,7 @@
 use core::net::SocketAddrV4;
 
 use bacnet_bip_codec::{BvlcFunction, BvlcResultCode, Bvll, BvllError, BvllFrame};
+use bacnet_npdu::Npdu;
 
 use super::addressing::Addressed;
 use super::config::{ForwardedTrust, Link, Mode};
@@ -197,6 +198,10 @@ pub enum Discard {
     /// A Forwarded-NPDU a foreign device doesn't take from this sender
     /// ([`ForwardedTrust::ConfiguredBbmd`]).
     ForwardedUntrusted,
+    /// A Forwarded-NPDU whose NPDU, for this link, carries an APDU no
+    /// broadcast carries: an answer to a confirmed request or a confirmed
+    /// request ([`forward_content_allowed`], #2829).
+    ForwardedNotBroadcast,
 }
 
 impl Discard {
@@ -265,6 +270,40 @@ impl<'d> ForBbmd<'d> {
     }
 }
 
+/// Whether a node may hand a Forwarded-NPDU's `npdu` up as from the origin
+/// it names (#2829).
+///
+/// A forward distributes a broadcast (Annex J.2.5, J.4.5), a broadcast
+/// carries only an Unconfirmed-Request or a network message (Clause 6.3),
+/// and a directed message travels in an Original-Unicast-NPDU (J.3). An
+/// APDU of any other type, for this link, is therefore never real traffic
+/// from the origin, and nothing checks the origin a forward names: taking
+/// one would let any station that reaches this node complete a request it
+/// made of another station by sending the answer itself, wrapped in a
+/// forward that names that station. So `false` for an NPDU with no DNET
+/// whose APDU is a Confirmed-Request, an acknowledgment, an Error, a
+/// Reject, an Abort or a Segment-ACK (PDU types 0 and 2 to 7, Clause 20.1).
+/// `true` for everything else: a broadcast's content, which stays a cue
+/// from an unchecked origin; anything addressed to another network or
+/// globally, and an APDU of no defined type, which the network layer and
+/// the application route or drop by their own rules; and anything that
+/// doesn't parse. A BBMD forwards a peer's forward whatever it carries;
+/// its host asks this before handing it up.
+#[must_use]
+pub fn forward_content_allowed(npdu: &[u8]) -> bool {
+    match Npdu::decode(npdu) {
+        Ok(npdu) => {
+            npdu.destination.is_some()
+                || npdu.is_network_message()
+                || npdu
+                    .payload
+                    .first()
+                    .is_none_or(|&first| !matches!(first >> 4, 0 | 2..=7))
+        }
+        Err(_) => true,
+    }
+}
+
 /// The management requests [`Policy::admit_management`] is asked about.
 fn rate_limited(function: BvlcFunction) -> bool {
     matches!(
@@ -296,11 +335,14 @@ impl Link {
     /// 8. [`Policy::admit_management`], for the four requests it covers;
     /// 9. the payload against the function's layout.
     ///
-    /// Then each function is dispatched by mode. Every one of the six
-    /// BBMD-only requests that arrived by unicast gets its own NAK
-    /// ([`BvlcFunction::nak`]), unless [`Mode::Bbmd`] claims it, from any
-    /// source a reply can reach ([`Link::is_answerable`]). Write-BDT is
-    /// refused in every mode, and so is a malformed BBMD-only request.
+    /// Then each function is dispatched by mode. A Forwarded-NPDU a node
+    /// or foreign device takes is handed up as from its origin only when
+    /// it carries what a broadcast may ([`forward_content_allowed`]). Every
+    /// one of the six BBMD-only requests that arrived by unicast gets its
+    /// own NAK ([`BvlcFunction::nak`]), unless [`Mode::Bbmd`] claims it,
+    /// from any source a reply can reach ([`Link::is_answerable`]).
+    /// Write-BDT is refused in every mode, and so is a malformed BBMD-only
+    /// request.
     pub fn receive<'d>(&self, datagram: &Datagram<'d>, policy: &mut impl Policy) -> Received<'d> {
         let source = datagram.source;
         if datagram.truncated {
@@ -394,7 +436,8 @@ impl Link {
         }
     }
 
-    /// A Forwarded-NPDU: its origin is its NPDU's source (Annex J.2.5).
+    /// A Forwarded-NPDU: its origin is its NPDU's source (Annex J.2.5),
+    /// unless it carries what no broadcast does ([`forward_content_allowed`]).
     fn forwarded<'d>(
         &self,
         sender: SocketAddrV4,
@@ -427,6 +470,9 @@ impl Link {
                     && (foreign.bbmd != Some(sender) || arrival != Arrival::Unicast) =>
             {
                 Received::Discarded(Discard::ForwardedUntrusted)
+            }
+            Mode::Normal | Mode::Foreign(_) if !forward_content_allowed(npdu) => {
+                Received::Discarded(Discard::ForwardedNotBroadcast)
             }
             Mode::Normal | Mode::Foreign(_) => Received::Deliver(Delivery {
                 npdu,

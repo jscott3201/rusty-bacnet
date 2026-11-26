@@ -127,7 +127,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         if let Some(forwarded_npci_len) = routed_forwarded_npci_len {
             self.routed_path_limits.install_active(
                 target,
-                tsm_mac.clone(),
+                &tsm_mac,
                 invoke_id,
                 owner.clone(),
                 forwarded_npci_len,

@@ -1004,6 +1004,8 @@ mod ack_kind_tests;
 #[cfg(test)]
 mod acknowledge_alarm_tests;
 #[cfg(test)]
+mod answer_path_tests;
+#[cfg(test)]
 mod answer_refresh_tests;
 #[cfg(test)]
 mod audit_tests;

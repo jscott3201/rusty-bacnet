@@ -105,6 +105,13 @@ struct RoutedPathEntry {
     configured: Option<ConfiguredPathLimit>,
     learned: Option<LearnedPathLimit>,
     active: Option<ActiveRoutedSend>,
+    /// The TSM key of the request that holds the path's gate, from the
+    /// moment it is sized ([`RoutedPathLease::open`]) until it is installed
+    /// ([`RoutedPathLimits::install_active`]): the TSM holds a request
+    /// before it is installed, and in that time this is what ties the
+    /// request to the path for [`RoutedPathLimits::answer_through`]
+    /// (#2831). The same copy of the key then moves into the active record.
+    opening: Option<MacAddr>,
     last_used: u64,
     quarantine_started: Option<TokioInstant>,
     answered: Option<AnsweredFrames>,
@@ -123,7 +130,7 @@ struct RoutedPathEntry {
     /// ([`RoutedPathLimits::commit_learned_limit`]).
     changed: u64,
     /// [`changed`](Self::changed) as it stood when the path's latest
-    /// request read its limit ([`RoutedPathLease::max_apdu`]). A change
+    /// request read its limit ([`RoutedPathLease::open`]). A change
     /// applies at once, even while a request sized before it is in flight
     /// (#2683), so a reason 4 is judged by the limit its request was sized
     /// to, not the one in force when it lands.
@@ -141,6 +148,7 @@ impl RoutedPathEntry {
             configured: None,
             learned: None,
             active: None,
+            opening: None,
             last_used,
             quarantine_started: None,
             answered: None,
@@ -177,6 +185,10 @@ struct RoutedPathState {
     /// Reason-4 rejects dropped because the active request's largest frame
     /// is within the conservative limit.
     below_minimum_drops: u64,
+    /// Answers dropped for coming by another path than their request took
+    /// ([`RoutedPathLimits::answer_through`],
+    /// [`RoutedPathLimits::count_off_path_answer`]).
+    off_path_answers: u64,
 }
 
 pub(super) struct RoutedPathLimits {
@@ -198,6 +210,7 @@ impl RoutedPathLimits {
                 capacity,
                 dropped_rejects: 0,
                 below_minimum_drops: 0,
+                off_path_answers: 0,
             }),
             quarantine_horizon,
         }
@@ -215,6 +228,58 @@ impl RoutedPathLimits {
     /// See [`BACnetClient::below_minimum_reject_drops`].
     pub(super) fn below_minimum_drops(&self) -> u64 {
         self.state().below_minimum_drops
+    }
+
+    /// See [`BACnetClient::off_path_answer_drops`].
+    pub(super) fn off_path_answers(&self) -> u64 {
+        self.state().off_path_answers
+    }
+
+    /// Counts an answer refused for the path it came by elsewhere than
+    /// [`Self::answer_through`]: one relayed with this network as its SNET
+    /// for a request sent straight to the station it names (#2831).
+    pub(super) fn count_off_path_answer(&self) {
+        let mut state = self.state();
+        state.off_path_answers = state.off_path_answers.saturating_add(1);
+    }
+
+    /// Whether an answer from link station `from` to transaction
+    /// (`tsm_mac`, `invoke_id`), whose SNET names `network`, may complete
+    /// it (#2831). Every request through a router is the one active request
+    /// on its path (router, DNET) while it is open, so the path it came
+    /// through has it active. One open through another router is answered
+    /// by someone else: the answer is counted and refused. Any other answer
+    /// goes on as before: one for a request sent by local broadcast, which
+    /// any router may relay and which takes no path, and one for no open
+    /// request, which the TSM drops.
+    pub(super) fn answer_through(
+        &self,
+        from: &[u8],
+        network: u16,
+        tsm_mac: &MacAddr,
+        invoke_id: u8,
+    ) -> bool {
+        // Before its install the open request's invoke ID isn't on the
+        // path yet, only its key: any answer to that key is its.
+        let answers = |entry: &RoutedPathEntry| {
+            entry.opening.as_ref() == Some(tsm_mac)
+                || entry.active.as_ref().is_some_and(|active| {
+                    active.invoke_id == invoke_id && active.tsm_mac == *tsm_mac
+                })
+        };
+        let mut state = self.state();
+        if state
+            .entries
+            .get(&RoutedPathKey::new(from, network))
+            .is_some_and(answers)
+        {
+            return true;
+        }
+        let open_elsewhere = state.entries.values().any(answers);
+        if open_elsewhere {
+            state.off_path_answers = state.off_path_answers.saturating_add(1);
+        }
+        !open_elsewhere
     }
 
     /// What [`BACnetClient::routed_path_limits`] lists: each path with a
@@ -445,10 +510,13 @@ impl RoutedPathLimits {
         }
     }
 
+    /// Make the request the TSM registered under `tsm_mac` and `invoke_id`
+    /// the path's active one, taking the key its
+    /// [`open`](RoutedPathLease::open) left on the path.
     pub(super) fn install_active(
         &self,
         target: ConfirmedTarget<'_>,
-        tsm_mac: MacAddr,
+        tsm_mac: &[u8],
         invoke_id: u8,
         owner: TransactionOwner,
         forwarded_npci_len: u16,
@@ -467,6 +535,12 @@ impl RoutedPathLimits {
             entry.active.is_none(),
             "the per-path gate permits only one active routed request"
         );
+        // A request is opened on its path before it is installed; a caller
+        // that skipped the open gets its own copy of the key.
+        let tsm_mac = entry
+            .opening
+            .take()
+            .unwrap_or_else(|| MacAddr::from_slice(tsm_mac));
         entry.active = Some(ActiveRoutedSend {
             path: key,
             tsm_mac,
@@ -553,17 +627,21 @@ pub(super) struct RoutedPathLease {
 }
 
 impl RoutedPathLease {
-    /// The APDU allowance left on this path after the forwarded NPCI that
-    /// [`forwarded_npci_len`] measured.
-    /// It also records the limit's version the request is sized under
-    /// ([`RoutedPathEntry::sized_under`]).
-    pub(super) fn max_apdu(&self, forwarded_npci_len: u16) -> u16 {
+    /// Open the path for the request whose TSM key is `tsm_mac`, before the
+    /// TSM holds it ([`RoutedPathEntry::opening`]), and return the APDU
+    /// allowance left on this path after the forwarded NPCI that
+    /// [`forwarded_npci_len`] measured. It also records the limit's version
+    /// the request is sized under ([`RoutedPathEntry::sized_under`]).
+    pub(super) fn open(&self, tsm_mac: &[u8], forwarded_npci_len: u16) -> u16 {
         let mut state = self.limits.state();
         let entry = state
             .entries
             .get_mut(&self.key)
             .expect("path entry remains present while its gate is held");
         entry.sized_under = entry.changed;
+        // `from_slice` copies at once; this is the request's one copy of the
+        // key on the path, which its install takes.
+        entry.opening = Some(MacAddr::from_slice(tsm_mac));
         let configured_or_conservative =
             entry
                 .configured
@@ -626,6 +704,7 @@ impl Drop for RoutedPathLease {
         let mut state = self.limits.state();
         if let Some(entry) = state.entries.get_mut(&self.key) {
             entry.active = None;
+            entry.opening = None;
             match (entry.generation_end, entry.generation_attempts) {
                 (_, 0) | (GenerationEnd::Answered, 1) | (GenerationEnd::Refused, _) => {}
                 (GenerationEnd::Answered, _) => {

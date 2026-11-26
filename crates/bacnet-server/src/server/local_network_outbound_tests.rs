@@ -1,8 +1,8 @@
 //! Outbound traffic the server starts toward this device's own network
 //! number (#1358). A write in another device whose binding is routed through
 //! that number goes there as a local request: a unicast to the device's MAC
-//! with no DNET. The answer from that MAC with no SNET completes it, and so
-//! does one a router relays back with this network as its SNET (#1465).
+//! with no DNET. Only the answer from that MAC with no SNET completes it; one
+//! a router relays back with this network as its SNET does not (#2831).
 //! Both the Command action and the Channel member take that route. A binding
 //! routed to another network, or any binding while the number is unknown,
 //! still goes through its router with the DNET it names. An answer to a
@@ -80,17 +80,6 @@ async fn start(writer: Writer) -> Harness {
             .await
         }
     }
-}
-
-/// How the device's answer comes back.
-#[derive(Clone, Copy, Debug)]
-enum Answer {
-    /// The way the request went: from the device's own MAC for a local
-    /// request, through `ROUTER` with the device's SNET otherwise.
-    AsSent,
-    /// Through `ROUTER`, with this network as its SNET and the device's MAC
-    /// as its SADR, as a router here relays it.
-    Relayed,
 }
 
 /// Where Device 9 is bound.
@@ -212,19 +201,15 @@ impl Write {
 
 /// Run `writer`'s write to Device 9, bound at the peer on `bound_on` behind
 /// `ROUTER`, with `this_network` published as the local network's number.
-/// The answer comes back as `answer` says, and the write succeeds.
-async fn write_through(
-    writer: Writer,
-    this_network: Option<u16>,
-    bound_on: u16,
-    answer: Answer,
-) -> Sent {
+/// The answer comes back the way the request went, from the device's own
+/// MAC for a local request and through `ROUTER` with the device's SNET
+/// otherwise, and the write succeeds.
+async fn write_through(writer: Writer, this_network: Option<u16>, bound_on: u16) -> Sent {
     let write = send_write(writer, this_network, Bound::Routed(bound_on)).await;
-    let (link, snet) = match answer {
-        Answer::AsSent => (write.sent.link.clone(), write.sent.dnet),
-        Answer::Relayed => (MacAddr::from_slice(&ROUTER), this_network),
-    };
-    write.deliver(&ack(write.invoke_id), &link, snet).await;
+    let link = write.sent.link.clone();
+    write
+        .deliver(&ack(write.invoke_id), &link, write.sent.dnet)
+        .await;
     let sent = Sent {
         link: write.sent.link.clone(),
         dnet: write.sent.dnet,
@@ -241,16 +226,16 @@ async fn write_through(
 async fn command_write_bound_through_this_network_goes_without_a_dnet() {
     let writer = Writer::Command;
     assert_eq!(
-        write_through(writer, Some(THIS_NETWORK), THIS_NETWORK, Answer::AsSent).await,
+        write_through(writer, Some(THIS_NETWORK), THIS_NETWORK).await,
         local()
     );
     assert_eq!(
-        write_through(writer, Some(THIS_NETWORK), REMOTE_NETWORK, Answer::AsSent).await,
+        write_through(writer, Some(THIS_NETWORK), REMOTE_NETWORK).await,
         routed(REMOTE_NETWORK)
     );
     // While the number is unknown the binding is taken as written.
     assert_eq!(
-        write_through(writer, None, THIS_NETWORK, Answer::AsSent).await,
+        write_through(writer, None, THIS_NETWORK).await,
         routed(THIS_NETWORK)
     );
 }
@@ -259,41 +244,34 @@ async fn command_write_bound_through_this_network_goes_without_a_dnet() {
 async fn channel_member_bound_through_this_network_is_written_without_a_dnet() {
     let writer = Writer::Channel;
     assert_eq!(
-        write_through(writer, Some(THIS_NETWORK), THIS_NETWORK, Answer::AsSent).await,
+        write_through(writer, Some(THIS_NETWORK), THIS_NETWORK).await,
         local()
     );
     assert_eq!(
-        write_through(writer, Some(THIS_NETWORK), REMOTE_NETWORK, Answer::AsSent).await,
+        write_through(writer, Some(THIS_NETWORK), REMOTE_NETWORK).await,
         routed(REMOTE_NETWORK)
     );
     assert_eq!(
-        write_through(writer, None, THIS_NETWORK, Answer::AsSent).await,
+        write_through(writer, None, THIS_NETWORK).await,
         routed(THIS_NETWORK)
     );
 }
 
-/// Once the number is known, a write sent to the device's MAC is completed
-/// by its answer relayed back through a router with this network as its SNET
-/// and that MAC as its SADR, as by a direct one (#1465).
+/// A relayed answer never stands for the device a write went straight to
+/// (#2831): any station on this link could write its SNET and SADR. A
+/// Reject relayed with this network's known number as SNET, with another
+/// network's, or with SNET 7 while the number is unknown, neither ends a
+/// write sent to the device's MAC nor teaches a router; the device's own
+/// SimpleACK after it completes the write.
 #[tokio::test(start_paused = true)]
-async fn a_local_write_is_completed_by_its_answer_relayed_with_this_networks_snet() {
-    for writer in [Writer::Command, Writer::Channel] {
-        assert_eq!(
-            write_through(writer, Some(THIS_NETWORK), THIS_NETWORK, Answer::Relayed).await,
-            local()
-        );
-    }
-}
-
-/// A relayed answer stands for the device only when its SNET is this
-/// network's known number. A Reject relayed with another network's SNET, or
-/// relayed with SNET 7 while the number is unknown, neither ends a write sent
-/// to the device's MAC nor teaches a router; the device's own SimpleACK after
-/// it completes the write.
-#[tokio::test(start_paused = true)]
-async fn a_relayed_answer_from_another_network_or_an_unknown_number_leaves_a_local_write_open() {
+async fn a_relayed_answer_leaves_a_local_write_open() {
     for writer in [Writer::Command, Writer::Channel] {
         for (this_network, bound, snet) in [
+            (
+                Some(THIS_NETWORK),
+                Bound::Routed(THIS_NETWORK),
+                THIS_NETWORK,
+            ),
             (
                 Some(THIS_NETWORK),
                 Bound::Routed(THIS_NETWORK),
@@ -313,8 +291,8 @@ async fn a_relayed_answer_from_another_network_or_an_unknown_number_leaves_a_loc
 /// A write routed to this network while its number was unknown keeps its
 /// routed key. Learned before the answer comes back, the number does not
 /// stop that answer, relayed with this network as its SNET, from completing
-/// the write, as it would have before (#1465); and it teaches no router for
-/// this network.
+/// the write, as it would have before; and it teaches no router for this
+/// network.
 #[tokio::test(start_paused = true)]
 async fn a_write_routed_before_the_number_was_learned_completes_on_its_relayed_answer() {
     for writer in [Writer::Command, Writer::Channel] {

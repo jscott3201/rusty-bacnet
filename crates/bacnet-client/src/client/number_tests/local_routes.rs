@@ -1,9 +1,10 @@
 //! Once the client has learned its network's number, a routed request or a
 //! network broadcast naming that number goes out as local traffic (#1358):
 //! a unicast to the destination MAC, or a local broadcast, with no DNET. A
-//! routed confirmed request is then answered from that MAC with no SNET, or
-//! relayed back by a router with this network as its SNET and that MAC as
-//! its SADR, and either answer completes it (#1465). The peer's limits come
+//! routed confirmed request is then completed only by its answer from that
+//! MAC with no SNET: one relayed back with this network as its SNET and that
+//! MAC as its SADR completes nothing and is counted (#2831). The peer's
+//! limits come
 //! from its local device-table row, which a routed row on this network
 //! becomes when the number is learned (#2572), and a request past them is
 //! refused or segmented locally. Another network keeps its DNET, and so does
@@ -417,33 +418,35 @@ async fn retry_of(
 }
 
 /// Once the number is known, an answer a router relays back with this
-/// network as its SNET and the peer's MAC as its SADR completes a request
-/// sent to that MAC as the direct answer would (#1465): network numbers are
-/// unique, so both name the same station. That holds for a request routed to
-/// this network and for one sent straight to the MAC, and the answer
-/// completes it at once, with nothing sent again.
+/// network as its SNET and the peer's MAC as its SADR does not complete a
+/// request sent to that MAC (#2831): any station on this link could write
+/// that SNET and SADR, and only the peer can send from its own MAC. That
+/// holds for a request routed to this network and for one sent straight to
+/// the MAC. The relayed answer is dropped and counted, the request goes
+/// again after the APDU timeout, and the peer's own answer completes it.
 #[tokio::test(start_paused = true)]
-async fn an_answer_relayed_with_this_networks_snet_completes_a_local_request() {
+async fn an_answer_relayed_with_this_networks_snet_leaves_a_local_request_open() {
     let (mut client, inbound, mut outbound) = client(true).await;
-    for routed in [true, false] {
+    for (routed, drops) in [(true, 1), (false, 2)] {
         let peer = async {
             let request = local_request(outbound.recv().await.unwrap());
             let relayed = relayed_from(THIS_NETWORK, &PEER);
             send_to_client(&inbound, &simple_ack(&request), &ROUTER, relayed).await;
+            let retry = retry_of(&mut outbound, &request).await;
+            send_to_client(&inbound, &simple_ack(&retry), &PEER, None).await;
         };
         let took = write_answered_by(&client, routed, peer).await;
         // The harness's APDU timeout is 5 s.
-        assert!(took < Duration::from_secs(5), "routed {routed}: {took:?}");
-        assert!(outbound.try_recv().is_err(), "routed {routed}: sent once");
+        assert!(took >= Duration::from_secs(5), "routed {routed}: {took:?}");
+        assert_eq!(client.off_path_answer_drops(), drops, "routed {routed}");
     }
     client.stop().await.unwrap();
 }
 
-/// A relayed answer completes a local request only when it names this
-/// network, the station the request went to and the request's invoke ID.
-/// Another SNET, another SADR or another invoke ID completes nothing, so the
-/// request goes again after the APDU timeout, and the station's relayed
-/// answer to that completes it.
+/// A relayed answer completes no local request, whatever it names: another
+/// SNET, another SADR or another invoke ID completes nothing and names no
+/// open request, so none is counted. The request goes again after the APDU
+/// timeout, and the station's own answer to that completes it.
 #[tokio::test(start_paused = true)]
 async fn a_relayed_answer_naming_another_network_station_or_invoke_id_leaves_the_request_open() {
     let (mut client, inbound, mut outbound) = client(true).await;
@@ -461,12 +464,13 @@ async fn a_relayed_answer_naming_another_network_station_or_invoke_id_leaves_the
             service_choice: request.service_choice,
         });
         let relayed = relayed_from(THIS_NETWORK, &PEER);
-        send_to_client(&inbound, &another_invoke_id, &ROUTER, relayed.clone()).await;
+        send_to_client(&inbound, &another_invoke_id, &ROUTER, relayed).await;
         let retry = retry_of(&mut outbound, &request).await;
-        send_to_client(&inbound, &simple_ack(&retry), &ROUTER, relayed).await;
+        send_to_client(&inbound, &simple_ack(&retry), &PEER, None).await;
     };
     let took = write_answered_by(&client, true, peer).await;
     assert!(took >= Duration::from_secs(5), "{took:?}");
+    assert_eq!(client.off_path_answer_drops(), 0);
     client.stop().await.unwrap();
 }
 
@@ -492,9 +496,12 @@ async fn with_the_number_unknown_a_relayed_answer_leaves_a_local_request_open() 
 /// through the router with the DNET and keeps that routed key. When the
 /// number is learned before its answer comes back, the answer the router
 /// relays with this network as its SNET still completes it at once, as it
-/// would have before the number was known (#1465).
+/// would have before the number was known. That answer is checked as any
+/// routed answer is (#2831): the same answer from another station on this
+/// link is dropped and counted first.
 #[tokio::test(start_paused = true)]
 async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed_answer() {
+    const STRANGER: [u8; 1] = [4];
     let (mut client, inbound, mut outbound) = client(false).await;
     let peer = async {
         let sent = outbound.recv().await.unwrap();
@@ -506,16 +513,20 @@ async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed
         };
         learn(&inbound, &mut outbound).await;
         let relayed = relayed_from(THIS_NETWORK, &PEER);
-        send_to_client(&inbound, &simple_ack(&request), &ROUTER, relayed).await;
+        let ack = simple_ack(&request);
+        send_to_client(&inbound, &ack, &STRANGER, relayed.clone()).await;
+        send_to_client(&inbound, &ack, &ROUTER, relayed).await;
     };
     let took = write_answered_by(&client, true, peer).await;
     assert!(took < Duration::from_secs(5), "{took:?}");
     assert!(outbound.try_recv().is_err(), "sent once");
+    assert_eq!(client.off_path_answer_drops(), 1);
     client.stop().await.unwrap();
 }
 
 /// An I-Am a router relays back from this network, with its number as
-/// SNET, names a local device, as its answers do (#1465): it lands on the
+/// SNET, names a local device, as a request relayed that way does (#1404):
+/// it lands on the
 /// device's local row, so the device and its relayed I-Am are one device,
 /// not an ambiguous instance (#2560). While the number is unknown the relay
 /// is a routed station of its own, and the instance is ambiguous: learning

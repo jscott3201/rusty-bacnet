@@ -26,6 +26,7 @@ async fn a_limit_set_and_cleared_shows_decoded() {
             paths: Vec::new(),
             too_long_reject_drops: 0,
             below_minimum_reject_drops: 0,
+            off_path_answer_drops: 0,
         }
     );
     let default = client.routed_paths().status(&path);
@@ -60,6 +61,7 @@ async fn a_limit_set_and_cleared_shows_decoded() {
             }],
             "too_long_reject_drops": 0,
             "below_minimum_reject_drops": 0,
+            "off_path_answer_drops": 0,
         })
     );
 

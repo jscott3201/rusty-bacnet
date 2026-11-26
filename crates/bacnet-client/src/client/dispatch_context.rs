@@ -24,6 +24,9 @@ pub(super) struct DispatchContext<'a, T: TransportPort + 'static> {
     pub(super) i_have_tx: &'a broadcast::Sender<ReceivedIHave>,
     /// Routes for SegmentAcks awaiting an outgoing segmented request.
     pub(super) seg_ack_senders: &'a Arc<SyncMutex<HashMap<SegAckKey, SegmentAckRoute>>>,
+    /// The routed paths, each with the request open through it: which
+    /// station a routed device's answer must come through (#2831).
+    pub(super) routed_path_limits: &'a RoutedPathLimits,
     /// The client's throttle on warnings for received APDUs and service
     /// requests that fail to decode (#1950).
     pub(super) decode_warning: &'a WarnThrottle,

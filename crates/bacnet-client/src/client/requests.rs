@@ -166,10 +166,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// discovery table's row at it names (Clause 6.2.2), with its network
     /// and MAC as the NPDU's DNET and DADR. Once the client has learned its
     /// own network's number, a station on it is sent to at its MAC on this
-    /// link, with no DNET and not through any router (#1358); an answer from
-    /// it with no SNET completes the request, and so does one a router
-    /// relays back with that network and MAC as its SNET and SADR (#1465),
-    /// since both name the same station. The row at the station's address,
+    /// link, with no DNET and not through any router (#1358); only an answer
+    /// from that MAC with no SNET completes the request, not one relayed
+    /// back with that network and MAC as its SNET and SADR, which any
+    /// station could send (#2831). The row at the station's address,
     /// when the table has one, bounds the request by the device's Max APDU
     /// Length Accepted and segmentation, and an answer from it starts the
     /// row's age again; with no row the client's configured limits apply.
@@ -284,12 +284,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     .await?,
             ),
         };
+        let transaction_peer = target.transaction_peer();
+        let tsm_mac = transaction_peer.tsm_mac;
+        // Opened before the TSM holds the request, so that an answer can be
+        // told by the path it came through from the first (#2831).
         let routed_path_max_apdu = path_lease
             .as_ref()
             .zip(routed_forwarded_npci_len)
-            .map(|(lease, npci_len)| lease.max_apdu(npci_len));
-        let transaction_peer = target.transaction_peer();
-        let tsm_mac = transaction_peer.tsm_mac;
+            .map(|(lease, npci_len)| lease.open(&tsm_mac, npci_len));
         let unsegmented_apdu_size = 4 + service_data.len();
         let RequestSize {
             remote_max_apdu,
@@ -375,7 +377,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         if let Some(forwarded_npci_len) = routed_forwarded_npci_len {
             self.routed_path_limits.install_active(
                 target,
-                MacAddr::from_slice(&tsm_mac),
+                &tsm_mac,
                 invoke_id,
                 owner.clone(),
                 forwarded_npci_len,

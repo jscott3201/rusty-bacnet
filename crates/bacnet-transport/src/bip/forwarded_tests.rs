@@ -482,3 +482,55 @@ async fn forwarded_npdu_arriving_by_broadcast_is_not_rebroadcast_locally() {
     assert_forwarded(&recv_bvll(&local_sink).await, "local broadcast");
     assert_forwarded(&recv_bvll(&foreign).await, "foreign device");
 }
+
+/// A BDT peer's forward carrying a ComplexACK is passed on as the BBMD's
+/// duty is, but never handed up as its origin's: a peer forwards whatever
+/// its subnet broadcast, so the origin is that subnet's word, and no
+/// broadcast carries an answer (#2829). It is counted.
+#[tokio::test]
+async fn a_bbmd_passes_on_a_peers_forwarded_answer_but_never_hands_it_up() {
+    let socket = Arc::new(super::BipSocket::new(
+        UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap(),
+        None,
+    ));
+    let local_port = socket.local_addr().unwrap().port();
+    let local_broadcast_sink = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let local_broadcast_port = local_broadcast_sink.local_addr().unwrap().port();
+    let (npdu_tx, mut npdu_rx) = mpsc::channel(1);
+    let peer = ([192, 0, 2, 10], 0xBAC0);
+    let origin = ([192, 0, 2, 20], 0xBAC1);
+    let mut state = BbmdState::new(Ipv4Addr::LOCALHOST.octets(), local_port);
+    state
+        .set_bdt(vec![BdtEntry {
+            ip: peer.0,
+            port: peer.1,
+            broadcast_mask: [255, 255, 255, 255],
+        }])
+        .unwrap();
+    let ctx = RecvContext::for_test(
+        socket,
+        npdu_tx,
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, local_port),
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, local_broadcast_port),
+        Some(Arc::new(std::sync::Mutex::new(state))),
+    );
+    let answer = [0x01, 0x00, 0x30, 0x05, 0x0C, 0xAA];
+    let msg = forwarded_message(origin, &answer);
+
+    handle_bvll_message(&msg, peer, Delivery::Unicast, &ctx).await;
+
+    let local_frame = recv_bvll(&local_broadcast_sink).await;
+    assert_eq!(local_frame.function, BvlcFunction::FORWARDED_NPDU);
+    assert_eq!(origin_of(&local_frame), Some(origin));
+    assert!(
+        timeout(Duration::from_millis(100), npdu_rx.recv())
+            .await
+            .is_err(),
+        "the forwarded answer was handed up"
+    );
+    assert_eq!(ctx.drops.snapshot().forwarded_not_broadcast, 1);
+}

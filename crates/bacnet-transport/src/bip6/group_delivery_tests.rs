@@ -22,14 +22,14 @@ use crate::udp_metadata::ReceivedDatagram;
 const CONFIRMED_REQUEST: &[u8] = &[
     0x01, 0x04, 0x00, 0x05, 0x01, 0x0C, 0x0C, 0x02, 0x00, 0x00, 0x01, 0x19, 0x55,
 ];
-const LOCAL_VMAC: Bip6Vmac = Bip6Vmac::new([0x00, 0x05, 0x15]);
-const SENDER_VMAC: Bip6Vmac = Bip6Vmac::new([0x00, 0x05, 0x1E]);
+pub(super) const LOCAL_VMAC: Bip6Vmac = Bip6Vmac::new([0x00, 0x05, 0x15]);
+pub(super) const SENDER_VMAC: Bip6Vmac = Bip6Vmac::new([0x00, 0x05, 0x1E]);
 
-fn local_ip() -> Ipv6Addr {
+pub(super) fn local_ip() -> Ipv6Addr {
     Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x10)
 }
 
-fn sender() -> SocketAddrV6 {
+pub(super) fn sender() -> SocketAddrV6 {
     SocketAddrV6::new(
         Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x30),
         0xBAC0,
@@ -41,7 +41,7 @@ fn sender() -> SocketAddrV6 {
 /// A receiver bound in-process to `2001:db8::10` whose only listener is the
 /// returned NPDU channel. The socket is only used for address-resolution
 /// replies, which these tests never draw.
-async fn receiver() -> (Receiver, mpsc::Receiver<ReceivedNpdu>) {
+pub(super) async fn receiver() -> (Receiver, mpsc::Receiver<ReceivedNpdu>) {
     let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, PortUse::Claimed, Role::Normal)
         .await
         .unwrap();
@@ -85,7 +85,7 @@ fn original_broadcast() -> BytesMut {
     .unwrap()
 }
 
-fn datagram(
+pub(super) fn datagram(
     data: &[u8],
     destination: Ipv6Addr,
     os_group_delivery: Option<bool>,
@@ -204,12 +204,13 @@ fn no_mac_is_a_group_destination() {
     }
 }
 
-/// A Forwarded-NPDU from `origin`, carrying a ReadProperty request.
+/// A Forwarded-NPDU from `origin`, carrying a Who-Is: a forward carries
+/// what a broadcast may (#2829).
 fn forwarded_from(origin: SocketAddrV6) -> BytesMut {
     encoded(&Bvll6::ForwardedNpdu {
         original_source: SENDER_VMAC,
         original_address: origin.into(),
-        npdu: CONFIRMED_REQUEST,
+        npdu: &[0x01, 0x00, 0x10, 0x08],
     })
     .unwrap()
 }
