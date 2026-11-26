@@ -234,7 +234,7 @@ fn custom_reporter_invalid_configuration_preserves_all_settings_and_property_pre
                     BACnetPriorityFilter::all(),
                     None,
                 ),
-            Err(Error::OutOfRange(_))
+            Err(Error::Range(_))
         ));
         assert_eq!(snapshot(object), before);
     }

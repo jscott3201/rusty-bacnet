@@ -220,7 +220,11 @@ fn refused_size<R: SnapshotRecord>(open: impl Fn(u32) -> Result<(), Error>) {
     assert!(open(max).is_ok());
     let error = open(max + 1).unwrap_err();
     assert!(
-        matches!(&error, Error::OutOfRange(message) if message.contains("at most")),
+        matches!(&error, Error::Range(refused) if refused.message().to_string() == format!(
+            "a durable {:?} keeps at most {max} records, not Buffer_Size {}",
+            R::OBJECT_TYPE,
+            max + 1
+        )),
         "{error:?}"
     );
 }

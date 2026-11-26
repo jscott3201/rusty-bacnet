@@ -129,7 +129,7 @@ fn an_active_source_owner_refuses_monitored_objects_only_while_active() {
     let selected = || Some(alloc::vec![]);
     assert!(matches!(
         configure(&mut reporter, Some(&lease), selected()),
-        Err(Error::Encoding(_))
+        Err(Error::Unsupported(_))
     ));
     assert!(
         reporter

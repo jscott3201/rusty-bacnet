@@ -145,8 +145,8 @@ impl IpConfig {
                 ..config.clone()
             }),
             _ => {
-                return Err(Error::Encoding(
-                    "Network Port bind is for the other IP version".into(),
+                return Err(Error::invalid_argument(
+                    "Network Port bind is for the other IP version",
                 ));
             }
         })

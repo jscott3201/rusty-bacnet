@@ -281,8 +281,8 @@ impl<'a, R: ResidentLogRecord> LogLifecycle<'a, R> {
             daylight_savings_status: false,
         };
         if !frame.is_valid_actual_datetime() {
-            return Err(Error::OutOfRange(
-                "a LOG_INTERRUPTED record needs an actual date and time".into(),
+            return Err(Error::range(
+                "a LOG_INTERRUPTED record needs an actual date and time",
             ));
         }
         self.refresh_window_at(Some(at));

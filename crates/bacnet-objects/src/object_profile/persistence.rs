@@ -6,6 +6,8 @@ use std::path::Path;
 
 use bacnet_types::constructed::BACnetNameValue;
 use bacnet_types::error::Error;
+#[cfg(feature = "std")]
+use bacnet_types::error::Refusal;
 use bacnet_types::primitives::ObjectIdentifier;
 
 #[cfg(feature = "std")]
@@ -199,11 +201,11 @@ impl FileTagsPersistence {
             .get(8..crate::snapshot::framing::HEADER_LEN)
             .and_then(|identifier| ObjectIdentifier::decode(identifier).ok())
             .map_or_else(|| "another object".to_owned(), |owner| owner.to_string());
-        Error::Encoding(format!(
+        Error::InvalidConfig(Refusal::text(format!(
             "{}: the Tags file belongs to {owner}, not {object}; remove or move it, or give \
              each object a path of its own",
             self.path().display()
-        ))
+        )))
     }
 }
 

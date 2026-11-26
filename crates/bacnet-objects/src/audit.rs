@@ -14,7 +14,7 @@ use bacnet_types::enums::{
     AuditLevel, BACnetSuccessFilter, ErrorClass, ErrorCode, EventState, ObjectType,
     PropertyIdentifier, Reliability,
 };
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RangeError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
 use crate::clock::ClockReader;
@@ -169,15 +169,15 @@ impl AuditLogObject {
     ) -> Result<Self, Error> {
         let oid = ObjectIdentifier::new(ObjectType::AUDIT_LOG, instance)?;
         if buffer_size > MAX_AUDIT_RECORDS {
-            return Err(Error::OutOfRange(format!(
-                "AuditLog capacity {buffer_size} exceeds {MAX_AUDIT_RECORDS}"
-            )));
+            return Err(RangeError::new("AuditLog capacity {} exceeds {}")
+                .with_values(u64::from(buffer_size), u64::from(MAX_AUDIT_RECORDS))
+                .into());
         }
         let snapshot = match persistence.load(oid)? {
             Some(snapshot) => {
                 if snapshot.object_identifier != oid {
-                    return Err(Error::Encoding(
-                        "AuditLog persisted identity does not match configuration".into(),
+                    return Err(Error::invalid_config(
+                        "AuditLog persisted identity does not match configuration",
                     ));
                 }
                 validate_snapshot(&snapshot)?;
@@ -325,7 +325,7 @@ impl AuditLogObject {
         let generation = self
             .generation
             .checked_add(1)
-            .ok_or_else(|| Error::OutOfRange("AuditLog persistence generation exhausted".into()))?;
+            .ok_or_else(|| Error::limit_reached("AuditLog persistence generation exhausted"))?;
         let mut snapshot = self.current_snapshot();
         snapshot.generation = generation;
         Ok(snapshot)

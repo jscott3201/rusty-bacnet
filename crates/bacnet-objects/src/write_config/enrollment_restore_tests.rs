@@ -154,7 +154,7 @@ fn storage_holding_what_no_write_leaves_fails_the_build() {
     ];
     for stored in refused {
         let built = try_open(Some(&holding(stored)));
-        assert!(matches!(built, Err(Error::Encoding(_))));
+        assert!(matches!(built, Err(Error::InvalidConfig(_))));
     }
 }
 

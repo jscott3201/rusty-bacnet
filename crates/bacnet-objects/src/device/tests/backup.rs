@@ -179,7 +179,7 @@ fn a_zero_backup_failure_timeout_is_refused_at_construction() {
         ..DeviceConfig::default()
     });
 
-    assert!(matches!(device, Err(Error::Encoding(_))));
+    assert!(matches!(device, Err(Error::InvalidConfig(_))));
 }
 
 /// Table 12-13 footnote 8: Backup_Failure_Timeout is writable when present.

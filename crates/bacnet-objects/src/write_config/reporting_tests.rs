@@ -382,10 +382,25 @@ fn storage_holding_what_no_write_leaves_fails_the_build() {
         notify_type: Some(NotifyType::from_raw(5)),
         ..ReportingWriteConfig::default()
     }));
-    for storage in [timer, unknown] {
+    // Without `std` a refusal owns no text, so the codec's reason stands
+    // alone there.
+    #[cfg(feature = "std")]
+    let unknown_text = "saved reporting settings holds an unknown Notify_Type";
+    #[cfg(not(feature = "std"))]
+    let unknown_text = "holds an unknown Notify_Type";
+    for (storage, text) in [
+        (timer, "saved write configuration is not reporting settings"),
+        (unknown, unknown_text),
+    ] {
         let built = AnalogInputObject::new(1, "AI", EngineeringUnits::DEGREES_CELSIUS)
             .and_then(|object| object.with_reporting_persistence(persistence(&storage)));
-        assert!(matches!(built, Err(Error::Encoding(_))));
+        // A configuration refusal (#1833) whose text is as before, with no
+        // category in front.
+        assert!(
+            matches!(&built, Err(Error::InvalidConfig(why)) if why.to_string() == text),
+            "{:?}",
+            built.err()
+        );
     }
 }
 

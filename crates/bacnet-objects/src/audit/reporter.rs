@@ -553,7 +553,7 @@ fn audit_reporter_rejects_default_level_before_mutation() {
     reporter.set_audit_level(AuditLevel::AUDIT_CONFIG).unwrap();
     assert!(matches!(
         reporter.set_audit_level(AuditLevel::DEFAULT),
-        Err(Error::OutOfRange(_))
+        Err(Error::Range(_))
     ));
     assert_eq!(
         read(&reporter, PropertyIdentifier::AUDIT_LEVEL),

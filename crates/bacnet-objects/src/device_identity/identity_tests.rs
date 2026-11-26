@@ -13,12 +13,14 @@ fn identity() -> DeviceIdentity {
     DeviceIdentity::new(1001, 42).unwrap()
 }
 
-/// The `Error::Encoding` message of `result`, or a panic naming what came back.
+/// The `Error::InvalidConfig` message of `result`, or a panic naming what
+/// came back: every refusal of an identity is one of its configuration
+/// (#1833).
 fn encoding_message<T>(result: Result<T, Error>) -> String {
     match result {
-        Err(Error::Encoding(message)) => message,
-        Err(other) => panic!("expected an encoding error, got {other:?}"),
-        Ok(_) => panic!("expected an encoding error, got success"),
+        Err(Error::InvalidConfig(message)) => message.to_string(),
+        Err(other) => panic!("expected a configuration refusal, got {other:?}"),
+        Ok(_) => panic!("expected a configuration refusal, got success"),
     }
 }
 

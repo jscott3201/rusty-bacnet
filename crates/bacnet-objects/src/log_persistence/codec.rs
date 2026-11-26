@@ -28,7 +28,7 @@ use bacnet_types::constructed::{
     BACnetLogRecord,
 };
 use bacnet_types::enums::{LoggingType, ObjectType, PropertyIdentifier as P};
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, RangeError};
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::BytesMut;
 
@@ -66,6 +66,10 @@ pub(crate) trait SnapshotRecord:
 {
     /// The log object type whose records these are.
     const OBJECT_TYPE: ObjectType;
+    /// [`check_buffer_size`]'s refusal, naming [`OBJECT_TYPE`](Self::OBJECT_TYPE):
+    /// a static label taking the most records a slot keeps, then the
+    /// Buffer_Size refused (#1833).
+    const BUFFER_SIZE_REFUSAL: &'static str;
     /// The most octets one record the stack itself makes can take: what a
     /// slot is sized for (see [`check_buffer_size`]).
     const WORST_RECORD_OCTETS: usize;
@@ -75,6 +79,8 @@ pub(crate) trait SnapshotRecord:
 
 impl SnapshotRecord for BACnetLogRecord {
     const OBJECT_TYPE: ObjectType = ObjectType::TREND_LOG;
+    const BUFFER_SIZE_REFUSAL: &'static str =
+        "a durable ObjectType::TREND_LOG keeps at most {} records, not Buffer_Size {}";
     /// A timestamp, an any-value at the pollers' 256-octet cap with its
     /// framing, and Status_Flags.
     const WORST_RECORD_OCTETS: usize = 320;
@@ -85,6 +91,8 @@ impl SnapshotRecord for BACnetLogRecord {
 
 impl SnapshotRecord for BACnetEventLogRecord {
     const OBJECT_TYPE: ObjectType = ObjectType::EVENT_LOG;
+    const BUFFER_SIZE_REFUSAL: &'static str =
+        "a durable ObjectType::EVENT_LOG keeps at most {} records, not Buffer_Size {}";
     /// A timestamp and a notification no larger than the 1476-octet APDU
     /// it could arrive in.
     const WORST_RECORD_OCTETS: usize = 1_500;
@@ -95,6 +103,8 @@ impl SnapshotRecord for BACnetEventLogRecord {
 
 impl SnapshotRecord for BACnetLogMultipleRecord {
     const OBJECT_TYPE: ObjectType = ObjectType::TREND_LOG_MULTIPLE;
+    const BUFFER_SIZE_REFUSAL: &'static str =
+        "a durable ObjectType::TREND_LOG_MULTIPLE keeps at most {} records, not Buffer_Size {}";
     /// A timestamp and one 256-octet any-value, framed, for each of the 64
     /// references a log may hold.
     const WORST_RECORD_OCTETS: usize = 32 + MAX_LOG_DEVICE_OBJECT_PROPERTIES * 264;
@@ -122,10 +132,9 @@ pub(crate) fn max_buffer_size<R: SnapshotRecord>() -> u32 {
 pub(crate) fn check_buffer_size<R: SnapshotRecord>(buffer_size: u32) -> Result<(), Error> {
     let max = max_buffer_size::<R>();
     if buffer_size > max {
-        return Err(Error::OutOfRange(format!(
-            "a durable {:?} keeps at most {max} records, not Buffer_Size {buffer_size}",
-            R::OBJECT_TYPE
-        )));
+        return Err(RangeError::new(R::BUFFER_SIZE_REFUSAL)
+            .with_values(u64::from(max), u64::from(buffer_size))
+            .into());
     }
     Ok(())
 }
