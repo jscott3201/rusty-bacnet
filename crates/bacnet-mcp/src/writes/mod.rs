@@ -535,6 +535,20 @@ impl Caller for McpCaller<'_> {
         None
     }
 
+    /// A revert whose device isn't placed (#2824) asks the operator,
+    /// naming no address an agent could pick, rather than [`Unsent`]'s own
+    /// text, which names the claims for a person to choose from.
+    ///
+    /// [`Unsent`]: bacnet_tool::safety::Unsent
+    fn unsent_text(
+        &self,
+        entry: &bacnet_tool::safety::ledger::Entry,
+        unsent: &bacnet_tool::safety::Unsent,
+    ) -> String {
+        crate::errors::ToolError::unplaced_revert_text(entry.device, unsent)
+            .unwrap_or_else(|| unsent.to_string())
+    }
+
     /// The policy, at the address the desk found (its network, local form)
     /// and the entry's instance; for an attached revert, the address
     /// confirmed. Found once, by the desk, so what is checked is what is

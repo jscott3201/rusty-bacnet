@@ -458,3 +458,80 @@ async fn an_old_entry_asks_no_claim_the_policy_leaves_out() {
     assert_eq!(Ledger::open(dir.path()).unwrap().entries().len(), 1);
     lab.stop().await;
 }
+
+/// Two entries from before addresses (#2824): 7777, claimed by a forged
+/// I-Am at one alias's address, and 7778, claimed at two others, each
+/// alias answering as itself. Neither is reverted, and each says to ask the
+/// operator, naming no address an agent could pick and not steering it to
+/// name one or write the value back by hand.
+#[tokio::test(start_paused = true)]
+async fn an_old_entry_not_placed_asks_the_operator() {
+    let dir = tempfile::tempdir().unwrap();
+    let held = ledger(&[(1, 7777, None), (2, 7778, None)]);
+    std::fs::write(dir.path().join(FILE), held).unwrap();
+    let mut lab = Lab::start(writes(dir.path(), ArmMode::Elicit)).await;
+    lab.agent.initialize().await;
+    let (one, two, three) = (ALIASES.start, ALIASES.start + 1, ALIASES.start + 2);
+    lab.inject(&i_am(7777), &alias_mac(three)).await;
+    lab.inject(&i_am(7778), &alias_mac(one)).await;
+    lab.inject(&i_am(7778), &alias_mac(two)).await;
+    let claims = |lab: &Lab| {
+        let known = lab.mcp.ctx().known.lock().unwrap();
+        known.values().filter(|instance| **instance >= 7777).count()
+    };
+    until(&lab, |lab| claims(lab) == 3, "the forged claims are known").await;
+    let reply = call(&mut lab, "bacnet_revert", json!({ "all": true }), json!({})).await;
+    let results = reply["structuredContent"]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2, "{reply}");
+    for result in results {
+        assert_eq!(result["applied"], json!(false), "{result}");
+        let why = result["outcome"]["why"].as_str().unwrap();
+        assert!(why.contains("Ask the operator"), "{why}");
+        for steer in ["10.0.0.", "by its address", "by hand"] {
+            assert!(!why.contains(steer), "{steer}: {why}");
+        }
+    }
+    assert_eq!(Ledger::open(dir.path()).unwrap().entries().len(), 2);
+    lab.stop().await;
+}
+
+/// An attached revert whose old entry's device isn't placed (#2824) is
+/// refused as the tools refuse an instance: ambiguous or unconfirmed, the
+/// claims under `claims`, each unconfirmed, asking the operator.
+#[test]
+fn an_attached_revert_not_placed_asks_the_operator() {
+    use bacnet_ops::device::Answer;
+    use bacnet_ops::target::AddressStyle;
+    use bacnet_tool::safety::Unsent;
+
+    use crate::errors::ToolError;
+    let one: bacnet_ops::DeviceAddress = "10.0.0.3:47808".parse().unwrap();
+    let two: bacnet_ops::DeviceAddress = "10.0.0.4:47808".parse().unwrap();
+    let contested = Unsent::Contested {
+        instance: 7778,
+        claims: vec![one.clone(), two],
+        style: AddressStyle::Bip,
+    };
+    let unconfirmed = Unsent::Unconfirmed {
+        instance: 7777,
+        at: one,
+        answer: Some(Answer::Is(1202)),
+        said: String::new(),
+    };
+    let refused = |instance, unsent: &Unsent| {
+        ToolError::unplaced_revert(instance, unsent)
+            .expect("refused")
+            .json()
+    };
+    let body = refused(7778, &contested);
+    assert_eq!(body["reason"], json!("ambiguous-device"), "{body}");
+    assert_eq!(body["claims"].as_array().unwrap().len(), 2, "{body}");
+    let body = refused(7777, &unconfirmed);
+    assert_eq!(body["reason"], json!("unconfirmed-device"), "{body}");
+    assert_eq!(body["claims"][0]["answer_instance"], json!(1202), "{body}");
+    for body in [refused(7778, &contested), body] {
+        let message = body["message"].as_str().unwrap();
+        assert!(message.contains("Ask the operator"), "{message}");
+        assert!(!message.contains("10.0.0."), "{message}");
+    }
+}

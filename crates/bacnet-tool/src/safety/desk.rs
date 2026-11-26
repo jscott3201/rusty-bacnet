@@ -34,7 +34,7 @@ use serde_json::{Map, Value, json};
 use super::audit::{Audit, Context, utc_now};
 use super::ledger::{Entry, Ledger, Origin, Place};
 use super::lock::{WorkspaceLock, lock};
-use super::place::{Asked, revert_address, turn, turn_asking};
+use super::place::{Asked, Unsent, revert_address, turn, turn_asking};
 use super::plan::{self, PRE_READ, PreRead};
 use super::send::{item_json, send, write_property};
 use super::{Gate, Level, Outcome, Planned, Preview, Stored, WriteSpec, run_id};
@@ -107,6 +107,14 @@ pub trait Caller: Sync {
     /// refused stops the revert with nothing sent. MCP checks its policy.
     fn claim_refusal(&self, _entry: &Entry, _claim: &DeviceAddress) -> Option<String> {
         None
+    }
+
+    /// The text of a revert of `entry` not sent for `unsent`, its device
+    /// not placed: [`Unsent`]'s own by default, which may name addresses
+    /// for a person to choose from. MCP asks the operator instead, naming
+    /// none an agent could pick (#2824).
+    fn unsent_text(&self, _entry: &Entry, unsent: &Unsent) -> String {
+        unsent.to_string()
     }
 
     /// Why the revert of `entry` may not go to `at`, if it may not: `at` is
@@ -571,7 +579,7 @@ async fn revert_entry<T: TransportPort + 'static>(
     let gate = |claim: &DeviceAddress| caller.claim_refusal(entry, claim);
     let at = match revert_address(client, rate, entry, caller.may_look(), &gate).await {
         Ok(at) => at,
-        Err(error) => return Outcome::NotSent(error.to_string()),
+        Err(unsent) => return Outcome::NotSent(caller.unsent_text(entry, &unsent)),
     };
     if let Some(why) = caller.revert_refusal(entry, &at) {
         return Outcome::NotSent(why);

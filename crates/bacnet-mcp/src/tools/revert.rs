@@ -325,11 +325,13 @@ async fn attached<T: TransportPort + 'static>(
 
 /// Why an attached revert of `entry` can't be put to the person: the
 /// device can't be placed without a Who-Is, or an entry from before
-/// addresses names an instance two addresses claim. Nothing was sent.
+/// addresses names an instance two addresses may be, or one that didn't
+/// answer as it, refused asking the operator (#2824). Nothing was sent.
 fn unplaced(entry: &Entry, unsent: Unsent) -> ToolError {
+    if let Some(refused) = ToolError::unplaced_revert(entry.device, &unsent) {
+        return refused;
+    }
     match unsent {
-        Unsent::Contested { .. } => ToolError::refused("ambiguous-device", unsent.to_string()),
-        Unsent::Unconfirmed { .. } => ToolError::refused("unconfirmed-device", unsent.to_string()),
         Unsent::NotLooking { device } => ToolError::UnknownDevice {
             // Its address, or for an entry from before addresses its instance.
             device: match entry.address {

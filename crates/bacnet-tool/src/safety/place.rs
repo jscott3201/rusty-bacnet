@@ -20,7 +20,7 @@ use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 
 use super::ledger::Entry;
-use bacnet_ops::device::{Gate, Look, Withheld, place_instance};
+use bacnet_ops::device::{Answer, Gate, Look, Withheld, place_instance};
 use bacnet_ops::limits::{RequestLimits, Turn};
 use bacnet_ops::raw::{self, Halt, Reader};
 use bacnet_ops::target::AddressStyle;
@@ -93,6 +93,8 @@ pub enum Unsent {
         instance: u32,
         /// The address asked.
         at: DeviceAddress,
+        /// What the device there did, asked which device it is.
+        answer: Option<Answer>,
         /// The address asked and what answered there, as text.
         said: String,
     },
@@ -373,9 +375,10 @@ pub async fn revert_address<T: TransportPort + 'static>(
                 claims: candidates,
                 style,
             }),
-            Err(OpsError::NotConfirmed { at, .. }) => Err(Unsent::Unconfirmed {
+            Err(OpsError::NotConfirmed { at, answer, .. }) => Err(Unsent::Unconfirmed {
                 instance,
                 at,
+                answer,
                 said: said.unwrap_or_default(),
             }),
             Err(OpsError::UnknownDevice { asked: None, .. }) if placement.asked.is_empty() => {
