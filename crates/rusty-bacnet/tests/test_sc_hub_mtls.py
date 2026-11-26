@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 
 from rusty_bacnet import (
-    BACnetClient, BACnetServer, BacnetError, ObjectIdentifier, ObjectType,
+    BACnetClient, BACnetServer, BacnetError, BacnetStateError, ObjectIdentifier, ObjectType,
     PropertyIdentifier, ScHub,
 )
 
@@ -492,16 +492,21 @@ class NodeMtlsTests(MtlsFixture):
             node = self.kept_node(port)
             starting = asyncio.ensure_future(node.start())
             try:
-                with self.assertRaisesRegex(RuntimeError, "in progress"):
-                    node.add_file(2, "Late")
-                with self.assertRaisesRegex(RuntimeError, "already in progress"):
-                    node.start()
-                with self.assertRaisesRegex(RuntimeError, "in progress"):
-                    node.set_file_data(7, b"x")
-                with self.assertRaisesRegex(RuntimeError, "in progress"):
-                    node.configure_audit_notification_sink(1, policy="deny_all")
-                with self.assertRaisesRegex(RuntimeError, "cannot configure"):
-                    node.configure_audit_reporters([{**self.REPORTER, "instance": 1}])
+                for call, text in (
+                    (lambda: node.add_file(2, "Late"), "in progress"),
+                    (node.start, "already in progress"),
+                    (lambda: node.set_file_data(7, b"x"), "in progress"),
+                    (lambda: node.configure_audit_notification_sink(1, policy="deny_all"),
+                     "in progress"),
+                    (lambda: node.configure_audit_reporters([{**self.REPORTER, "instance": 1}]),
+                     "cannot configure"),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, text) as caught:
+                        call()
+                    # A start under way refuses what only an unstarted
+                    # server takes (#2819).
+                    self.assertIsInstance(caught.exception, BacnetStateError)
+                    self.assertEqual(caught.exception.state, "already_started")
             finally:
                 starting.cancel()
             with self.assertRaises(asyncio.CancelledError):

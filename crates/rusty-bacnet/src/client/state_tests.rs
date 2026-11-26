@@ -218,3 +218,40 @@ async fn a_failed_native_stop_is_recorded_without_a_waiter() {
         .unwrap();
     assert_eq!(state.liveness(), Liveness::Stopped);
 }
+
+/// The `state` of the `BacnetStateError` a lifecycle check raised (#2819).
+fn state_of(error: pyo3::PyErr) -> String {
+    use pyo3::prelude::*;
+    Python::attach(|py| {
+        let class = crate::errors::state_error_type(py).unwrap().bind(py);
+        assert!(error.value(py).get_type().is(class), "{error}");
+        error.value(py).getattr("state").unwrap().extract().unwrap()
+    })
+}
+
+/// Each of the client's own lifecycle checks raises `BacnetStateError`
+/// naming its state (#2819): a second start, a call once a standalone
+/// client stopped (it starts again), a call while a stop is under way, and
+/// a call on an endpoint's client once it stopped (it never starts again).
+#[tokio::test]
+async fn lifecycle_refusals_name_their_state() {
+    let state = running_client().await;
+    assert_eq!(
+        state_of(starting(&state).await.err().unwrap()),
+        "already_started"
+    );
+    close(Arc::clone(&state)).await.unwrap();
+    assert_eq!(
+        state_of(started(&state).await.err().unwrap()),
+        "not_running"
+    );
+    assert_eq!(
+        state_of(high_level(&state).await.err().unwrap()),
+        "not_running"
+    );
+    state.closing.store(true, Ordering::Release);
+    assert_eq!(state_of(started(&state).await.err().unwrap()), "stopping");
+    assert_eq!(state_of(starting(&state).await.err().unwrap()), "stopping");
+    let seated: ClientInner = Arc::new(ClientState::seated());
+    assert_eq!(state_of(started(&seated).await.err().unwrap()), "closed");
+}

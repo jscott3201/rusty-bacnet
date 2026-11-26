@@ -35,10 +35,10 @@ impl BACnetServer {
         // ownership transfer. Keep registration stable until it is drained.
         let mut pending = self.lock_pending();
         if self.start_in_flight.load(Ordering::Acquire) {
-            return Err(PyRuntimeError::new_err("start() is already in progress"));
+            return Err(already_started("start() is already in progress"));
         }
         if self.started.load(Ordering::Acquire) {
-            return Err(PyRuntimeError::new_err(
+            return Err(already_started(
                 "cannot start() — server is already running",
             ));
         }

@@ -3,7 +3,7 @@ use super::super::*;
 use bacnet_objects::file::FileConfiguration;
 use bacnet_types::enums::{FileAccessMethod, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
-use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::types::{PyBytes, PyList};
 
 const INVALID_ACCESS_METHOD: &str = "access_method must be 'stream' or 'record'";
@@ -42,7 +42,7 @@ impl BACnetServer {
         let guard = self.lock_pending();
         self.check_start_not_in_flight()?;
         if self.started.load(Ordering::Acquire) {
-            return Err(PyRuntimeError::new_err(STARTED_CONFIGURATION));
+            return Err(already_started(STARTED_CONFIGURATION));
         }
         let object = guard
             .iter()
@@ -63,7 +63,7 @@ impl BACnetServer {
         let mut guard = self.lock_pending();
         self.check_start_not_in_flight()?;
         if self.started.load(Ordering::Acquire) {
-            return Err(PyRuntimeError::new_err(STARTED_CONFIGURATION));
+            return Err(already_started(STARTED_CONFIGURATION));
         }
         let object = guard
             .iter_mut()
@@ -176,6 +176,7 @@ mod tests {
     use bacnet_objects::binary::BinaryValueObject;
     use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
     use bacnet_types::error::Error;
+    use pyo3::exceptions::PyRuntimeError;
     use std::borrow::Cow;
 
     fn test_server() -> BACnetServer {
@@ -412,7 +413,12 @@ mod tests {
             let error = started
                 .set_file_data(8, &PyBytes::new(py, b"changed"))
                 .unwrap_err();
+            // A lifecycle refusal (#2819): BacnetStateError, still a
+            // RuntimeError, with its text unchanged.
             assert!(error.is_instance_of::<PyRuntimeError>(py));
+            assert!(error.is_instance_of::<crate::errors::BacnetError>(py));
+            let state: String = error.value(py).getattr("state").unwrap().extract().unwrap();
+            assert_eq!(state, "already_started");
             assert_eq!(py_message(py, &error), STARTED_CONFIGURATION);
         });
         assert_eq!(

@@ -65,6 +65,12 @@ pub(crate) use audit_configuration::{
 };
 pub(crate) use host::{SeatedHost, ServerHost};
 
+/// What a call only an unstarted server takes raises once a start has
+/// begun (#2819): `BacnetStateError`, `state` `"already_started"`.
+fn already_started(message: &str) -> PyErr {
+    crate::errors::lifecycle_error(bacnet_types::error::Lifecycle::AlreadyStarted, message)
+}
+
 /// Async BACnet server that hosts objects and responds to requests.
 ///
 /// Usage:
@@ -297,7 +303,7 @@ impl BACnetServer {
     /// them: what it gives back after a refusal must not meet a newer call.
     fn check_start_not_in_flight(&self) -> PyResult<()> {
         if self.start_in_flight.load(Ordering::Acquire) {
-            return Err(PyRuntimeError::new_err(
+            return Err(already_started(
                 "start() is in progress: registrations and their configuration \
                  cannot change until it ends",
             ));
@@ -317,7 +323,7 @@ impl BACnetServer {
         }
         self.check_start_not_in_flight()?;
         if self.started.load(Ordering::Acquire) {
-            return Err(PyRuntimeError::new_err(
+            return Err(already_started(
                 "cannot add objects after start() — server is already running",
             ));
         }

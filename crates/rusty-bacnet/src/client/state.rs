@@ -1,10 +1,10 @@
 //! Concurrent operation leases and cancellation-safe ownership of client shutdown.
 
 use super::{ClientInner, CoreClient};
-use crate::errors::to_py_err;
+use crate::errors::{lifecycle_error, to_py_err};
 use crate::high_level::{OpsClient, OpsDevice};
 use bacnet_transport::sc::ScEvent;
-use bacnet_types::error::Error;
+use bacnet_types::error::{Error, Lifecycle};
 use bacnet_types::sync::MutexExt;
 use pyo3::PyResult;
 use pyo3::exceptions::PyRuntimeError;
@@ -302,7 +302,10 @@ impl ClientState {
 }
 
 fn closing() -> pyo3::PyErr {
-    PyRuntimeError::new_err("client closing — await stop() before starting new work")
+    lifecycle_error(
+        Lifecycle::Stopping,
+        "client closing — await stop() before starting new work",
+    )
 }
 /// Take `guard`, a lock on the client slot, unless close is admitted first
 /// or meanwhile. A pending entry holds the slot exclusively until it
@@ -337,12 +340,17 @@ async fn admitted<G>(inner: &ClientInner, guard: impl Future<Output = G>) -> PyR
 fn not_started(inner: &ClientInner) -> pyo3::PyErr {
     if inner.seated {
         // Its endpoint started it; once stopped it is done (#2617).
-        return PyRuntimeError::new_err(
+        return lifecycle_error(
+            Lifecycle::Closed,
             "this client ran on an endpoint and is stopped, or its endpoint is: ask the \
              running endpoint for another with 'await endpoint.client()'",
         );
     }
-    PyRuntimeError::new_err("client not started — use 'async with'")
+    // A standalone client starts again after its stop.
+    lifecycle_error(
+        Lifecycle::NotRunning,
+        "client not started — use 'async with'",
+    )
 }
 
 /// Hold shared ownership through a native operation, without serializing readers.
@@ -368,7 +376,10 @@ pub(super) async fn starting(
 ) -> PyResult<RwLockWriteGuard<'_, Option<Started>>> {
     let guard = admitted(inner, inner.client.write()).await?;
     if guard.is_some() {
-        return Err(PyRuntimeError::new_err("client already started"));
+        return Err(lifecycle_error(
+            Lifecycle::AlreadyStarted,
+            "client already started",
+        ));
     }
     Ok(guard)
 }

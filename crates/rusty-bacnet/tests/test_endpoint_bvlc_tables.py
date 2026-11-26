@@ -137,8 +137,12 @@ class EndpointBvlcTableTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.01)
         # close() doesn't wait for the read's answer.
         await asyncio.wait_for(self.endpoint.close(), 2)
-        with self.assertRaisesRegex(RuntimeError, "not started"):
+        with self.assertRaisesRegex(RuntimeError, "not started") as caught:
             await asyncio.wait_for(read, 2)
+        # As a read after close (#2819): the endpoint starts again.
+        self.assertIsInstance(caught.exception, rb.BacnetStateError)
+        self.assertEqual(caught.exception.state, "not_running")
+        self.assertEqual(str(caught.exception), "endpoint not started")
 
     async def test_a_cancelled_read_frees_its_slot_at_once(self):
         answered = []
@@ -205,8 +209,10 @@ class EndpointBvlcTableTests(unittest.IsolatedAsyncioTestCase):
         for owner in (unstarted, self.endpoint):
             for name in ("read_bdt", "read_fdt"):
                 with self.subTest(method=name), \
-                        self.assertRaisesRegex(RuntimeError, "not started"):
+                        self.assertRaisesRegex(RuntimeError, "not started") as caught:
                     await getattr(owner, name)("127.0.0.1:47808")
+                self.assertIsInstance(caught.exception, rb.BacnetStateError)
+                self.assertEqual(caught.exception.state, "not_running")
 
     def test_stub_matches_runtime(self):
         classes = stub_classes(installed_stub())

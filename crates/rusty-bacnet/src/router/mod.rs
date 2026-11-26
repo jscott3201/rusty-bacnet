@@ -20,6 +20,13 @@ use pyo3::prelude::*;
 use session::NativeSession;
 use std::sync::Mutex;
 
+/// What a call that needs the running router raises without it (#2819):
+/// `BacnetStateError`, its `state` the one [`Lifecycle::inspect`] found,
+/// with the text these calls have always raised.
+fn router_not_started(state: bacnet_types::error::Lifecycle) -> PyErr {
+    crate::errors::lifecycle_error(state, "router not started or already closing")
+}
+
 /// A B/IP router. With `application=`, a client and optionally a server run
 /// on its own application entity (#2071).
 ///
@@ -247,7 +254,7 @@ impl PyBACnetRouter {
             owner
                 .inspect(NativeSession::ports)
                 .await
-                .ok_or_else(|| PyRuntimeError::new_err("router not started or already closing"))
+                .map_err(router_not_started)
         })
     }
 
@@ -262,7 +269,7 @@ impl PyBACnetRouter {
             let snapshot = owner
                 .inspect(NativeSession::counters)
                 .await
-                .ok_or_else(|| PyRuntimeError::new_err("router not started or already closing"))?;
+                .map_err(router_not_started)?;
             crate::py_async::attach(|py| Ok(snapshot.into_dict(py)?.into_any().unbind()))
         })
     }
@@ -275,7 +282,7 @@ impl PyBACnetRouter {
             owner
                 .inspect(NativeSession::routes)
                 .await
-                .ok_or_else(|| PyRuntimeError::new_err("router not started or already closing"))
+                .map_err(router_not_started)
         })
     }
 }

@@ -1,6 +1,7 @@
 //! Causal tests of the exact router owner, without Python or sockets.
 #[path = "../src/router/lifecycle.rs"]
 mod lifecycle;
+use bacnet_types::error::Lifecycle as State;
 use lifecycle::{CloseError, Lifecycle, Session, StartError};
 use std::future::Future;
 use std::sync::{
@@ -257,10 +258,10 @@ async fn old_publication_cleanup_cannot_close_a_new_generation() {
         .unwrap();
     assert_ne!(first, second);
     owner.close_generation(first).await.unwrap();
-    assert!(owner.inspect(|_| ()).await.is_some());
+    assert!(owner.inspect(|_| ()).await.is_ok());
     assert_eq!(counts.stops.load(Ordering::SeqCst), 1);
     owner.close_generation(second).await.unwrap();
-    assert!(owner.inspect(|_| ()).await.is_none());
+    assert_eq!(owner.inspect(|_| ()).await, Err(State::NotRunning));
     assert_eq!(counts.stops.load(Ordering::SeqCst), 2);
 }
 
@@ -297,6 +298,8 @@ async fn disposal_fences_admitted_publication_and_future_starts() {
     release.send(()).unwrap();
     assert!(matches!(start.await.unwrap(), Err(StartError::Cancelled)));
     owner.close().await.unwrap();
+    // Its Python object is gone: a share's call finds it closed (#2819).
+    assert_eq!(owner.inspect(|_| ()).await, Err(State::Closed));
     assert!(matches!(
         owner.start(false, || panic!("disposed")).await,
         Err(StartError::Cancelled)
@@ -313,6 +316,8 @@ async fn worker_panic_never_becomes_success_or_admits_a_restart() {
     starts(&owner, resource).await.unwrap().unwrap();
     assert!(matches!(owner.close().await, Err(CloseError::WorkerEnded)));
     assert!(matches!(owner.close().await, Err(CloseError::WorkerEnded)));
+    // No start gets past it, so a call finds the owner closed (#2819).
+    assert_eq!(owner.inspect(|_| ()).await, Err(State::Closed));
     assert!(matches!(
         owner.start(false, || panic!("must not restart")).await,
         Err(StartError::Cleanup(CloseError::WorkerEnded))
@@ -340,7 +345,7 @@ async fn unread_start_result_cleanup(fail: bool) {
     .await;
     // Admission remains locked until the retained worker has queued success.
     // This task never polls the receiver again after that independent barrier.
-    assert_eq!(owner.inspect(|_| ()).await, Some(()));
+    assert_eq!(owner.inspect(|_| ()).await, Ok(()));
     assert_eq!(counts.stops.load(Ordering::SeqCst), 0);
     drop(start);
     tokio::time::timeout(std::time::Duration::from_secs(5), stopping)
@@ -368,8 +373,9 @@ async fn unread_start_result_cleanup(fail: bool) {
             panic!("restart discarded failed cleanup")
         };
         assert!(Arc::ptr_eq(&actual, &error));
+        assert_eq!(owner.inspect(|_| ()).await, Err(State::Closed));
     } else {
-        assert!(owner.inspect(|_| ()).await.is_none());
+        assert_eq!(owner.inspect(|_| ()).await, Err(State::NotRunning));
         owner.close().await.unwrap();
     }
     assert_eq!(counts.stops.load(Ordering::SeqCst), 1);
@@ -415,7 +421,66 @@ async fn receipt_failed_send_and_panicking_transfer_keep_cleanup_authority() {
         done.await.unwrap();
         assert_eq!(counts.stops.load(Ordering::SeqCst), 1);
         assert_eq!(counts.live.load(Ordering::SeqCst), 0);
-        assert!(owner.inspect(|_| ()).await.is_none());
+        assert_eq!(owner.inspect(|_| ()).await, Err(State::NotRunning));
         owner.close().await.unwrap();
     }
+}
+
+/// What a call that needs the running router finds without one (#2819): a
+/// new owner, or one closed cleanly, starts again; a failed cleanup fences
+/// every later start, so the owner is closed.
+#[tokio::test]
+async fn inspect_names_the_state_of_an_owner_without_a_running_router() {
+    let counts = Arc::new(Counts::default());
+    let owner = Owner::new();
+    assert_eq!(owner.inspect(|_| ()).await, Err(State::NotRunning));
+    starts(&owner, Resource::new(&counts))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(owner.inspect(|_| ()).await, Ok(()));
+    owner.close().await.unwrap();
+    assert_eq!(owner.inspect(|_| ()).await, Err(State::NotRunning));
+    let mut resource = Resource::new(&counts);
+    resource.stop_error = Some(Arc::new("cleanup failed".to_string()));
+    starts(&owner, resource).await.unwrap().unwrap();
+    assert!(matches!(owner.close().await, Err(CloseError::Stop(_))));
+    assert_eq!(owner.inspect(|_| ()).await, Err(State::Closed));
+}
+
+/// A call queued behind a start that a close then ends finds a stop under
+/// way (#2819): the router is "already closing".
+#[tokio::test]
+async fn a_call_behind_a_start_a_close_ends_finds_a_stop_under_way() {
+    let counts = Arc::new(Counts::default());
+    let owner = Owner::new();
+    let mut resource = Resource::new(&counts);
+    let (entered, starting) = oneshot::channel();
+    let (release, gate) = oneshot::channel();
+    resource.starting = Some(entered);
+    resource.start_gate = Some(gate);
+    let start = starts(&owner, resource);
+    starting.await.unwrap();
+    // The start's worker holds the owner: the call queues for it first,
+    // then the close asks for the stop.
+    let call = tokio::spawn({
+        let owner = owner.clone();
+        async move { owner.inspect(|_| ()).await }
+    });
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+    let close = tokio::spawn({
+        let owner = owner.clone();
+        async move { owner.close().await }
+    });
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+    release.send(()).unwrap();
+    assert_eq!(call.await.unwrap(), Err(State::Stopping));
+    assert!(matches!(start.await.unwrap(), Err(StartError::Cancelled)));
+    close.await.unwrap().unwrap();
+    assert_eq!(owner.inspect(|_| ()).await, Err(State::NotRunning));
+    assert_eq!(counts.live.load(Ordering::SeqCst), 0);
 }

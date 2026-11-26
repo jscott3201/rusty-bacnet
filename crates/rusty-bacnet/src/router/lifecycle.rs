@@ -3,6 +3,7 @@
 //! The admitted worker owns the state lock through publication or cleanup.
 //! Failed cleanup is terminal for this owner; no later start can discard it.
 
+use bacnet_types::error::Lifecycle as LifecycleState;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -219,14 +220,24 @@ impl<S: Session> Lifecycle<S> {
             .unwrap_or(Err(StartError::Cleanup(CloseError::WorkerEnded)))
     }
 
-    pub(crate) async fn inspect<R>(&self, read: impl FnOnce(&S) -> R) -> Option<R> {
+    /// `read` of the running session, or the state that has none (#2819):
+    /// `Stopping` while a close is asked for, `NotRunning` before a start
+    /// or after a close it can start again from, `Closed` once disposed or
+    /// after a cleanup failure, which no start gets past.
+    pub(crate) async fn inspect<R>(&self, read: impl FnOnce(&S) -> R) -> Result<R, LifecycleState> {
         let state = self.state.lock().await;
-        if self.closing.load(Ordering::SeqCst) > 0 || self.disposed.load(Ordering::SeqCst) {
-            return None;
+        if self.disposed.load(Ordering::SeqCst) {
+            return Err(LifecycleState::Closed);
+        }
+        if self.closing.load(Ordering::SeqCst) > 0 {
+            return Err(LifecycleState::Stopping);
         }
         match &state.phase {
-            Phase::Running(running) => Some(read(running)),
-            _ => None,
+            Phase::Running(running) => Ok(read(running)),
+            Phase::Idle => Err(LifecycleState::NotRunning),
+            // A worker that ended while starting or closing leaves the
+            // owner failed for its next start too.
+            Phase::Failed(_) | Phase::Starting | Phase::Closing => Err(LifecycleState::Closed),
         }
     }
 
