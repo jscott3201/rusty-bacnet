@@ -140,6 +140,12 @@ async def next_where(watch: Watch, test, seconds: float = 15.0) -> WatchUpdate:
             return update
 
 
+async def table_holds(c: BACnetClient, rows: set[tuple[int, str]]) -> bool:
+    """Whether the discovery table has each (instance, address) of ``rows``."""
+    held = {(d.object_identifier.instance, d.mac_address) for d in await c.discovered_devices()}
+    return all((instance, mac_of(address)) in held for instance, address in rows)
+
+
 def mac_of(address: str) -> bytes:
     """The B/IP MAC of ``address`` (``host:port``)."""
     host, port = address.rsplit(":", 1)
@@ -388,9 +394,14 @@ class FollowTests(Lab):
             await c.discover(scope=self.address, wait=0.3)
             dev = await c.device(DEVICE)
             # The table: another device at the relay's address, which then
-            # answers nothing, and the device at its own.
+            # answers nothing, and the device at its own. The relay's I-Am
+            # can land after the discovery ends (a loaded runner): until the
+            # table holds both rows, the handle's own row still names the
+            # device, and the write would rightly go there.
             self.relay.answer(i_am(OTHER))
             await c.discover(scope=new, wait=0.3)
+            await until(lambda: table_holds(c, {(OTHER, self.address), (DEVICE, new)}),
+                        10, "both rows in the discovery table")
             self.relay.passing = 0
             with self.assertRaises(BacnetLookupError) as caught:
                 await dev.write("ai:1", "out-of-service", "true")
