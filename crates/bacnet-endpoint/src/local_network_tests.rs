@@ -1,8 +1,9 @@
 //! Once an endpoint session knows the number of its own network (#1403),
 //! traffic it starts for a station on that network goes as local traffic: to
 //! the station's MAC with no DNET. A routed read naming the number goes to its
-//! DADR, and the answer from there completes it, as does one relayed back
-//! with this network as its SNET and the DADR as its SADR (#1465). Another
+//! DADR, and only the answer from there completes it: one relayed back with
+//! this network as its SNET and the DADR as its SADR completes nothing, and
+//! the session's client counts it (#2831). Another
 //! network keeps its DNET, every network does while the number is unknown,
 //! and answers keep the route their request arrived by. The source Audit
 //! cases are in `source`.
@@ -282,6 +283,11 @@ impl Endpoint {
         (route, request)
     }
 
+    /// The session's client, as the first read took it.
+    fn client(&self) -> &BACnetClient<TestTransport> {
+        self.client.get().expect("a read has run")
+    }
+
     async fn stop(mut self) {
         bounded(self.session.stop()).await.unwrap();
     }
@@ -319,38 +325,39 @@ fn direct_read() -> Station {
     Station::local(&mac(PEER))
 }
 
+/// A routed read naming this network goes to the peer's MAC with no DNET,
+/// and only the peer's own answer completes it. One a router relays back
+/// with this network as its SNET and the peer's MAC as its SADR completes
+/// nothing (#2831): any station on this link could write those. The
+/// session's client takes it, drops it and counts it.
 #[tokio::test(start_paused = true)]
-async fn routed_reads_naming_this_network_go_local_and_a_direct_or_relayed_answer_completes_them() {
+async fn routed_reads_naming_this_network_go_local_and_only_the_direct_answer_completes_them() {
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         let mut endpoint = Endpoint::started(role, true).await;
-        // Straight from the peer's MAC, or relayed back by a router with
-        // this network as its SNET and the peer's MAC as its SADR: both
-        // name the station the request went to (#1465).
-        for (link, source) in [(mac(PEER), None), (mac(ROUTER), peer_on(THIS_NETWORK))] {
-            let relayed = source.is_some();
-            let read = endpoint.read(routed_read(THIS_NETWORK));
-            let (route, request) = endpoint.request().await;
-            assert_eq!(route, local(PEER), "{role:?}");
-            endpoint.deliver_apdu(ack(&request, 2), link, source).await;
-            let answer = bounded(read).await.unwrap().unwrap();
-            assert_eq!(
-                answer.property_value,
-                [0x21, 2],
-                "{role:?}, relayed {relayed}"
-            );
-            assert_eq!(endpoint.session.active_leases(), 0);
-        }
+        let read = endpoint.read(routed_read(THIS_NETWORK));
+        let (route, request) = endpoint.request().await;
+        assert_eq!(route, local(PEER), "{role:?}");
+        endpoint
+            .deliver_apdu(ack(&request, 1), mac(ROUTER), peer_on(THIS_NETWORK))
+            .await;
+        endpoint
+            .deliver_apdu(ack(&request, 2), mac(PEER), None)
+            .await;
+        let answer = bounded(read).await.unwrap().unwrap();
+        assert_eq!(answer.property_value, [0x21, 2], "{role:?}");
+        assert_eq!(endpoint.session.active_leases(), 0);
+        assert_eq!(endpoint.client().off_path_answer_drops(), 1, "{role:?}");
         endpoint.stop().await;
     }
 }
 
-/// A relayed answer completes a local read only when it names this network,
-/// the station the read went to and the read's invoke ID. Answers relayed
-/// from another network, from another station here or for another invoke ID
-/// complete nothing, so the station's own answer after them is the one the
-/// read returns.
+/// No relayed answer completes a local read: one relayed from another
+/// network, from another station here, for another invoke ID or naming the
+/// station itself completes nothing, so the station's own answer after them
+/// is the one the read returns. Only the one naming the station and the
+/// read's invoke ID names an open request, and is counted.
 #[tokio::test(start_paused = true)]
-async fn a_relayed_answer_naming_another_network_station_or_invoke_id_completes_nothing() {
+async fn a_relayed_answer_naming_any_network_station_or_invoke_id_completes_nothing() {
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
         let mut endpoint = Endpoint::started(role, true).await;
         let read = endpoint.read(routed_read(THIS_NETWORK));
@@ -377,9 +384,13 @@ async fn a_relayed_answer_naming_another_network_station_or_invoke_id_completes_
         endpoint
             .deliver_apdu(ack(&request, 8), mac(ROUTER), peer_on(THIS_NETWORK))
             .await;
+        endpoint
+            .deliver_apdu(ack(&request, 9), mac(PEER), None)
+            .await;
         let answer = bounded(read).await.unwrap().unwrap();
-        assert_eq!(answer.property_value, [0x21, 8], "{role:?}");
+        assert_eq!(answer.property_value, [0x21, 9], "{role:?}");
         assert_eq!(endpoint.session.active_leases(), 0);
+        assert_eq!(endpoint.client().off_path_answer_drops(), 1, "{role:?}");
         endpoint.stop().await;
     }
 }
@@ -410,8 +421,9 @@ async fn with_the_number_unknown_a_relayed_answer_leaves_a_direct_read_open() {
 /// A read routed to this network while its number was unknown goes through
 /// the router with the DNET and keeps that routed key. When the number is
 /// learned before the answer comes back, the answer the router relays with
-/// this network as its SNET still completes it, as it would have before
-/// (#1465).
+/// this network as its SNET still completes it, as it would have before.
+/// That answer is checked as any routed answer is (#2831): the same answer
+/// from another station on this link is dropped and counted first.
 #[tokio::test(start_paused = true)]
 async fn a_read_routed_before_the_number_was_learned_completes_on_its_relayed_answer() {
     for role in [SessionRole::ClientOnly, SessionRole::Both] {
@@ -421,11 +433,15 @@ async fn a_read_routed_before_the_number_was_learned_completes_on_its_relayed_an
         assert_eq!(route, routed(mac(ROUTER), THIS_NETWORK), "{role:?}");
         endpoint.learn(THIS_NETWORK).await;
         endpoint
+            .deliver_apdu(ack(&request, 8), mac(4), peer_on(THIS_NETWORK))
+            .await;
+        endpoint
             .deliver_apdu(ack(&request, 9), mac(ROUTER), peer_on(THIS_NETWORK))
             .await;
         let answer = bounded(read).await.unwrap().unwrap();
         assert_eq!(answer.property_value, [0x21, 9], "{role:?}");
         assert_eq!(endpoint.session.active_leases(), 0);
+        assert_eq!(endpoint.client().off_path_answer_drops(), 1, "{role:?}");
         endpoint.stop().await;
     }
 }

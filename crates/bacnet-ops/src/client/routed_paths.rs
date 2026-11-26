@@ -163,11 +163,12 @@ pub struct RoutedPaths {
     /// above 228 octets. A rise, with timeouts to a network, is the sign of
     /// a router that needs its path's limit set.
     pub below_minimum_reject_drops: u64,
-    /// Answers for a routed device's open request dropped since start
-    /// because they came from another station than the router the request
-    /// went to (#2831,
+    /// Answers for a device's open request dropped since start because they
+    /// came by another path than the request took: from another station
+    /// than a routed request's router, or relayed with this network's own
+    /// number as SNET for a request sent straight to the device (#2831,
     /// [`BACnetClient::off_path_answer_drops`](bacnet_client::client::BACnetClient::off_path_answer_drops)).
-    /// A rise means a station is answering for routed devices.
+    /// A rise means a station is answering for other devices.
     pub off_path_answer_drops: u64,
 }
 

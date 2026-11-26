@@ -311,8 +311,7 @@ names the command, the device form first.
 After the command, the CLI prints the client's routed paths to stderr when
 something happened that the command line didn't ask for: a path learned a
 limit from a router, the client dropped a too-long reject, or it refused an
-answer for a routed device that came from another station than the
-request's router (#2831). With `-v` it
+answer that came by another path than its request took (#2831). With `-v` it
 prints them whenever a path holds a limit. Stdout stays the command's own
 output. With table output it is a table, one row a path (the router in the
 link's own form, the network, the limit in force, where it comes from:
@@ -328,9 +327,11 @@ refused for the path they came by. With JSON output it is one line:
 `too_long_reject_drops` counts rejects that could answer a larger frame of an
 earlier request on the same path, and clears by itself;
 `below_minimum_reject_drops` counts rejects for a request of 228 octets or
-fewer. `off_path_answer_drops` counts answers for a routed device's open
-request that came from another station than the router the request went
-to: a rise means a station is answering for routed devices. When the
+fewer. `off_path_answer_drops` counts answers for a device's open request
+that came from another station than a routed request's router, or were
+relayed with this network's own number as SNET for a request sent straight
+to the device: a rise means a station is answering for other devices. When
+the
 command timed out after such a reject, `hint` (a `Hint:` line
 in a table) names the flag to set for each path that drew one; otherwise it is
 `null`.

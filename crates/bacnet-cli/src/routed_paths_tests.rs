@@ -254,7 +254,7 @@ fn the_summary_renders_as_one_json_line_or_a_table() {
         "Small request refused",
         "Too-long rejects not believed: 2 that could answer",
         "1 for a request of 228 NPDU octets or fewer",
-        "Answers refused for the path they came by: 3 from another station",
+        "Answers refused for the path they came by: 3 not from the request's router or device",
         "Hint: a router refused",
     ] {
         assert!(table.contains(text), "{text}: {table}");

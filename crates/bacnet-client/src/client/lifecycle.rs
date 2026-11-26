@@ -664,26 +664,28 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.routed_path_limits.dropped_rejects()
     }
 
-    /// Answers dropped since start because they named a routed device and
-    /// one of its open requests but came from another station on this link
-    /// than the router that request went to (#2831). A routed frame's SNET
-    /// and SADR are written by whoever sends it; the link station it comes
-    /// from is the part a sender can't choose on most links. So another
-    /// station can no longer complete a routed request by sending the
-    /// answer itself: such an answer is neither kept nor answered, and the
-    /// request waits for the device's own.
+    /// Answers dropped since start because they named a device and one of
+    /// its open requests but came by another path than that request took
+    /// (#2831): from another station on this link than the router a routed
+    /// request went to, or relayed with this network's own number as SNET
+    /// for a request sent straight to the device. A routed frame's SNET and
+    /// SADR are written by whoever sends it; the link station it comes from
+    /// is the part a sender can't choose on most links. So another station
+    /// can no longer complete a request by sending the answer itself: such
+    /// an answer is neither kept nor answered, and the request waits for
+    /// the device's own. A site whose router relays a local device's
+    /// answers back onto this network sees those requests time out and
+    /// this count rise.
     ///
     /// Not covered: an answer relayed through the request's own router
-    /// (that router would have to check where it came from); an answer
-    /// naming this client's own network as its source, which completes a
-    /// request sent straight to the station (#1465); a request sent by
-    /// local broadcast ([`Station::routed_via_local_broadcast`]), which
+    /// (that router would have to check where it came from); a request sent
+    /// by local broadcast ([`Station::routed_via_local_broadcast`]), which
     /// names no router, so any router's relay completes it; a client on a
     /// router's application port, whose requests the router's own table
     /// routes; and B/IPv6, where a frame's source virtual address is the
-    /// sender's own claim. A rise means a station is answering for routed
-    /// devices: one guessing invoke IDs, or a second path to a network,
-    /// which Clause 4.2 rules out.
+    /// sender's own claim. A rise means a station is answering for other
+    /// devices: one guessing invoke IDs, a router relaying a local device's
+    /// answers, or a second path to a network, which Clause 4.2 rules out.
     pub fn off_path_answer_drops(&self) -> u64 {
         self.routed_path_limits.off_path_answers()
     }

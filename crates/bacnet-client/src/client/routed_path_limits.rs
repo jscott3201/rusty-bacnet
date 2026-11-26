@@ -185,8 +185,9 @@ struct RoutedPathState {
     /// Reason-4 rejects dropped because the active request's largest frame
     /// is within the conservative limit.
     below_minimum_drops: u64,
-    /// Answers dropped for coming through another station than the router
-    /// their request went to ([`RoutedPathLimits::answer_through`]).
+    /// Answers dropped for coming by another path than their request took
+    /// ([`RoutedPathLimits::answer_through`],
+    /// [`RoutedPathLimits::count_off_path_answer`]).
     off_path_answers: u64,
 }
 
@@ -232,6 +233,14 @@ impl RoutedPathLimits {
     /// See [`BACnetClient::off_path_answer_drops`].
     pub(super) fn off_path_answers(&self) -> u64 {
         self.state().off_path_answers
+    }
+
+    /// Counts an answer refused for the path it came by elsewhere than
+    /// [`Self::answer_through`]: one relayed with this network as its SNET
+    /// for a request sent straight to the station it names (#2831).
+    pub(super) fn count_off_path_answer(&self) {
+        let mut state = self.state();
+        state.off_path_answers = state.off_path_answers.saturating_add(1);
     }
 
     /// Whether an answer from link station `from` to transaction

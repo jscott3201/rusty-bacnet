@@ -83,14 +83,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let TransactionPeer {
             tsm_mac,
             canonical: canonical_peer,
-        } = TransactionPeer::of_answer_in(
-            tsm,
-            source_mac,
-            source_network.as_ref(),
-            network.local_network_number().get(),
-            &coordinator_apdu,
-        )
-        .await;
+        } = TransactionPeer::of_answer(source_mac, source_network.as_ref());
         let key = (tsm_mac.clone(), ack.invoke_id, provenance.clone());
         if let Some(conflict) = super::response_admission::find_provenance_conflict(
             seg_state,

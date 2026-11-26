@@ -198,8 +198,9 @@ struct Summary {
     routed_paths: Vec<RoutedPathStatus>,
     too_long_reject_drops: u64,
     below_minimum_reject_drops: u64,
-    /// Answers for a routed device that came from another station than the
-    /// request's router (#2831).
+    /// Answers that came by another path than their request took (#2831):
+    /// from another station than a routed request's router, or relayed with
+    /// this network's number for a request sent straight to the device.
     off_path_answer_drops: u64,
     /// What to do about a timeout on a path whose router refused a small
     /// request as too long; `null` otherwise.
@@ -293,8 +294,8 @@ impl Summary {
             self.too_long_reject_drops, self.below_minimum_reject_drops
         ));
         text.push_str(&format!(
-            "\nAnswers refused for the path they came by: {} from another station than \
-             the request's router.",
+            "\nAnswers refused for the path they came by: {} not from the request's \
+             router or device.",
             self.off_path_answer_drops
         ));
         if let Some(hint) = &self.hint {

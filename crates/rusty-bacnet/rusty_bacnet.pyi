@@ -6866,11 +6866,12 @@ class BACnetClient:
         ...
 
     def off_path_answer_drops(self) -> Awaitable[int]:
-        """How many answers for a routed device's open request the client
-        dropped since start because they came from another station than the
-        router the request went to (#2831). A rise means a station is
-        answering for routed devices. RuntimeError before start and after
-        stop."""
+        """How many answers for a device's open request the client dropped
+        since start because they came by another path than the request took
+        (#2831): from another station than a routed request's router, or
+        relayed with this network's own number as SNET for a request sent
+        straight to the device. A rise means a station is answering for
+        other devices. RuntimeError before start and after stop."""
         ...
 
     def network_reports(self) -> Awaitable[NetworkReportIterator]:

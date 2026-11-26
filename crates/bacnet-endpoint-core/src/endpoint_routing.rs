@@ -47,7 +47,7 @@ use bacnet_types::sync::MutexExt;
 use bytes::{Bytes, BytesMut};
 
 use super::*;
-use crate::coordinator::LeaseHolder;
+use crate::coordinator::{CanonicalPeer, LeaseHolder};
 use crate::seat::{Attached, CopyBudget, ReservedCopy, SeatSlot};
 
 /// ConfirmedCOVNotification, as a confirmed service choice octet.
@@ -396,13 +396,37 @@ fn lease_holder(
         return None;
     }
     received.apdu.get(1).and_then(|invoke_id| {
-        coordinator.holder_of_source(
-            &received.source_mac,
-            received.source_network.as_ref(),
-            local_network,
-            *invoke_id,
-        )
+        coordinator
+            .holder_of_source(
+                &received.source_mac,
+                received.source_network.as_ref(),
+                local_network,
+                *invoke_id,
+            )
+            .or_else(|| {
+                relayed_to_a_client_request(coordinator, received, local_network, *invoke_id)
+            })
     })
+}
+
+/// The client, when `received` is relayed with this network as its SNET and
+/// the client has a request with its invoke ID open straight to the station
+/// its SADR names. Such an answer completes nothing (#2831), but the client
+/// takes it, to refuse it and count it in its off-path answer drops as it
+/// does on a link of its own. Looked up only for that SNET.
+fn relayed_to_a_client_request(
+    coordinator: &OutboundTransactionCoordinator,
+    received: &ReceivedApdu,
+    local_network: Option<u16>,
+    invoke_id: u8,
+) -> Option<LeaseHolder> {
+    let station = received
+        .source_network
+        .as_ref()
+        .filter(|source| !source.mac_address.is_empty() && Some(source.network) == local_network)?;
+    coordinator
+        .holder_of(&CanonicalPeer::direct(&station.mac_address), invoke_id)
+        .filter(|holder| *holder == LeaseHolder::Client)
 }
 
 /// The share of a Confirmed-Request for `service`, whole or `segmented`, of

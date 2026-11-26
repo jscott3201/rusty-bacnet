@@ -10073,18 +10073,15 @@ client's own network (#1358). A routed confirmed request to it, from any of
 the methods above or for a device added with `add_routed_device`, passes the
 checks above and then goes as a local request: a unicast to the DADR with no
 DNET, not through the router, so a non-routing peer there takes it. It holds
-no routed-path state, and `router_mac` is not used. An answer from the DADR
-with no SNET completes it, and so does one a router relays back with that
-number as its SNET and the DADR as its SADR (#1465): network numbers are
-unique, so both name the same station. That holds for any request to a station
-on this network. A relayed answer still has to carry the request's invoke ID,
-one naming another network or another station completes nothing, and while
-the number is unknown only the direct answer counts. The link source of a
-relayed answer is not checked, so any node on this link could complete the
-request by claiming that SNET and SADR with the right invoke ID; a routed
-request already trusts a claimed SNET/SADR the same way. A request routed to
-this network before the number was learned keeps its routed key, and its
-relayed answer still completes it. The peer's
+no routed-path state, and `router_mac` is not used. Only an answer from the
+DADR with no SNET completes it. One relayed back with that number as its SNET
+and the DADR as its SADR completes nothing (#2831): any station on this link
+could write those, so it is dropped unanswered and counted in
+`BACnetClient::off_path_answer_drops()`. That holds for any request sent
+straight to a station on this network. A request routed to this network
+before the number was learned keeps its routed key: its answer relayed with
+this network as SNET still completes it, but only from the router the request
+went to, as for any routed request. The peer's
 limits still come from its routed device-table row, so a request past them is
 refused or segmented as for the routed peer.
 `broadcast_network_unconfirmed`, and a scoped call to `Broadcast::Network`
@@ -10095,11 +10092,13 @@ arrived by.
 
 The shared endpoint's requester does the same once its session knows the
 number (#1403). A `Routed` or `RoutedViaLocalBroadcast` destination naming it
-passes the same checks, then goes to the DADR with no DNET. The DADR's own
-answer completes the read, and so does one relayed back with that number as
-its SNET and the DADR as its SADR (#1465). The client, the endpoint and the
+passes the same checks, then goes to the DADR with no DNET. Only the DADR's
+own answer completes the read; one relayed back with that number as its SNET
+and the DADR as its SADR completes nothing, and the session's client counts
+it in `off_path_answer_drops()` (#2831). The client, the endpoint and the
 server's own confirmed requests match answers through one rule,
-`CanonicalPeer::from_source`.
+`CanonicalPeer::of_answer`; `CanonicalPeer::from_source`, which reads that
+relayed form as the station, is for the sources of requests only (#1404).
 
 State is keyed by the immediate router MAC together with DNET. One confirmed
 request at a time owns that path; requests through a different router or to a
@@ -10188,10 +10187,10 @@ device's own answer. The standard allows one path between two nodes (Clause
 4.2), so a device's answers return through the router its requests went to;
 a retry goes through the same router as the first frame. The path ties to the
 request from before the TSM holds it, so no answer arrives in between
-unchecked. Not covered: an answer relayed through the request's own router,
-which only that router could check; an answer that names this network as its
-source, which completes a request sent straight to the station from any
-station (#1465); a request by local broadcast
+unchecked. An answer relayed with this network's own number as SNET, for a
+request sent straight to the station it names, is dropped and counted the
+same way. Not covered: an answer relayed through the request's own router,
+which only that router could check; a request by local broadcast
 (`Station::routed_via_local_broadcast`), which names no router, so any
 router's relay completes it; a client on a router's application port, whose
 requests the router's own table routes; and B/IPv6, where a frame's source
