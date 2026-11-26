@@ -66,8 +66,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     return;
                 }
             };
-            // A check's Who-Is is the server's own initiation: none while
-            // DCC restricts it. Its answers count for the APDU timeout.
+            // A check's requests are the server's own initiation: none
+            // while DCC restricts it. The claimant's answer counts for the
+            // APDU timeout.
             let checking = (!comm_state.initiation_restricted())
                 .then(|| Duration::from_millis(config.cov_retry_timeout_ms));
             let heard = device_bindings.write().await.hear_i_am_at(
@@ -92,17 +93,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         "Device binding capacity reached; I-Am observation ignored"
                     );
                 }
-                // Another address claims a bound device, unasked: ask both
-                // (#2825). No guard is held over the sends.
+                // Another address claims a bound device, unasked: check the
+                // bound address on a task of its own (#2825).
                 device_bindings::Heard::Cue(start) => {
                     debug!(
                         device = %i_am.object_identifier,
                         source = ?received.source_mac,
-                        "An I-Am names a bound device from another address; checking both"
+                        "An I-Am names a bound device from another address; checking it"
                     );
-                    let sent = device_bindings::ask(network, comm_state, &start).await;
-                    let now = runtime_clock::now();
-                    device_bindings.write().await.check_asked(&start, sent, now);
+                    let handles = device_bindings::CheckHandles {
+                        network: Arc::clone(network),
+                        bindings: Arc::clone(device_bindings),
+                        comm_state: Arc::clone(comm_state),
+                        transactions: Arc::clone(notification_transactions),
+                        timeout: Duration::from_millis(config.cov_retry_timeout_ms),
+                        retries: config.notification_retries,
+                        max_apdu: u32::from(config.device.max_apdu_length()),
+                    };
+                    device_bindings::start_check(handles, start).await;
                 }
                 device_bindings::Heard::Inserted
                 | device_bindings::Heard::Refreshed

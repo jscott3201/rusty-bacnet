@@ -1,7 +1,8 @@
 ---
 section: Security
 ---
-- **Breaking (wire):** an I-Am the server did not ask for no longer binds a
-  device or moves a binding. Only an answer to the server's own Who-Is binds;
-  another address claiming a bound device starts a check of both, and the
-  binding moves only if the old address stays silent (#2825).
+- **Breaking (wire):** an I-Am the server did not ask for no longer binds or
+  moves a device. Only an answer to its own Who-Is binds, and a move needs
+  two failed reads of the old address a minute apart while the new one
+  answers. A station that alone answers for an absent device is still bound
+  (#2825).

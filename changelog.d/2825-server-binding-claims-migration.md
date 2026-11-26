@@ -1,10 +1,11 @@
 ---
 section: Migration notes
 ---
-- **Server device bindings (wire, #2825):** the first write or notification to
-  a device the server has not asked about sends a Who-Is and waits for the
-  answer, even if the device announced itself. Device_Address_Binding lists
-  only configured bindings and devices that answered the server, and a write
-  from a device the server has not bound names its address as the source. A
-  device that moves is followed after one check (the APDU timeout); configure
-  a `DeviceBinding` for one that must never move.
+- **Server device bindings (wire, #2825):** a first write or notification to
+  a device waits for the end of the server's Who-Is, and nothing binds when
+  two stations answer (`BACnetServer::device_binding_conflicts`); the
+  notifications that waited are dropped and counted in
+  `device_recipient_unbound`. A device that moved is followed about two
+  minutes after it announces its new address (84 s by default). Configure a
+  `DeviceBinding` for a device that only announces itself or whose alarms
+  can't wait.

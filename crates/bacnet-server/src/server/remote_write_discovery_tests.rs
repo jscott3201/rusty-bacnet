@@ -90,6 +90,88 @@ fn take_who_is(h: &Harness, broadcast: bool) -> Vec<(Vec<u8>, WhoIs)> {
     taken
 }
 
+/// A read of a Device object's Object_Identifier the server sent: where it
+/// went, its invoke ID, and the Device asked for (#2825).
+pub(super) type IdentityRead = (Vec<u8>, u8, ObjectIdentifier);
+
+/// Take every ReadProperty of a Device object's Object_Identifier the
+/// server has sent, retries included, with where each went: a binding
+/// check's reads of a bound address (#2825).
+pub(super) fn identity_reads(h: &Harness) -> Vec<IdentityRead> {
+    let log = h.server.test_network().transport().sent();
+    let mut frames = log.lock();
+    let mut taken = Vec::new();
+    frames.retain(|frame| match frame.apdu() {
+        Apdu::ConfirmedRequest(request)
+            if request.service_choice == ConfirmedServiceChoice::READ_PROPERTY =>
+        {
+            let read = bacnet_services::read_property::ReadPropertyRequest::decode(
+                &request.service_request,
+            )
+            .unwrap();
+            if read.property_identifier != PropertyIdentifier::OBJECT_IDENTIFIER {
+                return true;
+            }
+            taken.push((
+                frame.mac.to_vec(),
+                request.invoke_id,
+                read.object_identifier,
+            ));
+            false
+        }
+        _ => true,
+    });
+    taken
+}
+
+/// A ReadProperty-ACK under `invoke_id` naming Device `instance` as the
+/// Object_Identifier asked for.
+pub(super) fn names(invoke_id: u8, instance: u32) -> Apdu {
+    let mut value = BytesMut::new();
+    encode_property_value(
+        &mut value,
+        &PropertyValue::ObjectIdentifier(device(instance)),
+    )
+    .unwrap();
+    let mut service_ack = BytesMut::new();
+    bacnet_services::read_property::ReadPropertyACK {
+        object_identifier: device(instance),
+        property_identifier: PropertyIdentifier::OBJECT_IDENTIFIER,
+        property_array_index: None,
+        property_value: value.to_vec(),
+    }
+    .encode(&mut service_ack)
+    .unwrap();
+    Apdu::ComplexAck(ComplexAck {
+        segmented: false,
+        more_follows: false,
+        invoke_id,
+        sequence_number: None,
+        proposed_window_size: None,
+        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+        service_ack: service_ack.freeze(),
+    })
+}
+
+/// An Error of class OBJECT and `code` refusing ReadProperty `invoke_id`.
+pub(super) fn refuses(invoke_id: u8, code: ErrorCode) -> Apdu {
+    Apdu::Error(ErrorPdu {
+        invoke_id,
+        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
+        error_class: ErrorClass::OBJECT,
+        error_code: code,
+        error_data: Bytes::new(),
+    })
+}
+
+/// A Reject of request `invoke_id`.
+pub(super) fn rejects(invoke_id: u8) -> Apdu {
+    Apdu::Reject(RejectPdu {
+        invoke_id,
+        reject_reason: RejectReason::UNRECOGNIZED_SERVICE,
+    })
+}
+
 /// Wait for the one Who-Is the server sends next.
 pub(super) async fn next_who_is(h: &Harness) -> WhoIs {
     let log = h.server.test_network().transport().sent();

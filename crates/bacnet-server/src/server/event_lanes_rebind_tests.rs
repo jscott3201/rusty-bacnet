@@ -6,8 +6,10 @@
 //! `device_recipient_unbound` when the device stays silent, or takes the
 //! notification when it answers; one that moved takes it at its new
 //! address, unless that address is a broadcast form on another network,
-//! which no confirmed request goes to (#2732). A binding moves only once a
-//! check finds the old address silent and the new one answering (#2825).
+//! which no confirmed request goes to (#2732). A binding moves only once two
+//! checks a minute apart find the old address failing and the new one
+//! answering (#2825), whose reads need invoke IDs too: these tests move it
+//! in the table, as those checks would.
 //!
 //! Each test binds Device 9 as its answer to the server's own Who-Is would,
 //! leases every invoke ID, and has AV-1 alarm confirmed to Device 9
@@ -17,7 +19,6 @@
 use super::*;
 use crate::server::device_bindings::OBSERVED_BINDING_TTL;
 use crate::server::notification_transactions::NotificationReservation;
-use crate::server::remote_write_discovery_tests::directed_who_is_sent;
 
 /// The MAC Device 9 answers from once it has moved.
 const MOVED: [u8; 6] = [10, 0, 0, 19, 0xBA, 0xC0];
@@ -96,13 +97,11 @@ async fn a_lapsed_binding_that_answers_the_who_is_takes_the_notification() {
     h.server.stop().await.unwrap();
 }
 
-/// Device 9 has moved during the wait, its old address silent: its I-Am
-/// from the new MAC cues a check, which asks both addresses straight, and
-/// its answer there moves the binding once the check's wait is over. The
-/// notification goes to the new address, with no broadcast Who-Is.
+/// Device 9's binding has moved during the wait: the notification goes to
+/// the new address, with no broadcast Who-Is.
 #[tokio::test(start_paused = true)]
 async fn a_binding_moved_during_the_wait_takes_the_notification_there() {
-    let (mut h, mut leases) = moved_and_checked(None).await;
+    let (mut h, mut leases) = moved(None).await;
     drop(leases.pop());
     until("the notification", || sent_confirmed_to(&h, &MOVED)).await;
     assert!(!sent_confirmed_to(&h, &DEVICE_9));
@@ -112,25 +111,23 @@ async fn a_binding_moved_during_the_wait_takes_the_notification_there() {
     h.server.stop().await.unwrap();
 }
 
-/// The server waiting for an ID as above, then Device 9 heard from MOVED,
-/// relayed from `routed` when given: the check that cues asks the old
-/// address and MOVED, MOVED answers, and the check's wait passes.
-async fn moved_and_checked(routed: Option<NpduAddress>) -> (Harness, Vec<NotificationReservation>) {
+/// The server waiting for an ID as above, then Device 9's binding moved to
+/// MOVED, relayed from `routed` when given, as two checks that struck move
+/// it (`binding_claims` has those).
+async fn moved(routed: Option<NpduAddress>) -> (Harness, Vec<NotificationReservation>) {
     let (h, leases) = waiting_for_an_id().await;
-    deliver(&h, &i_am(9), &MOVED, routed.clone()).await;
-    h.settle().await;
-    let asked: Vec<_> = directed_who_is_sent(&h)
-        .into_iter()
-        .map(|(mac, (_, who_is))| (mac, who_is))
-        .collect();
-    let to = |mac: &[u8]| (mac.to_vec(), targeted(9));
-    assert_eq!(asked, [to(&DEVICE_9), to(&MOVED)], "both addresses asked");
-    deliver(&h, &i_am(9), &MOVED, routed).await;
-    tokio::time::sleep(WAIT).await;
+    let now = runtime_clock::now();
+    h.server.device_bindings.write().await.bind_found_at(
+        device(9),
+        &MOVED,
+        routed.as_ref(),
+        now,
+        |_| false,
+    );
     (h, leases)
 }
 
-/// Device 9 answers during the wait through a router from `5:0xFF`, a
+/// Device 9's binding moves during the wait to a router's `5:0xFF`, a
 /// broadcast form there: the address actually used is checked, so the
 /// confirmed notification is skipped and counted, its ID given back.
 #[tokio::test(start_paused = true)]
@@ -139,7 +136,7 @@ async fn a_binding_moved_to_a_broadcast_form_is_skipped_and_counted() {
         network: 5,
         mac_address: MacAddr::from_slice(&[0xFF]),
     };
-    let (mut h, mut leases) = moved_and_checked(Some(station)).await;
+    let (mut h, mut leases) = moved(Some(station)).await;
     drop(leases.pop());
     let skipped = || {
         h.server

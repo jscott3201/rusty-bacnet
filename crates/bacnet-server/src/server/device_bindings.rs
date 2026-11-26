@@ -218,7 +218,9 @@ enum BindingEntry {
 
 #[path = "binding_checks.rs"]
 mod checks;
-pub(super) use checks::{Heard, IAmFrom, ask};
+#[cfg(test)]
+pub(super) use checks::{CHECK_HOLD_OFF, MAX_CHECKS};
+pub(super) use checks::{CheckHandles, Heard, IAmFrom, start_check};
 
 /// The server's device bindings, behind one `RwLock`.
 ///
@@ -237,7 +239,7 @@ pub(super) struct DeviceBindingTable {
     /// so an I-Am can wake the writes waiting on them (#1322).
     pub(super) probes: BindingProbes,
     /// Checks of bound devices' addresses that I-Ams from other addresses
-    /// cued, out or held off (#2825).
+    /// cued, out, between their two checks or held off (#2825).
     checks: checks::BindingChecks,
     /// See [`Self::conflicts`].
     conflicts: u64,
@@ -554,7 +556,7 @@ impl DeviceBindingTable {
     /// The Device object's Device_Address_Binding at `now` (Clause 12.11.34,
     /// #1369): one BACnetAddressBinding for each configured binding and each
     /// device that answered the server's own targeted Who-Is less than
-    /// [`OBSERVED_BINDING_TTL`] ago (#2825), a check's move included, in
+    /// [`OBSERVED_BINDING_TTL`] ago (#2825), or that two checks moved, in
     /// Device instance order. A binding on
     /// this network reads network 0 and the peer's MAC; a routed one reads
     /// its network and the device's MAC there, not the router's. A stale
@@ -564,7 +566,7 @@ impl DeviceBindingTable {
             .entries
             .keys()
             .filter_map(|device| {
-                let (target, observed_at) = self.current(device, now)?;
+                let (target, observed_at) = self.current(device)?;
                 if observed_at.is_some_and(|observed_at| {
                     now.saturating_duration_since(observed_at) >= OBSERVED_BINDING_TTL
                 }) {
@@ -600,7 +602,7 @@ impl DeviceBindingTable {
     /// came from while that observation is held, or every network for a
     /// device never heard from.
     pub(super) fn who_is_scope(&self, device: &ObjectIdentifier) -> WhoIsScope {
-        match self.current(device, runtime_clock::now()) {
+        match self.current(device) {
             Some((DeviceBindingTarget::Local { .. }, Some(_))) => WhoIsScope::Local,
             Some((DeviceBindingTarget::Routed { network, .. }, Some(_))) => {
                 WhoIsScope::Remote(*network)
@@ -620,6 +622,21 @@ impl DeviceBindingTable {
         }
     }
 
+    /// `device`'s binding target, and when it was last observed (`None`
+    /// for a configured one).
+    fn current(
+        &self,
+        device: &ObjectIdentifier,
+    ) -> Option<(&DeviceBindingTarget, Option<Instant>)> {
+        match self.entries.get(device)? {
+            BindingEntry::Configured(target) => Some((target, None)),
+            BindingEntry::Observed {
+                target,
+                observed_at,
+            } => Some((target, Some(*observed_at))),
+        }
+    }
+
     pub(super) fn resolve_at(
         &self,
         device: &ObjectIdentifier,
@@ -629,7 +646,7 @@ impl DeviceBindingTable {
         if device.object_type() != ObjectType::DEVICE {
             return DeviceResolution::Invalid;
         }
-        let (target, freshness) = match self.current(device, now) {
+        let (target, freshness) = match self.current(device) {
             Some((target, None)) => (target, BindingFreshness::Configured),
             Some((target, Some(observed_at))) => {
                 if now.saturating_duration_since(observed_at) >= OBSERVED_BINDING_TTL {

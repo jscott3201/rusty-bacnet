@@ -7,13 +7,14 @@
 //! it too.
 //!
 //! Each write goes out as one unsegmented confirmed WriteProperty. The address
-//! comes from the server's device bindings: a configured binding, or an I-Am
-//! heard in the last ten minutes. A device with neither is looked for first
-//! (#1322): one Who-Is limited to its instance, then a wait of the APDU
-//! timeout, a minute at most, from the send, for its I-Am. The Who-Is goes to
-//! every network for a device never heard from, or to the network the
-//! device's stale observation names, which a Who-Is that draws nothing
-//! drops. A write that misses while that Who-Is is out waits on it instead
+//! comes from the server's device bindings: a configured binding, or the
+//! answer to the server's own Who-Is in the last ten minutes (#2825, see
+//! `device_bindings`). A device with neither is looked for first (#1322):
+//! one Who-Is limited to its instance, then a wait of the APDU timeout, a
+//! minute at most, from the send, after which the one station that answered
+//! is bound, and none when two or more did. The Who-Is goes to every network
+//! for a device never heard from, or to the network the device's stale
+//! observation names, which a Who-Is that draws nothing drops. A write that misses while that Who-Is is out waits on it instead
 //! of sending another, and a device gets at most one Who-Is a minute
 //! (`binding_probes`), so a write that misses within a minute of a Who-Is
 //! that drew nothing fails at once. A write that ends with no binding sends no WriteProperty. A binding
@@ -271,24 +272,7 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
             Err(_) => return Err(RemoteRequestError::NoInvokeId),
         };
         let invoke_id = operation.invoke_id();
-        let mut apdu = BytesMut::new();
-        encode_apdu(
-            &mut apdu,
-            &Apdu::ConfirmedRequest(ConfirmedRequestPdu {
-                segmented: false,
-                more_follows: false,
-                segmented_response_accepted: false,
-                max_segments: None,
-                max_apdu_length: apdu::max_apdu_header_at_or_below(self.max_apdu)
-                    .expect("validated local APDU capacity"),
-                invoke_id,
-                sequence_number: None,
-                proposed_window_size: None,
-                service_choice,
-                service_request: parameters.freeze(),
-            }),
-        )
-        .expect("valid APDU encoding");
+        let apdu = confirmed_request(service_choice, invoke_id, self.max_apdu, parameters);
         route.record_next_hop(&operation);
         let (apdu, route, network) = (&apdu, &route, self.network);
         let outcome = run_attempts(operation, answer, self.timeout, self.retries, |attempt| {
@@ -416,9 +400,39 @@ impl<T: TransportPort + 'static> RemoteWriter<'_, T> {
     }
 }
 
+/// One unsegmented Confirmed-Request APDU for `service_choice`, whose
+/// encoded parameters are `parameters`, under `invoke_id`, taking answers up
+/// to `max_apdu`, the longest this device takes, and no segments.
+pub(super) fn confirmed_request(
+    service_choice: ConfirmedServiceChoice,
+    invoke_id: u8,
+    max_apdu: u32,
+    parameters: BytesMut,
+) -> BytesMut {
+    let mut apdu = BytesMut::new();
+    encode_apdu(
+        &mut apdu,
+        &Apdu::ConfirmedRequest(ConfirmedRequestPdu {
+            segmented: false,
+            more_follows: false,
+            segmented_response_accepted: false,
+            max_segments: None,
+            max_apdu_length: apdu::max_apdu_header_at_or_below(max_apdu)
+                .expect("validated local APDU capacity"),
+            invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice,
+            service_request: parameters.freeze(),
+        }),
+    )
+    .expect("valid APDU encoding");
+    apdu
+}
+
 /// One attempt: the request to the bound peer, a device on this network
 /// included, or through the binding's router to a device on another network.
-async fn send<T: TransportPort + 'static>(
+pub(super) async fn send<T: TransportPort + 'static>(
     network: &NetworkLayer<T>,
     apdu: &[u8],
     route: &ConfirmedRecipientRoute,

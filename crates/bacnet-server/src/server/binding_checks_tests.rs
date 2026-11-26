@@ -1,6 +1,7 @@
 //! The rules an I-Am meets in the binding table (#2825): only an answer to
-//! the server's own Who-Is binds, and only a check that finds the bound
-//! address silent and the claimant answering moves a binding.
+//! the server's own Who-Is binds, and only two checks a hold-off apart that
+//! both find the bound address failing, while the same claimant answers and
+//! the bound address answers nothing else, move a binding.
 
 use super::*;
 
@@ -43,15 +44,43 @@ fn found() -> DeviceBindingTable {
     table
 }
 
-/// A table with Device 9 found at [`BOUND`] and a check cued from
-/// [`CLAIMANT`], its two Who-Is sent.
-fn checking() -> DeviceBindingTable {
-    let mut table = found();
-    let Heard::Cue(start) = hear(&mut table, 9, CLAIMANT) else {
+/// Device 9's check cued by `claimant`'s I-Am.
+fn cue(table: &mut DeviceBindingTable, claimant: &[u8]) -> CheckStart {
+    let Heard::Cue(start) = hear(table, 9, claimant) else {
         panic!("another address cues a check");
     };
-    table.check_asked(&start, true, now());
-    table
+    start
+}
+
+/// Begin `start`'s next check now: whether it may.
+fn begins(table: &mut DeviceBindingTable, start: &CheckStart) -> bool {
+    table.check_begins(start, now(), |_| false).is_some()
+}
+
+/// End `start`'s check now, the bound address having said `identity`.
+fn ends(table: &mut DeviceBindingTable, start: &CheckStart, identity: Identity) -> Step {
+    let checked = Checked {
+        identity,
+        heard: false,
+    };
+    table.check_ended(start, checked, now())
+}
+
+/// One check of Device 9 in which the claimant answers and the bound
+/// address says `identity`.
+fn check(table: &mut DeviceBindingTable, start: &CheckStart, identity: Identity) -> Step {
+    assert!(begins(table, start));
+    assert_eq!(hear(table, 9, CLAIMANT), Heard::Claimed);
+    ends(table, start, identity)
+}
+
+/// A table with Device 9 found at [`BOUND`] and a first check cued by
+/// [`CLAIMANT`] that struck, with the start that runs it.
+fn struck() -> (DeviceBindingTable, CheckStart) {
+    let mut table = found();
+    let start = cue(&mut table, CLAIMANT);
+    assert_eq!(check(&mut table, &start, Identity::Silent), Step::Again);
+    (table, start)
 }
 
 #[tokio::test(start_paused = true)]
@@ -88,71 +117,144 @@ async fn a_configured_binding_is_never_changed_by_traffic() {
     assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND));
 }
 
-/// The claimant answers and the bound address stays silent: the binding
-/// moves once the wait is over, not before, its freshness counted from the
-/// answer.
+/// Two checks a hold-off apart that both strike move the binding to the
+/// claimant, its freshness counted from the claimant's last answer; one
+/// strike moves nothing.
 #[tokio::test(start_paused = true)]
-async fn a_check_moves_the_binding_when_only_the_claimant_answers() {
-    let mut table = checking();
-    tokio::time::advance(WAIT / 3).await;
+async fn two_strikes_a_hold_off_apart_move_the_binding() {
+    let (mut table, start) = struck();
+    assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND), "one strike");
+    assert_eq!(hear(&mut table, 9, CLAIMANT), Heard::Ignored, "between");
+    tokio::time::advance(CHECK_HOLD_OFF).await;
+    assert!(begins(&mut table, &start));
     let answered = now();
-    assert_eq!(hear(&mut table, 9, CLAIMANT), Heard::Claimed);
-    assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND), "not yet");
+    hear(&mut table, 9, CLAIMANT);
     tokio::time::advance(WAIT).await;
-    assert_eq!(bound_at(&table, 9).as_deref(), Some(CLAIMANT));
+    let moved = ends(&mut table, &start, Identity::Is(10));
+    let [from, to] = [BOUND, CLAIMANT].map(|mac| DeviceBindingTarget::Local {
+        peer_mac: MacAddr::from_slice(mac),
+    });
+    assert_eq!(moved, Step::Moved(from, to));
     assert!(matches!(
         table.resolve_at(&device(9), now(), |_| false),
         DeviceResolution::ResolvedLocal {
+            peer_mac,
             freshness: BindingFreshness::ObservedUntil(until),
-            ..
-        } if until == tokio::time::Instant::from_std(answered + OBSERVED_BINDING_TTL)
+        } if peer_mac.as_slice() == CLAIMANT
+            && until == tokio::time::Instant::from_std(answered + OBSERVED_BINDING_TTL)
     ));
-    // The next I-Am writes the move into the table: the claimant is bound.
-    assert_eq!(hear(&mut table, 9, CLAIMANT), Heard::Refreshed);
-    assert_eq!(bound_at(&table, 9).as_deref(), Some(CLAIMANT));
 }
 
-/// Nothing moves when the bound address answers, the claimant stays
-/// silent, a third address claims the device, or the Who-Is did not go
-/// out.
+/// A check fails when the bound address names another instance, has no
+/// Device object of the bound one, or stays silent through its retries; it
+/// answers for the device, or unclearly (a Reject, an Abort, another
+/// Error), or the read didn't all go out, and it doesn't.
 #[tokio::test(start_paused = true)]
-async fn a_check_keeps_the_binding_otherwise() {
-    let mut bound_answers = checking();
-    hear(&mut bound_answers, 9, CLAIMANT);
-    assert_eq!(hear(&mut bound_answers, 9, BOUND), Heard::Refreshed);
-    let mut claimant_silent = checking();
-    let mut contested = checking();
-    hear(&mut contested, 9, CLAIMANT);
-    assert_eq!(hear(&mut contested, 9, THIRD), Heard::Claimed);
-    let mut unasked = found();
-    let Heard::Cue(start) = hear(&mut unasked, 9, CLAIMANT) else {
-        panic!("a cue");
-    };
-    unasked.check_asked(&start, false, now());
-    hear(&mut unasked, 9, CLAIMANT);
-    // Its sender stopped before saying whether the Who-Is went out.
-    let mut unreported = found();
-    assert!(matches!(hear(&mut unreported, 9, CLAIMANT), Heard::Cue(_)));
-    hear(&mut unreported, 9, CLAIMANT);
-    tokio::time::advance(WAIT).await;
-    for (case, table) in [
-        ("bound answers", &mut bound_answers),
-        ("claimant silent", &mut claimant_silent),
-        ("contested", &mut contested),
-        ("not asked", &mut unasked),
-        ("not reported", &mut unreported),
+async fn what_fails_a_check() {
+    for (identity, fails) in [
+        (Identity::Is(10), true),
+        (Identity::NotThere, true),
+        (Identity::Silent, true),
+        (Identity::Is(9), false),
+        (Identity::Unclear, false),
+        (Identity::NotAsked, false),
     ] {
-        assert_eq!(bound_at(table, 9).as_deref(), Some(BOUND), "{case}");
-        table.settle_checks(now());
-        assert_eq!(bound_at(table, 9).as_deref(), Some(BOUND), "{case}");
+        let mut table = found();
+        let start = cue(&mut table, CLAIMANT);
+        let step = check(&mut table, &start, identity);
+        assert_eq!(step == Step::Again, fails, "{identity:?}");
     }
 }
 
-/// One check per device per hold-off, at most [`MAX_CHECKS`] held at once,
-/// and none while the server may not ask.
+/// A failed check strikes only when the claimant answered its Who-Is, no
+/// third address claimed the device, and the bound address answered no
+/// other request of the server's.
+#[tokio::test(start_paused = true)]
+async fn a_failed_check_strikes_only_with_the_claimant_alone_answering() {
+    let mut silent = found();
+    let start = cue(&mut silent, CLAIMANT);
+    assert!(begins(&mut silent, &start));
+    assert_eq!(ends(&mut silent, &start, Identity::Silent), Step::Done);
+
+    let mut contested = found();
+    let start = cue(&mut contested, CLAIMANT);
+    assert!(begins(&mut contested, &start));
+    hear(&mut contested, 9, CLAIMANT);
+    assert_eq!(hear(&mut contested, 9, THIRD), Heard::Claimed);
+    assert_eq!(ends(&mut contested, &start, Identity::Silent), Step::Done);
+
+    let mut heard = found();
+    let start = cue(&mut heard, CLAIMANT);
+    assert!(begins(&mut heard, &start));
+    hear(&mut heard, 9, CLAIMANT);
+    let checked = Checked {
+        identity: Identity::Silent,
+        heard: true,
+    };
+    assert_eq!(heard.check_ended(&start, checked, now()), Step::Done);
+
+    // An I-Am of the claimant's before its Who-Is went out answers nothing.
+    let mut early = found();
+    let start = cue(&mut early, CLAIMANT);
+    hear(&mut early, 9, CLAIMANT);
+    assert!(begins(&mut early, &start));
+    assert_eq!(ends(&mut early, &start, Identity::Silent), Step::Done);
+}
+
+/// After one strike, anything but a second strike ends the checks with the
+/// binding where it was: the bound address answering, another claimant, a
+/// check that didn't go out, the bound address heard from, or the binding
+/// lapsing. The next cue starts again from no strike.
+#[tokio::test(start_paused = true)]
+async fn a_second_check_that_does_not_strike_resets() {
+    for (case, identity) in [
+        ("the old address answers", Identity::Is(9)),
+        ("it answers unclearly", Identity::Unclear),
+        ("not asked", Identity::NotAsked),
+    ] {
+        let (mut table, start) = struck();
+        tokio::time::advance(CHECK_HOLD_OFF).await;
+        assert_eq!(check(&mut table, &start, identity), Step::Done, "{case}");
+        assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND), "{case}");
+        tokio::time::advance(CHECK_HOLD_OFF).await;
+        let again = cue(&mut table, CLAIMANT);
+        assert_eq!(check(&mut table, &again, Identity::Silent), Step::Again);
+    }
+
+    // Another station claims the device during the second check, the
+    // first claimant silent.
+    let (mut table, start) = struck();
+    tokio::time::advance(CHECK_HOLD_OFF).await;
+    assert!(begins(&mut table, &start));
+    hear(&mut table, 9, THIRD);
+    assert_eq!(ends(&mut table, &start, Identity::Silent), Step::Done);
+
+    // The old address answered a request of the server's between them.
+    let (mut table, start) = struck();
+    tokio::time::advance(CHECK_HOLD_OFF).await;
+    assert!(begins(&mut table, &start));
+    hear(&mut table, 9, CLAIMANT);
+    let checked = Checked {
+        identity: Identity::Silent,
+        heard: true,
+    };
+    assert_eq!(table.check_ended(&start, checked, now()), Step::Done);
+    assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND));
+
+    // The binding lapsed before the second check: it doesn't begin.
+    let (mut table, start) = struck();
+    tokio::time::advance(OBSERVED_BINDING_TTL).await;
+    assert!(!begins(&mut table, &start));
+}
+
+/// One check per device per hold-off from a cue, at most [`MAX_CHECKS`]
+/// held at once, a device between its two checks never given up for a new
+/// cue, and none while the server may not ask.
 #[tokio::test(start_paused = true)]
 async fn checks_are_paced_capped_and_held_back_by_dcc() {
-    let mut table = checking();
+    let mut table = found();
+    let start = cue(&mut table, CLAIMANT);
+    assert_eq!(check(&mut table, &start, Identity::Is(9)), Step::Done);
     tokio::time::advance(WAIT).await;
     assert_eq!(hear(&mut table, 9, THIRD), Heard::Ignored, "held off");
     tokio::time::advance(CHECK_HOLD_OFF - WAIT).await;
@@ -163,10 +265,24 @@ async fn checks_are_paced_capped_and_held_back_by_dcc() {
     for instance in devices.clone() {
         table.bind_found_at(device(instance), BOUND, None, now(), |_| false);
     }
-    let cued = devices
-        .filter(|instance| matches!(hear(&mut table, *instance, CLAIMANT), Heard::Cue(_)))
-        .count();
-    assert_eq!(cued, MAX_CHECKS);
+    let starts: Vec<_> = devices
+        .clone()
+        .filter_map(|instance| match hear(&mut table, instance, CLAIMANT) {
+            Heard::Cue(start) => Some(start),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(starts.len(), MAX_CHECKS);
+    // Each strikes once and waits for its second check, a hold-off on.
+    for start in &starts {
+        assert!(table.check_begins(start, now(), |_| false).is_some());
+        let instance = start.device.instance_number();
+        hear(&mut table, instance, CLAIMANT);
+        assert_eq!(ends(&mut table, start, Identity::Silent), Step::Again);
+    }
+    tokio::time::advance(CHECK_HOLD_OFF * 2).await;
+    let last = devices.end - 1;
+    assert_eq!(hear(&mut table, last, CLAIMANT), Heard::Ignored, "full");
 
     let mut table = found();
     let from = IAmFrom {
@@ -233,23 +349,6 @@ async fn a_binding_through_this_networks_number_takes_its_stations_direct_i_am()
     };
     let heard = table.hear_i_am_at(device(9), from, now(), |_| false, Some(WAIT));
     assert_eq!(heard, Heard::Refreshed);
-}
-
-/// A check's wait counts from when its Who-Is went out, not from the cue:
-/// a send held up past the wait (an MS/TP station waiting for the token)
-/// still gives the bound device the whole wait to answer.
-#[tokio::test(start_paused = true)]
-async fn a_checks_wait_counts_from_its_send() {
-    let mut table = found();
-    let Heard::Cue(start) = hear(&mut table, 9, CLAIMANT) else {
-        panic!("a cue");
-    };
-    hear(&mut table, 9, CLAIMANT);
-    tokio::time::advance(WAIT + Duration::from_secs(1)).await;
-    table.check_asked(&start, true, now());
-    assert_eq!(hear(&mut table, 9, BOUND), Heard::Refreshed);
-    tokio::time::advance(WAIT).await;
-    assert_eq!(bound_at(&table, 9).as_deref(), Some(BOUND));
 }
 
 /// A late answer to the server's own Who-Is, the only one it drew, still

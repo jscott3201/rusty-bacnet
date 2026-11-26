@@ -2341,7 +2341,8 @@ members, Device instance 4194303 names this server's Device, and the
 Device's COV subscription lists are live. Its Device\_Address\_Binding
 is a list with one `"address_binding"` element per device binding
 the server holds (each `add_device_binding`, and each device that
-answered the server's own Who-Is in the last ten minutes): a mapping of
+answered the server's own Who-Is, while heard from in the last ten
+minutes; an I-Am the server did not ask for lists nothing): a mapping of
 `device_identifier`, `network_number` (0 on this network) and
 `mac_address`. An unknown object or
 property raises `BacnetProtocolError` with the network error, and a

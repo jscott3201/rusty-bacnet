@@ -589,7 +589,10 @@ impl<T: TransportPort + 'static> DeviceLookup<'_, T> {
 /// `target` as an operator reads it: a B/IP station as its IP address and
 /// port, another link's as its MAC in hex, a routed one as its network and
 /// MAC there, with the router it came through.
-fn station_text<T: TransportPort>(transport: &T, target: &DeviceBindingTarget) -> String {
+pub(super) fn station_text<T: TransportPort>(
+    transport: &T,
+    target: &DeviceBindingTarget,
+) -> String {
     let link = |mac: &[u8]| match bacnet_transport::bvll::decode_bip_mac(mac) {
         Ok((ip, port)) if transport.as_bip().is_ok() => {
             format!("{}:{port}", std::net::Ipv4Addr::from(ip))

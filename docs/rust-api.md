@@ -4338,7 +4338,7 @@ session's source Audit binding takes the same mark
 changes. Three addresses can't carry it and stay unconfirmed-only at those
 forms: a Recipient_List or Audit recipient Address (name the Device and bind
 it marked instead), a COV subscriber's address, taken from its request, and a
-binding observed from an I-Am.
+binding found by the server's own Who-Is.
 
 A reply goes back to the link-layer MAC its request came from, so a
 confirmed request from a group address would get its answer, any segment
@@ -7585,15 +7585,12 @@ follow In_Process.
 
 A command whose `device_identifier` names another device goes there as a
 confirmed WriteProperty (#1180). The address comes from the server's device
-bindings: a `DeviceBinding` registered on the builder, or an I-Am answering
-the server's own Who-Is in the last ten minutes (#2825). An I-Am the server did
-not ask for binds nothing; one naming a bound device from another address
-starts a check: a Who-Is for the device to the bound address and to the
-claimant, and the binding moves only if the bound address stays silent for the
-APDU timeout while the claimant answers. Both answering, or a third address
-claiming the device, keeps it; checks run at most once a minute per device, 64
-at once, none under DeviceCommunicationControl. A configured binding never
-moves. A binding never takes a group address of the
+bindings: a `DeviceBinding` registered on the builder, or the answer to the
+server's own Who-Is for the device in the last ten minutes; an I-Am the server
+did not ask for binds nothing, and one naming a bound device from another
+address only starts a check ([Device bindings the server
+finds](#device-bindings-the-server-finds), #2825). A binding never takes a
+group address of the
 link (`TransportPort::is_group_destination`), as the device's own MAC or as its
 router's: one registered so stops the server from starting, with an error
 naming the device and the address, and an I-Am from one binds nothing (#1493).
@@ -7602,18 +7599,17 @@ binds, but no write or read goes to it, and the command fails as for an
 unbound device (#2732). For a device with neither, the server first
 broadcasts one Who-Is whose low and high limits are both that device's
 instance (#1322). A device it has never heard from is asked on every network
-(a global broadcast, DNET 65535). One whose stale I-Am is still held is asked
-where that I-Am came from: the local network, or the remote network it was
-routed from, where a remote network numbered as this device's own counts as
-local. If that Who-Is draws nothing, the stale I-Am is dropped, so the
-device's next Who-Is goes global. The server then waits
+(a global broadcast, DNET 65535). One whose stale binding is still held is
+asked where that binding came from: the local network, or the remote network
+it was routed from, where a remote network numbered as this device's own
+counts as local. If that Who-Is draws nothing, the stale binding is dropped,
+so the device's next Who-Is goes global. The server then waits
 `ServerConfig::cov_retry_timeout_ms`, but never more than a minute (#1368),
-counted from the send, for the I-Am, which binds the device, and the write
-goes ahead. For a stale binding, an answer from the old address binds at once,
-one from another address only at the end of the wait with the old one silent,
-and two from other addresses bind nothing (#2825). With no I-Am by then the
-command fails and no
-WriteProperty is sent. Writes that miss
+counted from the send, for the answers, and decides when the wait ends: one
+station answered, and it is bound and the write goes ahead; two or more
+answered, and none is bound, as with no answer. For a stale binding, an answer
+from its old address binds at once. With no single answer the command fails
+and no WriteProperty is sent. Writes that miss
 while that Who-Is is out share it and its wait. A device gets at most one
 Who-Is a minute, counted from when it went out, so a command naming it within
 a minute of one that drew nothing fails at once. At most 256 devices with a
@@ -7633,6 +7629,71 @@ or Abort fails the command at once. Nothing is sent while
 DeviceCommunicationControl restricts initiation, a Who-Is included, and the
 run holds no database guard while the write is outstanding or waits for an
 I-Am. Naming this server's own Device is the same as naming none.
+
+#### Device bindings the server finds
+
+Any station on a link can send an I-Am naming any device, so the server takes
+no I-Am it did not ask for as a device's address (#2825). Its bindings
+address Command and Channel writes and reads in other devices and event
+notifications to Device recipients, and name the device a write came from
+(Value_Source, an Audit record's source device). The rules (decisions,
+maintainer, 2026-11-26):
+
+- **First contact.** A device with no binding, or a lapsed one, is asked with
+  the targeted Who-Is above, and the answers are counted when its wait ends.
+  One station answered: it is bound. Two or more: none is, a warning names the
+  device and the stations, `BACnetServer::device_binding_conflicts` counts
+  it, and the device is asked again after a minute. A late answer still binds
+  within that minute if no other station answered. A lapsed binding's old
+  address answering binds at once. So a first write or notification to a
+  device waits the whole wait; notifications that waited are dropped and
+  counted in `device_recipient_unbound` when no single station answered.
+- **Freshness.** An I-Am from a device's bound address, or the device naming
+  itself in a check's read, keeps its binding for another ten minutes.
+- **Moves.** An I-Am naming a bound device from another address is a cue for
+  a check, run on a task of the server's. The server sends that address a
+  Who-Is limited to the device's instance, and reads the Device object's
+  Object_Identifier at the bound address with a confirmed ReadProperty: by
+  the wildcard instance 4194303, or, for a device that refuses that, by the
+  bound instance. The read leases an invoke ID and is retried as a write is,
+  and only the bound station's answer, through its router for a routed
+  binding, ends it. The check fails when the read times out after its
+  retries, names another instance, or finds no Device object of the bound
+  instance there. A failed check is a strike only when the other address
+  answered the Who-Is, no third address claimed the device during the check,
+  and the bound address answered no request of the server's (a write, a read,
+  a notification) since the first check began; an I-Am or notification it
+  sends unasked counts for nothing either way. A strike schedules a second
+  check a minute later, and when that strikes too, the binding moves to the
+  address that answered both times, with a warning naming the device and both
+  addresses. Anything else ends the checks with the binding where it was: the
+  bound address naming the device, or answering with something that says
+  neither (a Reject, an Abort, another Error), a request the link failed to
+  send, no free invoke ID, the binding changing or lapsing, DCC, the server
+  stopping. With the default timeout (3 seconds, three retries) a device that
+  really moved is followed 84 seconds after its first I-Am from the new
+  address; until then every write and notification goes to the old one.
+- **Pacing.** A cue starts at most one check of a device a minute. At most 64
+  devices hold a check, out, between its two reads or within its minute, and a
+  cue that finds them all held starts nothing: none is given up for it. At
+  most 16 of the checks' reads are out at once, so they hold at most 16 of the
+  server's invoke IDs, and none runs while DeviceCommunicationControl
+  restricts initiation. Forged I-Ams naming one device that keeps answering
+  cost a Who-Is and a read a minute, and naming any number of such devices
+  128 frames a minute; a silent bound address costs a read's retries too.
+- **Configured bindings** (`DeviceBinding` on the builder) never move. They
+  are the path for a device that only announces itself and never answers a
+  Who-Is, and for alarm recipients whose notifications must not wait for one.
+- **Listing and attribution.** Device_Address_Binding lists configured
+  bindings and the devices that answered the server. A write from a station
+  the server never asked about names its address as the source, not a Device.
+
+What remains: a station that alone answers the server's question while the
+device is absent or silent is bound, at first contact or after two checks,
+and keeps the binding while it answers as the device. And the server takes
+some sources as the frame states them: an I-Am or answer inside a forwarded
+B/IP frame is credited to the address the forwarding names, and a B/IPv6
+virtual address is the sender's own claim (#2837).
 
 A run that `stop()` cuts short isn't resumed. It ends where it stood
 (#1252): In_Process returns to FALSE, each command it hadn't made reads
@@ -8460,7 +8521,7 @@ Reject of INVALID_PARAMETER_DATA_TYPE. A value the member itself refuses as
 out of range (VALUE_OUT_OF_RANGE) is PROCESS_ERROR: the clause leaves the
 choice open, and here only the Channel's own conversion counts against its
 configuration. COMMUNICATION_FAILURE means a remote member's device had no
-fresh binding and no I-Am answered the Who-Is for it (or none was sent, under
+fresh binding and no single station answered the Who-Is for it (or none was sent, under
 the one-a-minute limit), DCC restricted initiation, or no attempt was
 answered; an
 attempt the transport failed to send waits like a silent one, so a send
@@ -10338,8 +10399,9 @@ and `Active_COV_Multiple_Subscriptions` are present: the identity's Device
 gets live lists and other Devices get empty lists (#2227). Its `Device_Address_Binding`
 lists the server's device bindings at the time of the read (#1369): each
 configured `DeviceBinding` and each device that answered the server's own
-targeted Who-Is in the last ten minutes (an I-Am it did not ask for lists
-nothing, #2825), in instance order, with network
+targeted Who-Is, while heard from in the last ten minutes (an I-Am it did not
+ask for lists nothing, and a device a check moved is listed at its new
+address, #2825), in instance order, with network
 number 0 for a device on this network and the device's own MAC, not its
 router's, for one elsewhere. Other Devices read an empty list. Network RP,
 budgeted RPM, `read_local` and `generate_pics` share effective Device
@@ -12986,17 +13048,20 @@ fixes them, and the warning logged with each skip gives the finer reason:
   the observed one expired, and a look for the device found none. Before
   skipping such a recipient the server looks for its device as it does for a
   Command's remote write (#1368): one Who-Is limited to its instance, at most
-  one a minute per device, none under DCC, and the notification waits up to
-  `cov_retry_timeout_ms` (a minute at most) from that Who-Is for the I-Am.
+  one a minute per device, none under DCC, and the notification waits
+  `cov_retry_timeout_ms` (a minute at most) from that Who-Is for the
+  answers, which are counted when the wait ends ([Device bindings the server
+  finds](#device-bindings-the-server-finds), #2825).
   It waits at the head of its lane, the device's later notifications behind
   it in commit order, so the transition's other recipients aren't held up
   and each device waits on its own (#2537); the change that made it holds
-  its COV fanout until the I-Am or the APDU timeout, as above. A device that
-  answers gets them, each counting as any other send does, DCC checked again
-  after the wait. When one stays silent, every notification waiting for it
-  counts here once; one that can't be looked for within the minute after a
-  fruitless Who-Is counts here at once. Observing the device's I-Am again,
-  or configuring a binding, clears it. A confirmed notification whose
+  its COV fanout until the wait ends, as above. A device one station
+  answered for gets them, each counting as any other send does, DCC checked
+  again after the wait. When none answers, or two or more stations do, every
+  notification waiting for it counts here once; one that can't be looked
+  for within the minute after a fruitless Who-Is counts here at once. An
+  answer to a later Who-Is of the server's, or configuring a binding, clears
+  it. A confirmed notification whose
   observed binding expires before a retry ends there, its invoke ID freed,
   and counts here, not in `confirmed_unanswered` (#1371); one whose binding
   lapsed while it waited for its invoke ID is looked for first (#2569).
