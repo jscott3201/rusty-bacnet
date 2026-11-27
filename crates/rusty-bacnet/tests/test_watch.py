@@ -398,6 +398,10 @@ class FollowTests(Lab):
         async with client() as c:
             await c.discover(scope=self.address, wait=0.3)
             dev = await c.device(DEVICE)
+            # Placed on its one claim, the handle is so provisionally for
+            # 3 s: a claim elsewhere sooner would have the write place it
+            # again (#2824). Past that, the write's own rule is tested.
+            await asyncio.sleep(3.2)
             # The table: another device at the relay's address, which then
             # answers nothing, and the device at its own. Until the table
             # holds both rows, the handle's own row still names the device,
