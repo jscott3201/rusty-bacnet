@@ -204,16 +204,23 @@ fn records_of_ended_leases_are_pruned() {
     assert_eq!(coordinator.recorded_hops(), 1);
 }
 
-/// Only an attempt recorded as sent by broadcast says so.
+/// The observer's path check takes what admission would: any station for
+/// a lease that recorded nothing or went by broadcast, only the router for
+/// one that went through it.
 #[test]
-fn went_by_broadcast_names_only_a_broadcast_attempt() {
+fn on_path_follows_the_recorded_hop() {
     let coordinator = OutboundTransactionCoordinator::new();
     let unrecorded = routed_lease(&coordinator);
     let through = routed_lease(&coordinator);
     let broadcast = routed_lease(&coordinator);
     coordinator.route_through(through, Some(&ROUTER)).unwrap();
     coordinator.route_through(broadcast, None).unwrap();
-    assert!(!coordinator.went_by_broadcast(unrecorded));
-    assert!(!coordinator.went_by_broadcast(through));
-    assert!(coordinator.went_by_broadcast(broadcast));
+    for token in [unrecorded, broadcast] {
+        assert!(coordinator.on_path(token.invoke_id(), &STRANGER));
+    }
+    assert!(coordinator.on_path(through.invoke_id(), &ROUTER));
+    assert!(!coordinator.on_path(through.invoke_id(), &STRANGER));
+    // An ended lease's record no longer applies.
+    coordinator.release(through).unwrap();
+    assert!(coordinator.on_path(through.invoke_id(), &STRANGER));
 }

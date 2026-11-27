@@ -1,8 +1,10 @@
 ---
 section: Migration notes
 ---
-- **Server answer path (wire, #2831):** where a remote network's answers come
-  back through another router than the server's requests go through, those
-  requests now time out; watch `off_path_answer_drops`. A learned router is
-  kept while it answers and forgotten once it stays silent, then learned again
-  from the next broadcast attempt's answer.
+- **Server and endpoint routers (wire, #2831):** a remote network's router is
+  learned only when one router alone answers two of the node's
+  Who-Is-Router-To-Network queries a minute apart: 60 s plus two timeouts
+  after the first routed request. A replaced router is taken 60 s plus five
+  timeouts after the first unanswered one (75 s at 3 s). Requests go by
+  broadcast meanwhile. Answers through another router than the request's
+  time out (`off_path_answer_drops`).

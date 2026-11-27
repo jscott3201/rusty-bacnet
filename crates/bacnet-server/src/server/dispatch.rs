@@ -5,36 +5,29 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Admit an answer to a confirmed request this server sent. An answer
     /// relayed with `local_network`, this network's known number, as SNET
     /// completes only a request still keyed to that routed form, never one
-    /// sent straight to its SADR (#2831), and teaches no next hop: sends to
-    /// this network go out locally. A routed answer completes a request sent
-    /// through a router only when it arrives from that router. Which
-    /// answers teach their network's router is
-    /// [`LearnedRouterCache::answer_teaches`]'s rule (#2831).
-    async fn admit_notification_terminal(
-        learned_routers: &Arc<Mutex<LearnedRouterCache>>,
-        notification_transactions: &Arc<NotificationTransactions>,
+    /// sent straight to its SADR (#2831). A routed answer completes a
+    /// request sent through a router only when it arrives from that router.
+    /// No answer teaches a router: one the request's network's router
+    /// carried only shows that router still works
+    /// ([`RouterLearning::heard`], #2831).
+    fn admit_notification_terminal(
+        learned_routers: &RouterLearning,
+        notification_transactions: &NotificationTransactions,
         source_mac: &[u8],
         source_network: Option<&NpduAddress>,
         local_network: Option<u16>,
         apdu: &Apdu,
     ) -> bool {
-        let Some(by_broadcast) =
-            notification_transactions.admit_answer(source_mac, source_network, local_network, apdu)
-        else {
-            return false;
-        };
-
-        if let Some(source) = source_network.filter(|source| {
-            LearnedRouterCache::answer_teaches(by_broadcast)
-                && !source.mac_address.is_empty()
-                && Some(source.network) != local_network
-        }) {
-            learned_routers
-                .lock()
-                .await
-                .learn_router(source.network, &MacAddr::from_slice(source_mac));
+        let admitted = notification_transactions.admit_terminal(
+            source_mac,
+            source_network,
+            local_network,
+            apdu,
+        );
+        if admitted && let Some(source) = source_network {
+            learned_routers.heard(source.network, source_mac);
         }
-        true
+        admitted
     }
 
     /// Hand a requester's Segment-ACK or Abort to the segmented answer it
@@ -179,7 +172,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
         // Ingress provenance travels with `received` into request diagnostics
         // and authorization. NotificationTransactions owns outgoing terminal
-        // admission; learned_routers stores only next hops from admitted replies.
+        // admission; learned_routers only hears what a known router carries.
         let route = received.response_route();
         match apdu {
             Apdu::ConfirmedRequest(req) => {
@@ -278,6 +271,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 }
             }
             Apdu::UnconfirmedRequest(req) => {
+                // A frame a network's known router carries from there keeps
+                // that router; it teaches none (#2831).
+                if let Some(source) = &received.source_network {
+                    learned_routers.heard(source.network, source_mac);
+                }
                 let now = runtime_clock::now();
                 if req.service_choice == UnconfirmedServiceChoice::WHO_IS {
                     match discovery_limiter.pre_check_who_is(&req.service_request, &received, now) {
@@ -351,8 +349,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     received.source_network.as_ref(),
                     network.local_network_number().get(),
                     &Apdu::SimpleAck(sa),
-                )
-                .await;
+                );
                 debug!(
                     invoke_id,
                     admitted, "SimpleAck received for outgoing confirmed notification"
@@ -369,8 +366,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     received.source_network.as_ref(),
                     network.local_network_number().get(),
                     &Apdu::Error(err),
-                )
-                .await;
+                );
                 debug!(
                     invoke_id,
                     error_class,
@@ -388,8 +384,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     received.source_network.as_ref(),
                     network.local_network_number().get(),
                     &Apdu::Reject(rej),
-                )
-                .await;
+                );
                 debug!(
                     invoke_id,
                     admitted, "Reject received for outgoing confirmed notification"
@@ -427,8 +422,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     received.source_network.as_ref(),
                     network.local_network_number().get(),
                     &Apdu::Abort(abort),
-                )
-                .await;
+                );
                 debug!(
                     invoke_id,
                     routed_segmented,
@@ -474,8 +468,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     received.source_network.as_ref(),
                     network.local_network_number().get(),
                     &Apdu::ComplexAck(ack),
-                )
-                .await;
+                );
                 if admitted {
                     debug!(invoke_id, "ComplexAck answered a read this server sent");
                 } else {

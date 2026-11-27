@@ -1,6 +1,6 @@
 //! Actual NORMAL-B/IP client wire proof on isolated Linux loopback.
 #![cfg(target_os = "linux")]
-use bacnet_client::client::{BACnetClient, ClientConfig};
+use bacnet_client::client::{BACnetClient, ClientConfig, ClientOptions};
 use bacnet_transport::bip::BipTransport;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use tokio::{
@@ -13,6 +13,27 @@ use tokio::{
 mod port_retry;
 
 const BROADCAST: Ipv4Addr = Ipv4Addr::new(127, 255, 255, 255);
+/// The window the client's question opens here (#2826).
+const WINDOW_MS: u64 = 500;
+/// The client's APDU timeout here: the router check after a window waits
+/// one (#2826).
+fn config() -> ClientConfig {
+    ClientConfig {
+        apdu_timeout_ms: 500,
+        ..ClientConfig::default()
+    }
+}
+/// Past the window and the router check after it.
+const PAST_THE_WINDOW: Duration = Duration::from_millis(WINDOW_MS + 500 + 200);
+/// The B/IP MAC of `socket`, its address and port.
+fn sink_mac(socket: &UdpSocket) -> Vec<u8> {
+    let SocketAddr::V4(address) = socket.local_addr().unwrap() else {
+        panic!("IPv4 socket")
+    };
+    let mut mac = address.ip().octets().to_vec();
+    mac.extend_from_slice(&address.port().to_be_bytes());
+    mac
+}
 fn frame(function: u8, npdu: &[u8]) -> Vec<u8> {
     let mut wire = vec![0x81, function];
     wire.extend_from_slice(&((4 + npdu.len()) as u16).to_be_bytes());
@@ -24,7 +45,9 @@ async fn expect(observer: &UdpSocket, source: SocketAddrV4, number: u8) {
         let mut wire = [0; 256];
         loop {
             let (n, from) = observer.recv_from(&mut wire).await.unwrap();
-            if from != SocketAddr::V4(source) {
+            // The router check the client makes before it takes a number
+            // (Who-Is-Router-To-Network, #2826) is no reply.
+            if from != SocketAddr::V4(source) || wire[4..n].starts_with(&[1, 0x80, 0x00]) {
                 continue;
             }
             // Independent BVLC and NPDU bytes, not the production decoder.
@@ -56,7 +79,11 @@ async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
         let port = observer.local_addr().unwrap().port();
         let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
         transport.set_share_wildcard_port(true);
-        let mut client = BACnetClient::start(ClientConfig::default(), transport)
+        // The client takes a number only from the answers to its own
+        // question, within a window after it (#2826): a short one, through
+        // the test hook, keeps this wall-clock test quick.
+        let options = ClientOptions::default().with_number_window(Duration::from_millis(WINDOW_MS));
+        let mut client = BACnetClient::start_with_options(config(), transport, options)
             .await
             .unwrap();
         let mac = client.local_mac();
@@ -72,9 +99,15 @@ async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
         peer.send_to(&frame(11, &[1, 0x80, 0x12]), group)
             .await
             .unwrap();
+        // The client's question goes to a sink alone, so the observer sees
+        // no broadcast of it; the peer's announcement answers it.
+        let sink = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let sink = sink_mac(&sink);
+        client.what_is_network_number(Some(&sink)).await.unwrap();
         peer.send_to(&frame(11, &[1, 0x80, 0x13, 0, 77, 1]), group)
             .await
             .unwrap();
+        tokio::time::sleep(PAST_THE_WINDOW).await;
         peer.send_to(&frame(10, &[1, 0x80, 0x12]), local)
             .await
             .unwrap();
@@ -82,10 +115,13 @@ async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
         // No broadcast question once the number is known: its answer
         // waits up to ten seconds (Clause 6.4.19, #2597), which is tested
         // on paused time, not on this wall clock.
-        // Unicast NNI cannot replace the learned number; the next reply is its fence.
+        // Unicast NNI cannot replace the learned number, even inside a
+        // question's window; the next reply is its fence.
+        client.what_is_network_number(Some(&sink)).await.unwrap();
         peer.send_to(&frame(10, &[1, 0x80, 0x13, 0, 99, 1]), local)
             .await
             .unwrap();
+        tokio::time::sleep(PAST_THE_WINDOW).await;
         peer.send_to(&frame(10, &[1, 0x80, 0x12]), local)
             .await
             .unwrap();

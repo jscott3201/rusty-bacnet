@@ -112,6 +112,10 @@ pub async fn harness(
 pub async fn inject(inbound: &mpsc::Sender<ReceivedNpdu>, npdu: &[u8], group: bool) {
     deliver(inbound, npdu, &[2], group).await;
 }
+/// Hand the client `npdu` as a local broadcast from link MAC `source`.
+pub async fn broadcast_from(inbound: &mpsc::Sender<ReceivedNpdu>, npdu: &[u8], source: &[u8]) {
+    deliver(inbound, npdu, source, true).await;
+}
 /// Hand the client `npdu` by unicast from link MAC `source`.
 pub async fn inject_from(inbound: &mpsc::Sender<ReceivedNpdu>, npdu: &[u8], source: &[u8]) {
     deliver(inbound, npdu, source, false).await;
@@ -150,4 +154,36 @@ pub async fn reply(outbound: &mut mpsc::Receiver<Sent>, value: u16) {
     let sent = bounded(outbound.recv()).await.unwrap();
     assert!(sent.destination.is_empty());
     assert_eq!(sent.npdu.as_ref(), number(value, 0));
+}
+
+/// The link MAC the tests' router answers from.
+pub const ROUTER_MAC: [u8; 1] = [9];
+
+/// Past the window the harness client gives the answers to its question:
+/// the longest a node may hold its answer, 10 s, which outlasts its APDU
+/// timeout, the 2 s margin, and a little more (#2826).
+pub const PAST_THE_WINDOW: std::time::Duration = std::time::Duration::from_millis(12_100);
+
+/// Teach the harness client `value`, flagged `flag`, the way a router
+/// does (#2826): the client asks, the router's answer comes in the window
+/// the question opens, and the client takes it once the router check after
+/// the window (its APDU timeout, 5 s) finds no router routing there. Runs
+/// on paused time; the question, and the check's router query when the
+/// number changes, are taken from `outbound`.
+pub async fn teach(
+    client: &BACnetClient<TestTransport>,
+    inbound: &mpsc::Sender<ReceivedNpdu>,
+    outbound: &mut mpsc::Receiver<Sent>,
+    value: u16,
+    flag: u8,
+) {
+    client.what_is_network_number(None).await.unwrap();
+    asked(outbound).await;
+    broadcast_from(inbound, &number(value, flag), &ROUTER_MAC).await;
+    tokio::time::sleep(PAST_THE_WINDOW + std::time::Duration::from_millis(5_100)).await;
+    while let Ok(sent) = outbound.try_recv() {
+        assert!(sent.destination.is_empty(), "a broadcast");
+        let check = [1, 0x80, 0x00, (value >> 8) as u8, value as u8];
+        assert_eq!(sent.npdu.as_ref(), check, "the router check alone");
+    }
 }

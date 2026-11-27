@@ -397,7 +397,7 @@ struct OwnedDelivery<T: TransportPort + 'static> {
     db: Arc<RwLock<ObjectDatabase>>,
     network: Arc<NetworkLayer<T>>,
     comm_state: Arc<CommState>,
-    learned_routers: Arc<Mutex<LearnedRouterCache>>,
+    learned_routers: Arc<RouterLearning>,
     notification_transactions: Arc<NotificationTransactions>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     suppressions: Arc<EventSuppressions>,

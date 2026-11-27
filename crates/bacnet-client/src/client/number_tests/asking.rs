@@ -34,11 +34,16 @@ pub(super) struct Site {
     pub(super) client: BACnetClient<TestTransport>,
     pub(super) inbound: mpsc::Sender<ReceivedNpdu>,
     pub(super) sent: SendLog,
-    handle: TestTransportHandle,
+    pub(super) handle: TestTransportHandle,
     back: watch::Sender<u64>,
 }
 
 pub(super) async fn open_site(numbers: bool) -> Site {
+    open_site_with(numbers, ClientConfig::default()).await
+}
+
+/// [`open_site`] with the client's `config`.
+pub(super) async fn open_site_with(numbers: bool, config: ClientConfig) -> Site {
     let (inbound, receiver) = mpsc::channel(64);
     let (back, returns) = watch::channel(0);
     let mut transport = TestTransport::builder()
@@ -51,9 +56,7 @@ pub(super) async fn open_site(numbers: bool) -> Site {
     let handle = transport.handle();
     let transport = transport.build();
     let sent = transport.sent();
-    let client = BACnetClient::start(ClientConfig::default(), transport)
-        .await
-        .unwrap();
+    let client = BACnetClient::start(config, transport).await.unwrap();
     Site {
         client,
         inbound,
@@ -63,17 +66,31 @@ pub(super) async fn open_site(numbers: bool) -> Site {
     }
 }
 
+/// Past the window the client gives the answers to its question: the
+/// longest a node may hold its answer, 10 s, which outlasts the default
+/// APDU timeout, the 2 s margin, and a little more (#2826).
+pub(super) const PAST_THE_WINDOW: Duration = Duration::from_millis(12_100);
+
+/// Past the router check after a window: the default APDU timeout, 6 s,
+/// and a little more (#2826).
+pub(super) const PAST_THE_CHECK: Duration = Duration::from_millis(6_100);
+
 impl Site {
-    /// Have a node broadcast that this network is `network`, with `flag`,
-    /// and wait until the client holds it.
-    pub(super) async fn announce(&self, network: u16, flag: u8) {
-        inject(&self.inbound, &number(network, flag), true).await;
-        bounded(async {
-            while self.client.network_number() != Some(network) {
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
-        })
-        .await;
+    /// Have `ROUTER` answer the client's latest question, which went less
+    /// than a window ago, with `network` and `flag`, and wait for the
+    /// window to close and for the router check that follows when the
+    /// client holds routed rows on `network`, which no router answers: the
+    /// client then holds `network` (#2826).
+    pub(super) async fn answered(&self, network: u16, flag: u8) {
+        broadcast_from(&self.inbound, &number(network, flag), &ROUTER).await;
+        tokio::time::sleep(PAST_THE_WINDOW + PAST_THE_CHECK).await;
+        assert_eq!(self.client.network_number(), Some(network));
+    }
+
+    /// Have the client ask, and `ROUTER` answer with `network` and `flag`.
+    pub(super) async fn taught(&self, network: u16, flag: u8) {
+        self.client.what_is_network_number(None).await.unwrap();
+        self.answered(network, flag).await;
     }
 
     /// The link is back.
@@ -297,10 +314,11 @@ async fn a_link_return_asks_again_after_a_first_question_while_unknown() {
         assert_eq!(frames.len(), asks, "{frames:?}");
         assert_ask(&frames[asks - 1]);
     }
-    site.announce(THIS_NETWORK, 0).await;
+    site.answered(THIS_NETWORK, 0).await;
     site.link_returns();
     let frames = site.settled().await;
-    assert_eq!(frames.len(), 4, "a known number is not asked for");
+    // The fifth is the router check before the number was taken (#2826).
+    assert_eq!(frames.len(), 5, "a known number is not asked for");
     site.client.stop().await.unwrap();
 }
 
@@ -322,7 +340,7 @@ async fn a_relayed_device_is_one_device_once_the_answer_comes() {
         Err(Error::AmbiguousDevice { instance: 9, .. })
     ));
 
-    site.announce(THIS_NETWORK, 0).await;
+    site.answered(THIS_NETWORK, 0).await;
     let device = site
         .client
         .get_device(9)
@@ -341,9 +359,16 @@ async fn a_relayed_device_is_one_device_once_the_answer_comes() {
         vec![0x44, 0x42, 0xA0, 0x00, 0x00],
         None,
     );
+    // The routed row on this network had the client check that no router
+    // routes to it before taking it (#2826).
+    let check = site.sent.frame(1).decode_npdu();
+    assert_eq!(
+        check.message_type,
+        Some(NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
+    );
     let peer = async {
-        site.sent.wait_for_len(2).await;
-        let frame = site.sent.frame(1);
+        site.sent.wait_for_len(3).await;
+        let frame = site.sent.frame(2);
         assert_eq!(frame.mac.as_slice(), PEER, "to the device's own MAC");
         assert_eq!(frame.decode_npdu().destination, None, "with no DNET");
         let Apdu::ConfirmedRequest(request) = frame.apdu() else {
@@ -363,16 +388,20 @@ async fn a_relayed_device_is_one_device_once_the_answer_comes() {
 /// A started client whose questions wait in the send until the test lets
 /// them go: `entered` gains a permit as each reaches it, and each takes one
 /// of `gate`'s.
-struct Gated {
-    client: BACnetClient<TestTransport>,
-    inbound: mpsc::Sender<ReceivedNpdu>,
-    sent: SendLog,
-    entered: Arc<Semaphore>,
-    gate: Arc<Semaphore>,
+pub(super) struct Gated {
+    pub(super) client: BACnetClient<TestTransport>,
+    pub(super) inbound: mpsc::Sender<ReceivedNpdu>,
+    pub(super) sent: SendLog,
+    pub(super) entered: Arc<Semaphore>,
+    pub(super) gate: Arc<Semaphore>,
+    /// The link's returns, which the client asks again on while the number
+    /// is unknown.
+    pub(super) back: watch::Sender<u64>,
 }
 
-async fn gated() -> Gated {
+pub(super) async fn gated() -> Gated {
     let (inbound, receiver) = mpsc::channel(64);
+    let (back, returns) = watch::channel(0);
     let entered = Arc::new(Semaphore::new(0));
     let gate = Arc::new(Semaphore::new(0));
     let (reached, held) = (Arc::clone(&entered), Arc::clone(&gate));
@@ -380,6 +409,7 @@ async fn gated() -> Gated {
         .local_mac(&[1])
         .inbound(receiver)
         .number_controls()
+        .link_returns(returns)
         .on_send(move |frame| {
             let (reached, held) = (Arc::clone(&reached), Arc::clone(&held));
             async move {
@@ -401,12 +431,13 @@ async fn gated() -> Gated {
         sent,
         entered,
         gate,
+        back,
     }
 }
 
 impl Gated {
     /// How many questions the client has sent, held ones included.
-    fn asks(&self) -> usize {
+    pub(super) fn asks(&self) -> usize {
         let frames = self.sent.frames();
         frames.iter().filter(|frame| frame.npdu == QUERY).count()
     }
@@ -444,8 +475,9 @@ async fn two_who_is_at_once_ask_once() {
 
 /// A routed I-Am while a Who-Is's question is held in its send: the Number
 /// owner finds the question going out and asks nothing, and meanwhile keeps
-/// taking announcements. The number one teaches is known before the held
-/// question even goes.
+/// taking announcements. The question was noted before its send, so an
+/// answer to it counts, and the number it teaches is known when the window
+/// closes, before the held question even goes.
 #[tokio::test(start_paused = true)]
 async fn the_owner_neither_asks_twice_nor_stops_while_a_question_is_held() {
     let mut site = gated().await;
@@ -455,22 +487,23 @@ async fn the_owner_neither_asks_twice_nor_stops_while_a_question_is_held() {
         send_to_client(&site.inbound, &i_am(10), &ROUTER, routed).await;
         tokio::time::sleep(Duration::from_millis(10)).await;
         inject(&site.inbound, &number(THIS_NETWORK, 0), true).await;
-        bounded(async {
-            while site.client.network_number() != Some(THIS_NETWORK) {
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
-        })
-        .await;
+        tokio::time::sleep(PAST_THE_WINDOW + PAST_THE_CHECK).await;
+        assert_eq!(site.client.network_number(), Some(THIS_NETWORK));
         assert_eq!(site.asks(), 1, "the held question alone");
         site.gate.add_permits(10);
     };
-    let (who_is, ()) =
-        bounded(async { tokio::join!(site.client.who_is(Broadcast::Global, None), driver) }).await;
+    // Bounded past the window the driver waits out.
+    let both = async { tokio::join!(site.client.who_is(Broadcast::Global, None), driver) };
+    let (who_is, ()) = tokio::time::timeout(Duration::from_secs(30), both)
+        .await
+        .expect("the held question goes once released");
     who_is.unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     let frames = site.sent.frames();
     assert_eq!(site.asks(), 1, "{frames:?}");
-    assert_eq!(frames.len(), 2, "{frames:?}");
+    // The question, the router check before the number was taken (#2826),
+    // and the Who-Is.
+    assert_eq!(frames.len(), 3, "{frames:?}");
     site.client.stop().await.unwrap();
 }
 

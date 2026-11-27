@@ -232,7 +232,7 @@ async fn commit_and_capture_history_notification(
                 db: &db,
                 network: &network,
                 comm_state: &Arc::new(CommState::default()),
-                learned_routers: &Arc::new(Mutex::new(LearnedRouterCache::new())),
+                learned_routers: &Arc::new(RouterLearning::new()),
                 notification_transactions: &NotificationTransactions::new(),
                 device_bindings: &Arc::new(RwLock::new(
                     crate::server::device_bindings::DeviceBindingTable::new(),

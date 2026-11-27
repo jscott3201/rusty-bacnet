@@ -75,7 +75,7 @@ struct Fixture {
     db: Arc<RwLock<ObjectDatabase>>,
     network: Arc<NetworkLayer<TestTransport>>,
     comm_state: Arc<CommState>,
-    learned_routers: Arc<Mutex<LearnedRouterCache>>,
+    learned_routers: Arc<RouterLearning>,
     notification_transactions: Arc<NotificationTransactions>,
     sent: SendLog,
     oid: ObjectIdentifier,
@@ -150,7 +150,7 @@ impl Fixture {
             db: Arc::new(RwLock::new(db)),
             network: Arc::new(NetworkLayer::new(transport)),
             comm_state: Arc::new(CommState::default()), // DCC not blocking
-            learned_routers: Arc::new(Mutex::new(LearnedRouterCache::new())),
+            learned_routers: Arc::new(RouterLearning::new()),
             notification_transactions: NotificationTransactions::new(),
             sent,
             oid,

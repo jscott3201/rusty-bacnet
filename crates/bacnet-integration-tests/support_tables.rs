@@ -124,6 +124,7 @@ const PYTHON_OTHER_METHODS: &[&str] = &[
     "too_long_reject_drops",
     "below_minimum_reject_drops",
     "off_path_answer_drops",
+    "network_number_disagreements",
     "read_bdt",
     "write_bdt",
     "read_fdt",

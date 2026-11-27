@@ -447,7 +447,7 @@ async fn a_panicking_follow_up_batch_leaves_the_task_running() {
     let fanout = crate::server::cov_fanout::CovFanout::new(
         &f.ctx(),
         &Default::default(),
-        &Arc::new(Mutex::new(LearnedRouterCache::new())),
+        &Arc::new(RouterLearning::new()),
         &Default::default(),
     );
     let task = tokio::spawn(fanout.run_revisits());

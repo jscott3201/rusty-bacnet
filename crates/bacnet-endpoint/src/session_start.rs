@@ -71,12 +71,26 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             self.client_config.max_apdu_length,
         ))?;
 
-        // Routed source Audit bindings' routers, which router announcements
-        // teach here, and traffic at ingress (#2371).
+        // Routed source Audit bindings' routers, learned and replaced only
+        // through the session's own router query (#2831), whose answers
+        // come from the link's controls; each step waits the APDU timeout.
+        // A check's Who-Is waits out the node's DeviceCommunicationControl.
         let routers = source_recipient
             .as_ref()
             .map(|runtime| Arc::clone(runtime.routes.routers()))
             .filter(|routers| !routers.is_empty());
+        let ingress = self.ingress.as_ref();
+        let link = ingress.and_then(EndpointIngress::started_network);
+        self.router_task = routers.zip(link).map(|(routers, link)| {
+            let learning = Arc::clone(routers.learning());
+            let reports = receivers.router_reports.clone();
+            let dcc = ingress.and_then(EndpointIngress::node_dcc);
+            let wait = std::time::Duration::from_millis(self.config.apdu_timeout_ms);
+            tokio::spawn(async move {
+                let may_initiate = || !dcc.as_ref().is_some_and(|dcc| dcc.is_restricted());
+                learning.run(&link, &reports, may_initiate, wait).await;
+            })
+        });
         self.network_number_task = receivers.network_controls.map(|mut controls| {
             let egress = egress.clone();
             let registration_lease = self.registered_port_lease.upgrade();
@@ -121,9 +135,6 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                             continue;
                         }
                     };
-                    if let Some(routers) = &routers {
-                        routers.observe_control(&control);
-                    }
                     let before = egress.local_network_number().get();
                     let reply = owner.handle(control).await;
                     if egress.local_network_number().get() != before {

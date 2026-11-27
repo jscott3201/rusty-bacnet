@@ -144,13 +144,17 @@ impl Site {
     }
 
     /// Teach the client that its own network is `network`, by the
-    /// Network-Number-Is a router broadcasts.
+    /// Network-Number-Is a router broadcasts in answer to the client's
+    /// question, taken when the question's window closes (#2826).
     async fn learn(&self, network: u16) {
+        self.client.what_is_network_number(None).await.unwrap();
         let [hi, lo] = network.to_be_bytes();
         let npdu = Bytes::from(vec![0x01, 0x80, 0x13, hi, lo, 1]);
         let received =
             ReceivedNpdu::unverified(npdu, MacAddr::from_slice(ROUTER), true, Vec::new(), None);
         self.inbox.send(received).await.unwrap();
+        // The window: the longest a node may hold its answer, and a margin.
+        tokio::time::sleep(Duration::from_secs(12)).await;
         for _ in 0..1_000 {
             if self.client.network_number() == Some(network) {
                 return;

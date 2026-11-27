@@ -107,6 +107,7 @@ pub(super) struct Linked<T: TransportPort + 'static, A> {
     pub(super) apdu_rx: A,
     pub(super) network_controls:
         Option<mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>>,
+    pub(super) router_reports: RouterReports,
     pub(super) notification_transactions: Arc<NotificationTransactions>,
     pub(super) seated: Option<Seated>,
     pub(super) execution: crate::device_view::DeviceExecution,
@@ -202,6 +203,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             network,
             apdu_rx,
             network_controls,
+            router_reports,
             notification_transactions,
             seated,
             execution,
@@ -226,7 +228,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let seg_send_permits = Arc::new(Semaphore::new(MAX_SEG_SENDERS));
 
         let cov_in_flight = Arc::new(Semaphore::new(255));
-        let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
+        let learned_routers = Arc::new(RouterLearning::new());
         let confirmed_request_tracker = Arc::new(ConfirmedRequestTracker::default());
         let device_bindings = Arc::new(RwLock::new(device_bindings));
         // ENABLE at every start, the node's too on a seat (#2617).
@@ -244,7 +246,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &db,
             &config,
             &target_audit,
+            &router_reports,
         );
+        let router_task = Some(tasks::spawn_router_learning(
+            &learned_routers,
+            &network,
+            router_reports,
+            &comm_state,
+            &config,
+        ));
         let network_dispatch = Arc::clone(&network);
         let config_dispatch = Arc::clone(&config);
         let notification_transactions_dispatch = Arc::clone(&notification_transactions);
@@ -394,6 +404,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             transport_cleanup: None,
             transport_cleanup_error: None,
             network_number_task,
+            router_task,
             db,
             database_handed_back: false,
             cov_table,

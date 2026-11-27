@@ -3394,8 +3394,15 @@ until its path's limit is set by hand:
   routed request's router, or relayed with this network's own number as
   SNET for a request sent straight to the device. A rise means a station is
   answering for other devices.
+- `network_number_disagreements()` counts, since start, the windows of
+  answers to the client's What-Is-Network-Number that decided nothing
+  because the answers disagreed or may have (#2826): they named two
+  numbers, agreed on a network the client reaches through a router that a
+  router on its link answered it routes to, or an answer may have been
+  lost. A rise means stations on the link claim different numbers for it,
+  or controls come faster than the client takes them.
 
-None of the six sends anything through the path (a B/IPv6 router given as a
+None of the seven sends anything through the path (a B/IPv6 router given as a
 socket address is first asked its VMAC), and each raises `RuntimeError`
 before the client starts and after `stop()`. The first two apply at once
 (#2683): they wait neither for a request on the path nor out the hold a
@@ -3452,7 +3459,19 @@ unknown (#2572). A client that only reads and writes by address never asks.
 After that question, it asks again when its link comes back (a BACnet/SC
 hub reconnect, a foreign device registering again) while no answer has
 come. A router answers at once; where only nodes that are not routers hold
-the number, the answer can take up to ten seconds (#2597). A relay heard
+the number, the answer can take up to ten seconds (#2597). A standalone
+`BACnetClient` takes the number only from the answers to its own question,
+when every answer heard in the window after it (the APDU timeout or ten
+seconds, whichever is longer, and two more) names that number, and a new
+number only after a router check, one APDU timeout, finds no router on the
+link that routes there: about 18 s after the question at the defaults. A Network-Number-Is it
+did not ask for that names another number makes it ask (at most once a
+minute, then less often), and never sets the number by itself (#2826).
+`network_number_disagreements()` counts the windows that decided nothing
+because the answers disagreed or may have.
+A client from `endpoint.client()` holds its endpoint's number instead,
+which the endpoint still takes from any announcement; configure its
+Network Port's number to prevent that. A relay heard
 before the answer is listed as a routed device of its own, and the instance
 is ambiguous (`BacnetAmbiguousDeviceError`) until
 then; learning the number folds the routed entry into the local one, or
@@ -8503,9 +8522,9 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
     CLI writes a routed target (`"2:0x05"` is station 5 on network 2). The
     network is 1 to 65534 and the MAC 1 to 18 octets, in the remote link's
     format. Records go through the router to that network, which the session
-    learns from traffic back from there or from the router's
-    I-Am-Router-To-Network; until then they go with the link's broadcast
-    address. A failed delivery sets the Reporter's Reliability to
+    learns only from its own Who-Is-Router-To-Network, when the same one
+    router alone answers two of its queries a minute apart (#2831); until
+    then they go with the link's broadcast address. A failed delivery sets the Reporter's Reliability to
     COMMUNICATION_FAILURE as a direct one does. A `RoutedTarget` with no
     `router` names the same binding and can mark the address
     `one_station=True`, as the text can with a `":one-station"` suffix

@@ -147,6 +147,7 @@ async fn device_session_and_ledger_resources() {
             "too_long_reject_drops": 0,
             "below_minimum_reject_drops": 0,
             "off_path_answer_drops": 0,
+            "network_number_disagreements": 0,
         })
     );
     let ledger = lab.agent.read("bacnet://ledger").await.unwrap();
@@ -180,6 +181,7 @@ async fn the_session_lists_routed_path_limits() {
             "too_long_reject_drops": 0,
             "below_minimum_reject_drops": 0,
             "off_path_answer_drops": 0,
+            "network_number_disagreements": 0,
         })
     );
     assert_eq!(lab.sends().len(), before);

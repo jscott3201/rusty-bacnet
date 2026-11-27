@@ -57,7 +57,8 @@ use super::i_have::collect_until;
 use super::network_number::Discovery;
 use super::*;
 use crate::discovery::{Checked, PathKey, Strike};
-use bacnet_network::layer::{NetworkReport, QueueAdmissionCounters, ReceivedNetworkReport};
+use bacnet_network::layer::{QueueAdmissionCounters, ReceivedNetworkReport};
+use bacnet_network::router_checks::{Answer, Routers, Step};
 use bacnet_npdu::NetworkMessageType;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant as TokioInstant;
@@ -86,15 +87,6 @@ pub(super) enum Found {
     /// Nothing decided: the node may not initiate, no row there can be
     /// asked, or a send failed.
     Skipped,
-}
-
-/// The routers that answered one router query (Who-Is-Router-To-Network).
-#[derive(Debug, Default)]
-struct Routers {
-    /// The router the rows name answered.
-    old: bool,
-    /// The others that answered, at most two: one decides, two refuse.
-    others: Vec<MacAddr>,
 }
 
 /// The path checks and what they send with.
@@ -185,7 +177,7 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
         let began = crate::discovery::now();
         // A second check counts what the old router carried since the first
         // began.
-        let since = strike.as_ref().map_or(began, |strike| strike.since);
+        let since = Strike::since(strike.as_ref(), began);
         // Subscribed before the send, so no answer comes before the
         // receiver.
         let mut events = device_tx.subscribe();
@@ -219,36 +211,29 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
                 return Found::Skipped;
             }
         };
-        let to = match routers.others.as_slice() {
-            [to] if !routers.old => to.clone(),
-            _ => {
-                let why = if routers.old {
-                    "the router still answers for the network"
-                } else if routers.others.is_empty() {
-                    "no router answered for the network"
-                } else {
-                    "several other routers answered for the network"
-                };
+        // The shared rule (`bacnet_network::router_checks`), which the
+        // server's and the endpoint's router learning follow too (#2831).
+        let to = match routers.answer() {
+            Answer::One(to) => to,
+            answer => {
+                let why = answer.kept_why().unwrap_or_default();
                 self.kept(network, router, why);
                 return Found::Kept;
             }
         };
         let mut table = discovery.table.lock();
         // The old router carried something back meanwhile: it still works.
-        if table.heard_through_since(network, router, since) {
-            return Found::Answered;
-        }
-        match strike {
-            None => {
-                return Found::Struck(Strike { to, since: began });
-            }
-            Some(first) if first.to != to => {
+        let heard = table.heard_through_since(network, router, since);
+        let to = match Strike::step(strike.as_ref(), to, began, heard) {
+            Step::Answered => return Found::Answered,
+            Step::Struck(strike) => return Found::Struck(strike),
+            Step::Differs => {
                 drop(table);
                 self.kept(network, router, "another router answered alone each time");
                 return Found::Kept;
             }
-            Some(_) => {}
-        }
+            Step::Moved(to) => to,
+        };
         let moved = table.reroute(network, router, &to);
         warn!(
             network,
@@ -315,19 +300,9 @@ impl<T: TransportPort + 'static> RouteChecks<T> {
             .await?;
         let deadline = TokioInstant::now() + self.wait;
         let mut routers = Routers::default();
+        // A router on this link, answering for the network asked about.
         let lost = collect_until(&mut rx, deadline, "I-Am-Router-To-Network", |received| {
-            let NetworkReport::IAmRouterToNetwork(listed) = received.report else {
-                return;
-            };
-            // A router on this link, answering for the network asked about.
-            if received.source_network.is_some() || !listed.contains(&network) {
-                return;
-            }
-            if received.source_mac == *old {
-                routers.old = true;
-            } else if routers.others.len() < 2 && !routers.others.contains(&received.source_mac) {
-                routers.others.push(received.source_mac);
-            }
+            routers.record(&received, network, Some(old.as_slice()));
         })
         .await;
         let whole = lost == 0

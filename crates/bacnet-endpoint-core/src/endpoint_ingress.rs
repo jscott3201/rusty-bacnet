@@ -129,6 +129,10 @@ pub struct IngressReceivers {
     /// Tells a seated client the Number owner published the number (#2617).
     #[doc(hidden)]
     pub seat_number: crate::seat::SeatNumber,
+    /// The router announcements the link receives, for router learning
+    /// (#2831), with a count of the controls the layer's queue turned away.
+    #[doc(hidden)]
+    pub router_reports: bacnet_network::router_learning::RouterReports,
 }
 
 /// Terminal state reported by the classifier task. A full queue is none:
@@ -318,11 +322,15 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             .as_mut()
             .ok_or_else(|| started_once("endpoint ingress network owner is missing"))?;
         self.lifecycle = Lifecycle::Starting;
-        // Every link's controls are taken, for a client seat (#2617). The
+        // Every link's controls are taken, for a client seat (#2617) and
+        // the router announcements router learning waits for (#2831). The
         // endpoint's own Number owner gets them only on a link that takes
         // the local Number controls; on any other they go no further
         // without a seat.
-        let layer_controls = network.enable_network_control_receiver()?;
+        let (layer_controls, control_drops) =
+            network.enable_network_control_receiver_counting_drops()?;
+        let router_reports =
+            bacnet_network::router_learning::RouterReports::new(Some(control_drops));
         let apdu_rx = network.start().await?;
         let (numbers, controls) = if network
             .transport()
@@ -346,7 +354,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         let (inbound_tx, inbound_requests) = mpsc::channel(self.queue_capacity);
         let (terminal_tx, terminal_or_segment) = mpsc::channel(self.queue_capacity);
         let (policy_tx, policy_outcomes) = mpsc::channel(self.queue_capacity);
-        let (seats, seat_holds) = SeatSlot::new();
+        let (seats, seat_holds) = SeatSlot::new(router_reports.clone());
         let queues = IngressQueues {
             inbound_tx,
             terminal_tx,
@@ -360,6 +368,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             layer: layer_controls,
             numbers,
             seats: Arc::clone(&seats),
+            routers: router_reports.clone(),
         };
         let (egress_tx, egress_rx) = mpsc::channel(self.queue_capacity);
         let (cancel_tx, cancel_rx) = oneshot::channel();
@@ -414,6 +423,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             policy_outcomes,
             egress,
             seat_number,
+            router_reports,
         };
         Ok((receivers, server_seat))
     }
@@ -462,6 +472,14 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             coordinator,
             self.queue_capacity,
         )
+    }
+
+    /// The started link's network layer, which the session task owns:
+    /// `None` before start and once it has gone. A holder sends on it as a
+    /// seat does, and is stopped before the ingress (#2831).
+    #[doc(hidden)]
+    pub fn started_network(&self) -> Option<Arc<NetworkLayer<T>>> {
+        self.started.upgrade()
     }
 
     /// What a call that needs the ingress running finds instead, from its

@@ -161,6 +161,8 @@ struct Site {
     rx: bacnet_network::layer::ApduReceiver,
     /// The MAC of each unicast the session sends; a broadcast adds none.
     unicasts: tokio::sync::mpsc::UnboundedReceiver<MacAddr>,
+    /// The Who-Is probes the station received ([`Site::receive`]).
+    probes: usize,
 }
 
 impl Site {
@@ -236,6 +238,7 @@ impl Site {
             peer,
             rx,
             unicasts,
+            probes: 0,
         }
     }
 
@@ -251,13 +254,34 @@ impl Site {
     }
 
     /// The next APDU the peer receives: through the router, from the
-    /// session.
+    /// session. A Who-Is, which a check of the router sends the station
+    /// through it (#2831), is passed over and counted.
     async fn receive(&mut self) -> ReceivedApdu {
-        let received = timeout(WAIT, self.rx.recv()).await.unwrap().unwrap();
-        let source = received.source_network.clone().unwrap();
-        assert_eq!(source.mac_address.as_slice(), SESSION);
-        assert_eq!(received.source_mac.as_slice(), ROUTER_FAR);
-        received
+        loop {
+            let received = timeout(WAIT, self.rx.recv()).await.unwrap().unwrap();
+            let source = received.source_network.clone().unwrap();
+            assert_eq!(source.mac_address.as_slice(), SESSION);
+            assert_eq!(received.source_mac.as_slice(), ROUTER_FAR);
+            if received.apdu.as_ref() == [0x10, 0x08] {
+                self.probes += 1;
+                continue;
+            }
+            return received;
+        }
+    }
+
+    /// Wait until the session's router queries have learned the router: the
+    /// router alone answers two of them a minute apart, each waiting the
+    /// three seconds a step waits at least.
+    async fn learns_the_router(&self) {
+        let two_queries = Duration::from_secs(70);
+        eventually(
+            two_queries,
+            "the router queries learn the router",
+            async || self.learned().is_some(),
+        )
+        .await;
+        assert_eq!(self.learned().as_deref(), Some(&ROUTER_NEAR[..]));
     }
 
     /// Send `pdu` from the peer to the session, through the router.
@@ -298,11 +322,12 @@ impl Site {
 }
 
 /// The Reporter's records reach Device 999 behind the router: the first
-/// with the link's broadcast MAC, since no router is known yet. The peer's
-/// routed ReinitializeDevice teaches the session its network's router, so
-/// the record of that reset, the SimpleAck and the next local report all go
-/// to the router as unicasts. Each record names its requester, or this
-/// device for a local reset.
+/// with the link's broadcast MAC, since no router is known yet, which has
+/// the session ask its router query; the router's answer teaches it the
+/// router (#2831). The record of the peer's routed ReinitializeDevice, the
+/// SimpleAck and the next local report then all go to the router as
+/// unicasts. Each record names its requester, or this device for a local
+/// reset.
 #[tokio::test(start_paused = true)]
 async fn a_reporter_records_resets_to_a_device_behind_a_router() {
     let mut site = Site::start(false, &[AuditOperation::DEVICE_RESET]).await;
@@ -312,7 +337,7 @@ async fn a_reporter_records_resets_to_a_device_behind_a_router() {
     assert_eq!(first.operation, AuditOperation::DEVICE_RESET);
     assert_eq!(first.source_device, this_device);
     assert!(site.sent_unicasts().is_empty(), "no router was known yet");
-    assert_eq!(site.learned(), None);
+    site.learns_the_router().await;
 
     let mut service = BytesMut::new();
     bacnet_services::device_mgmt::ReinitializeDeviceRequest {
@@ -367,42 +392,52 @@ async fn a_reporter_records_resets_to_a_device_behind_a_router() {
 }
 
 /// A confirmed record's answer comes back through the router naming Device
-/// 999's network and MAC, completes the record and teaches the router. A
-/// record through that router that gets no answer fails as a direct one
-/// does, setting COMMUNICATION_FAILURE, and the router is forgotten: the
-/// next record goes with the broadcast MAC again, and its answer clears
-/// the failure and teaches the router anew.
+/// 999's network and MAC and completes the record; it teaches nothing, the
+/// session's router query does (#2831). A record through that router that
+/// gets no answer fails as a direct one does, setting COMMUNICATION_FAILURE,
+/// and the router is kept: silence starts a check of it, which finds it
+/// still answering the query, so the next record goes through it and its
+/// answer clears the failure.
 #[tokio::test(start_paused = true)]
-async fn a_confirmed_routed_record_learns_its_router_and_fails_like_a_direct_one() {
+async fn a_confirmed_routed_record_keeps_its_router_and_fails_like_a_direct_one() {
     let mut site = Site::start(true, &[AuditOperation::DEVICE_RESET]).await;
     for (round, answer) in [(0, true), (1, false), (2, true)] {
         site.session.report_device_reset_local().await.unwrap();
         let (record, invoke) = notification(&site.receive().await, true);
         assert_eq!(record.operation, AuditOperation::DEVICE_RESET);
         let unicasts = site.sent_unicasts();
-        if round == 1 {
-            assert_eq!(unicasts, [MacAddr::from_slice(&ROUTER_NEAR)]);
+        // Round 2 may carry the check's Who-Is through the router too.
+        if round == 0 {
+            assert!(unicasts.is_empty(), "no router was known yet");
         } else {
-            assert!(unicasts.is_empty(), "round {round} knew a router");
+            assert!(!unicasts.is_empty(), "round {round}");
+            assert!(unicasts.iter().all(|mac| mac.as_slice() == ROUTER_NEAR));
         }
         let site = &site;
         if answer {
             site.acknowledge(invoke.unwrap()).await;
             eventually(WAIT, "the answer completes the record", async || {
                 reliability(&site.session).await == Reliability::NO_FAULT_DETECTED.to_raw()
-                    && site.learned().is_some()
             })
             .await;
-            assert_eq!(site.learned().as_deref(), Some(&ROUTER_NEAR[..]));
         } else {
             let failed = Reliability::COMMUNICATION_FAILURE.to_raw();
             eventually(Duration::from_secs(10), "no answer fails it", async || {
                 reliability(&site.session).await == failed
             })
             .await;
-            assert_eq!(site.learned(), None, "the failed router is forgotten");
+        }
+        site.learns_the_router().await;
+    }
+    // The silent round started a check: a Who-Is to the station through the
+    // router, which found the router still answering the router query.
+    tokio::time::sleep(WAIT).await;
+    while let Ok(received) = site.rx.try_recv() {
+        if received.apdu.as_ref() == [0x10, 0x08] {
+            site.probes += 1;
         }
     }
+    assert_eq!(site.probes, 1);
     site.stop().await;
 }
 
@@ -474,18 +509,17 @@ async fn an_audited_read_of_a_routed_station_names_its_network() {
     site.stop().await;
 }
 
-/// A peer's Reject or Error came back through the learned router: the
-/// record fails, setting COMMUNICATION_FAILURE, but the router stays, so the
-/// next record goes to it as a unicast. Only a lost delivery forgets it.
+/// A peer's Reject or Error came back through the known router: the record
+/// fails, setting COMMUNICATION_FAILURE, but the router stays, so the next
+/// record goes to it as a unicast. Nothing but two checks of the session's
+/// own replaces it (#2831).
 #[tokio::test(start_paused = true)]
 async fn a_refused_record_keeps_its_router() {
     let mut site = Site::start(true, &[AuditOperation::DEVICE_RESET]).await;
     site.session.report_device_reset_local().await.unwrap();
     let (_, invoke) = notification(&site.receive().await, true);
     site.acknowledge(invoke.unwrap()).await;
-    // Idle the paused runtime, so every task has handled the answer.
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    assert_eq!(site.learned().as_deref(), Some(&ROUTER_NEAR[..]));
+    site.learns_the_router().await;
     for refusal in ["Reject", "Error", "none"] {
         site.session.report_device_reset_local().await.unwrap();
         let (_, invoke) = notification(&site.receive().await, true);
@@ -533,21 +567,18 @@ async fn a_refused_record_keeps_its_router() {
     site.stop().await;
 }
 
-/// The session learns a network's router at its ingress, whichever role
-/// takes the traffic (#2617): an answer from there that no lease of the
-/// session's holds, which any station may send, teaches nothing; a request
-/// from there, which the server takes, does.
+/// Nothing that arrives from a network teaches its router (#2831): not an
+/// answer from there that no lease of the session's holds, nor a request
+/// from there, which the server takes and answers through the station it
+/// came from. With no record to send, the session asks no router query.
 #[tokio::test(start_paused = true)]
-async fn only_a_request_or_a_held_answer_teaches_the_router() {
+async fn no_request_or_answer_teaches_the_router() {
     let mut site = Site::start(false, &[AuditOperation::READ]).await;
     let stray = Apdu::SimpleAck(SimpleAck {
         invoke_id: 99,
         service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
     });
     site.send(stray, false).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(site.learned(), None, "a stray answer taught a router");
-
     let mut service = BytesMut::new();
     bacnet_services::read_property::ReadPropertyRequest {
         object_identifier: oid(ObjectType::DEVICE, 123),
@@ -570,7 +601,14 @@ async fn only_a_request_or_a_held_answer_teaches_the_router() {
     site.send(request, true).await;
     let answer = decode_apdu(site.receive().await.apdu).unwrap();
     assert!(matches!(answer, Apdu::ComplexAck(ack) if ack.invoke_id == 4));
-    assert_eq!(site.learned().as_deref(), Some(&ROUTER_NEAR[..]));
+    // The answer went back to the station the request came through.
+    assert_eq!(site.sent_unicasts(), [MacAddr::from_slice(&ROUTER_NEAR)]);
+    tokio::time::sleep(WAIT).await;
+    assert_eq!(
+        site.learned(),
+        None,
+        "a request or a stray answer taught it"
+    );
     site.stop().await;
 }
 
@@ -608,76 +646,22 @@ async fn client_only_read() -> (
 }
 
 /// A client-only session, whose own dispatch takes the answers to its
-/// requests, learns the router from such an answer at its ingress too
-/// (#2617): the answer to its read of the station there teaches it, and one
-/// with the read's invoke ID but another service, which admission refuses
-/// too, doesn't.
+/// requests: its read of the station there is answered through the router
+/// and teaches nothing; the record of that read goes by broadcast, and the
+/// session's router query learns the router (#2831).
 #[tokio::test(start_paused = true)]
-async fn a_client_only_session_learns_the_router_from_an_answer() {
-    let (site, read, invoke, rp) = Box::pin(client_only_read()).await;
-    let other_service = Apdu::SimpleAck(SimpleAck {
-        invoke_id: invoke,
-        service_choice: ConfirmedServiceChoice::WRITE_PROPERTY,
-    });
-    site.send(other_service, false).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(site.learned(), None, "another service's answer taught it");
+async fn a_client_only_session_learns_the_router_only_by_its_query() {
+    let (mut site, read, invoke, rp) = Box::pin(client_only_read()).await;
     site.send(ack(invoke, &rp), false).await;
     assert!(read.await.unwrap().is_ok());
-    assert_eq!(site.learned().as_deref(), Some(&ROUTER_NEAR[..]));
-    site.stop().await;
-}
-
-/// An Error is matched by its service too: one naming another service
-/// teaches no router, one naming the read's does.
-#[tokio::test(start_paused = true)]
-async fn an_error_teaches_the_router_only_for_the_leases_service() {
-    let (site, read, invoke, _) = Box::pin(client_only_read()).await;
-    let error = |service| {
-        Apdu::Error(ErrorPdu {
-            invoke_id: invoke,
-            service_choice: service,
-            error_class: ErrorClass::PROPERTY,
-            error_code: ErrorCode::UNKNOWN_PROPERTY,
-            error_data: Bytes::new(),
-        })
-    };
-    site.send(error(ConfirmedServiceChoice::WRITE_PROPERTY), false)
-        .await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(site.learned(), None, "another service's Error taught it");
-    site.send(error(ConfirmedServiceChoice::READ_PROPERTY), false)
-        .await;
-    assert!(read.await.unwrap().is_err());
-    assert_eq!(site.learned().as_deref(), Some(&ROUTER_NEAR[..]));
-    site.stop().await;
-}
-
-/// A segmented Complex-ACK's first segment carries its service after the
-/// sequence number and window: it is matched by its peer and invoke ID, as
-/// admission matches it, and teaches the router.
-#[tokio::test(start_paused = true)]
-async fn a_held_segment_teaches_the_router() {
-    let (site, read, invoke, _) = Box::pin(client_only_read()).await;
-    let segment = Apdu::ComplexAck(ComplexAck {
-        segmented: true,
-        more_follows: true,
-        invoke_id: invoke,
-        sequence_number: Some(0),
-        proposed_window_size: Some(1),
-        service_choice: ConfirmedServiceChoice::READ_PROPERTY,
-        service_ack: Bytes::from_static(&[0x0c, 0, 0, 0, 1]),
-    });
-    site.send(segment, false).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let learned = site.learned();
+    let (record, _) = notification(&site.receive().await, false);
+    assert_eq!(record.operation, AuditOperation::READ);
     assert_eq!(
-        learned.as_deref(),
-        Some(&ROUTER_NEAR[..]),
-        "a held segment didn't teach"
+        site.sent_unicasts(),
+        [MacAddr::from_slice(&ROUTER_NEAR)],
+        "only the read itself: the record went by broadcast"
     );
-    read.abort();
-    let _ = read.await;
+    site.learns_the_router().await;
     site.stop().await;
 }
 

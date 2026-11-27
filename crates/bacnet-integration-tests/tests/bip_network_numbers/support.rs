@@ -80,8 +80,10 @@ pub async fn expect_number(socket: &UdpSocket, source: SocketAddrV4, function: u
     bounded(async {
         loop {
             let (bytes, from) = receive(socket).await;
-            // BBMD input broadcasts and ordinary fanout are not its own reply.
-            if from != source || bytes[1] == 4 {
+            // BBMD input broadcasts and ordinary fanout are not its own reply,
+            // nor is the router check a client makes before it takes a
+            // number (Who-Is-Router-To-Network, #2826).
+            if from != source || bytes[1] == 4 || bytes[4..].starts_with(&[1, 0x80, 0x00]) {
                 continue;
             }
             assert_eq!(
