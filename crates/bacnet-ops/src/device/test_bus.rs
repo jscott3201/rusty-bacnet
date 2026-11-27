@@ -76,6 +76,13 @@ pub(crate) async fn settle() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 }
 
+/// Wait out the provisional window of a handle placed on a lone claim
+/// (#2824), the resolve wait: a claim elsewhere after it is judged by the
+/// handles' own rules (#2795) rather than clearing the placement.
+pub(crate) async fn past_provisional() {
+    tokio::time::sleep(crate::client::RESOLVE_WAIT + Duration::from_millis(100)).await;
+}
+
 /// Wait out the window in which the bus client takes the answers to its
 /// What-Is-Network-Number (the longest a node may hold its answer, 10 s,
 /// which outlasts the client's 1 s APDU timeout, and 2 s more) and the

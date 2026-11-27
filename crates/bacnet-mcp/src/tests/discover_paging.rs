@@ -475,10 +475,11 @@ async fn find_skips_an_instance_claimed_twice_whole() {
     for row in &skipped {
         assert_eq!(row["device"], json!(1202));
         assert_eq!(row["error"]["reason"], json!("ambiguous-device"), "{row}");
-        let message = row["error"]["message"].as_str().unwrap();
-        assert!(
-            message.contains("10.0.0.150:47808") && message.contains("10.0.0.3:47808"),
-            "{message}"
+        let claims = &row["error"]["claims"];
+        assert_eq!(
+            (&claims[0]["address"], &claims[1]["address"]),
+            (&json!("10.0.0.3:47808"), &json!("10.0.0.150:47808")),
+            "{row}"
         );
     }
 

@@ -20,7 +20,7 @@
 //! instance meanwhile. Nor is it sent once the address is another
 //! device's: the turn is refused when the discovery table's row there
 //! claims another instance, and a local address with no row is asked which
-//! device it is first ([`Unsent`](super::Unsent)).
+//! device it is first ([`Unsent`]).
 
 use std::future::Future;
 use std::path::Path;
@@ -34,7 +34,7 @@ use serde_json::{Map, Value, json};
 use super::audit::{Audit, Context, utc_now};
 use super::ledger::{Entry, Ledger, Origin, Place};
 use super::lock::{WorkspaceLock, lock};
-use super::place::{Asked, revert_address, turn, turn_asking};
+use super::place::{Asked, Unsent, revert_address, turn, turn_asking};
 use super::plan::{self, PRE_READ, PreRead};
 use super::send::{item_json, send, write_property};
 use super::{Gate, Level, Outcome, Planned, Preview, Stored, WriteSpec, run_id};
@@ -99,6 +99,23 @@ pub trait Caller: Sync {
     /// the TUI may; MCP never sends one, so its reverts report such an
     /// entry as not reverted, with why.
     fn may_look(&self) -> bool;
+
+    /// Why the device of a revert's `entry` may not be asked anything at
+    /// `claim`, if it may not: each address claiming its instance (for an
+    /// entry kept without an address), or the entry's own address, passes
+    /// this before any question or Who-Is goes there (#2824), and one
+    /// refused stops the revert with nothing sent. MCP checks its policy.
+    fn claim_refusal(&self, _entry: &Entry, _claim: &DeviceAddress) -> Option<String> {
+        None
+    }
+
+    /// The text of a revert of `entry` not sent for `unsent`, its device
+    /// not placed: [`Unsent`]'s own by default, which may name addresses
+    /// for a person to choose from. MCP asks the operator instead, naming
+    /// none an agent could pick (#2824).
+    fn unsent_text(&self, _entry: &Entry, unsent: &Unsent) -> String {
+        unsent.to_string()
+    }
 
     /// Why the revert of `entry` may not go to `at`, if it may not: `at` is
     /// where the desk found the entry's device, in its local form, settled
@@ -559,9 +576,10 @@ async fn revert_entry<T: TransportPort + 'static>(
     let Some(object) = entry.object() else {
         return Outcome::NotSent(UNKNOWN_PRE_IMAGE.into());
     };
-    let at = match revert_address(client, entry, caller.may_look()).await {
+    let gate = |claim: &DeviceAddress| caller.claim_refusal(entry, claim);
+    let at = match revert_address(client, rate, entry, caller.may_look(), &gate).await {
         Ok(at) => at,
-        Err(error) => return Outcome::NotSent(error.to_string()),
+        Err(unsent) => return Outcome::NotSent(caller.unsent_text(entry, &unsent)),
     };
     if let Some(why) = caller.revert_refusal(entry, &at) {
         return Outcome::NotSent(why);

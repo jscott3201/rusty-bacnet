@@ -1121,9 +1121,10 @@ calls.
 
 Made from an address (`"192.168.1.10"`, `"mstp:5"`, `"2:0x05"`, a
 `discover()` row) it is pinned there. Made from an instance (`1234`,
-`"2:1234"`) it follows the instance: when the device stops answering
-at its address and one other address claims the instance, the handle
-moves there. Its calls go to the device one at a time.
+`"2:1234"`) it follows the instance, from where a device confirmed it
+to the client's own question: when the device stops answering at its
+address and one other address claims the instance and answers as it,
+the handle moves there. Its calls go to the device one at a time.
 
 An object is an `ObjectIdentifier` or text (`"ai:1"`,
 `"analog-input:1"`); a property a `PropertyIdentifier` or text

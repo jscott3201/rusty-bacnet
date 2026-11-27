@@ -11,7 +11,9 @@ use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRou
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::test_transport::{SendLog, TestTransport};
 
-use super::test_bus::{Bus, N, client_on, mac, name_of, server, settle, stop, until_learned};
+use super::test_bus::{
+    Bus, N, client_on, mac, name_of, past_provisional, server, settle, stop, until_learned,
+};
 use super::*;
 use crate::client::{Discover, Find, ResolveScope, Scope};
 
@@ -426,9 +428,12 @@ async fn a_router_refusal_has_a_following_handle_ask_again() {
     let bus = Bus::new();
     bus.rejecter(9);
     let (client, sent) = client_on(bus.port(1)).await;
-    // Device 2002 is station 6 on network 3, heard through station 9.
+    // Device 2002 is station 6 on network 3, heard through station 9, and
+    // named so to an earlier question of the client's (#2824): the router
+    // refuses every request now.
     bus.i_am_from(9, Some((3, &mac(6))), 2002);
     settle().await;
+    client.remember(DeviceAddress::new(3, &mac(6)).unwrap(), 2002);
     let wide = client.with_resolve_scope(ResolveScope::Global);
     let device = wide.device(2002).await.unwrap();
     assert_eq!(device.address(), DeviceAddress::new(3, &mac(6)).unwrap());
@@ -480,10 +485,11 @@ async fn a_miss_on_the_own_network_keeps_the_target_as_written() {
 }
 
 /// A bare instance whose one row in the table is behind the router follows
-/// it there, on the default local resolve scope, sending no Who-Is: the
-/// table is asked before the network.
+/// it there, on the default local resolve scope: the row's device isn't
+/// confirmed yet, so one Who-Is goes to that scope first (#2824), and the
+/// routed station is asked which device it is.
 #[tokio::test(start_paused = true)]
-async fn a_bare_instance_with_a_remote_row_needs_no_who_is() {
+async fn a_bare_instance_with_a_remote_row_asks_it_after_a_local_who_is() {
     let mut lab = Routed::new(|near| near.port(1)).await;
     lab.servers
         .push(server(lab.three.port(7), 2002, "on three").await);
@@ -493,10 +499,7 @@ async fn a_bare_instance_with_a_remote_row_needs_no_who_is() {
     let device = lab.client.device(2002).await.unwrap();
     assert_eq!(device.address(), DeviceAddress::new(3, &mac(7)).unwrap());
     assert!(device.follows());
-    assert!(
-        super::discover_tests::who_is_frames(&lab.sent).is_empty(),
-        "no Who-Is"
-    );
+    assert_eq!(super::discover_tests::the_who_is(&lab.sent), (None, true));
     lab.stop().await;
 }
 
@@ -510,6 +513,7 @@ async fn a_routed_write_with_no_route_goes_nowhere_else() {
     let mut lab = Routed::new(|near| near.port(1)).await;
     lab.discover().await;
     let following = lab.client.device("3:1001").await.unwrap();
+    past_provisional().await;
     let six = DeviceAddress::new(3, &mac(6)).unwrap();
     let eight = DeviceAddress::new(3, &mac(8)).unwrap();
     assert_eq!(following.address(), six);
@@ -557,5 +561,30 @@ async fn a_station_found_again_as_another_device_is_not_read() {
     settle().await;
     assert_eq!(name_of(&following).await.unwrap(), "moved");
     assert_eq!(following.address(), eight);
+    lab.stop().await;
+}
+
+/// A device behind a router answers a Who-Is later than one on this
+/// network (#2824): a first placement whose Who-Is goes to a remote
+/// network (`3:N`), or whose claims include a routed address (a bare
+/// instance with one remote row), gives the answers the resolve wait,
+/// about 3 s, rather than half a second.
+#[tokio::test(start_paused = true)]
+async fn a_routed_placement_settles_for_the_resolve_wait() {
+    let mut lab = Routed::new(|near| near.port(1)).await;
+    lab.servers
+        .push(server(lab.three.port(7), 2002, "on three").await);
+    lab.discover().await;
+    for target in ["3:1001", "2002"] {
+        let from = tokio::time::Instant::now();
+        let device = lab.client.device(target).await.unwrap();
+        let took = from.elapsed();
+        assert!(device.follows(), "{target}");
+        assert!(
+            (crate::client::RESOLVE_WAIT..crate::client::RESOLVE_WAIT + Duration::from_secs(1))
+                .contains(&took),
+            "{target}: {took:?}"
+        );
+    }
     lab.stop().await;
 }

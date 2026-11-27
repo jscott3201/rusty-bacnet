@@ -226,8 +226,13 @@ async fn two_networks_holding_one_instance_are_two_devices() {
     let body = &by_instance["structuredContent"];
     assert_eq!(body["reason"], json!("ambiguous-device"), "{by_instance}");
     let message = body["message"].as_str().unwrap_or_default();
+    assert!(message.contains("Ask the operator"), "{by_instance}");
     assert_eq!(
-        message, "device 1201 is claimed by 10.0.0.2:47808 and 2001:0x33; name one by its address",
+        body["claims"],
+        json!([
+            { "address": "10.0.0.2:47808", "confirmed": false },
+            { "address": "2001:0x33", "confirmed": false },
+        ]),
         "{by_instance}"
     );
     let routed = lab
@@ -258,7 +263,10 @@ async fn two_networks_holding_one_instance_are_two_devices() {
 
 /// With both networks allowed, `2001:instance` resolves within its
 /// network to the routed station, and the local one is still its own
-/// device: each call is pinned to the address it named.
+/// device: each call is pinned to the address it named. Announced only
+/// (nothing answers at the routed station), the claim is asked which
+/// device answers there and refused as unconfirmed, naming it (#2824);
+/// registered by hand, the application's own word, it is taken unasked.
 #[tokio::test(start_paused = true)]
 async fn a_scoped_instance_names_the_claim_on_its_network() {
     let mut lab = Lab::start(Policy::default()).await;
@@ -277,6 +285,31 @@ async fn a_scoped_instance_names_the_claim_on_its_network() {
     until(&lab, routed, "the routed claim is known").await;
     let ctx = lab.mcp.ctx();
     let call = Call::new(Duration::from_secs(5), ctx.account());
+    let unconfirmed = ctx
+        .device(&call, &DeviceArg::Text(format!("2001:{LAB}")))
+        .await
+        .map(|_| ())
+        .unwrap_err()
+        .json();
+    assert_eq!(
+        unconfirmed["reason"],
+        json!("unconfirmed-device"),
+        "{unconfirmed}"
+    );
+    assert_eq!(unconfirmed["claims"][0]["address"], json!("2001:0x33"));
+    assert_eq!(unconfirmed["claims"][0]["answer"], json!("silent"));
+    lab.low
+        .add_routed_device(bacnet_client::discovery::RoutedDeviceConfig {
+            instance: LAB,
+            router_mac: LAB_MAC.to_vec(),
+            remote_network: 2001,
+            remote_mac: vec![0x33],
+            max_apdu_length: 1476,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
+            max_segments_accepted: None,
+        })
+        .await
+        .unwrap();
     let routed = ctx
         .device(&call, &DeviceArg::Text(format!("2001:{LAB}")))
         .await

@@ -302,7 +302,7 @@ async fn a_link_refusal_names_the_cli_flag() {
     // A B/IPv6 socket address on another link: both resolvers name the flag.
     let (client, server) = lab().await;
     let by_resolve = resolve(&client, "[::1]:47808", std::time::Duration::ZERO).await;
-    let by_mac = resolve_mac(&client, "[::1]:47808").await;
+    let by_mac = resolve_mac(&client, "[::1]:47808", std::time::Duration::ZERO).await;
     for refused in [
         by_resolve.map(drop).unwrap_err(),
         by_mac.map(drop).unwrap_err(),

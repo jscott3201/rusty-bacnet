@@ -19,6 +19,8 @@ use serde_json::{Map, Value, json};
 use super::write::{Peer, Step};
 use super::write_task::{self, hand_off, open};
 use super::{Spec, schema};
+use bacnet_ops::DeviceAddress;
+
 use crate::context::{Call, Ctx};
 use crate::errors::ToolError;
 use crate::writes::McpCaller;
@@ -244,21 +246,37 @@ async fn attached<T: TransportPort + 'static>(
         .cloned()
         .collect();
     let ids: BTreeSet<u64> = chosen.iter().map(|e| e.id).collect();
-    // Where the entries' writes went, found as the desk finds it (nothing
-    // is sent); one written before #2560 kept no address, so its device is
-    // the one the discovery table holds for its instance. The job checks
-    // the desk finds the same address again (`McpCaller::reverting`).
-    let client = ctx.client()?.low_level();
+    // Where the entries' writes went, found as the desk finds it. One
+    // written before #2560 kept no address: its device is where the claims
+    // of its instance, each checked against the policy first, answer as it
+    // (#2824: a question each, no Who-Is). The job checks the desk finds
+    // the same address again (`McpCaller::reverting`).
+    let ops = ctx.client()?;
+    let client = ops.low_level();
     let first = chosen
         .iter()
         .find(|e| e.address.is_some())
         .or(chosen.first());
     let address = match first {
-        Some(entry) => Some(
-            revert_address(client, entry, false)
-                .await
-                .map_err(|unsent| unplaced(entry, unsent))?,
-        ),
+        Some(entry) => {
+            let gate = |claim: &DeviceAddress| match ctx.allow(claim, entry.device) {
+                Ok(()) => None,
+                Err(ToolError::Refused { message, .. }) => Some(message),
+                Err(other) => Some(format!("{other:?}")),
+            };
+            Some(
+                revert_address(client, ops.limits(), entry, false, &gate)
+                    .await
+                    .map_err(|unsent| match unsent {
+                        // The policy's own refusal, with its reason.
+                        Unsent::Withheld { at, why } => ctx
+                            .allow(&at, entry.device)
+                            .err()
+                            .unwrap_or(ToolError::Failed(why)),
+                        unsent => unplaced(entry, unsent),
+                    })?,
+            )
+        }
         None => None,
     };
     let own = client.network_number();
@@ -307,10 +325,13 @@ async fn attached<T: TransportPort + 'static>(
 
 /// Why an attached revert of `entry` can't be put to the person: the
 /// device can't be placed without a Who-Is, or an entry from before
-/// addresses names an instance two addresses claim. Nothing was sent.
+/// addresses names an instance two addresses may be, or one that didn't
+/// answer as it, refused asking the operator (#2824). Nothing was sent.
 fn unplaced(entry: &Entry, unsent: Unsent) -> ToolError {
+    if let Some(refused) = ToolError::unplaced_revert(entry.device, &unsent) {
+        return refused;
+    }
     match unsent {
-        Unsent::Contested { .. } => ToolError::refused("ambiguous-device", unsent.to_string()),
         Unsent::NotLooking { device } => ToolError::UnknownDevice {
             // Its address, or for an entry from before addresses its instance.
             device: match entry.address {

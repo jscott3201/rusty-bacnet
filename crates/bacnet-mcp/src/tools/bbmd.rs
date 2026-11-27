@@ -138,6 +138,7 @@ pub(super) async fn plan<T: TransportPort + 'static>(
         return Err(ToolError::Refused {
             reason: "rate-limited",
             message: "one BBMD survey a minute".into(),
+            claims: None,
             retry_after_s: Some(wait.as_secs().max(1)),
         });
     }

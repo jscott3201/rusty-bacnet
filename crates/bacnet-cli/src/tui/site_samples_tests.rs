@@ -152,7 +152,7 @@ fn the_command_bar_lines_parse() {
                 command_bar::parse(command, &devices).unwrap_or_else(|e| panic!("{line}: {e}"));
             let matches = match (*kind, &parsed) {
                 ("watch", Line::Watch(_)) | ("dcc", Line::Manage(_)) => true,
-                ("writem", Line::Writem(specs)) => !specs.is_empty(),
+                ("writem", Line::Writem(specs, _)) => !specs.is_empty(),
                 _ => false,
             };
             assert!(matches, "{line}: {parsed:?}");

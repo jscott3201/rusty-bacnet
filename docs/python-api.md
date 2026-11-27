@@ -176,14 +176,27 @@ far = await client.device("2:1234")            # instance 1234 on network 2
   asked on its network first from then on. It never moves: `await
   ahu.moved_to()` says where its instance is heard now, once its own
   address has gone quiet.
-- **A following handle** needs the device's address. One address claiming
-  the instance in the discovery table gives it. None sends one Who-Is for
-  that instance and waits up to 3 seconds: to the network the target names,
-  or for a bare instance to the client's `resolve_scope`, this network
-  alone unless `BACnetClient(resolve_scope="global")` or
-  `resolve_scope=<network>` widens it. Later, when the device stops
-  answering at its address and one other address claims the instance, the
-  handle moves there and the call goes on.
+- **A following handle** needs the device's address, where a device
+  confirmed the instance to the client's own question (#2824). Unless a
+  row registered with `add_device` claims it (trusted without a question),
+  one Who-Is for the instance goes first, to the network the target
+  names, or for a bare instance to the client's `resolve_scope` (this
+  network alone unless `BACnetClient(resolve_scope="global")` or
+  `resolve_scope=<network>` widens it), its answers given half a second on
+  this network and 3 seconds where the Who-Is goes beyond it or a claim is
+  routed, or up to 3 seconds when nothing claims it. Then each address
+  claiming it is asked which device answers there: one read of its Device
+  object, which a claim that doesn't answer holds for the client's timeout
+  and retries (about 24 seconds at the defaults). A placement so costs
+  about half a second on this network. While a handle follows the
+  instance a new one joins it, sending nothing; once the last is dropped,
+  the next is placed again, though an address whose device answered is
+  not asked again. A handle placed on a lone claim is so only
+  provisionally for 3 seconds: another address claiming the instance in
+  that time makes the next handle or write ask again. An I-Am confirms
+  nothing, as anyone can send one. Later, when the device stops answering
+  at its address and one other address claims the instance and answers as
+  it, the handle moves there and the call goes on.
 
 A wrong type raises `TypeError` and text the grammar refuses `ValueError`,
 when the call is made. On await:
@@ -192,10 +205,17 @@ when the call is made. On await:
   client, say) raises `ValueError`;
 - an instance no address claims and none answered for, or a routed address
   with no router known, raises `BacnetLookupError`, which is also a
-  `LookupError`;
-- an instance two or more addresses claim raises
-  `BacnetAmbiguousDeviceError`, a `BacnetLookupError`. Each of its
-  `candidates` is a target: `await client.device(error.candidates[0])`.
+  `LookupError`; so does an instance claimed at one address whose device,
+  asked, didn't answer as it, with `at` the address asked and `answer`
+  what it did (`"silent"`, `"another-device"` with `answer_instance`,
+  `"no-device-object"`, `"refused"` or `"failed"`); so does a first
+  placement while handles follow the instance elsewhere, with `candidate`
+  the address that confirmed it (read through those handles, which moves
+  them, or drop them), and one settled with the discovery table full;
+- an instance two or more addresses claim, when none of them answers as it
+  or two or more might be it, raises `BacnetAmbiguousDeviceError`, a
+  `BacnetLookupError`. Each of its `candidates` is a target: `await
+  client.device(error.candidates[0])`.
 
 #### `Device`
 
@@ -664,8 +684,12 @@ What this leaves: a read moves a following handle once its old address
 misses one identity question (about 24 s at the default timers; about 3
 to 6 s for a routed address with no row) while another address names the
 instance, and later writes go to the new place. A routed device's path
-through its router is #2823, and a new handle's first resolution of an
-instance is #2824.
+through its router is #2823. A first placement takes a station answering as
+the instance while the device itself hasn't claimed it by the time the
+claims are asked (#2824): a device absent or silent, one slower than the
+settle time (and than 3 seconds after a lone claim's placement), or one
+on another network than a bare instance asks (name its network, or widen
+`resolve_scope`).
 
 ```python
 await ahu.write("av:1", "pv", "72.5@8")            # priority 8, in the text
@@ -878,7 +902,7 @@ ask only the instances between them: give both or neither.
 | Raised | When |
 |--------|------|
 | `TypeError`, `ValueError` | An argument that names nothing: when the call is made for a wrong type or bad text, on await for what needs the started client's link. Nothing was sent |
-| `BacnetLookupError` (also `LookupError`) | No device could be placed for the name, or a write through a following handle wasn't sent because the device isn't taken for the instance where the handle holds it. `target` is the name, and `instance` the instance it holds (None for an address); for that write, `at` is the address held and `candidate` an unconfirmed hint, as `(network, mac)` |
+| `BacnetLookupError` (also `LookupError`) | No device could be placed for the name (an instance claimed at one address whose device, asked, didn't answer as it included, #2824), or a write through a following handle wasn't sent because the device isn't taken for the instance where the handle holds it. `target` is the name, and `instance` the instance it holds (None for an address); `at` is the address asked or held and, for that write, `candidate` an unconfirmed hint, as `(network, mac)` |
 | `BacnetAmbiguousDeviceError` | A `BacnetLookupError`: two or more addresses claim the instance. `candidates` are targets |
 | `BacnetWriteDeniedError` | The write policy refuses the priority. Nothing was sent |
 | `BacnetProtocolError`, `BacnetRejectError`, `BacnetAbortError` | The device's own Error, Reject or Abort |
@@ -3559,6 +3583,9 @@ await client.who_is(scope="192.168.1.100:47808")
 Manually add a device to the discovery table. The table holds one device
 per address: adding an instance at an address that holds another replaces
 it, so `get_device()` no longer finds the instance that was there (#2560).
+A row added so is the application's own word: `client.device(instance)`
+places a handle there without a Who-Is or a question to the device
+(#2824), so add only an address known to be the device's.
 An address longer than 18 octets, which the hex form can spell, raises
 `BacnetError` and adds nothing: no link's MAC is longer (#2606).
 

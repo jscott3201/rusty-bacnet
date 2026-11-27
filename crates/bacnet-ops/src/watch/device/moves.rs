@@ -63,7 +63,7 @@ use bacnet_transport::port::TransportPort;
 use tokio::time::Instant;
 
 use super::super::hub::Phase;
-use super::super::jobs::{self, Answer};
+use super::super::jobs::{self, Answer, Skipped};
 use super::super::{Binding, Why};
 use super::follow::follows_to;
 use super::identity::{Pace, give_up};
@@ -346,11 +346,11 @@ impl<T: TransportPort + 'static> Device<T> {
     }
 
     /// A following point's start found a device at the address that
-    /// refuses the read that names it (#2795): nothing there can confirm
-    /// it, so nothing it answered is taken or subscribed, and the point is
-    /// unreachable as unconfirmed. It goes with its device if the hub's
-    /// reads find it at another address.
-    pub(super) fn unconfirmed(&mut self, process: u32) {
+    /// refuses the read that names it (#2795), or, `ambiguous`, two or more
+    /// addresses that may be the device when its place was settled
+    /// (#2824): nothing confirms it there, so nothing it answered is taken
+    /// or subscribed, and the point is given up as unconfirmed.
+    pub(super) fn unconfirmed(&mut self, process: u32, why: Skipped) {
         let seq = &self.inner.registry.seq;
         let at = &self.address;
         let Some(row) = self.rows.get_mut(&process) else {
@@ -364,10 +364,25 @@ impl<T: TransportPort + 'static> Device<T> {
             self.finish(row);
             return;
         }
-        let note = format!(
-            "the device at {at} refuses the read that names it, so device {instance} can't be \
-             confirmed there; watch it by its address"
-        );
+        let note = match why {
+            Skipped::Ambiguous => format!(
+                "two or more addresses claiming device {instance} answer as it, or may, so \
+                 which one it is isn't confirmed; watch it by its address"
+            ),
+            Skipped::TableFull => format!(
+                "the discovery table is full, so the device's own claim to device {instance} \
+                 may have been dropped, and its place at {at} isn't confirmed; watch it by its \
+                 address"
+            ),
+            Skipped::Unsent => format!(
+                "the Who-Is for device {instance} couldn't be sent, so its place at {at} isn't \
+                 confirmed; watch it again once the link is back, or by its address"
+            ),
+            Skipped::Unconfirmed | Skipped::Elsewhere => format!(
+                "the device at {at} refuses the read that names it, so device {instance} can't \
+                 be confirmed there; watch it by its address"
+            ),
+        };
         give_up(row, Why::Unconfirmed, note, seq, instance);
     }
 

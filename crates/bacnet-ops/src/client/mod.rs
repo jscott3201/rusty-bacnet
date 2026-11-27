@@ -70,7 +70,7 @@ pub use self::read::{ListRead, MAX_OBJECTS, ReadVia, Wanted};
 pub use self::routed_paths::{
     DEFAULT_ROUTED_PATH_MAX_NPDU, RoutedPath, RoutedPathStatus, RoutedPaths,
 };
-use crate::device::{ClientEvent, DeviceAddress, Follows};
+use crate::device::{ClientEvent, DeviceAddress, Follows, Said};
 use crate::format::Value;
 use crate::limits::RequestLimits;
 use crate::reading::Reading;
@@ -220,11 +220,15 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// `device::follow::REMEMBERED`).
     pub(crate) follows: Mutex<Follows>,
     /// The instances devices named for their address, from the one read by
-    /// the wildcard instance a handle made from an address needed (at most
+    /// the wildcard instance a handle made from an address needed, or
+    /// confirmed there to a handle's first placement (#2824; at most
     /// `device::follow::REMEMBERED`); one goes when the discovery table
     /// loses a row at its address, or a device there announces another
     /// instance.
-    pub(crate) instances: Mutex<HashMap<DeviceAddress, u32>>,
+    pub(crate) instances: Mutex<HashMap<DeviceAddress, Said>>,
+    /// The turn of each instance's resolution while one runs or waits,
+    /// with when its last Who-Is went out (#2824).
+    pub(crate) resolving: Mutex<crate::device::Resolving>,
     /// The stations on other networks a lookup by address found answering
     /// only a Who-Is to their network, or nothing
     /// ([`StationMisses`](crate::device::StationMisses)).
@@ -273,6 +277,7 @@ impl<T: TransportPort + 'static> Client<T> {
                 cov: Mutex::new(HashMap::new()),
                 follows: Mutex::new(HashMap::new()),
                 instances: Mutex::new(HashMap::new()),
+                resolving: Mutex::new(HashMap::new()),
                 station_misses: Mutex::default(),
                 changes,
                 events: broadcast::channel(64).0,
@@ -327,6 +332,9 @@ impl<T: TransportPort + 'static> Client<T> {
     /// whose following
     /// handles, after a request times out, ask once where the device went
     /// and give the answers that long (see [`QUIET`](crate::device::QUIET)).
+    /// A first placement by instance gives its Who-Is's answers `wait`
+    /// where it goes beyond this network or a claim is routed, and a
+    /// handle placed on a lone claim stays provisional that long (#2824).
     /// `None` sends no Who-Is: such a handle fails at once with
     /// [`OpsError::UnknownDevice`](crate::OpsError::UnknownDevice), as does a routed address the discovery
     /// table holds no router for, and a following one goes by the

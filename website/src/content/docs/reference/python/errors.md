@@ -239,7 +239,10 @@ Raised when no device could be placed for the name a call gave
 answered a Who-Is for it, or no router is known for a routed address's
 network. Also a `LookupError`. Nothing was sent to the device. The
 typed `_from_device` and `_to_device` calls raise it for an
-instance the table doesn't hold. A write or relinquish through a handle
+instance the table doesn't hold. `client.device(instance)` raises it
+when the one address claiming the instance, asked which device answers
+there, didn't answer as it (#2824); `at` is that address and
+`answer` says what it did. A write or relinquish through a handle
 made from an instance raises it when the device isn't taken for the
 instance at the address the handle holds (#2795): a write never goes to
 another address on its own. Read through the handle to have it look
@@ -251,13 +254,23 @@ target: The device as it was named: an instance (`"1234"`,
 instance: The instance named (`1234` for `"1234"` or
 `"2:1234"`); None when the device was named by an address.
 candidates: An empty list here.
-at: For a write a following handle didn't send, the address it
-holds, as `(network, mac)` (network 0 the local one); else
-None.
-candidate: For that write, the one other address the discovery
-table has the instance at, as `(network, mac)`, or None. An
-unconfirmed hint: the table takes I-Ams nobody asked for, and
-nothing asked the device there which it is.
+at: The address asked which device answers there, as `(network, mac)` (network 0 the local one): the instance's one claim, or
+the address a following handle holds; else None.
+candidate: As `(network, mac)`, or None. For `device()` while
+handles already follow the instance at `at`: the address
+whose device did confirm it; a new handle never moves the live
+ones, so read through them (a read asks their address and moves
+them) or drop them, then make the handle again. For a write
+through a following handle: the one other address the
+discovery table has the instance at, an unconfirmed hint, as
+the table takes I-Ams nobody asked for.
+answer: What the device at `at` did, asked which device it is:
+`"silent"`, `"another-device"` (`answer_instance` names
+it), `"no-device-object"`, `"refused"` or `"failed"`;
+None when it wasn't asked (no route to it is known), or for
+another lookup error.
+answer\_instance: The instance the device at `at` answered as, for
+`"another-device"`; else None.
 
 Attributes:
 
@@ -266,6 +279,8 @@ Attributes:
 - `candidates: list[tuple[int, bytes]]`
 - `at: Optional[tuple[int, bytes]]`
 - `candidate: Optional[tuple[int, bytes]]`
+- `answer: Optional[str]`
+- `answer_instance: Optional[int]`
 
 ## BacnetAmbiguousDeviceError
 

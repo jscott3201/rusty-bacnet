@@ -504,6 +504,12 @@ impl DeviceTable {
         self.rows.len()
     }
 
+    /// Whether the table holds as many rows as it takes: an I-Am from an
+    /// address it holds no row for is dropped, unheard, until a row goes.
+    pub fn is_full(&self) -> bool {
+        self.rows.len() >= MAX_DEVICE_TABLE_ENTRIES
+    }
+
     /// Whether the table is empty.
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()

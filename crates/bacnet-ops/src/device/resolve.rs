@@ -12,6 +12,7 @@ use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::error::Error;
 use tokio::sync::broadcast::error::RecvError;
 
+use super::follow::Joining;
 use super::{Device, DeviceAddress, DeviceRef, Discovered, Duplicate, Pin};
 use crate::client::{Client, Discover, ResolveScope, Scope, lock};
 use crate::error::OpsError;
@@ -19,13 +20,14 @@ use crate::target::{Target, VmacLookup, bip6_vmac, check_local_mac, parse_target
 
 /// How long the one Who-Is for an instance no address claims listens on
 /// past the first answer, for a second device claiming it too (within the
-/// resolve wait). Two devices answer one Who-Is moments apart, not
+/// resolve wait), and how long the answers to one sent while claims exist
+/// already are given before they are asked (#2824). Two devices answer one Who-Is moments apart, not
 /// together: a few milliseconds apart on an IP link, but on an MS/TP trunk
 /// each answers only when the token reaches it, which on a slow or busy
 /// trunk is hundreds of milliseconds. Half a second keeps a handle's first
 /// lookup quick while hearing a duplicate on all but the slowest trunks;
 /// one heard later still shows in the table, as a duplicate.
-const SETTLE: Duration = Duration::from_millis(500);
+pub(super) const SETTLE: Duration = Duration::from_millis(500);
 
 impl<T: TransportPort + 'static> Client<T> {
     /// A handle on the device `target` names ([`DeviceRef`]); see the
@@ -175,33 +177,34 @@ impl<T: TransportPort + 'static> Client<T> {
         network.map(|network| if Some(network) == own { 0 } else { network })
     }
 
-    /// A handle following `instance`, from the one address claiming it
-    /// (on `named` when the target names a network, network 0 for this
-    /// client's own), or the one that answers a Who-Is, so long as no other
-    /// answered it too.
+    /// A handle following `instance` (on `named` when the target names a
+    /// network, network 0 for this client's own), placed where a device
+    /// confirmed the instance to the client's own question (#2824): where
+    /// the handles already following it are, once confirmed there and
+    /// still the instance's ([`Client::joining`]); otherwise where its
+    /// claims, asked after one Who-Is for it unless a row registered by
+    /// hand claims it, say it is ([`Client::resolve_claims`]), for a lone
+    /// claim provisionally ([`Client::provisional`]). One resolution of an
+    /// instance runs at a time. A new handle never moves the handles
+    /// already following it: placed elsewhere than they are, it fails as
+    /// [`OpsError::NotConfirmed`] naming where they are, and a read through
+    /// them moves them (#2795).
     async fn following(&self, instance: u32, named: Option<u16>) -> Result<Device<T>, OpsError> {
         let network = self.scope(named);
-        let claims = self.claims(instance, network).await;
-        let address = match claims.as_slice() {
-            [] => {
-                let row = self.find_instance(instance, named).await?;
-                let address = DeviceAddress::of(&row)
-                    .map(|address| self.localized(address))
-                    .ok_or_else(|| OpsError::from(unknown(instance, named)))?;
-                // A second device answers the one Who-Is a little after
-                // the first, not with it: `find_instance` listened on for
-                // SETTLE past the first answer, so one in that time is in
-                // the table now.
-                let claims = self.claims(instance, network).await;
-                if claims.len() > 1 {
-                    return Err(ambiguous(instance, &claims).into());
-                }
-                address
+        let key = (network, instance);
+        let since = std::time::Instant::from(tokio::time::Instant::now());
+        let mut turn = self.resolving(key).await;
+        let at = match self.joining(key).await {
+            Joining::Join(at) => at,
+            Joining::Ask(live) => {
+                let (address, asked) = self
+                    .resolve_claims((key, named), live, (&mut turn, since))
+                    .await?;
+                let provisional = self.provisional(instance, &address, &asked, since).await;
+                self.place_confirmed(key, address, &asked, provisional)?
             }
-            [address] => address.clone(),
-            _ => return Err(ambiguous(instance, &claims).into()),
         };
-        let at = self.follow((network, instance), address);
+        drop(turn);
         Ok(Device {
             client: self.clone(),
             // As named: the follow key localizes it where it is used.
@@ -246,10 +249,11 @@ impl<T: TransportPort + 'static> Client<T> {
     /// The device claiming `instance` that answers one Who-Is for it, to
     /// the network the target `named` (this client's own as a local
     /// broadcast) and to this clone's [`resolve_scope`](Self::resolve_scope)
-    /// otherwise, listening [`SETTLE`] past its answer for a second. A miss
+    /// otherwise, listening past its answer for a second as long as
+    /// [`settle_time`](Self::settle_time) says. A miss
     /// names the target as written and says where it asked: the network
     /// named, or the resolve scope.
-    async fn find_instance(
+    pub(super) async fn find_instance(
         &self,
         instance: u32,
         named: Option<u16>,
@@ -258,9 +262,9 @@ impl<T: TransportPort + 'static> Client<T> {
         let own = self.low_level().network_number();
         let network = self.scope(named);
         let sent_to = network.map_or(self.resolve_scope(), ResolveScope::on);
-        let asked = named.map_or(sent_to, ResolveScope::Network);
+        let settle = self.settle_time(network, &[]);
         let found = self
-            .wait_for(&sent_to.into(), Some(range), SETTLE, |row| {
+            .wait_for(&sent_to.into(), Some(range), settle, |row| {
                 row.object_identifier.instance_number() == instance
                     && network.is_none_or(|n| {
                         DeviceAddress::of(row)
@@ -268,16 +272,25 @@ impl<T: TransportPort + 'static> Client<T> {
                     })
             })
             .await?;
-        found.ok_or_else(|| {
-            let sent = self.resolve_wait().is_some();
-            match OpsError::from(unknown(instance, named)) {
-                OpsError::UnknownDevice { target, .. } => OpsError::UnknownDevice {
-                    target,
-                    asked: sent.then(|| asked.into()),
-                },
-                other => other,
-            }
-        })
+        found.ok_or_else(|| self.missing(instance, named))
+    }
+
+    /// The error for `instance` (named on `named`) that no address claims
+    /// after the Who-Is for it, naming the target as written and saying
+    /// where it asked, if it did.
+    pub(super) fn missing(&self, instance: u32, named: Option<u16>) -> OpsError {
+        let sent_to = self
+            .scope(named)
+            .map_or(self.resolve_scope(), ResolveScope::on);
+        let asked = named.map_or(sent_to, ResolveScope::Network);
+        let sent = self.resolve_wait().is_some();
+        match OpsError::from(unknown(instance, named)) {
+            OpsError::UnknownDevice { target, .. } => OpsError::UnknownDevice {
+                target,
+                asked: sent.then(|| asked.into()),
+            },
+            other => other,
+        }
     }
 
     /// The row of the station at the remote `address`, once it answers,

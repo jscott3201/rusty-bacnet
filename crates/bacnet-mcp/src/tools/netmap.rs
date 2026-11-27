@@ -289,6 +289,7 @@ async fn ask_routers<T: TransportPort + 'static>(
             return Err(ToolError::Refused {
                 reason: "rate-limited",
                 message: "one Who-Is-Router-To-Network a minute".into(),
+                claims: None,
                 retry_after_s: Some(wait.as_secs().max(1)),
             });
         }

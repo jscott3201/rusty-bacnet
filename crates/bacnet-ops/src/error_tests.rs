@@ -266,3 +266,31 @@ fn a_parse_error_reads_as_its_reason() {
     assert_eq!(error.to_string(), "unknown object type: 'zz'");
     assert!(!error.unreachable());
 }
+
+/// A new handle's placement refused while handles follow the instance at
+/// another address (#2824): the text says the candidate's device confirmed
+/// it and what to do (read through the live handles, which moves them, or
+/// drop them), and doesn't call the candidate the table's unconfirmed word
+/// or ask for a discovery. A lone claim's refusal keeps its own advice.
+#[test]
+fn a_new_handle_beside_live_ones_says_what_to_do() {
+    use crate::device::Answer;
+    let here = DeviceAddress::local(&[2]).unwrap();
+    let there = DeviceAddress::local(&[3]).unwrap();
+    let refused = |candidate| OpsError::NotConfirmed {
+        instance: 7,
+        at: here.clone(),
+        candidate,
+        answer: Some(Answer::Silent),
+        placing: true,
+    };
+    let live = refused(Some(there)).to_string();
+    for says in ["confirmed it", "read through", "drop them"] {
+        assert!(live.contains(says), "{says}: {live}");
+    }
+    for not in ["discovery table", "make the handle again once"] {
+        assert!(!live.contains(not), "{not}: {live}");
+    }
+    let lone = refused(None).to_string();
+    assert!(lone.contains("once the device answers"), "{lone}");
+}

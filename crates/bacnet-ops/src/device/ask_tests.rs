@@ -23,6 +23,8 @@ async fn a_move_soon_after_an_i_am_is_followed() {
     bus.i_am(2, N);
     settle().await;
     let device = client.device(N).await.unwrap();
+    // The handle's first placement sent one Who-Is for the instance (#2824).
+    let made = who_is(&sent);
     assert_eq!(name_of(&device).await.unwrap(), "A");
     tokio::time::sleep(Duration::from_secs(10)).await;
     bus.silence(2);
@@ -33,7 +35,7 @@ async fn a_move_soon_after_an_i_am_is_followed() {
     let error = name_of(&device).await.unwrap_err();
     assert!(error.timed_out(), "{error}");
     assert_eq!(device.address(), at(2), "one timeout moves nothing");
-    assert_eq!(who_is(&sent), 1, "one Who-Is asks where it went");
+    assert_eq!(who_is(&sent) - made, 1, "one Who-Is asks where it went");
     // A second timeout before the Who-Is has had the resolve wait for its
     // answers decides nothing yet.
     assert!(name_of(&device).await.is_err());
@@ -49,7 +51,7 @@ async fn a_move_soon_after_an_i_am_is_followed() {
             to: at(3),
         }
     );
-    assert_eq!(who_is(&sent), 1, "asked once");
+    assert_eq!(who_is(&sent) - made, 1, "asked once");
     stop(vec![old, new]).await;
 }
 
@@ -64,16 +66,22 @@ async fn a_gone_device_is_asked_for_once_each_quiet() {
     settle().await;
     let device = client.device(N).await.unwrap();
     let alongside = client.device(N).await.unwrap();
+    // The handle's first placement sent one Who-Is for the instance (#2824).
+    let made = who_is(&sent);
     assert_eq!(name_of(&device).await.unwrap(), "A");
     bus.silence(2);
     for handle in [&device, &alongside, &device, &alongside, &device] {
         let error = name_of(handle).await.unwrap_err();
         assert!(error.timed_out(), "{error}");
     }
-    assert_eq!(who_is(&sent), 1, "one Who-Is for five reads by two handles");
+    assert_eq!(
+        who_is(&sent) - made,
+        1,
+        "one Who-Is for five reads by two handles"
+    );
     tokio::time::sleep(QUIET).await;
     assert!(name_of(&device).await.is_err());
-    assert_eq!(who_is(&sent), 2, "another once QUIET has passed");
+    assert_eq!(who_is(&sent) - made, 2, "another once QUIET has passed");
     assert_eq!(device.address(), at(2));
     stop(vec![lab]).await;
 }
@@ -117,14 +125,12 @@ async fn a_clone_that_sends_nothing_goes_by_the_announcements() {
 #[tokio::test(start_paused = true)]
 async fn a_late_duplicate_does_not_take_the_handle_on_a_missed_read() {
     let bus = Bus::new();
-    let (client, _) = client(&bus).await;
-    let servers = vec![
-        server(bus.port(2), N, "A").await,
-        server(bus.port(3), N, "B").await,
-    ];
+    let (client, log) = client(&bus).await;
+    let mut servers = vec![server(bus.port(2), N, "A").await];
     bus.i_am(2, N);
     settle().await;
     let device = client.device(N).await.unwrap();
+    servers.push(server(bus.port(3), N, "B").await);
     assert_eq!(name_of(&device).await.unwrap(), "A");
     tokio::time::sleep(QUIET * 2).await;
     bus.i_am(3, N);
@@ -150,10 +156,13 @@ async fn a_late_duplicate_does_not_take_the_handle_on_a_missed_read() {
     assert!(name_of(&device).await.is_err());
     assert_eq!(device.address(), at(2));
     assert!(events.try_recv().is_err(), "nothing moved");
-    assert!(matches!(
-        client.device(N).await,
-        Err(OpsError::Ambiguous { instance: N, .. })
-    ));
+    // A handle made now joins the others where they are, asking nothing:
+    // the client confirmed the device there, and its row still names it
+    // (#2824); the claim at station 3 moves none of them (#2795).
+    let before = log.len();
+    let again = client.device(N).await.unwrap();
+    assert_eq!(again.address(), at(2));
+    assert_eq!(log.len(), before, "nothing asked");
     stop(servers).await;
 }
 

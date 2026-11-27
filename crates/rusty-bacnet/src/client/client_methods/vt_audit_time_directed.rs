@@ -427,7 +427,9 @@ impl BACnetClient {
     ///
     /// Useful when the device address is known without sending a WhoIs.
     /// Default values are used for max_apdu_length (1476), segmentation (NO_SEGMENTATION),
-    /// and vendor_id (0).
+    /// and vendor_id (0). A row added so is the application's own word: a
+    /// handle by its instance is placed there without a Who-Is or a
+    /// question to the device (#2824).
     #[pyo3(signature = (device_instance, address))]
     fn add_device<'py>(
         &self,

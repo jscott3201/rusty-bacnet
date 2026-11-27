@@ -359,14 +359,6 @@ fn lifted_refusal(text: &str, shown: &str) -> String {
     )
 }
 
-/// The ambiguity error for `instance`, claimed by every row of `claims`.
-fn ambiguous(instance: u32, claims: &[DiscoveredDevice]) -> OpsError {
-    OpsError::Ambiguous {
-        instance,
-        candidates: claims.iter().filter_map(DeviceAddress::of).collect(),
-    }
-}
-
 impl<T: TransportPort + 'static> Ctx<T> {
     /// The client, or a refusal in passive mode.
     pub(crate) fn client(&self) -> Result<&Client<T>, ToolError> {
@@ -380,12 +372,14 @@ impl<T: TransportPort + 'static> Ctx<T> {
 
     /// The device `arg` names, if the discovery table holds it and the
     /// policy allows it, with the handle the call reads through. Targets
-    /// are numeric: a device is never found by name. An instance names the
-    /// one address claiming it, `dnet:instance` the one claiming it on that
-    /// network, and an address (#2560) the device at it. Nothing is sent to
-    /// find one (the server's client looks for no device), and an instance
-    /// two addresses claim is refused, naming both. The handle is pinned to
-    /// the row the policy checks, so no request in the call goes elsewhere.
+    /// are numeric: a device is never found by name. An address (#2560)
+    /// names the device at it. An instance names the address claiming it
+    /// (`dnet:instance`: on that network) whose device confirmed it to the
+    /// client's own question (#2824, [`confirmed`](Self::confirmed)): one
+    /// read of its Device object, once an address, sent only where the
+    /// policy lets the call reach. No Who-Is is sent to find one (the
+    /// server's client looks for no device). The handle is pinned to the
+    /// row the policy checks, so no request in the call goes elsewhere.
     pub(crate) async fn device(
         &self,
         call: &Call,
@@ -428,18 +422,9 @@ impl<T: TransportPort + 'static> Ctx<T> {
         // (#2738).
         let mut named = None;
         let entry = match parsed {
-            Target::Instance(instance) => match client.low_level().get_device(instance).await {
-                Ok(Some(entry)) => entry,
-                Ok(None) => return Err(unknown()),
-                Err(error) => return Err(failed(error.into())),
-            },
+            Target::Instance(instance) => self.confirmed(client, &text, instance, None).await?,
             Target::Routed { dnet, instance } => {
-                let claims = self.claims(instance, Some(dnet)).await;
-                match claims.as_slice() {
-                    [] => return Err(unknown()),
-                    [entry] => entry.clone(),
-                    several => return Err(failed(ambiguous(instance, several))),
-                }
+                self.confirmed(client, &text, instance, Some(dnet)).await?
             }
             Target::Mac(_) | Target::RoutedMac { .. } => {
                 // A handle from an address sends nothing on this client,
@@ -483,6 +468,60 @@ impl<T: TransportPort + 'static> Ctx<T> {
         self.remember(&device.entry);
         call.reached(&device.address, device.instance);
         Ok(device)
+    }
+
+    /// The row of device `instance`, named as `text` (on `network` when it
+    /// names one), at the address whose device confirmed the instance to
+    /// the client's own question (#2824, `Client::confirm_among`): each
+    /// address claiming it is asked which device answers there, unless its
+    /// device confirmed it before. Every claim is checked against the
+    /// policy first, and exactly those are asked, so nothing is sent where
+    /// the call may not reach: one claim the policy leaves out is refused
+    /// as such, and several of which it leaves out any as ambiguous. No
+    /// Who-Is is sent, so a quiet device that never announced itself
+    /// isn't heard: the refusals ask the operator to run a discovery. A claim from an address only the operator's one-station
+    /// mark lifts is refused, as it has no handle by instance (#2738).
+    async fn confirmed(
+        &self,
+        client: &Client<T>,
+        text: &str,
+        instance: u32,
+        network: Option<u16>,
+    ) -> Result<DiscoveredDevice, ToolError> {
+        let unknown = || ToolError::UnknownDevice {
+            device: text.to_string(),
+            hint: DISCOVER_HINT.into(),
+        };
+        let claims = self.claims(instance, network).await;
+        let addresses: Vec<DeviceAddress> = claims.iter().filter_map(DeviceAddress::of).collect();
+        match (claims.as_slice(), addresses.as_slice()) {
+            ([], _) => return Err(unknown()),
+            ([row], []) => return Err(self.lifted_claim(text, row).unwrap_or_else(unknown)),
+            (_, [only]) if claims.len() == 1 => self.allow(only, instance)?,
+            (several, _) => {
+                if addresses.len() < several.len()
+                    || addresses.iter().any(|at| self.allow(at, instance).is_err())
+                {
+                    return Err(ToolError::ambiguous(text, &addresses));
+                }
+            }
+        }
+        // Exactly the claims the policy checked are asked, no Who-Is: an
+        // I-Am landing meanwhile adds no address the policy never saw.
+        let at = client
+            .confirm_among(instance, &addresses)
+            .await
+            .map_err(|error| match error {
+                OpsError::UnknownDevice { .. } => unknown(),
+                OpsError::Ambiguous { candidates, .. } => ToolError::ambiguous(text, &candidates),
+                error @ OpsError::NotConfirmed { .. } => ToolError::unconfirmed(text, &error),
+                error => ToolError::Failed(format!("{text}: {error}")),
+            })?;
+        client
+            .low_level()
+            .get_device_at(at.network(), at.mac())
+            .await
+            .ok_or_else(unknown)
     }
 
     /// The refusal for a device `row` that answered from an address only the
@@ -584,6 +623,16 @@ impl<T: TransportPort + 'static> Ctx<T> {
 
     /// The one known address claiming `instance`; `None` when none or two
     /// or more do.
+    /// [`known_at`](Self::known_at), once the device there confirmed the
+    /// instance to the client's own question, as a tool's call by the
+    /// instance asks it (#2824), or its row was registered by hand: where
+    /// a subscription by the instance may go. Sends nothing.
+    pub(crate) fn confirmed_at(&self, instance: u32) -> Option<DeviceAddress> {
+        let at = self.known_at(instance)?;
+        let client = self.client.as_ref()?;
+        (client.confirmed_at(&at) == Some(instance)).then_some(at)
+    }
+
     pub(crate) fn known_at(&self, instance: u32) -> Option<DeviceAddress> {
         let known = self.known.locked();
         let mut claims = known

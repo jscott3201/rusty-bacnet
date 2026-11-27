@@ -84,10 +84,24 @@ pub(crate) fn subscribe<T: TransportPort + 'static>(
                 device: uri.device.to_string(),
                 hint: "the discovery table changed meanwhile; subscribe again".into(),
             };
-            let point = ctx
+            let at = ctx
                 .known_at(uri.device)
-                .map(|at| uri.at(at))
                 .ok_or_else(|| refusal(&changed()))?;
+            // A subscription goes only where the device confirmed the
+            // instance to the client's own question (#2824): nothing here
+            // asks, so a tool's call on the device does first.
+            if ctx.confirmed_at(uri.device).is_none() {
+                return Err(refusal(&ToolError::refused(
+                    "unconfirmed-device",
+                    format!(
+                        "device {} isn't confirmed at the address claiming it ({at}): call a \
+                         tool on the device first (bacnet_describe_device, say), which asks it \
+                         which device it is, then subscribe",
+                        uri.device
+                    ),
+                )));
+            }
+            let point = uri.at(at);
             let hold = ctx
                 .subs
                 .hold(ctx, point)

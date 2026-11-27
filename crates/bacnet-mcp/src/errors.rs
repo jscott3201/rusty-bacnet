@@ -7,8 +7,10 @@
 //! `network-reject`, `timeout`, `failed`) are always distinct, because an
 //! agent's retry logic depends on the difference.
 
+use bacnet_ops::device::Answer;
 use bacnet_ops::label::kebab;
 use bacnet_ops::{DeviceAddress, OpsError, PropertyError};
+use bacnet_tool::safety::Unsent;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, NetworkReject, RemoteError};
 use serde_json::{Value, json};
@@ -38,10 +40,14 @@ pub(crate) enum ToolError {
     /// one frame; after a retry or a segment, an earlier attempt may have
     /// reached it.
     NetworkReject { device: u32, reject: NetworkReject },
-    /// The policy refused the call. Nothing was sent.
+    /// The policy refused the call. Nothing was sent, but, for a device
+    /// named by its instance, the question of which device answers at each
+    /// address claiming it (#2824): those addresses are `claims`, each
+    /// marked unconfirmed, as data, never as a target to name.
     Refused {
         reason: &'static str,
         message: String,
+        claims: Option<Value>,
         retry_after_s: Option<u64>,
     },
     /// The device isn't in the discovery table. Nothing was sent.
@@ -77,22 +83,88 @@ impl ToolError {
         Self::Refused {
             reason,
             message: message.into(),
+            claims: None,
             retry_after_s: None,
         }
     }
 
     /// The device `target` names, as written (`7`, `2:7`), is claimed by
-    /// every address of `candidates` (#2560): refused as ambiguous, naming
-    /// them. Nothing was sent.
+    /// every address of `candidates`, and which one is the device isn't
+    /// confirmed (#2560, #2824): refused as ambiguous, the addresses as
+    /// `claims`, each unconfirmed. The advice is to ask the operator: an
+    /// agent must not pick an unconfirmed address (#2738's rule).
     pub(crate) fn ambiguous(target: &str, candidates: &[DeviceAddress]) -> Self {
-        let claims: Vec<String> = candidates.iter().map(ToString::to_string).collect();
-        Self::refused(
-            "ambiguous-device",
-            format!(
-                "device {target} is claimed by {}; name one by its address",
-                claims.join(" and ")
-            ),
-        )
+        let claims: Vec<Value> = candidates
+            .iter()
+            .map(|at| json!({ "address": at.to_string(), "confirmed": false }))
+            .collect();
+        Self::Refused {
+            reason: "ambiguous-device",
+            message: ambiguous_text(target, candidates.len(), " (under `claims`)"),
+            claims: Some(Value::Array(claims)),
+            retry_after_s: None,
+        }
+    }
+
+    /// Why a revert of a ledger entry kept by its instance alone (written
+    /// before #2560) wasn't sent, its device not placed (#2824): two or
+    /// more addresses may be it, or its one claim didn't answer as it.
+    /// Refused as [`ambiguous`](Self::ambiguous) or
+    /// [`unconfirmed`](Self::unconfirmed) are, asking the operator; `None`
+    /// for any other reason.
+    pub(crate) fn unplaced_revert(instance: u32, unsent: &Unsent) -> Option<Self> {
+        let target = instance.to_string();
+        match unsent {
+            Unsent::Contested { claims, .. } => Some(Self::ambiguous(&target, claims)),
+            Unsent::Unconfirmed { at, answer, .. } => {
+                Some(Self::unconfirmed_at(&target, at, *answer))
+            }
+            _ => None,
+        }
+    }
+
+    /// The text of a detached revert's [`unplaced_revert`](Self::unplaced_revert):
+    /// its message, which names no address, without pointing at `claims`,
+    /// as a revert's result lists none.
+    pub(crate) fn unplaced_revert_text(instance: u32, unsent: &Unsent) -> Option<String> {
+        let target = instance.to_string();
+        match unsent {
+            Unsent::Contested { claims, .. } => Some(ambiguous_text(&target, claims.len(), "")),
+            Unsent::Unconfirmed { answer, .. } => {
+                Some(unconfirmed_text(&target, answered(*answer).2, ""))
+            }
+            _ => None,
+        }
+    }
+
+    /// The device `target` names by its instance isn't confirmed at the one
+    /// address claiming it (#2824, `error` an [`OpsError::NotConfirmed`]):
+    /// refused, that address under `claims`, unconfirmed, with what its
+    /// device did when asked which it is. The advice is to ask the operator
+    /// to check the device and run a discovery.
+    pub(crate) fn unconfirmed(target: &str, error: &OpsError) -> Self {
+        let OpsError::NotConfirmed { at, answer, .. } = error else {
+            return Self::Failed(format!("{target}: {error}"));
+        };
+        Self::unconfirmed_at(target, at, *answer)
+    }
+
+    /// [`unconfirmed`](Self::unconfirmed) for the claim at `at`, whose
+    /// device gave `answer` when asked (`None`: not asked).
+    pub(crate) fn unconfirmed_at(target: &str, at: &DeviceAddress, answer: Option<Answer>) -> Self {
+        let (kind, found, did) = answered(answer);
+        let claim = json!({
+            "address": at.to_string(),
+            "confirmed": false,
+            "answer": kind,
+            "answer_instance": found,
+        });
+        Self::Refused {
+            reason: "unconfirmed-device",
+            message: unconfirmed_text(target, did, " (under `claims`)"),
+            claims: Some(json!([claim])),
+            retry_after_s: None,
+        }
     }
 
     /// A request to `device` that failed with `error`: a timeout (the
@@ -182,9 +254,13 @@ impl ToolError {
             Self::Refused {
                 reason,
                 message,
+                claims,
                 retry_after_s,
             } => {
                 let mut body = json!({ "error": "refused", "reason": reason, "message": message });
+                if let Some(claims) = claims {
+                    body["claims"] = claims.clone();
+                }
                 if let Some(after) = retry_after_s {
                     body["retry_after_s"] = json!(after);
                 }
@@ -250,6 +326,50 @@ impl ToolError {
             } => format!("{}, reading {object}; {hint}", error.summary()),
         }
     }
+}
+
+/// The advice for device `target` claimed by `count` addresses none of
+/// which is confirmed: ask the operator, never pick one. `listed` follows
+/// "addresses" (where the reply lists them, if it does).
+fn ambiguous_text(target: &str, count: usize, listed: &str) -> String {
+    format!(
+        "device {target} is claimed by {count} addresses{listed}, and which one is the device \
+         isn't confirmed. Ask the operator which device is meant; do not pick an address \
+         yourself"
+    )
+}
+
+/// The advice for device `target` whose one claim, asked which device
+/// answers there, `did` as said: ask the operator, never name an address.
+/// `listed` follows "the address claiming it" (where the reply lists it).
+fn unconfirmed_text(target: &str, did: String, listed: &str) -> String {
+    format!(
+        "device {target} isn't confirmed: the address claiming it{listed}, asked which device \
+         answers there, {did}. Ask the operator to check the device and run a discovery; do \
+         not name an address for it yourself"
+    )
+}
+
+/// What the device at a claim did, asked which device it is (`None`: not
+/// asked): its `answer` as `claims` writes it, the instance it answered as
+/// for another device, and the words for it.
+fn answered(answer: Option<Answer>) -> (Option<&'static str>, Option<u32>, String) {
+    let (kind, found) = match answer {
+        Some(Answer::Is(found) | Answer::Has(found)) => (Some("another-device"), Some(found)),
+        Some(Answer::Not) => (Some("no-device-object"), None),
+        Some(Answer::Unclear) => (Some("refused"), None),
+        Some(Answer::Silent) => (Some("silent"), None),
+        Some(_) => (Some("failed"), None),
+        None => (None, None),
+    };
+    let did = match (kind, found) {
+        (Some("another-device"), Some(found)) => format!("answered as device {found}"),
+        (Some("silent"), _) => "didn't answer".into(),
+        (Some("no-device-object"), _) => "has no such Device object".into(),
+        (Some("refused"), _) => "turned the question away".into(),
+        _ => "couldn't be asked".into(),
+    };
+    (kind, found, did)
 }
 
 /// A device's Error, Reject or Abort as data: each name in kebab case

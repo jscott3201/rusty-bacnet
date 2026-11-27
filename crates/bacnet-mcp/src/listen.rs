@@ -464,11 +464,12 @@ impl Subs {
                     pages += 1;
                     pages <= MAX_DEVICE_PAGES
                 }
-                // At the one address its instance names now: a URI names a
-                // device by its instance.
+                // At the one address its instance names now, once its
+                // device confirmed it there (#2824): a URI names a device
+                // by its instance.
                 Ok(Uri::Point(uri)) => {
                     let at = ctx
-                        .known_at(uri.device)
+                        .confirmed_at(uri.device)
                         .filter(|_| ctx.reach_known(uri.device));
                     match at.map(|at| uri.at(at)) {
                         Some(point) => match self.take(ctx, point.clone()) {

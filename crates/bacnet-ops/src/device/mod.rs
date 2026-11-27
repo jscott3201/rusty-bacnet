@@ -18,14 +18,55 @@
 //!   its network first from then on. Its instance, when a call needs it and the table doesn't say,
 //!   comes from one read of the Device object by the wildcard instance,
 //!   remembered by the client.
-//! - **From an instance** (`1234`, or `2:1234` on one network): one
-//!   address claiming it in the discovery table gives a handle that
-//!   follows the instance; none sends one Who-Is for it and waits
-//!   ([`Client::with_resolve_wait`]), to the network the target names, or
-//!   for a bare instance to the client's resolve scope, this network alone
-//!   by default ([`Client::with_resolve_scope`]), and a miss fails as
-//!   [`OpsError::UnknownDevice`] saying where it asked; two or more, before
-//!   or after that wait, fail with [`OpsError::Ambiguous`], listing them.
+//! - **From an instance** (`1234`, or `2:1234` on one network): a handle
+//!   that follows the instance, placed only where a device confirmed it to
+//!   the client's own question (#2824). Where the handles already
+//!   following it are, confirmed and still holding it, it joins them,
+//!   sending nothing. Otherwise, unless a row registered by hand claims it
+//!   (the application's own word, trusted without a question), one Who-Is
+//!   for the instance goes first, to the network the target names, or for a
+//!   bare instance to the client's resolve scope, this network alone by
+//!   default ([`Client::with_resolve_scope`]), so the device itself, on
+//!   the network but quiet, claims it too: its answers are given half a
+//!   second on this network, and the resolve wait
+//!   ([`Client::with_resolve_wait`], 3 s by default) where the Who-Is goes
+//!   beyond it or a claim is routed, as a device behind a router answers
+//!   later; with no claim at all, the resolve wait for a first one, a miss
+//!   failing as [`OpsError::UnknownDevice`] saying where it asked. One
+//!   resolution of an instance runs at a time; the others wait, and share
+//!   its Who-Is once its settle time is over.
+//!   Then each claim is asked which device answers there, all at once:
+//!   one read of its Device object by the wildcard instance, or, for a
+//!   device refusing that, of the instance's own Device object. The
+//!   handle goes to the one address that confirms it, while no other is
+//!   left open by an unclear answer; one claim that doesn't fails as
+//!   [`OpsError::NotConfirmed`] naming it and what it answered, and
+//!   several that don't, or two or more left open, as
+//!   [`OpsError::Ambiguous`], listing them, with nothing but the Who-Is
+//!   and those questions sent. A handle placed on a lone claim is so for
+//!   the resolve wait only provisionally: another address claiming the
+//!   instance in that time, as a device slower than the settle time does,
+//!   clears its confirmation, and the next handle made for the instance, or
+//!   write through it, is placed again (both answering: ambiguous). More
+//!   claims needing a question than
+//!   [`MAX_ASKED`] are ambiguous unasked, but a single row registered by
+//!   hand among them places the handle. A placement so costs about half a
+//!   second on this network (about 3 s for a routed target) and one read a
+//!   claim, about the resolve wait when nothing claims the instance; a
+//!   claim that doesn't answer holds it for the client's timeout and
+//!   retries, about 24 s at the default timers. With the discovery table
+//!   full once the Who-Is settles (4,096 addresses), it fails as
+//!   [`OpsError::TableFull`], asking nothing, as the device's own answer
+//!   may have been dropped. A device's answer is remembered for its
+//!   address (and
+//!   forgotten as the instance read for an address is), which spares its
+//!   read the next time and nothing more: once the last handle following
+//!   the instance is dropped, the next is placed again, Who-Is included,
+//!   as the device that answered may be elsewhere too. An I-Am, even one answering the client's own
+//!   Who-Is, confirms nothing: nothing in it ties it to a request. A new
+//!   handle never moves the handles already following the instance: one
+//!   placed elsewhere than they are fails as [`OpsError::NotConfirmed`]
+//!   naming their place, and a read through them moves them.
 //! - **From a discovery result** ([`Discovered`]): pinned, knowing the
 //!   instance.
 //!
@@ -75,8 +116,31 @@
 //! misses one identity question (about 24 s at the default timers; about 3
 //! to 6 s for a routed address with no row) while another address names
 //! the instance, and later writes go to the new place. A routed device's
-//! path through its router is #2823, and a new handle's first resolution
-//! of an instance is #2824.
+//! path through its router is #2823. Nothing in BACnet/IP is
+//! authenticated, so a station answering the client's question as the
+//! instance at its own address, while the device itself hasn't claimed it
+//! by the time the claims are asked, can't be told from the device having
+//! moved there, and is placed. That class takes in: a device absent, or
+//! silent to the Who-Is; one slower to answer it than the settle time,
+//! and than the resolve wait after a lone claim's placement; one beyond
+//! the Who-Is's reach (a bare instance asks the client's resolve scope,
+//! this network alone by default, so a device on another network isn't
+//! heard: name its network, or widen the scope); a clone that sends no
+//! Who-Is ([`Client::with_resolve_wait`]`(None)`), whose placements ask
+//! the claims as they stand; a frame a BBMD forwards that removes a
+//! device's claim, and with it the answer remembered for its address
+//! (#2837); a B/IPv6 virtual address, which is a claim like any other; and
+//! a routed station at first sight, reached through whichever station
+//! announced it, whose answer the real router's later I-Am only cues a
+//! check of (#2830). A row registered by hand
+//! ([`BACnetClient::add_device`], [`BACnetClient::add_routed_device`]) is
+//! taken as the application's word, without a Who-Is or a question. With
+//! the device claiming the instance too and answering its question, the
+//! caller gets [`OpsError::Ambiguous`]; a place confirmed before is joined,
+//! as its handles' own reads judge it.
+//!
+//! [`BACnetClient::add_device`]: bacnet_client::client::BACnetClient::add_device
+//! [`BACnetClient::add_routed_device`]: bacnet_client::client::BACnetClient::add_routed_device
 
 /// Evaluate `$body` with `$at` where the device is reached now
 /// ([`Device::target`]), and for a following handle whose request timed
@@ -111,8 +175,10 @@ pub(crate) use sent;
 
 mod address;
 pub(crate) mod confirm;
+mod first;
 mod follow;
 mod misses;
+mod raw_place;
 mod reads;
 mod resolve;
 mod route;
@@ -126,11 +192,13 @@ use bacnet_transport::any::AnyTransport;
 use bacnet_transport::port::TransportPort;
 
 pub use self::address::DeviceAddress;
-pub(crate) use self::confirm::Answer;
+pub use self::confirm::{Answer, MAX_ASKED, identify, placed};
+pub(crate) use self::first::{Resolving, Settled};
 pub(crate) use self::follow::{FollowKey, Followed};
-pub(crate) use self::follow::{Follows, keep_room};
+pub(crate) use self::follow::{Follows, Said, keep_room};
 pub use self::misses::MISS_MEMORY;
 pub(crate) use self::misses::StationMisses;
+pub use self::raw_place::{Gate, Look, Placement, Withheld, place_instance};
 pub(crate) use self::route::{path_to, router_for};
 use crate::client::{Client, lock};
 use crate::error::OpsError;
@@ -388,6 +456,9 @@ mod discover_tests;
 mod find_tests;
 
 #[cfg(test)]
+mod first_contact_tests;
+
+#[cfg(test)]
 mod follow_tests;
 
 #[cfg(test)]
@@ -410,6 +481,9 @@ pub(crate) mod test_bus;
 
 #[cfg(test)]
 mod write_follow_tests;
+
+#[cfg(test)]
+mod who_is_first_tests;
 
 #[cfg(test)]
 #[path = "tests.rs"]

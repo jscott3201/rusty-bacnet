@@ -4017,9 +4017,10 @@ class Device:
 
     Made from an address (``"192.168.1.10"``, ``"mstp:5"``, ``"2:0x05"``, a
     ``discover()`` row) it is pinned there. Made from an instance (``1234``,
-    ``"2:1234"``) it follows the instance: when the device stops answering
-    at its address and one other address claims the instance, the handle
-    moves there. Its calls go to the device one at a time.
+    ``"2:1234"``) it follows the instance, from where a device confirmed it
+    to the client's own question: when the device stops answering at its
+    address and one other address claims the instance and answers as it,
+    the handle moves there. Its calls go to the device one at a time.
 
     An object is an ``ObjectIdentifier`` or text (``"ai:1"``,
     ``"analog-input:1"``); a property a ``PropertyIdentifier`` or text
@@ -4947,7 +4948,10 @@ class BacnetLookupError(BacnetError, LookupError):
     answered a Who-Is for it, or no router is known for a routed address's
     network. Also a ``LookupError``. Nothing was sent to the device. The
     typed ``_from_device`` and ``_to_device`` calls raise it for an
-    instance the table doesn't hold. A write or relinquish through a handle
+    instance the table doesn't hold. ``client.device(instance)`` raises it
+    when the one address claiming the instance, asked which device answers
+    there, didn't answer as it (#2824); ``at`` is that address and
+    ``answer`` says what it did. A write or relinquish through a handle
     made from an instance raises it when the device isn't taken for the
     instance at the address the handle holds (#2795): a write never goes to
     another address on its own. Read through the handle to have it look
@@ -4959,19 +4963,32 @@ class BacnetLookupError(BacnetError, LookupError):
         instance: The instance named (``1234`` for ``"1234"`` or
             ``"2:1234"``); None when the device was named by an address.
         candidates: An empty list here.
-        at: For a write a following handle didn't send, the address it
-            holds, as ``(network, mac)`` (network 0 the local one); else
-            None.
-        candidate: For that write, the one other address the discovery
-            table has the instance at, as ``(network, mac)``, or None. An
-            unconfirmed hint: the table takes I-Ams nobody asked for, and
-            nothing asked the device there which it is.
+        at: The address asked which device answers there, as ``(network,
+            mac)`` (network 0 the local one): the instance's one claim, or
+            the address a following handle holds; else None.
+        candidate: As ``(network, mac)``, or None. For ``device()`` while
+            handles already follow the instance at ``at``: the address
+            whose device did confirm it; a new handle never moves the live
+            ones, so read through them (a read asks their address and moves
+            them) or drop them, then make the handle again. For a write
+            through a following handle: the one other address the
+            discovery table has the instance at, an unconfirmed hint, as
+            the table takes I-Ams nobody asked for.
+        answer: What the device at ``at`` did, asked which device it is:
+            ``"silent"``, ``"another-device"`` (``answer_instance`` names
+            it), ``"no-device-object"``, ``"refused"`` or ``"failed"``;
+            None when it wasn't asked (no route to it is known), or for
+            another lookup error.
+        answer_instance: The instance the device at ``at`` answered as, for
+            ``"another-device"``; else None.
     """
     target: Optional[str]
     instance: Optional[int]
     candidates: list[tuple[int, bytes]]
     at: Optional[tuple[int, bytes]]
     candidate: Optional[tuple[int, bytes]]
+    answer: Optional[str]
+    answer_instance: Optional[int]
 
 class BacnetAmbiguousDeviceError(BacnetLookupError):
     """Raised when a call names a device by its instance and two or more
@@ -6537,11 +6554,23 @@ class BACnetClient:
           routed station with no learned router is asked directly
           first;
         - an instance, ``1234`` (an int or text) or ``"2:1234"`` on network
-          2, gives a handle that follows the instance: the one address
-          claiming it, or the one that answers a Who-Is for it, sent where
-          ``resolve_scope`` says for a bare instance (this network alone by
-          default) and to the network named otherwise, waiting up to 3
-          seconds;
+          2, gives a handle that follows the instance, placed only where a
+          device confirmed it to the client's own question (#2824). Unless
+          a row added with ``add_device`` claims it, one Who-Is for it goes
+          first (where ``resolve_scope`` says for a bare instance, this
+          network alone by default, and to the network named otherwise),
+          its answers given half a second on this network and 3 seconds
+          beyond it or with a routed claim, or up to 3 seconds when nothing
+          claims it; then each address claiming it is asked which device
+          answers there: one read of its Device object (a claim that
+          doesn't answer holds it for the client's timeout and retries,
+          about 24 seconds at the defaults). A placement so costs about
+          half a second on this network. While a handle follows the
+          instance a new one joins it; once the last is dropped the next is
+          placed again. A handle placed on a lone claim is so only
+          provisionally for 3 seconds: another address claiming the
+          instance then makes the next handle or write ask again. An I-Am
+          confirms nothing, as anyone can send one;
         - a ``discover()`` row or a ``DiscoveredDevice`` pins the handle to
           its address, knowing its instance.
 
@@ -6550,9 +6579,14 @@ class BACnetClient:
         client's link can't reach raises ValueError, as does a local
         address on ``transport="router"``; an instance no address claims
         and none answered for, or a routed address with no router known,
-        ``BacnetLookupError``; an instance two or more addresses claim
-        ``BacnetAmbiguousDeviceError``, whose ``candidates`` are each a
-        target."""
+        ``BacnetLookupError``, and so does an instance whose one claim's
+        device didn't answer as it, asked (its ``at`` the address asked),
+        one placed while handles follow it elsewhere (``candidate`` the
+        address that confirmed it), and one settled with the discovery
+        table full;
+        an instance two or more addresses claim, when none confirms it or
+        two or more might be it, ``BacnetAmbiguousDeviceError``, whose
+        ``candidates`` are each a target."""
         ...
 
     def read_property_multiple(
@@ -7182,7 +7216,10 @@ class BACnetClient:
 
         The table holds one device per address: adding an instance at an
         address that holds another replaces it, so ``get_device()`` no longer
-        finds the instance that was there (#2560).
+        finds the instance that was there (#2560). A row added so is the
+        application's own word: ``device(instance)`` places a handle there
+        without a Who-Is or a question to the device (#2824), so add only an
+        address known to be the device's.
         """
         ...
 

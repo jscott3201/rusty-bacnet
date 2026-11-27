@@ -30,7 +30,7 @@ use crate::client::{
     Scope, failed_locally as is_failed_locally, timed_out as is_timed_out,
     unreachable as is_unreachable,
 };
-use crate::device::DeviceAddress;
+use crate::device::{Answer, DeviceAddress};
 use crate::format::PropertyError;
 use crate::label::kebab;
 use crate::watch::WatchError;
@@ -89,31 +89,60 @@ pub enum OpsError {
         asked: Option<Scope>,
     },
     /// Two or more addresses claim the instance named, so which device is
-    /// meant is unknown. Nothing was sent. Name one of `candidates` by its
-    /// address instead.
+    /// meant is unknown: none of them confirmed it, asked which device
+    /// answers there, or two or more did or said nothing either way
+    /// (#2824). Nothing but those questions was sent. Name one of
+    /// `candidates` by its address instead.
     Ambiguous {
         /// The Device instance named.
         instance: u32,
-        /// Every address claiming it, ordered by network and then MAC.
+        /// Every address claiming it, or every one its question left open,
+        /// ordered by network and then MAC.
         candidates: Vec<DeviceAddress>,
     },
-    /// A write (or relinquish) through a handle following an instance was
-    /// refused before anything was sent (#2795): the device isn't taken for
-    /// the instance at the address the handle holds (its table row names
-    /// another device there, and asked, the device there is silent or
-    /// another; or no route to it is known), and a write never goes to
-    /// another address on its own. A read through the handle looks for the
-    /// device, asking its address first; a write after it goes where the
-    /// read moved the handle.
+    /// The device isn't confirmed as the instance at `at`, and nothing but
+    /// the question of which device answers there was sent (`answer` says
+    /// what it did). Either a handle made from the instance (`placing`)
+    /// found it claimed at that one address only, or, while handles follow
+    /// it already, at the address they hold, and the device there didn't
+    /// confirm it (#2824); or a write (or relinquish) through a handle
+    /// following it was refused (#2795), as its table row names another
+    /// device at the address the handle holds and, asked, the device there
+    /// is silent or another, or no route to it is known, and a write never
+    /// goes to another address on its own. A read through a following
+    /// handle looks for the device, asking its address first; a write after
+    /// it goes where the read moved the handle.
     NotConfirmed {
-        /// The instance the handle follows.
+        /// The instance named.
         instance: u32,
-        /// The address the handle holds.
+        /// The address asked: the instance's one claim, or the place the
+        /// handles following it hold.
         at: DeviceAddress,
-        /// The one other address the discovery table has the instance at,
-        /// if one: an unconfirmed hint (the table takes I-Ams nobody asked
-        /// for), not asked.
+        /// For a write (`placing` false): one other address the discovery
+        /// table has the instance at, if one, unconfirmed, as the table
+        /// takes I-Ams nobody asked for. For a handle's first placement
+        /// while handles follow the instance at `at`: the address whose
+        /// device did confirm it, where a read through those handles moves
+        /// them. `None` for a placement on the instance's one claim.
         candidate: Option<DeviceAddress>,
+        /// What the device at `at` did when asked which device it is:
+        /// silent, another instance, no such Device object, or the question
+        /// turned away; `None` when it wasn't asked, as no route to it is
+        /// known.
+        answer: Option<Answer>,
+        /// A handle's first placement by instance (#2824), rather than a
+        /// write through a following handle (#2795).
+        placing: bool,
+    },
+    /// A first placement of `instance` by its instance settled with the
+    /// client's discovery table full (4,096 addresses, #2824): an I-Am from
+    /// an address the table held no row for, the device's own answer to
+    /// the Who-Is among them, was dropped unheard, so the claims it holds
+    /// may leave the device out. Nothing but the Who-Is was sent. Name the
+    /// device by its address, or make room in the table.
+    TableFull {
+        /// The Device instance named.
+        instance: u32,
     },
     /// The device, or the way to it, didn't answer: the request timed out
     /// (the client's own timeout, or the transaction state machine giving
@@ -200,6 +229,55 @@ pub enum OpsError {
 }
 
 impl OpsError {
+    /// The text of an [`OpsError::NotConfirmed`], each address as `show`
+    /// writes it (a front end's link form, say); `None` for another error.
+    /// The advice differs for a first placement and a write.
+    pub fn not_confirmed_text(&self, show: &dyn Fn(&DeviceAddress) -> String) -> Option<String> {
+        let Self::NotConfirmed {
+            instance,
+            at,
+            candidate,
+            answer,
+            placing,
+        } = self
+        else {
+            return None;
+        };
+        let (at, said) = (show(at), said(*answer));
+        Some(match (placing, candidate) {
+            // Handles follow the instance at `at` already, and the device
+            // at the candidate confirmed it: a new handle never moves them.
+            (true, Some(candidate)) => format!(
+                "device {instance} isn't confirmed at {at}, where the handles already following \
+                 it are: asked which device answers there, {said}. The device at {} confirmed \
+                 it, but a new handle never moves the handles following the instance: read \
+                 through them (a read asks their address first and moves them), or drop them, \
+                 then make the handle again",
+                show(candidate)
+            ),
+            (true, None) => format!(
+                "device {instance} isn't confirmed at {at}: asked which device answers there, \
+                 {said}, and nothing is sent to an address its device hasn't confirmed: make \
+                 the handle again once the device answers, after a discovery if it moved"
+            ),
+            (false, candidate) => {
+                let mut text = format!(
+                    "device {instance} isn't confirmed at {at}, where the handle reaches it: \
+                     asked which device answers there, {said}, and a write never goes \
+                     elsewhere on its own"
+                );
+                if let Some(candidate) = candidate {
+                    text.push_str(&format!(
+                        "; the discovery table has it at {}",
+                        show(candidate)
+                    ));
+                }
+                text.push_str(": read through the handle first, which looks for the device");
+                text
+            }
+        })
+    }
+
     /// The low-level client's `error` for a request to `device`.
     pub(crate) fn at(device: &DeviceAddress, error: Error) -> Self {
         if is_unreachable(&error) {
@@ -406,22 +484,16 @@ impl fmt::Display for OpsError {
                 }
                 f.write_str("; name one by its address")
             }
-            Self::NotConfirmed {
-                instance,
-                at,
-                candidate,
-            } => {
-                write!(
-                    f,
-                    "device {instance} isn't confirmed at {at}, where the handle reaches it \
-                     (another device or none answers there, or no route to it is known), \
-                     and a write never goes elsewhere on its own"
-                )?;
-                if let Some(candidate) = candidate {
-                    write!(f, "; the discovery table has it at {candidate}")?;
-                }
-                f.write_str(": read through the handle first, which looks for the device")
+            Self::NotConfirmed { .. } => {
+                let text = self.not_confirmed_text(&|address| address.to_string());
+                f.write_str(&text.unwrap_or_default())
             }
+            Self::TableFull { instance } => write!(
+                f,
+                "device {instance} isn't placed: the discovery table is full (4,096 \
+                 addresses), so the device's own answer to the Who-Is for it may have been \
+                 dropped unheard; nothing was asked: name the device by its address"
+            ),
             Self::Unreachable { source, .. } => write!(f, "{source}"),
             Self::Refused {
                 error,
@@ -553,6 +625,19 @@ impl std::error::Error for PagingFault {}
 impl From<PagingFault> for OpsError {
     fn from(fault: PagingFault) -> Self {
         Self::Paging(fault)
+    }
+}
+
+/// What `answer`, the device's to the question of which device it is,
+/// says, for an error's text; `None` when it wasn't asked.
+pub(crate) fn said(answer: Option<Answer>) -> String {
+    match answer {
+        Some(Answer::Is(found) | Answer::Has(found)) => format!("it answered as device {found}"),
+        Some(Answer::Not) => "it has no such Device object".into(),
+        Some(Answer::Unclear) => "it turned the question away".into(),
+        Some(Answer::Failed) => "the question couldn't be sent".into(),
+        Some(Answer::Silent) => "it didn't answer".into(),
+        None => "no route to it is known".into(),
     }
 }
 

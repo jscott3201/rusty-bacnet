@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use bacnet_types::enums::ConfirmedServiceChoice;
 
-use super::test_bus::{Bus, N, at, client, name_of, requests, server, settle, stop};
+use super::test_bus::{
+    Bus, N, at, client, name_of, past_provisional, requests, server, settle, stop,
+};
 use super::*;
 use crate::client::RESOLVE_WAIT;
 
@@ -26,12 +28,13 @@ async fn a_forged_pair_takes_no_write_elsewhere() {
         let bus = Bus::new();
         let (client, sent) = client(&bus).await;
         let mut servers = vec![server(bus.port(2), N, "A").await];
-        if responder {
-            servers.push(server(bus.port(3), N, "impostor").await);
-        }
         bus.i_am(2, N);
         settle().await;
         let device = client.device(N).await.unwrap();
+        past_provisional().await;
+        if responder {
+            servers.push(server(bus.port(3), N, "impostor").await);
+        }
         assert_eq!(name_of(&device).await.unwrap(), "A");
         let mut events = client.events();
         bus.i_am(2, N + 1);
@@ -113,6 +116,7 @@ async fn a_reused_address_with_a_silent_claim_sends_no_write() {
     bus.i_am(2, N);
     settle().await;
     let device = client.device(N).await.unwrap();
+    past_provisional().await;
     first.stop().await.unwrap();
     let other = server(bus.port(2), N + 1, "other").await;
     bus.i_am(2, N + 1);

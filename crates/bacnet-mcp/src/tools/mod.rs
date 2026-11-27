@@ -299,6 +299,7 @@ fn out_of_budget(call: &Call, budget: Duration) -> ToolError {
         ToolError::Refused {
             reason: "rate-limited",
             message: "the call's budget ran out before anything was sent".into(),
+            claims: None,
             retry_after_s: Some(budget.as_secs().max(1)),
         }
     } else {

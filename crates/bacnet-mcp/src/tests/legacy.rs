@@ -509,3 +509,28 @@ async fn a_panicking_subscribe_ends_the_session() {
     assert!(why.contains("a request panicked"), "{why}");
     assert!(why.contains("injected bug"), "{why}");
 }
+
+/// A point named by an instance whose one claim came from an I-Am alone
+/// is refused until the device there confirms the instance to the server's
+/// own question (#2824): the alias at 10.0.0.3 is device 1202, and an I-Am
+/// for 7777 from it gets the subscription refused as unconfirmed, nothing
+/// watched or sent.
+#[tokio::test(start_paused = true)]
+async fn a_subscription_by_an_unconfirmed_instance_is_refused() {
+    let mut lab = Lab::start(Policy::default()).await;
+    lab.agent.initialize_legacy().await;
+    let alias = super::alias_mac(super::ALIASES.start);
+    lab.inject(&super::known::i_am(7777), &alias).await;
+    let claimed = |lab: &Lab| lab.mcp.ctx().known_at(7777).is_some();
+    super::known::until(&lab, claimed, "7777 is claimed").await;
+    let before = lab.sends().len();
+    let error = lab
+        .mcp
+        .subscribe_now("bacnet://device/7777/object/analog-input:1")
+        .unwrap_err();
+    let data = error.data.unwrap_or_default();
+    assert_eq!(data["reason"], json!("unconfirmed-device"), "{data}");
+    assert_eq!(lab.mcp.watches(), (0, 0));
+    assert_eq!(lab.sends().len(), before, "nothing sent");
+    lab.stop().await;
+}

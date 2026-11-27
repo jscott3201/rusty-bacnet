@@ -380,11 +380,23 @@ station 255 or a gateway's two-octet station, takes the suffix
 routed station with no learned router is asked directly
 first;
 - an instance, `1234` (an int or text) or `"2:1234"` on network
-2, gives a handle that follows the instance: the one address
-claiming it, or the one that answers a Who-Is for it, sent where
-`resolve_scope` says for a bare instance (this network alone by
-default) and to the network named otherwise, waiting up to 3
-seconds;
+2, gives a handle that follows the instance, placed only where a
+device confirmed it to the client's own question (#2824). Unless
+a row added with `add_device` claims it, one Who-Is for it goes
+first (where `resolve_scope` says for a bare instance, this
+network alone by default, and to the network named otherwise),
+its answers given half a second on this network and 3 seconds
+beyond it or with a routed claim, or up to 3 seconds when nothing
+claims it; then each address claiming it is asked which device
+answers there: one read of its Device object (a claim that
+doesn't answer holds it for the client's timeout and retries,
+about 24 seconds at the defaults). A placement so costs about
+half a second on this network. While a handle follows the
+instance a new one joins it; once the last is dropped the next is
+placed again. A handle placed on a lone claim is so only
+provisionally for 3 seconds: another address claiming the
+instance then makes the next handle or write ask again. An I-Am
+confirms nothing, as anyone can send one;
 - a `discover()` row or a `DiscoveredDevice` pins the handle to
 its address, knowing its instance.
 
@@ -393,9 +405,14 @@ ValueError, when the call is made. On await: an address the
 client's link can't reach raises ValueError, as does a local
 address on `transport="router"`; an instance no address claims
 and none answered for, or a routed address with no router known,
-`BacnetLookupError`; an instance two or more addresses claim
-`BacnetAmbiguousDeviceError`, whose `candidates` are each a
-target.
+`BacnetLookupError`, and so does an instance whose one claim's
+device didn't answer as it, asked (its `at` the address asked),
+one placed while handles follow it elsewhere (`candidate` the
+address that confirmed it), and one settled with the discovery
+table full;
+an instance two or more addresses claim, when none confirms it or
+two or more might be it, `BacnetAmbiguousDeviceError`, whose
+`candidates` are each a target.
 
 ### BACnetClient.read_property_multiple
 
@@ -1132,7 +1149,10 @@ Add a device to the discovery table manually (useful when address is known witho
 
 The table holds one device per address: adding an instance at an
 address that holds another replaces it, so `get_device()` no longer
-finds the instance that was there (#2560).
+finds the instance that was there (#2560). A row added so is the
+application's own word: `device(instance)` places a handle there
+without a Who-Is or a question to the device (#2824), so add only an
+address known to be the device's.
 
 ### BACnetClient.subscribe_cov
 

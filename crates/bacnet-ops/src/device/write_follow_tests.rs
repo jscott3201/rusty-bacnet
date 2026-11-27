@@ -6,14 +6,17 @@
 
 use bacnet_types::enums::ConfirmedServiceChoice;
 
-use super::test_bus::{Bus, N, TurnAway, at, client, name_of, requests, server, settle, stop};
+use super::test_bus::{
+    Bus, N, TurnAway, at, client, name_of, past_provisional, requests, server, settle, stop,
+};
 use super::*;
 
 const WRITE: ConfirmedServiceChoice = ConfirmedServiceChoice::WRITE_PROPERTY;
 const READ: ConfirmedServiceChoice = ConfirmedServiceChoice::READ_PROPERTY;
 
-/// Device N answers at station 2, a following handle on it; a responder
-/// answering as N runs at station 3.
+/// Device N answers at station 2, a following handle on it, placed past
+/// its provisional window (#2824); a responder answering as N runs at
+/// station 3.
 async fn lab() -> (
     std::sync::Arc<Bus>,
     Client<bacnet_transport::test_transport::TestTransport>,
@@ -23,13 +26,14 @@ async fn lab() -> (
 ) {
     let bus = Bus::new();
     let (client, sent) = client(&bus).await;
-    let servers = vec![
-        server(bus.port(2), N, "A").await,
-        server(bus.port(3), N, "impostor").await,
-    ];
+    let mut servers = vec![server(bus.port(2), N, "A").await];
     bus.i_am(2, N);
     settle().await;
     let device = client.device(N).await.unwrap();
+    past_provisional().await;
+    // The responder starts once the handle is placed: it would answer the
+    // first placement's Who-Is as N too (#2824).
+    servers.push(server(bus.port(3), N, "impostor").await);
     assert_eq!(name_of(&device).await.unwrap(), "A");
     (bus, client, sent, device, servers)
 }
@@ -49,7 +53,13 @@ async fn a_write_never_goes_to_the_claimed_address() {
     assert!(
         matches!(
             &error,
-            OpsError::NotConfirmed { instance: N, at: here, candidate: Some(there) }
+            OpsError::NotConfirmed {
+                instance: N,
+                at: here,
+                candidate: Some(there),
+                answer: Some(Answer::Silent),
+                placing: false,
+            }
                 if *here == at(2) && *there == at(3)
         ),
         "{error:?}"

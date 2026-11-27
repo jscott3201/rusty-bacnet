@@ -17,7 +17,13 @@ static LOOKUP_ERROR: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 static AMBIGUOUS_ERROR: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 
 /// The attributes both classes carry, None on the class.
-const ATTRIBUTES: [&str; 3] = ["target", "instance", "candidates"];
+const ATTRIBUTES: [&str; 5] = [
+    "target",
+    "instance",
+    "candidates",
+    "answer",
+    "answer_instance",
+];
 
 fn class(py: Python<'_>, name: &str, bases: Bound<'_, PyTuple>, doc: &str) -> PyResult<Py<PyType>> {
     let namespace = PyDict::new(py);
@@ -86,8 +92,16 @@ pub(crate) struct Lookup {
     /// handle holds, as (network, MAC).
     pub(crate) at: Option<(u16, Vec<u8>)>,
     /// For that write: the one other address the discovery table has the
-    /// instance at, unconfirmed, as (network, MAC).
+    /// instance at, unconfirmed, as (network, MAC). For a new handle while
+    /// handles follow the instance at `at` (#2824): the address whose
+    /// device confirmed it.
     pub(crate) candidate: Option<(u16, Vec<u8>)>,
+    /// What the device at `at` did, asked which device it is (#2824):
+    /// `"silent"`, `"another-device"`, `"no-device-object"`, `"refused"` or
+    /// `"failed"`; `None` when it wasn't asked.
+    pub(crate) answer: Option<&'static str>,
+    /// The instance the device at `at` answered as, for `"another-device"`.
+    pub(crate) answer_instance: Option<u32>,
 }
 
 impl Lookup {
@@ -106,6 +120,8 @@ impl Lookup {
             candidates: Vec::new(),
             at: None,
             candidate: None,
+            answer: None,
+            answer_instance: None,
         }
     }
 
@@ -118,6 +134,8 @@ impl Lookup {
             candidates,
             at: None,
             candidate: None,
+            answer: None,
+            answer_instance: None,
         }
     }
 }
@@ -138,6 +156,8 @@ pub(crate) fn lookup_error(message: String, lookup: Lookup) -> PyErr {
         error.setattr("candidates", lookup.candidates)?;
         error.setattr("at", lookup.at)?;
         error.setattr("candidate", lookup.candidate)?;
+        error.setattr("answer", lookup.answer)?;
+        error.setattr("answer_instance", lookup.answer_instance)?;
         Ok(PyErr::from_value(error))
     })
     .unwrap_or_else(|_| BacnetError::new_err(fallback))
