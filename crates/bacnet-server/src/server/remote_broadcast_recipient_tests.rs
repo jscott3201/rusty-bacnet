@@ -166,7 +166,7 @@ async fn a_device_bound_at_a_remote_broadcast_form_gets_unconfirmed_notification
         network: NETWORK,
         mac_address: MacAddr::from_slice(&[0xFF]),
     };
-    bindings.observe_i_am_at(
+    bindings.bind_found_at(
         observed,
         &ROUTER,
         Some(&source),

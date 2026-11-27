@@ -60,7 +60,7 @@ async fn source(
 }
 async fn bind(wire: &Wire, peer: &Peer, instance: u32, ago: Duration) {
     let oid = ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap();
-    wire.server.device_bindings.write().await.observe_i_am_at(
+    wire.server.device_bindings.write().await.bind_found_at(
         oid,
         &peer.mac,
         peer.network.as_ref(),
@@ -410,3 +410,7 @@ async fn command_source_wire_wpm_prefix_and_create_initial_values_rollback() {
     }
     wire.server.stop().await.unwrap();
 }
+
+// An I-Am the server did not ask for names no source (#2825).
+#[path = "claimed_source.rs"]
+mod claimed_source;

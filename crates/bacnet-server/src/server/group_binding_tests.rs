@@ -104,7 +104,12 @@ async fn an_i_am_from_a_group_address_binds_nothing() {
         })
     };
     // Device 10 claims the group as its own address, Device 11 a router at
-    // the group, and Device 12 a station.
+    // the group, and Device 12 a station, each answering the server's own
+    // Who-Is (#2825).
+    for instance in 10..=12 {
+        let mut table = services.device_bindings.write().await;
+        table.ask_for_test(device(instance), Duration::from_secs(3));
+    }
     for (instance, source_mac, source_network) in [
         (10, GROUP, None),
         (11, GROUP, routed()),
@@ -116,6 +121,10 @@ async fn an_i_am_from_a_group_address_binds_nothing() {
             &from(&source_mac, source_network),
         )
         .await;
+    }
+    for instance in 10..=12 {
+        let mut table = services.device_bindings.write().await;
+        table.decide_for_test(device(instance));
     }
 
     let table = services.device_bindings.read().await;

@@ -2,9 +2,10 @@
 //! destination that names a Device object, not an address.
 //!
 //! Each side resolves the Device from what an I-Am told it: the server's
-//! binding table records the I-Am it receives, and the core's `Bindings`,
-//! which a firmware host backs with a Who-Is/I-Am cache, is given the
-//! same address from the same I-Am. With the binding made first, both send
+//! binding table records the I-Am answering its own Who-Is, and the core's
+//! `Bindings`, which a firmware host backs with a Who-Is/I-Am cache, is
+//! given the same address from the same I-Am. With the binding made first,
+//! both send
 //! the same notification, octet for octet, to the address the I-Am came
 //! from. Without it the two differ by design: the server asks for the
 //! Device (one Who-Is limited to its instance) and holds the notification
@@ -81,10 +82,28 @@ impl EventParity {
             vendor_id: 5,
         }
         .encode(&mut body);
-        let frames = self
+        // The server binds from an I-Am answering a Who-Is of its own
+        // (#2825): it has one out.
+        self.parity
+            .server
+            .device_bindings
+            .write()
+            .await
+            .ask_for_test(bound_device(), Duration::from_secs(3));
+        let mut frames = self
             .parity
             .deliver(&unconfirmed(UnconfirmedServiceChoice::I_AM, body))
             .await;
+        // Its wait ends with this one answer: the device is bound, and what
+        // waited for it goes.
+        self.parity
+            .server
+            .device_bindings
+            .write()
+            .await
+            .decide_for_test(bound_device());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        frames.extend(self.parity.sent.take());
         let from = BACnetAddress {
             network_number: 0,
             mac_address: self.parity.source(),

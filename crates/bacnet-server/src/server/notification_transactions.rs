@@ -68,6 +68,8 @@ struct NotificationState {
     pending: HashMap<LeaseToken, oneshot::Sender<CovAckResult>>,
     /// The event notifications waiting for an invoke ID, first-come (#2563).
     waiters: waiters::Waiters,
+    /// The stations a binding check counts the answers of (#2825).
+    listening: answer_listeners::Listening,
 }
 
 #[doc(hidden)]
@@ -141,6 +143,10 @@ mod room;
 
 #[path = "notification_waiters.rs"]
 mod waiters;
+
+#[path = "answer_listeners.rs"]
+mod answer_listeners;
+pub(super) use answer_listeners::AnswerListener;
 
 pub(super) type NotificationReservation = (NotificationOperation, oneshot::Receiver<CovAckResult>);
 
@@ -225,6 +231,7 @@ impl NotificationTransactions {
                     closed: false,
                     pending: HashMap::new(),
                     waiters: waiters::Waiters::default(),
+                    listening: answer_listeners::Listening::default(),
                 }),
             }),
             workers: Mutex::new(NotificationWorkers::default()),
@@ -619,7 +626,13 @@ impl NotificationCore {
         };
         // lock-poison: fail-closed (poisoned acts closed; the request times out)
         let sender = match self.state.lock() {
-            Ok(mut state) => state.pending.remove(&token),
+            Ok(mut state) => {
+                let sender = state.pending.remove(&token);
+                if sender.is_some() {
+                    state.listening.answered(admission.metadata().peer());
+                }
+                sender
+            }
             Err(_) => None,
         };
         let Some(sender) = sender else {

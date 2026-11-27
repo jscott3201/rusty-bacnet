@@ -284,18 +284,13 @@ async fn recipient_configured_routed_old_route_is_preserved_and_observed_new_is_
     )
     .await
     .unwrap();
-    fixture
-        .server
-        .device_bindings
-        .write()
-        .await
-        .observe_i_am_at(
-            oid(ObjectType::DEVICE, 22),
-            LOGGER,
-            None,
-            runtime_clock::now(),
-            |_| false,
-        );
+    fixture.server.device_bindings.write().await.bind_found_at(
+        oid(ObjectType::DEVICE, 22),
+        LOGGER,
+        None,
+        runtime_clock::now(),
+        |_| false,
+    );
     assert!(matches!(
         change(&fixture, &device(22)).await,
         Apdu::Error(_)

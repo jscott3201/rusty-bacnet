@@ -6083,11 +6083,18 @@ until the list ends, and All_Writes_Successful then reads True only if every
 write succeeded. Zero, or an empty list, writes nothing. A command whose
 `device_identifier` names another device is sent there as a confirmed
 WriteProperty when the server has a binding for it, from `add_device_binding`
-or an I-Am heard in the last ten minutes. With neither, the server first
+or an answer to its own Who-Is in the last ten minutes. An I-Am it did not ask
+for binds nothing, and one naming a bound device from another address only
+starts a check: the binding moves there after two reads of the bound address a
+minute apart both fail while that address alone answers, 84 seconds with the
+default 3 second timeout (#2825, [the
+rules](rust-api.md#device-bindings-the-server-finds)).
+With neither, the server first
 broadcasts one Who-Is for that device's instance alone, on every network or,
-for a device whose old I-Am it still holds, on the network that I-Am came
-from, and waits the APDU timeout (3 seconds) from the send for its I-Am,
-which binds it; with no I-Am the command fails and no WriteProperty is sent.
+for a device whose old binding it still holds, on the network that binding
+came from, and waits the APDU timeout (3 seconds) from the send for the
+answers: one station answering is bound, and two or more bind nothing; with
+no single answer the command fails and no WriteProperty is sent.
 A device gets at most one Who-Is a
 minute, so a command naming it within a minute of one that drew nothing
 fails at once, and nothing at all is sent while DeviceCommunicationControl
@@ -6371,7 +6378,8 @@ storage_path=None, clear_written_config=False)` registers a Channel. A member is
 own Device is stored as the local reference it stands for, as it is when a
 peer writes the list. A member in another device keeps its Device and is
 written there with a confirmed WriteProperty when the server has a binding for
-it, from `add_device_binding` or an I-Am heard in the last ten minutes, or
+it, from `add_device_binding` or an answer to its own Who-Is in the last ten
+minutes, or
 finds one with a Who-Is first, as for a Command's remote action (see
 [Building Control](#building-control)). The server reads that member's
 property there first to learn its datatype and converts the value to it as for
@@ -7101,8 +7109,10 @@ evaluator, the one network reads use, so the result equals what a network
 rebuilt from its members, Device instance `4194303` names this server's
 Device, and the Device's Active_COV_Subscriptions lists the live
 subscriptions. Its Device_Address_Binding lists the server's device bindings
-(#1369): each `add_device_binding` and each device whose I-Am arrived in the
-last ten minutes, one `"address_binding"` element each (see the typed
+(#1369): each `add_device_binding` and each device that answered the
+server's own Who-Is, while heard from in the last ten minutes, one
+`"address_binding"` element each; an I-Am the server did not ask for lists
+nothing (#2825) (see the typed
 constructed values below). The value takes the
 [read result](#read-results) shape. An
 unknown object or property raises `BacnetProtocolError` with the error a
@@ -7530,7 +7540,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `recipient_list_unavailable` | Transitions sent nowhere because reading the class's Recipient_List failed |
 | `recipient_list_invalid` | Transitions sent nowhere because the Recipient_List did not decode as a whole (no decodable prefix is used) |
 | `recipient_list_too_long` | Transitions sent nowhere because a custom class served more than 32 destinations |
-| `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired, and a targeted Who-Is drew no I-Am within the APDU timeout, each notification that waited for it counted once (or none could go out, within a minute of one that drew nothing); also a confirmed notification ended at a retry because the observed binding had expired by then (one that waited for its invoke ID reads the binding again first, and is looked for if it lapsed, #2569) |
+| `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired, and a targeted Who-Is drew no single answer within the APDU timeout (none, or two or more stations, #2825), each notification that waited for it counted once (or none could go out, within a minute of one that drew nothing); also a confirmed notification ended at a retry because the observed binding had expired by then (one that waited for its invoke ID reads the binding again first, and is looked for if it lapsed, #2569) |
 | `recipient_unroutable` | Matched recipients skipped because they can't be routed as written: a Device identifier that isn't a Device (or a binding unusable on this link), or a MAC on network 65535 |
 | `confirmed_broadcast_recipient` | Matched recipients skipped because they ask for confirmed notifications at a broadcast address, or another group address such as a multicast one, which only unconfirmed requests may use (Clause 6.3); also an address or Device binding on another network at a broadcast or group form there, such as `5:0xFF` or six octets starting `FF:FF:FF:FF` (#2732) |
 | `confirmed_waited_for_invoke_id` | Confirmed notifications that found every invoke ID in use and waited for one, or found others already waiting and queued behind them even with an ID free, once each; none is dropped for want of an ID, only its destination's lane waits (#2537), and the waiters get IDs in the order they began to wait (#2563) |
@@ -7582,6 +7592,17 @@ with `accepted_total`, `policy_denied_total`, `password_failure_total`,
 `DccOutcomeCounters` TypedDict in the stub. Each field saturates and is read on
 its own. Like `cov_counters()`, it raises `RuntimeError` before start and after
 stop. See [DCC policy](dcc-policy.md) for what each total counts.
+
+#### `device_binding_conflicts() -> int`
+
+Count the server's Who-Is requests for a device that two or more stations
+answered, so none was bound (#2825): a first contact's, a lapsed binding's, or
+the broadcast of a binding check's second read when a station other than the
+one claiming the device answered it. Each is logged with the device and the
+stations, and the device is asked again later; `add_device_binding` settles
+it. Zero at each start; like `cov_counters()`, it raises `RuntimeError` before
+start and after stop. See [Device bindings the server
+finds](rust-api.md#device-bindings-the-server-finds) for the rules.
 
 #### `local_address() -> str`
 

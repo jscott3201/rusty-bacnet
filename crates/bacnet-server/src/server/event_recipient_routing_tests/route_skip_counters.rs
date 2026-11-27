@@ -26,7 +26,7 @@ fn bindings() -> Arc<RwLock<DeviceBindingTable>> {
     let mut table = DeviceBindingTable::new();
     let expired = runtime_clock::now() - OBSERVED_BINDING_TTL;
     assert_eq!(
-        table.observe_i_am_at(id(STALE), &PEER, None, expired, |_| false),
+        table.bind_found_at(id(STALE), &PEER, None, expired, |_| false),
         ObservationOutcome::Inserted
     );
     for binding in [

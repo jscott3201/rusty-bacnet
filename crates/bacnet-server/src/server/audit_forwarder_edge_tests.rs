@@ -177,7 +177,7 @@ async fn audit_forwarding_to_a_parent_bound_marked_one_station() {
 #[tokio::test(start_paused = true)]
 async fn audit_forwarding_observed_binding_and_local_alias_do_not_send() {
     let mut f = fixture(Some(parent()), None).await;
-    f.server.device_bindings.write().await.observe_i_am_at(
+    f.server.device_bindings.write().await.bind_found_at(
         oid(ObjectType::DEVICE, 20),
         &[2],
         None,

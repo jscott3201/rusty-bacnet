@@ -190,7 +190,7 @@ pub(super) fn read_ack(
 /// waits for the answer to this one.
 pub(super) async fn answer_reads(h: &Harness, count: usize, value: &PropertyValue) {
     let mut answered = 0;
-    tokio::time::timeout(Duration::from_secs(1), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         while answered < count {
             for (invoke_id, request) in sent_reads(h) {
                 assert_eq!(request.property_identifier, PV);

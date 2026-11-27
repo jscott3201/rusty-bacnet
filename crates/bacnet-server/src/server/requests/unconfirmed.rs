@@ -41,6 +41,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             network,
             config,
             clock,
+            comm_state,
             device_bindings,
             discovery_limiter,
             time_sync_limiter,
@@ -65,27 +66,57 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     return;
                 }
             };
-            let outcome = device_bindings.write().await.observe_i_am_at(
+            // A check's requests are the server's own initiation: none
+            // while DCC restricts it. The claimant's answer counts for the
+            // APDU timeout.
+            let checking = (!comm_state.initiation_restricted())
+                .then(|| Duration::from_millis(config.cov_retry_timeout_ms));
+            let heard = device_bindings.write().await.hear_i_am_at(
                 i_am.object_identifier,
-                &received.source_mac,
-                received.source_network.as_ref(),
+                device_bindings::IAmFrom {
+                    mac: &received.source_mac,
+                    routed: received.source_network.as_ref(),
+                    local_network: network.local_network_number().get(),
+                },
                 runtime_clock::now(),
                 // An I-Am from a group address binds nothing (#1493).
                 |mac| network.transport().is_group_destination(mac),
+                checking,
             );
-            match outcome {
-                device_bindings::ObservationOutcome::RejectedInvalid => {
+            match heard {
+                device_bindings::Heard::RejectedInvalid => {
                     debug!("Ignoring unusable I-Am observation");
                 }
-                device_bindings::ObservationOutcome::RejectedCapacity => {
+                device_bindings::Heard::RejectedCapacity => {
                     warn_throttled!(
                         warnings.binding_capacity,
                         "Device binding capacity reached; I-Am observation ignored"
                     );
                 }
-                device_bindings::ObservationOutcome::Inserted
-                | device_bindings::ObservationOutcome::Refreshed
-                | device_bindings::ObservationOutcome::ConfiguredPreserved => {}
+                // Another address claims a bound device, unasked: check the
+                // bound address on a task of its own (#2825).
+                device_bindings::Heard::Cue(start) => {
+                    debug!(
+                        device = %i_am.object_identifier,
+                        source = ?received.source_mac,
+                        "An I-Am names a bound device from another address; checking it"
+                    );
+                    let handles = device_bindings::CheckHandles {
+                        network: Arc::clone(network),
+                        bindings: Arc::clone(device_bindings),
+                        comm_state: Arc::clone(comm_state),
+                        transactions: Arc::clone(notification_transactions),
+                        timeout: Duration::from_millis(config.cov_retry_timeout_ms),
+                        retries: config.notification_retries,
+                        max_apdu: u32::from(config.device.max_apdu_length()),
+                    };
+                    device_bindings::start_check(handles, start).await;
+                }
+                device_bindings::Heard::Inserted
+                | device_bindings::Heard::Refreshed
+                | device_bindings::Heard::Claimed
+                | device_bindings::Heard::ConfiguredPreserved
+                | device_bindings::Heard::Ignored => {}
             }
         } else if req.service_choice == UnconfirmedServiceChoice::WHO_IS {
             // Build the I-Am under the guard and drop it before the send, so

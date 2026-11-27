@@ -18,7 +18,7 @@ use super::super::{
 use super::LaneLockSpy;
 use crate::server::command_remote_write_tests::{deliver, device, disable_initiation};
 use crate::server::cov_wire_test_support::*;
-use crate::server::device_bindings::{DeviceResolution, ObservationOutcome};
+use crate::server::device_bindings::{DeviceResolution, Heard, IAmFrom};
 use crate::server::event_recipient_routing_tests::{address_recipient, destination_for};
 use crate::server::remote_write_discovery_tests::{
     everywhere, i_am, next_who_is, targeted, who_is_sent,
@@ -210,6 +210,14 @@ fn counted(h: &Harness) -> (u64, u64) {
     )
 }
 
+/// Bind Device `instance` at `mac` as its answer to the server's own
+/// Who-Is would (#2825).
+async fn found(h: &Harness, instance: u32, mac: &[u8]) {
+    let now = crate::runtime_clock::now();
+    let mut table = h.server.device_bindings.write().await;
+    table.bind_found_at(device(instance), mac, None, now, |_| false);
+}
+
 /// Whether no Who-Is has been sent since the last one taken.
 fn next_who_is_none(h: &Harness) -> bool {
     who_is_sent(h).is_empty()
@@ -227,7 +235,7 @@ fn open_lanes(h: &Harness) -> usize {
 
 /// Wait, on the paused clock, until `done` holds.
 async fn until(what: &str, mut done: impl FnMut() -> bool) {
-    for _ in 0..2_000 {
+    for _ in 0..10_000 {
         if done() {
             return;
         }
@@ -278,9 +286,10 @@ async fn the_lane_sends_once_the_i_am_comes_and_holds_no_other_destination() {
         tokio::time::advance(WAIT / 2).await;
         deliver(&h, &i_am(9), &DEVICE_9, None).await;
     });
+    // First contact is decided when the Who-Is's wait ends (#2825).
     assert!(
-        held >= WAIT / 2 && held < WAIT,
-        "held to the I-Am: {held:?}"
+        held >= WAIT / 2 && held <= WAIT,
+        "held to the wait's end: {held:?}"
     );
     h.settle().await;
     let both = vec![(OTHER.to_vec(), 7, false), (DEVICE_9.to_vec(), 9, false)];
@@ -294,7 +303,9 @@ async fn the_lane_sends_once_the_i_am_comes_and_holds_no_other_destination() {
     h.settle().await;
     assert_eq!(notifications(&h).len(), 4);
     assert!(next_who_is_none(&h));
-    assert_eq!(h.server.event_notification_counters().cov_wait_expired, 0);
+    // The first write's COV fanout waited out its cap: the Who-Is's whole
+    // wait (#2825).
+    assert_eq!(h.server.event_notification_counters().cov_wait_expired, 1);
     spy.assert_logged_unlocked(1);
     h.server.stop().await.unwrap();
 }
@@ -505,16 +516,12 @@ async fn the_writer_waits_for_the_i_am_and_no_longer_than_its_cap() {
         assert_eq!(cov_reports(&h), reports, "the report waits for the I-Am");
         deliver(&h, &i_am(9), &DEVICE_9, None).await;
     });
-    assert!(held >= WAIT / 2 && held < WAIT, "{held:?}");
+    // First contact is decided when the Who-Is's wait ends (#2825), the
+    // writer's cap too: the writer is held no longer than that.
+    assert!(held >= WAIT / 2 && held <= WAIT, "{held:?}");
+    h.settle().await;
     assert_eq!(cov_reports(&h), reports + 1);
     assert_eq!(notifications(&h), vec![(DEVICE_9.to_vec(), 9, false)]);
-    let frames = h.server.test_network().transport().sent().frames();
-    let event = frames
-        .iter()
-        .position(|frame| frame.mac.as_slice() == DEVICE_9);
-    let report = frames.iter().rposition(is_cov);
-    assert!(event < report, "the event notification first");
-    assert_eq!(h.server.event_notification_counters().cov_wait_expired, 0);
     h.server.stop().await.unwrap();
 
     // Device 9 stays silent, and its Who-Is is held 100 ms in the transport,
@@ -590,8 +597,7 @@ async fn a_device_lane_held_for_an_invoke_id_leaves_another_device_looked_for() 
         add_av2(db, 1);
     })
     .await;
-    deliver(&h, &i_am(9), &DEVICE_9, None).await;
-    h.settle().await;
+    found(&h, 9, &DEVICE_9).await;
     let leases = h.server.notification_transactions.lease_every_invoke_id();
     let made = MAX_LANE_ENTRIES + 2;
     futures_util::future::join_all((0..made).map(|at| h.write_local(flip(at)))).await;
@@ -634,10 +640,13 @@ async fn each_device_waits_on_its_own() {
         tokio::time::advance(WAIT / 2).await;
         deliver(&h, &i_am(9), &DEVICE_9, None).await;
         h.settle().await;
+        // Both wait to their Who-Is's end (#2825): Device 9 answered, so
+        // its notification goes; Device 10 is silent, so its is counted.
+        assert_eq!(notifications(&h), vec![(OTHER.to_vec(), 7, false)]);
+        assert_eq!((counted(&h), open_lanes(&h)), ((0, 0), 2));
+        tokio::time::sleep(WAIT).await;
         let both = vec![(OTHER.to_vec(), 7, false), (DEVICE_9.to_vec(), 9, false)];
         assert_eq!(notifications(&h), both);
-        assert_eq!((counted(&h), open_lanes(&h)), ((0, 0), 1));
-        tokio::time::sleep(WAIT).await;
         assert_eq!((counted(&h), open_lanes(&h)), ((1, 0), 0));
     });
     assert_eq!(notifications(&h).len(), 2);
@@ -766,20 +775,25 @@ async fn an_i_am_queued_behind_the_start_of_the_wait_still_ends_it() {
     let answer = tokio::spawn(async move {
         let now = crate::runtime_clock::now();
         let mut table = answering.write().await;
-        table.observe_i_am_at(device(9), &DEVICE_9, None, now, |_| false)
+        let from = IAmFrom {
+            mac: &DEVICE_9,
+            routed: None,
+            local_network: None,
+        };
+        table.hear_i_am_at(device(9), from, now, |_| false, None)
     });
     for _ in 0..20 {
         tokio::task::yield_now().await;
     }
     drop(gate);
-    assert_eq!(answer.await.unwrap(), ObservationOutcome::Inserted);
-    let started = Instant::now();
+    // The probe was out first, so the I-Am is its answer, which binds the
+    // device when the wait ends (#2825).
+    assert_eq!(answer.await.unwrap(), Heard::Claimed);
     let routed = lane.await.unwrap();
     assert!(
         matches!(routed, Some(DeviceResolution::ResolvedLocal { .. })),
         "{routed:?}"
     );
-    assert!(started.elapsed() < Duration::from_secs(1), "lost wake-up");
 }
 
 /// An I-Am that comes while the lane's Who-Is is still being sent (held in
@@ -800,7 +814,9 @@ async fn an_i_am_during_the_who_is_send_still_ends_the_wait() {
         deliver(&h, &i_am(9), &DEVICE_9, None).await;
         transport.release_sends(1);
     });
-    assert!(held < Duration::from_millis(100), "{held:?}");
+    // It counts as the answer, which binds the device when the wait ends
+    // (#2825).
+    assert!(held <= WAIT + Duration::from_millis(100), "{held:?}");
     h.settle().await;
     assert_eq!(notifications(&h), vec![(DEVICE_9.to_vec(), 9, false)]);
     h.server.stop().await.unwrap();
@@ -813,3 +829,6 @@ mod rebind;
 // Start-up Staging plans that alarm to silent devices (#2573).
 #[path = "event_lanes_start_tests.rs"]
 mod start_up;
+// An I-Am the server did not ask for moves no Device recipient (#2825).
+#[path = "event_lanes_claim_tests.rs"]
+mod claims;
