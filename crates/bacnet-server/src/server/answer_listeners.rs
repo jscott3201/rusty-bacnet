@@ -57,8 +57,8 @@ pub(in crate::server) struct AnswerListener {
 impl NotificationTransactions {
     /// Count `peer`'s answers to the server's requests from now on.
     pub(in crate::server) fn listen(&self, peer: CanonicalPeer) -> AnswerListener {
-        // lock-poison: fail-closed (a listener that can't count says every
-        // answer may have come)
+        // A listener that can't count says every answer may have come.
+        // lock-poison: fail-closed (uncounted reads as an answer; no move)
         let from = self.core.state.lock().ok().map(|mut state| {
             let heard = state.listening.0.entry(peer.clone()).or_insert(Heard {
                 listeners: 0,
@@ -80,6 +80,7 @@ impl AnswerListener {
     /// they can't be counted: take that as an answer.
     pub(in crate::server) fn answers(&self) -> Option<u64> {
         let from = self.from?;
+        // lock-poison: fail-closed (uncounted reads as an answer; no move)
         let state = self.core.state.lock().ok()?;
         let heard = state.listening.0.get(&self.peer)?;
         Some(heard.answers.wrapping_sub(from))
