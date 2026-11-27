@@ -57,6 +57,8 @@ bacnet-device-core = { workspace = true, features = ["std"] }
 # dedicated-thread MS/TP tests run their node on the test's paused time
 # (`test-support`, #2284).
 bacnet-transport = { workspace = true, features = ["ipv6", "test-support"] }
+# A router known at once, for tests of sends through one (#2831).
+bacnet-network = { workspace = true, features = ["test-support"] }
 socket2.workspace = true
 tokio-tungstenite.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util", "net"] }

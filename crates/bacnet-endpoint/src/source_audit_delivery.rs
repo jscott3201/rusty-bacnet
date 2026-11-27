@@ -115,7 +115,15 @@ pub(super) fn admit(
     let source = Arc::downgrade(source);
     owner.spawn(async move {
         let _permit = permit;
-        let (sent, hop) = admit_encoded(&egress, &routers, &route, encoded, confirmed, deadline);
+        let (sent, hop) = admit_encoded(
+            &egress,
+            &routers,
+            &route,
+            encoded,
+            confirmed,
+            deadline,
+            reserved.as_ref(),
+        );
         if matches!(sent, Err(EndpointEgressAdmissionError::QueueFull))
             && let (Some(source), Some(owner)) = (source.upgrade(), weak_owner.upgrade())
         {
@@ -162,10 +170,10 @@ pub(super) fn encode(
 }
 
 /// Queue one encoded record for `route`: to a MAC on the link, or through
-/// the network layer to a station behind a router, by the router learned
+/// the network layer to a station behind a router, by the router known
 /// for its network or the link's broadcast MAC ([`SourceRouters`], #2371).
-/// The [`Hop`] names a learned router the send went through, which a lost
-/// delivery forgets. A routed record for a network that has become this one
+/// The [`Hop`] names a known router the send went through, which a lost
+/// delivery has checked (#2831). A routed record for a network that has become this one
 /// goes direct only to a MAC the link's unicast rule takes; any other is
 /// refused here, unsent, like a send the egress can't take, so it fails
 /// without counting as a resource loss. So is a confirmed record to a
@@ -178,6 +186,7 @@ pub(super) fn admit_encoded(
     encoded: Vec<u8>,
     confirmed: bool,
     deadline: Instant,
+    reserved: Option<&Reservation>,
 ) -> (
     Result<bacnet_endpoint_core::endpoint_ingress::EndpointSend, EndpointEgressAdmissionError>,
     Hop,
@@ -193,6 +202,9 @@ pub(super) fn admit_encoded(
     let Some((destination, hop)) = routers.destination(route) else {
         return (Err(EndpointEgressAdmissionError::Closed), Hop::none());
     };
+    if let Some((operation, _)) = reserved {
+        record_next_hop(operation, &destination);
+    }
     let sent = egress.admit_apdu(
         encoded,
         destination,
@@ -202,6 +214,23 @@ pub(super) fn admit_encoded(
         Some(deadline),
     );
     (sent, hop)
+}
+
+/// Record where a confirmed record goes before it is queued (#2831): only
+/// an answer arriving from the router it goes through completes it, and any
+/// router may carry the answer to one sent with the link's broadcast
+/// address. A record to a station on this link records nothing.
+fn record_next_hop(
+    operation: &bacnet_server::server::__endpoint_NotificationOperation,
+    destination: &EndpointApduDestination,
+) {
+    match destination {
+        EndpointApduDestination::Routed { router_mac, .. } => {
+            operation.route_through(Some(router_mac));
+        }
+        EndpointApduDestination::RoutedViaLocalBroadcast { .. } => operation.route_through(None),
+        _ => {}
+    }
 }
 
 /// Queue one encoded UnconfirmedAuditNotification for global broadcast
@@ -222,18 +251,18 @@ pub(super) fn admit_global_broadcast(
     )
 }
 
-type Reservation = (
+pub(super) type Reservation = (
     bacnet_server::server::__endpoint_NotificationOperation,
     oneshot::Receiver<bacnet_server::server::CovAckResult>,
 );
 
 /// Wait for a queued record's outcome: whether it was delivered (sent, and
-/// for a confirmed one acknowledged). A delivery through a learned router
-/// that was lost, with no answer in time or a failed send, forgets the
-/// router ([`Hop::lost`]), but only once the send went out on the link. A
-/// peer's Error, Reject or Abort came back through it, and a send the local
-/// queue refused, expired in it or lost to shutdown never reached it, so
-/// none of those does; each still counts as undelivered.
+/// for a confirmed one acknowledged). A delivery through a known router
+/// that was lost, with no answer in time or a failed send, starts a check
+/// of the router ([`Hop::lost`], #2831), but only once the send went out on
+/// the link. A peer's Error, Reject or Abort came back through it, and a
+/// send the local queue refused, expired in it or lost to shutdown never
+/// reached it, so none of those does; each still counts as undelivered.
 pub(super) async fn finish_send(
     sent: Result<
         bacnet_endpoint_core::endpoint_ingress::EndpointSend,
@@ -285,7 +314,7 @@ pub(super) async fn finish_send(
 mod tests {
     use super::*;
 
-    /// A learned router and a send through it.
+    /// A known router and a send through it.
     fn through_router() -> (Arc<SourceRouters>, Hop) {
         let routers = Arc::new(SourceRouters::default());
         routers.track(2);
@@ -306,7 +335,7 @@ mod tests {
     /// A send the local queue refused never reached the router: the record
     /// is undelivered, and the router stays (#2371).
     #[tokio::test(start_paused = true)]
-    async fn a_full_local_queue_keeps_the_learned_router() {
+    async fn a_full_local_queue_keeps_the_known_router() {
         let (routers, hop) = through_router();
         let deadline = Instant::now() + DEADLINE;
         let sent = Err(EndpointEgressAdmissionError::QueueFull);
@@ -347,13 +376,65 @@ mod tests {
         }
     }
 
-    /// A lost delivery forgets its router only while it is still the one
-    /// learned: one learned since stays.
+    /// A confirmed record sent through a known router takes its answer only
+    /// from that router; one sent by local broadcast takes it from any
+    /// (#2831).
+    #[tokio::test]
+    async fn a_routed_records_answer_counts_only_through_its_router() {
+        use bacnet_encoding::apdu::SimpleAck;
+        use bacnet_endpoint_core::coordinator::{
+            AdmissionOutcome, CanonicalPeer, OutboundTransactionCoordinator,
+        };
+        let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+        let pool = bacnet_server::server::__endpoint_NotificationTransactions::with_coordinator(
+            Arc::clone(&coordinator),
+        );
+        let station = bacnet_encoding::npdu::NpduAddress {
+            network: 2,
+            mac_address: MacAddr::from_slice(&[5]),
+        };
+        let service = ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION;
+        let answer_from = |router: &[u8], invoke_id| {
+            let ack = Apdu::SimpleAck(SimpleAck {
+                invoke_id,
+                service_choice: service,
+            });
+            coordinator
+                .admit_from_source(router, Some(&station), None, &ack)
+                .unwrap()
+        };
+        let through = EndpointApduDestination::Routed {
+            destination_network: 2,
+            destination_mac: MacAddr::from_slice(&[5]),
+            router_mac: MacAddr::from_slice(&[0xFE]),
+        };
+        let broadcast = EndpointApduDestination::RoutedViaLocalBroadcast {
+            destination_network: 2,
+            destination_mac: MacAddr::from_slice(&[5]),
+        };
+        for (destination, other_admitted) in [(through, false), (broadcast, true)] {
+            let (operation, _answer) = pool
+                .reserve(CanonicalPeer::routed(2, &[5]), service)
+                .unwrap();
+            record_next_hop(&operation, &destination);
+            let other = answer_from(&[0xFD], operation.invoke_id());
+            assert_eq!(
+                matches!(other, AdmissionOutcome::Admitted(_)),
+                other_admitted,
+                "{destination:?}"
+            );
+        }
+        assert_eq!(coordinator.off_path_answers().unwrap(), 1);
+    }
+
+    /// A lost delivery forgets nothing: it starts a check of its router,
+    /// while that is still the network's, which only the session's own
+    /// router query decides (#2831).
     #[test]
-    fn a_lost_hop_forgets_only_its_own_router() {
+    fn a_lost_hop_forgets_no_router() {
         let (routers, hop) = through_router();
         hop.lost();
-        assert_eq!(routers.router(2), None);
+        assert_eq!(routers.router(2).as_deref(), Some(&[0xFE][..]));
         let (routers, hop) = through_router();
         routers.learn_for_test(2, &[0xFD]);
         hop.lost();

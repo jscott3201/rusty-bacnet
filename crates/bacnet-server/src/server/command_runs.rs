@@ -56,7 +56,7 @@ pub(super) struct CommandRunner<T: TransportPort + 'static> {
     cov_in_flight: Arc<Semaphore>,
     notification_transactions: Arc<NotificationTransactions>,
     comm_state: Arc<CommState>,
-    learned_routers: Arc<Mutex<LearnedRouterCache>>,
+    learned_routers: Arc<RouterLearning>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     event_suppressions: Arc<super::event_suppression::EventSuppressions>,
     config: Arc<ServerConfig>,

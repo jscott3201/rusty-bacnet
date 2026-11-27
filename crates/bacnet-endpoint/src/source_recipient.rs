@@ -436,27 +436,36 @@ impl SourceRecipient {
                 );
                 let second = attempts.next().map(|attempt| (attempt, completion()));
                 Ok(async move {
-                    let run =
-                        |(target, permit, reserved, bytes): (Option<SourceRoute>, _, _, _),
-                         completion: delivery::Completion| {
-                            let egress = egress.clone();
-                            let routers = Arc::clone(&routers);
-                            async move {
-                                let _permit: tokio::sync::OwnedSemaphorePermit = permit;
-                                let (sent, hop) = match target {
-                                    Some(route) => delivery::admit_encoded(
-                                        &egress, &routers, &route, bytes, confirmed, deadline,
-                                    ),
-                                    None => (
-                                        delivery::admit_global_broadcast(&egress, bytes, deadline),
-                                        Hop::none(),
-                                    ),
-                                };
-                                completion.finish(
-                                    delivery::finish_send(sent, hop, reserved, deadline).await,
-                                );
-                            }
-                        };
+                    let run = |(target, permit, reserved, bytes): (
+                        Option<SourceRoute>,
+                        _,
+                        Option<delivery::Reservation>,
+                        _,
+                    ),
+                               completion: delivery::Completion| {
+                        let egress = egress.clone();
+                        let routers = Arc::clone(&routers);
+                        async move {
+                            let _permit: tokio::sync::OwnedSemaphorePermit = permit;
+                            let (sent, hop) = match target {
+                                Some(route) => delivery::admit_encoded(
+                                    &egress,
+                                    &routers,
+                                    &route,
+                                    bytes,
+                                    confirmed,
+                                    deadline,
+                                    reserved.as_ref(),
+                                ),
+                                None => (
+                                    delivery::admit_global_broadcast(&egress, bytes, deadline),
+                                    Hop::none(),
+                                ),
+                            };
+                            completion
+                                .finish(delivery::finish_send(sent, hop, reserved, deadline).await);
+                        }
+                    };
                     let second = async {
                         if let Some((attempt, completion)) = second {
                             run(attempt, completion).await;

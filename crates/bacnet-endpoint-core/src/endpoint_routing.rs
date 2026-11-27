@@ -297,8 +297,9 @@ pub(super) struct IngressQueues {
 /// lease must match the answer's peer and invoke ID and, where the PDU
 /// carries a service (a Simple-ACK, an Error, an unsegmented Complex-ACK),
 /// its service; a Reject, an Abort, a Segment-ACK or a segment is matched
-/// by its peer and invoke ID alone. Admission's other checks, the lease's
-/// owner and the answers it takes, are not made here.
+/// by its peer and invoke ID alone. An answer from off the path the lease's
+/// attempt went is not shown (`on_path`, #2831). Admission's other checks,
+/// the lease's owner and the answers it takes, are not made here.
 fn observe_source(
     observer: &SourceObserver,
     coordinator: Option<&OutboundTransactionCoordinator>,
@@ -320,6 +321,7 @@ fn observe_source(
         let source = received.source_network.as_ref();
         pool.lease_of_source(&received.source_mac, source, local_network, *invoke_id)
             .is_some_and(|(_, service)| answer_service(apdu).is_none_or(|s| s == service.to_raw()))
+            && pool.on_path(*invoke_id, &received.source_mac)
     };
     if route == IngressRoute::InboundRequest || held() {
         observer(received);
@@ -755,18 +757,21 @@ fn send_policy(
 
 /// The layer's network controls, which only its APDU receive queues, shared
 /// out: the endpoint's Number owner when the link takes the Number controls,
-/// and a copy for the client seat when one is attached; the server seat
-/// takes none. Without either, a
-/// control is discarded, as the layer discards one nobody asked for.
+/// a copy for the client seat when one is attached, and the router
+/// announcements for whoever learns routers on the node (#2831); the server
+/// seat takes none but those. Without any of them, a control is discarded,
+/// as the layer discards one nobody asked for.
 pub(super) struct ControlTee {
     pub(super) layer: mpsc::Receiver<bacnet_network::layer::ReceivedNetworkControl>,
     pub(super) numbers: Option<mpsc::Sender<bacnet_network::layer::ReceivedNetworkControl>>,
     pub(super) seats: Arc<SeatSlot>,
+    pub(super) routers: bacnet_network::router_learning::RouterReports,
 }
 
 impl ControlTee {
     fn drain(&mut self) {
         while let Ok(control) = self.layer.try_recv() {
+            self.routers.offer(&control);
             self.seats.offer_control(&control);
             if let Some(numbers) = &self.numbers
                 && let Err(mpsc::error::TrySendError::Closed(_)) = numbers.try_send(control)
@@ -791,3 +796,7 @@ pub(super) async fn next_apdu(
     })
     .await
 }
+
+#[cfg(test)]
+#[path = "endpoint_observer_tests.rs"]
+mod observer_tests;

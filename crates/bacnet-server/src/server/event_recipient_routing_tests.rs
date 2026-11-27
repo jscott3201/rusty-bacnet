@@ -203,7 +203,7 @@ pub(super) async fn distribute_counted_through(
     let comm_state = Arc::new(CommState::default());
     comm_state.set_for_test(state);
     let suppressions = Arc::default();
-    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
+    let learned_routers = Arc::new(RouterLearning::new());
 
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {

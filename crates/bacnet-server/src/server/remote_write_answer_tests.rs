@@ -136,3 +136,31 @@ async fn remote_write_blocked_by_dcc_at_a_retry_ends_there_as_disabled() {
     assert_eq!(h.server.notification_transactions.active_count(), 0);
     assert!(sent_writes(&h).is_empty());
 }
+
+/// A write to Device 9 bound behind the harness peer as its router is
+/// answered only through that router: another station's answer for Device
+/// 9 completes nothing and is counted (#2831).
+#[tokio::test(start_paused = true)]
+async fn remote_write_to_a_routed_device_takes_its_answer_only_through_its_router() {
+    let h = super::command_remote_write_tests::start_unbound().await;
+    h.server
+        .device_bindings
+        .write()
+        .await
+        .insert_configured(
+            DeviceBinding::routed(device(9), 5, [0x09], PEER).unwrap(),
+            |_| false,
+        )
+        .unwrap();
+    let (task, invoke_id) = start_write(&h).await;
+    let device_9 = NpduAddress {
+        network: 5,
+        mac_address: MacAddr::from_slice(&[0x09]),
+    };
+    deliver(&h, &ack(invoke_id), &STRANGER, Some(device_9.clone())).await;
+    h.settle().await;
+    assert!(!task.is_finished());
+    assert_eq!(h.server.off_path_answer_drops(), 1);
+    deliver(&h, &ack(invoke_id), &PEER, Some(device_9)).await;
+    assert_eq!(task.await.unwrap(), Ok(()));
+}

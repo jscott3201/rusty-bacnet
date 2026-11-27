@@ -441,6 +441,14 @@ struct CoordinatorState {
     /// The most each owner may hold at once: the pool less the other's
     /// reserve.
     ceiling: [usize; 2],
+    /// The link station each routed lease's current attempt went through,
+    /// by invoke ID, for the leases whose owner records one
+    /// ([`OutboundTransactionCoordinator::route_through`], #2831). Kept
+    /// apart from the slots so a lease that records none, every client
+    /// request's, costs nothing here.
+    next_hops: std::collections::HashMap<u8, paths::NextHop>,
+    /// Routed answers refused for the station they came through.
+    off_path_answers: u64,
 }
 
 /// One entry per invoke ID, built on the heap, never on the stack.
@@ -460,6 +468,8 @@ impl CoordinatorState {
             last_generation: 0,
             room: ceiling,
             ceiling,
+            next_hops: std::collections::HashMap::new(),
+            off_path_answers: 0,
         }
     }
 
@@ -644,6 +654,10 @@ impl OutboundTransactionCoordinator {
             return Ok(AdmissionOutcome::PeerMismatch);
         }
 
+        // The same steps as `claim`, kept written out here: through that
+        // helper, even always inlined, this function compiled to more
+        // instructions (221 to 230 in a release build, 2026-11-26), and
+        // every client answer takes it (#2831).
         let kind = match validate_apdu(&active.metadata, apdu) {
             Ok(kind) => kind,
             Err(outcome) => return Ok(outcome),
@@ -672,7 +686,11 @@ impl OutboundTransactionCoordinator {
     /// [`CanonicalPeer::direct_alias`], is the alias tried: a lease reserved
     /// for the routed form of a network that has since become this one then
     /// gets its station's direct answer (#2371). An answer relayed with this
-    /// network as SNET never stands for the station it names (#2831). The
+    /// network as SNET never stands for the station it names (#2831). A
+    /// routed answer to a lease whose attempt went through one station
+    /// ([`Self::route_through`]) matches only from that station: from any
+    /// other it is a [`AdmissionOutcome::PeerMismatch`], counted in
+    /// [`Self::off_path_answers`], and the lease stays open. The
     /// admission's metadata names the peer that matched, which the owner
     /// keys its completion to.
     pub fn admit_from_source(
@@ -683,7 +701,11 @@ impl OutboundTransactionCoordinator {
         apdu: &Apdu,
     ) -> Result<AdmissionOutcome, CoordinatorError> {
         let peer = CanonicalPeer::of_answer(immediate_mac, routed_source);
-        match self.admit(&peer, apdu)? {
+        let admitted = match peer {
+            CanonicalPeer::Routed { .. } => self.admit_through(&peer, immediate_mac, apdu)?,
+            CanonicalPeer::Direct(_) => self.admit(&peer, apdu)?,
+        };
+        match admitted {
             AdmissionOutcome::PeerMismatch => {
                 match CanonicalPeer::direct_alias(immediate_mac, routed_source, local_network) {
                     Some(alias) => self.admit(&alias, apdu),
@@ -838,6 +860,31 @@ pub fn response_invoke_id(apdu: &Apdu) -> Option<u8> {
     }
 }
 
+/// Validate `apdu` against the matched lease `active` and, for a terminal,
+/// claim its one terminal admission: the routed check's tail
+/// (`admit_through`, #2831). [`OutboundTransactionCoordinator::admit`]
+/// writes the same steps out, for the reason given there.
+fn claim(active: &mut ActiveLease, invoke_id: u8, apdu: &Apdu) -> AdmissionOutcome {
+    let kind = match validate_apdu(&active.metadata, apdu) {
+        Ok(kind) => kind,
+        Err(outcome) => return outcome,
+    };
+    if kind == AdmissionKind::Terminal && active.terminal_claimed {
+        return AdmissionOutcome::DuplicateTerminal;
+    }
+    if kind == AdmissionKind::Terminal {
+        active.terminal_claimed = true;
+    }
+    AdmissionOutcome::Admitted(Admission {
+        token: LeaseToken {
+            invoke_id,
+            generation: active.generation,
+        },
+        metadata: active.metadata.clone(),
+        kind,
+    })
+}
+
 fn validate_apdu(metadata: &LeaseMetadata, apdu: &Apdu) -> Result<AdmissionKind, AdmissionOutcome> {
     match apdu {
         Apdu::SimpleAck(pdu) => {
@@ -910,6 +957,9 @@ fn validate_service(
         })
     }
 }
+
+#[path = "coordinator_paths.rs"]
+mod paths;
 
 #[cfg(test)]
 #[path = "coordinator_tests.rs"]

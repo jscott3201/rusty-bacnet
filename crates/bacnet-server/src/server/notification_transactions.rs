@@ -478,6 +478,13 @@ impl NotificationTransactions {
             .admit_terminal(immediate_source, routed_source, local_network, apdu)
     }
 
+    /// Answers to this pool's routed requests refused for arriving through
+    /// another station than the request's attempt went to (#2831); zero
+    /// once the pool is poisoned.
+    pub(super) fn off_path_answers(&self) -> u64 {
+        self.core.coordinator.off_path_answers().unwrap_or(0)
+    }
+
     /// Completes one already-admitted terminal (session dispatch only).
     ///
     /// The shared-coordinator `admit` owns exact-once claim; this releases
@@ -671,6 +678,11 @@ impl NotificationCore {
             .map_or(true, |mut state| state.pending.remove(&token).is_some())
     }
 
+    /// A poisoned coordinator records nothing; it admits nothing either.
+    fn route_through(&self, token: LeaseToken, station: Option<&[u8]>) {
+        let _ = self.coordinator.route_through(token, station);
+    }
+
     fn release(&self, token: LeaseToken) {
         // lock-poison: fail-closed (poisoned acts closed; lease still released)
         if let Ok(mut state) = self.state.lock() {
@@ -715,6 +727,26 @@ impl NotificationOperation {
         self.transactions.withdraw(self.token)
     }
 
+    /// Record the router this request's next attempt goes through, before
+    /// it is sent (#2831): only an answer arriving from that station then
+    /// completes it ([`OutboundTransactionCoordinator::route_through`]).
+    /// `None` for an attempt sent with the link's broadcast address, whose
+    /// answer any router may carry. A request to a station on this link
+    /// records nothing: its answer is matched by that station's own address.
+    #[doc(hidden)]
+    pub fn route_through(&self, station: Option<&[u8]>) {
+        self.transactions.route_through(self.token, station);
+    }
+
+    /// [`Self::route_through`] for each attempt, from inside the attempts
+    /// once this operation has moved into them.
+    pub(super) fn path(&self) -> AttemptPath {
+        AttemptPath {
+            transactions: Arc::clone(&self.transactions),
+            token: self.token,
+        }
+    }
+
     fn terminal_completed(&mut self) {
         self.active = false;
     }
@@ -742,6 +774,20 @@ impl NotificationOperation {
 impl Drop for NotificationOperation {
     fn drop(&mut self) {
         self.cancel();
+    }
+}
+
+/// Where each attempt of one confirmed request goes
+/// ([`NotificationOperation::path`]).
+pub(super) struct AttemptPath {
+    transactions: Arc<NotificationCore>,
+    token: LeaseToken,
+}
+
+impl AttemptPath {
+    /// [`NotificationOperation::route_through`].
+    pub(super) fn through(&self, station: Option<&[u8]>) {
+        self.transactions.route_through(self.token, station);
     }
 }
 

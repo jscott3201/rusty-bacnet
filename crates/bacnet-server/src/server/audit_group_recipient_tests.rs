@@ -327,3 +327,48 @@ async fn a_recipient_change_broadcasts_for_a_side_at_a_remote_broadcast_form() {
     }
     fixture.server.stop().await.unwrap();
 }
+
+/// A confirmed record to a Device bound behind the router `LOGGER` is
+/// acknowledged only through that router: another station's answer for the
+/// recipient completes nothing and is counted (#2831).
+#[tokio::test(start_paused = true)]
+async fn a_routed_recipients_record_takes_its_answer_only_through_its_router() {
+    let recipient = oid(ObjectType::DEVICE, 20);
+    let mut reporter = reporter();
+    reporter.set_issue_confirmed_notifications(true).unwrap();
+    let mut fixture = try_server(
+        reporter,
+        &[10],
+        Some(BACnetRecipient::Device(recipient)),
+        vec![DeviceBinding::routed(recipient, 5, [0x21], LOGGER).unwrap()],
+    )
+    .await
+    .expect("a Device recipient starts");
+    assert!(matches!(
+        write_value(&fixture.server, None).await,
+        Apdu::SimpleAck(_)
+    ));
+    settle().await;
+    let [wire] = fixture
+        .transport
+        .sent
+        .lock()
+        .unwrap()
+        .clone()
+        .try_into()
+        .expect("one record");
+    let npdu = decode_npdu(wire).unwrap();
+    let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
+        panic!("a confirmed record");
+    };
+    let ack = Apdu::SimpleAck(SimpleAck {
+        invoke_id: request.invoke_id,
+        service_choice: request.service_choice,
+    });
+    let transactions = &fixture.server.notification_transactions;
+    let source = npdu.destination.as_ref();
+    assert!(!transactions.admit_terminal(&STATION, source, None, &ack));
+    assert_eq!(fixture.server.off_path_answer_drops(), 1);
+    assert!(transactions.admit_terminal(LOGGER, source, None, &ack));
+    fixture.server.stop().await.unwrap();
+}

@@ -90,7 +90,7 @@ async fn a_local_broadcast_notification_reaches_each_attached_network_once() {
     let db = Arc::new(RwLock::new(database()));
     let comm_state = Arc::new(CommState::default());
     let suppressions = Arc::default();
-    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
+    let learned_routers = Arc::new(RouterLearning::new());
     let notifications = NotificationTransactions::new();
     let device_bindings = Arc::new(RwLock::new(
         super::device_bindings::DeviceBindingTable::new(),

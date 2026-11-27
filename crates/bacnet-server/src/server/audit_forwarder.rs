@@ -177,6 +177,7 @@ impl ForwardBatch {
         if encode_apdu(&mut bytes, &pdu).is_err() {
             return;
         }
+        route.record_next_hop(&operation);
         let network = Arc::clone(network);
         transactions.spawn(async move {
             let _permit = permit;

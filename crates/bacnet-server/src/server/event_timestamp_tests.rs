@@ -16,10 +16,10 @@ use bacnet_services::alarm_event::EventNotificationRequest;
 use bacnet_types::enums::{EventState, EventType, ObjectType, UnconfirmedServiceChoice};
 use bacnet_types::primitives::{Date, Time};
 use bytes::Bytes;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 use super::event_notifications_tests::{local_broadcast_destination, recording_transport};
-use super::{BACnetServer, LearnedRouterCache, NotificationTransactions};
+use super::{BACnetServer, NotificationTransactions, RouterLearning};
 use crate::server::test_transport::TestTransport;
 use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::database::ObjectDatabase;
@@ -99,7 +99,7 @@ async fn send_event(db: &Arc<RwLock<ObjectDatabase>>, network: &Arc<NetworkLayer
             db,
             network,
             comm_state: &Arc::default(),
-            learned_routers: &Arc::new(Mutex::new(LearnedRouterCache::new())),
+            learned_routers: &Arc::new(RouterLearning::new()),
             notification_transactions: &NotificationTransactions::new(),
             device_bindings: &Arc::new(RwLock::new(
                 crate::server::device_bindings::DeviceBindingTable::new(),

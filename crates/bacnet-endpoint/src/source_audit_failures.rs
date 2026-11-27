@@ -68,6 +68,7 @@ pub(super) fn record_drop(
                 encoded,
                 batch.context.confirmed,
                 deadline,
+                reserved.as_ref(),
             );
             drop(db);
             if matches!(

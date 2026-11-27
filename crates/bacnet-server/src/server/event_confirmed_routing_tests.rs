@@ -5,8 +5,9 @@
 //! the broadcast DA as an initial send form before the router's MAC is
 //! known. What used to block this was correlation: the ack
 //! arrives from whichever router delivers it, so the transaction is keyed by
-//! routed identity with an empty local half, and the router's MAC is learned
-//! from the ack's link SA per Clause 6.5.3 method 4.
+//! routed identity with an empty local half. The router's MAC is learned
+//! only through the server's own router query, never from an ack
+//! (`router_learning`, #2831).
 //!
 //! The tests drive the real distribution path over a recording transport and
 //! feed acks through the same correlation entry point the dispatch loop uses.
@@ -35,18 +36,20 @@ use bytes::Bytes;
 mod recipient_abort;
 
 mod dcc_retry;
-mod learned_router_cache;
+mod off_path_answers;
+mod router_learning;
 mod suppression_counters;
 
 /// One recorded unicast send: destination MAC and NPDU bytes.
 type UnicastFrame = (Vec<u8>, Bytes);
 
-/// A live distribution fixture: the same database, network and router cache across
-/// multiple distributions, so router learning is observable between them.
+/// A live distribution fixture: the same database, network and router learner
+/// across multiple distributions, so what the learner knows is observable
+/// between them.
 struct Harness {
     db: Arc<RwLock<ObjectDatabase>>,
     network: Arc<NetworkLayer<TestTransport>>,
-    learned_routers: Arc<Mutex<LearnedRouterCache>>,
+    learned_routers: Arc<RouterLearning>,
     notification_transactions: Arc<NotificationTransactions>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
     comm_state: Arc<CommState>,
@@ -69,7 +72,7 @@ impl Harness {
         let sent = transport.sent();
         let network = Arc::new(NetworkLayer::new(transport));
         let comm_state = Arc::new(CommState::default());
-        let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
+        let learned_routers = Arc::new(RouterLearning::new());
         let notification_transactions = NotificationTransactions::new();
 
         let mut db = clocked_test_database();
@@ -639,9 +642,9 @@ async fn ack_with_wrong_routed_identity_does_not_complete() {
         "wrong DADR must miss"
     );
     assert_eq!(
-        harness.learned_routers.lock().await.cached_router(1000),
+        harness.learned_routers.router(1000),
         None,
-        "mismatched routed traffic must not teach the router cache"
+        "mismatched routed traffic must not teach a router"
     );
     assert!(
         !harness
@@ -659,102 +662,13 @@ async fn ack_with_wrong_routed_identity_does_not_complete() {
             .await,
         "wrong service must not complete"
     );
-    assert_eq!(
-        harness.learned_routers.lock().await.cached_router(1000),
-        None
-    );
+    assert_eq!(harness.learned_routers.router(1000), None);
     assert!(
         harness
             .ack_routed(ROUTER_A, 1000, RECIPIENT, req.invoke_id)
             .await,
         "the true identity still completes"
     );
-}
-
-/// Clause 6.5.3 method 4: the ack's source MAC is the router for that DNET,
-/// so the next confirmed notification to the same network unicasts to it —
-/// carrying the same DNET/DADR NPDU — instead of broadcasting.
-#[tokio::test]
-async fn learned_router_unicasts_the_next_notification() {
-    let harness = Harness::new(
-        vec![destination_for(address_recipient(1000, RECIPIENT), true)],
-        150,
-    )
-    .await;
-    harness.distribute().await;
-    let (_, req) = decode_confirmed(&harness.broadcast_frames()[0]);
-    assert!(
-        harness
-            .ack_routed(ROUTER_A, 1000, RECIPIENT, req.invoke_id)
-            .await
-    );
-
-    harness.distribute().await;
-    let unicasts = harness.unicast_frames();
-    assert_eq!(
-        unicasts.len(),
-        1,
-        "the second notification unicasts to the learned router"
-    );
-    let (router_mac, frame) = &unicasts[0];
-    assert_eq!(router_mac.as_slice(), ROUTER_A);
-    let (npdu, req2) = decode_confirmed(frame);
-    assert!(npdu.expecting_reply);
-    let destination = npdu.destination.unwrap();
-    assert_eq!(destination.network, 1000);
-    assert_eq!(destination.mac_address.as_ref() as &[u8], RECIPIENT);
-
-    // Cleanup so the retry task ends promptly.
-    let _ = harness
-        .ack_routed(ROUTER_A, 1000, RECIPIENT, req2.invoke_id)
-        .await;
-}
-
-/// A learned router can vanish: the first attempt unicasts to it, and the
-/// retry after silence falls back to the always-correct broadcast DA.
-#[tokio::test]
-async fn retry_after_silent_router_falls_back_to_broadcast() {
-    let harness = Harness::new(
-        vec![destination_for(address_recipient(1000, RECIPIENT), true)],
-        150,
-    )
-    .await;
-    harness.distribute().await;
-    let (_, req) = decode_confirmed(&harness.broadcast_frames()[0]);
-    assert!(
-        harness
-            .ack_routed(ROUTER_A, 1000, RECIPIENT, req.invoke_id)
-            .await
-    );
-
-    // Second notification: attempt 0 unicasts to the learned router, which
-    // stays silent; the retry must arrive as a broadcast-DA frame.
-    harness.distribute().await;
-    assert_eq!(harness.unicast_frames().len(), 1);
-    assert_eq!(harness.notification_transactions.active_count(), 1);
-    let broadcasts_before = harness.broadcast_frames().len();
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    let broadcasts = harness.broadcast_frames();
-    assert!(
-        broadcasts.len() > broadcasts_before,
-        "the retry falls back to the broadcast DA"
-    );
-    let (npdu, req2) = decode_confirmed(broadcasts.last().unwrap());
-    let destination = npdu.destination.unwrap();
-    assert_eq!(destination.network, 1000);
-    assert_eq!(
-        req2.invoke_id,
-        decode_confirmed(&harness.unicast_frames()[0].1).1.invoke_id
-    );
-    assert_eq!(
-        harness.notification_transactions.active_count(),
-        1,
-        "the retry must retain one active lease"
-    );
-
-    let _ = harness
-        .ack_routed(ROUTER_A, 1000, RECIPIENT, req2.invoke_id)
-        .await;
 }
 
 /// A local-unicast confirmed recipient still works exactly as before — the

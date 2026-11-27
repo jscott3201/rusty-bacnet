@@ -177,6 +177,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         stop_producer(&mut self.binary_lighting_operation_task).await;
         stop_producer(&mut self.cov_purge_task).await;
         stop_producer(&mut self.cov_revisit_task).await;
+        // The router checks (#2831), which send on the link: before its
+        // cleanup.
+        stop_producer(&mut self.router_task).await;
         // Nothing looks at a reference owed room any more: its wait goes
         // with the task (#2671).
         self.cov_table.read().await.revisits().clear();
@@ -289,10 +292,11 @@ impl<T: TransportPort> BACnetServer<T> {
     }
 
     /// The server's own tasks, each in its slot.
-    fn task_slots(&mut self) -> [&mut Option<JoinHandle<()>>; 10] {
+    fn task_slots(&mut self) -> [&mut Option<JoinHandle<()>>; 11] {
         [
             &mut self.dispatch_task,
             &mut self.network_number_task,
+            &mut self.router_task,
             &mut self.cov_purge_task,
             &mut self.fault_detection_task,
             &mut self.event_enrollment_task,

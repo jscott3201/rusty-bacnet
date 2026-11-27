@@ -481,6 +481,10 @@ pub struct ServerSeat<T: TransportPort> {
     /// from segments that the client hears a copy of (#2743).
     #[doc(hidden)]
     pub client_copies: ClientCopies,
+    /// The router announcements the node's link receives, for the server's
+    /// router learning (#2831).
+    #[doc(hidden)]
+    pub router_reports: bacnet_network::router_learning::RouterReports,
 }
 
 impl<T: TransportPort> std::fmt::Debug for ServerSeat<T> {
@@ -607,6 +611,8 @@ pub(crate) struct SeatSlot {
     /// By [`Role`].
     counts: [Counts; 2],
     control_full_drops: AtomicU64,
+    /// The link's router announcements, shared with a server seat (#2831).
+    router_reports: bacnet_network::router_learning::RouterReports,
     /// The octets of the reassembled requests' copies the client seat holds
     /// (see [`ClientCopies`]).
     reassembled_octets: Arc<AtomicUsize>,
@@ -635,7 +641,9 @@ struct Made {
 
 impl SeatSlot {
     /// An empty slot, and the receiver that ends when every hold is gone.
-    pub(crate) fn new() -> (Arc<Self>, mpsc::Receiver<()>) {
+    pub(crate) fn new(
+        router_reports: bacnet_network::router_learning::RouterReports,
+    ) -> (Arc<Self>, mpsc::Receiver<()>) {
         let (holds, held) = mpsc::channel(1);
         let slot = Arc::new(Self {
             state: Mutex::new(State {
@@ -647,6 +655,7 @@ impl SeatSlot {
             dcc: NodeDcc::default(),
             counts: Default::default(),
             control_full_drops: AtomicU64::new(0),
+            router_reports,
             reassembled_octets: Arc::default(),
         });
         (slot, held)
@@ -721,6 +730,7 @@ impl SeatSlot {
             dcc: self.dcc.claim(),
             node: None,
             client_copies: ClientCopies(Arc::downgrade(self)),
+            router_reports: self.router_reports.clone(),
         })
     }
 

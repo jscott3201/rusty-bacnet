@@ -481,6 +481,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let (first_attempt, handed_off) = oneshot::channel::<()>();
             let mut first_attempt = Some(first_attempt);
             notification_transactions.spawn(async move {
+                // An address recipient's network's known router, which the
+                // first attempt goes through (#2831).
+                let learned = match &remote {
+                    Some((dnet, _, None)) => learned_routers.router(*dnet),
+                    _ => None,
+                };
+                let path = operation.path();
+                // Whether the first attempt went out through that router:
+                // only then is a retry, or no answer, its silence.
+                let through_sent = std::sync::atomic::AtomicBool::new(false);
                 let result = run_attempts(operation, result_rx, timeout, apdu_retries, |attempt| {
                     let first_attempt = first_attempt.take();
                     // DCC and the binding's lifetime are checked
@@ -501,6 +511,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let buf = buf.clone();
                     let local_target = local_target.clone();
                     let remote = remote.clone();
+                    let learned = learned.clone();
+                    let (path, through_sent) = (&path, &through_sent);
                     async move {
                         let _first_attempt = first_attempt;
                         if let Some(withdrawal) = withdrawn {
@@ -514,18 +526,38 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             }
                             (None, Some((dnet, dadr, configured_router))) => {
                                 // A Device binding keeps its fixed next hop for
-                                // each permitted attempt. Address recipients retain
-                                // the learned-router/broadcast behavior.
-                                let router = match configured_router {
-                                    Some(router) => Some(router),
-                                    None if attempt == 0 => {
-                                        learned_routers.lock().await.cached_router(dnet)
+                                // each permitted attempt. An address recipient's
+                                // first attempt goes through the network's known
+                                // router, its retries by local broadcast. With
+                                // none known, the learner asks which router
+                                // reaches the network; a first retry says the
+                                // known one stayed silent, which starts a check
+                                // of it and forgets nothing (#2831).
+                                let mut via_learned = false;
+                                let router = match (configured_router, &learned, attempt) {
+                                    (Some(router), _, _) => Some(router),
+                                    (None, Some(router), 0) => {
+                                        via_learned = true;
+                                        Some(router.clone())
                                     }
-                                    None => None,
+                                    (None, Some(silent), 1) => {
+                                        if through_sent.load(Ordering::Relaxed) {
+                                            learned_routers.silent(dnet, silent, &dadr);
+                                        }
+                                        None
+                                    }
+                                    (None, None, 0) => {
+                                        learned_routers.unrouted(dnet);
+                                        None
+                                    }
+                                    (None, _, _) => None,
                                 };
+                                // Before the send: only an answer through this
+                                // router completes the attempt (#2831).
+                                path.through(router.as_deref());
                                 match router {
                                     Some(router_mac) => {
-                                        network
+                                        let sent = network
                                             .send_apdu_routed(
                                                 &buf,
                                                 dnet,
@@ -534,7 +566,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                                 true,
                                                 network_priority,
                                             )
-                                            .await
+                                            .await;
+                                        if via_learned && sent.is_ok() {
+                                            through_sent.store(true, Ordering::Relaxed);
+                                        }
+                                        sent
                                     }
                                     None => {
                                         network
@@ -576,6 +612,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         warn!(invoke_id = id, "EventNotification rejected by recipient");
                     }
                     Ok(NotificationWorkerResult::Exhausted) => {
+                        // With no retry to say so, the one attempt through a
+                        // known router that stayed silent starts its check
+                        // here (#2831).
+                        if apdu_retries == 0
+                            && through_sent.load(Ordering::Relaxed)
+                            && let (Some(silent), Some((dnet, dadr, None))) = (&learned, &remote)
+                        {
+                            learned_routers.silent(*dnet, silent, dadr);
+                        }
                         suppressions.record(EventSuppression::ConfirmedUnanswered);
                         warn!(
                             invoke_id = id,

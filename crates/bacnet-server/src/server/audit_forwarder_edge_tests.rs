@@ -556,3 +556,33 @@ async fn audit_forwarding_follows_the_lowest_of_several_devices() {
         f.server.stop().await.unwrap();
     }
 }
+
+/// A forwarded record to a parent behind router `[2]` is acknowledged only
+/// through that router: another station's answer for the parent completes
+/// nothing and is counted (#2831).
+#[tokio::test(start_paused = true)]
+async fn audit_forwarding_takes_a_routed_ack_only_through_its_router() {
+    let mut f = fixture(
+        Some(parent()),
+        Some(DeviceBinding::routed(oid(ObjectType::DEVICE, 20), 200, [9], [2]).unwrap()),
+    )
+    .await;
+    f.unconfirmed(payload(false)).await;
+    settle().await;
+    let req = f.requests().remove(0);
+    let parent = NpduAddress {
+        network: 200,
+        mac_address: MacAddr::from_slice(&[9]),
+    };
+    let ack = Apdu::SimpleAck(SimpleAck {
+        invoke_id: req.invoke_id,
+        service_choice: req.service_choice,
+    });
+    let transactions = &f.server.notification_transactions;
+    assert!(!transactions.admit_terminal(&[3], Some(&parent), None, &ack));
+    assert_eq!(f.server.off_path_answer_drops(), 1);
+    assert!(transactions.admit_terminal(&[2], Some(&parent), None, &ack));
+    settle().await;
+    assert_eq!(f.server.notification_transactions.active_count(), 0);
+    f.server.stop().await.unwrap();
+}

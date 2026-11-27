@@ -230,6 +230,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.cov_counters.snapshot()
     }
 
+    /// Answers to this server's own confirmed requests to devices on other
+    /// networks (event and COV notifications, Command and Channel writes and
+    /// reads, Audit records) dropped since start because they arrived from
+    /// another station than the router the request went through (#2831).
+    /// Such an answer completes nothing: the request waits for its own, and
+    /// is retried or ends unanswered. On a node's server seat the count
+    /// covers the node's shared invoke-ID pool, the source Audit's requests
+    /// included; the client's requests check their path themselves and are
+    /// counted in its own `off_path_answer_drops`.
+    pub fn off_path_answer_drops(&self) -> u64 {
+        self.notification_transactions.off_path_answers()
+    }
+
     /// Sample lifetime mutation authorization decisions, including after `stop()`.
     /// Counts decisions, not completed handlers or response delivery; see
     /// [`MutationDecisionCounters`](crate::mutation::MutationDecisionCounters).

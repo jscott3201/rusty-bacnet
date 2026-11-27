@@ -308,3 +308,41 @@ async fn cov_recipient_wire_cleanup_expiry_and_delete_follow_current_route() {
         wire.server.stop().await.unwrap();
     }
 }
+
+/// A confirmed notification to a routed subscriber is completed only by an
+/// answer through the router its subscription came through: another
+/// station's answer for the subscriber completes nothing and is counted
+/// (#2831).
+#[tokio::test(start_paused = true)]
+async fn a_routed_subscribers_notification_takes_its_answer_only_through_its_router() {
+    let mut wire = Wire::start(ServerConfig::default()).await;
+    let peer = routed();
+    simple_ack(
+        wire.send(&peer, request(false, Some(true), Some(300)))
+            .await,
+    );
+    let (invoke_id, service_choice, subscriber) =
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                for frame in wire.sent.frames() {
+                    let npdu = decode_npdu(frame.npdu.clone()).unwrap();
+                    if let Ok(Apdu::ConfirmedRequest(request)) = decode_apdu(npdu.payload) {
+                        assert_eq!(frame.mac.as_slice(), peer.mac, "sent through its router");
+                        return (request.invoke_id, request.service_choice, npdu.destination);
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the initial confirmed notification");
+    let ack = Apdu::SimpleAck(SimpleAck {
+        invoke_id,
+        service_choice,
+    });
+    let transactions = &wire.server.notification_transactions;
+    assert!(!transactions.admit_terminal(&router_b().mac, subscriber.as_ref(), None, &ack));
+    assert_eq!(wire.server.off_path_answer_drops(), 1);
+    assert!(transactions.admit_terminal(&peer.mac, subscriber.as_ref(), None, &ack));
+    wire.server.stop().await.unwrap();
+}

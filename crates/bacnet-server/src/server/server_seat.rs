@@ -53,6 +53,7 @@ use bacnet_endpoint_core::seat::{
     ClientCopies, NodeDevice, SeatHolds, SeatNumber, ServerDcc, ServerSeat,
 };
 use bacnet_network::layer::{ApduReceiver, ReceivedApdu, ReceivedNetworkControl};
+use bacnet_network::router_learning::RouterReports;
 
 use super::audit_recipient_routes::AuditRoutes;
 use super::*;
@@ -106,6 +107,10 @@ pub(super) struct Started<T: TransportPort, A> {
     pub(super) audit_routes: Arc<AuditRoutes>,
     /// The Number controls, when the server answers for the network number.
     pub(super) controls: Option<mpsc::Receiver<ReceivedNetworkControl>>,
+    /// The router announcements the link receives, for the server's router
+    /// learning (#2831): fed from `controls` on its own link, by the node
+    /// on a seat.
+    pub(super) router_reports: RouterReports,
     pub(super) notification_transactions: Arc<NotificationTransactions>,
     pub(super) seated: Option<Seated>,
     /// The Device's execution profile: the server's alone, or on a node
@@ -162,11 +167,13 @@ impl<T: TransportPort + 'static> Link<T> for Own<T> {
     ) -> Result<Started<T, ApduReceiver>, Error> {
         let (network, apdus, audit_routes, controls) =
             super::network_port::start(db, config, self.0, routes).await?;
+        let (controls, drops) = controls.unzip();
         Ok(Started {
             network: Arc::new(network),
             apdus,
             audit_routes,
             controls,
+            router_reports: RouterReports::new(drops),
             notification_transactions: NotificationTransactions::new(),
             seated: None,
             execution: DeviceExecution::server(false, &config.time_sync_policy),
@@ -212,6 +219,7 @@ impl<T: TransportPort + 'static> Link<T> for Seat<T> {
             dcc,
             node,
             client_copies,
+            router_reports,
             ..
         } = self.0;
         // The node's link is up already: the Audit routes take its facts
@@ -225,6 +233,7 @@ impl<T: TransportPort + 'static> Link<T> for Seat<T> {
             },
             audit_routes: Arc::new(audit_routes),
             controls: None,
+            router_reports,
             notification_transactions: NotificationTransactions::with_coordinator(coordinator),
             seated: Some(Seated::new(&holds)),
             execution: DeviceExecution::server(

@@ -93,7 +93,7 @@ async fn a_router_application_server_sends_no_confirmed_notification_to_a_remote
     let network = Arc::new(NetworkLayer::new(server));
     let comm_state = Arc::new(CommState::default());
     let suppressions: Arc<super::super::event_suppression::EventSuppressions> = Arc::default();
-    let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
+    let learned_routers = Arc::new(RouterLearning::new());
     let notifications = NotificationTransactions::new();
     let device_bindings = Arc::new(RwLock::new(DeviceBindingTable::new()));
     let device = fixture_device(&db).await;

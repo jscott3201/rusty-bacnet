@@ -1,8 +1,9 @@
 //! Routed source Audit bindings seen from the link itself (#2371): the
 //! session's number changing to the binding's network while a record is in
-//! flight and a lost-record count is queued, and a router learned from an
-//! I-Am-Router-To-Network. The peer is a bare loopback end that reads and
-//! writes NPDUs, so it sees every DNET and link destination.
+//! flight and a lost-record count is queued, and a router learned from the
+//! answer to the session's own router query. The peer is a bare loopback
+//! end that reads and writes NPDUs, so it sees every DNET and link
+//! destination.
 use super::*;
 use bacnet_encoding::npdu::{Npdu, decode_npdu};
 use bacnet_transport::port::ReceivedNpdu;
@@ -39,6 +40,8 @@ struct Link {
     rx: tokio::sync::mpsc::Receiver<ReceivedNpdu>,
     /// The session's sends' gate, open until a test closes it.
     gate: Arc<tokio::sync::Semaphore>,
+    /// The session's router query for network 7 was seen (#2831).
+    queried: bool,
 }
 
 impl Link {
@@ -83,6 +86,7 @@ impl Link {
             peer,
             rx,
             gate,
+            queried: false,
         }
     }
 
@@ -99,12 +103,14 @@ impl Link {
     }
 
     /// The next APDU-carrying NPDU the session sent, skipping network
-    /// messages: whether it went to a group, its NPDU and its record.
+    /// messages (noting its router query): whether it went to a group, its
+    /// NPDU and its record.
     async fn record(&mut self) -> (bool, Npdu, BACnetAuditNotification, u8) {
         loop {
             let received = timeout(WAIT, self.rx.recv()).await.unwrap().unwrap();
             let npdu = decode_npdu(received.npdu.clone()).unwrap();
             if npdu.is_network_message() {
+                self.queried |= is_router_query(received.link_layer_group, &npdu);
                 continue;
             }
             let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload.clone()).unwrap() else {
@@ -203,31 +209,71 @@ async fn a_number_change_takes_routed_records_in_flight_and_queued_as_local() {
     link.session.stop().await.unwrap();
 }
 
-/// An I-Am-Router-To-Network listing network 7 teaches its sender as the
-/// router there: the next record goes to it as a unicast, with DNET 7.
-/// One listing only other networks teaches nothing.
+/// Whether `npdu` is the session's router query (Who-Is-Router-To-Network,
+/// Clause 6.4.1) for network 7, by broadcast.
+fn is_router_query(group: bool, npdu: &Npdu) -> bool {
+    group
+        && npdu.message_type == Some(bacnet_npdu::NetworkMessageType::WHO_IS_ROUTER_TO_NETWORK)
+        && npdu.payload.as_ref() == BOUND.to_be_bytes()
+}
+
+impl Link {
+    /// Answer the session's router queries for network 7 as the one router
+    /// to that network, the first and the one a minute later, and wait
+    /// until the session takes it.
+    async fn answer_router_query(&mut self) {
+        let routers = self.routers();
+        for answer in 0..2 {
+            while !self.queried {
+                let next = timeout(Duration::from_secs(70), self.rx.recv());
+                let received = next.await.unwrap().unwrap();
+                let npdu = decode_npdu(received.npdu.clone()).unwrap();
+                self.queried = is_router_query(received.link_layer_group, &npdu);
+            }
+            self.queried = false;
+            // I-Am-Router-To-Network (Clause 6.4.2) for network 7.
+            self.send(&[0x01, 0x80, 0x01, 0, BOUND as u8], true).await;
+            if answer == 0 {
+                tokio::time::sleep(Duration::from_secs(7)).await;
+                assert_eq!(routers.router(BOUND), None, "one answer learns nothing yet");
+            }
+        }
+        // Decided at the end of the second query's wait, the APDU timeout.
+        eventually(
+            Duration::from_secs(7),
+            "the answer teaches the router",
+            async || routers.router(BOUND).is_some(),
+        )
+        .await;
+        assert_eq!(routers.router(BOUND).as_deref(), Some(&STATION[..]));
+    }
+}
+
+/// A router announcement (I-Am-Router-To-Network) that the session did not
+/// ask for teaches nothing, whatever it lists. A record that goes by
+/// broadcast for want of a router has the session ask its router query, and
+/// the one router answering it alone twice, a minute apart, is learned
+/// (#2831): the next record goes to it as a unicast, with DNET 7.
 #[tokio::test(start_paused = true)]
-async fn an_i_am_router_to_network_teaches_its_sender() {
+async fn only_the_answer_to_the_router_query_teaches_its_sender() {
     let mut link = Link::start(&[AuditOperation::DEVICE_RESET]).await;
-    let routers = Arc::clone(
-        link.session
-            .source_recipient
-            .as_ref()
-            .unwrap()
-            .routes
-            .routers(),
-    );
-    // I-Am-Router-To-Network (Clause 6.4.2) for networks 8 and 9.
-    link.send(&[0x01, 0x80, 0x01, 0, 8, 0, 9], true).await;
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    assert_eq!(routers.router(BOUND), None);
+    let routers = link.routers();
+    // I-Am-Router-To-Network for networks 8 and 7, before anything asked.
     link.send(&[0x01, 0x80, 0x01, 0, 8, 0, BOUND as u8], true)
         .await;
-    eventually(WAIT, "the announcement teaches the router", async || {
-        routers.router(BOUND).is_some()
-    })
-    .await;
-    assert_eq!(routers.router(BOUND).as_deref(), Some(&STATION[..]));
+    tokio::time::sleep(WAIT).await;
+    assert_eq!(
+        routers.router(BOUND),
+        None,
+        "an unasked announcement taught it"
+    );
+    link.session.report_device_reset_local().await.unwrap();
+    let (group, npdu, record, invoke_id) = link.record().await;
+    assert!(group, "no router is known: the link's broadcast MAC");
+    assert_eq!(npdu.destination.unwrap().network, BOUND);
+    assert_eq!(record.operation, AuditOperation::DEVICE_RESET);
+    link.acknowledge(invoke_id).await;
+    link.answer_router_query().await;
     link.session.report_device_reset_local().await.unwrap();
     let (group, npdu, record, _) = link.record().await;
     assert!(!group, "sent to the router's MAC");
@@ -241,13 +287,12 @@ async fn an_i_am_router_to_network_teaches_its_sender() {
 /// the router it would have gone through stays learned.
 #[tokio::test(start_paused = true)]
 async fn a_record_expired_in_the_local_queue_keeps_its_router() {
-    let link = Link::start(&[AuditOperation::DEVICE_RESET]).await;
+    let mut link = Link::start(&[AuditOperation::DEVICE_RESET]).await;
     let routers = link.routers();
-    link.send(&[0x01, 0x80, 0x01, 0, BOUND as u8], true).await;
-    eventually(WAIT, "the announcement teaches the router", async || {
-        routers.router(BOUND).is_some()
-    })
-    .await;
+    link.session.report_device_reset_local().await.unwrap();
+    let (_, _, _, invoke_id) = link.record().await;
+    link.acknowledge(invoke_id).await;
+    link.answer_router_query().await;
     // One unrelated send enters the transport and waits at the closed
     // gate, so the record queues behind it until its deadline.
     link.gate.forget_permits(usize::MAX);
@@ -279,6 +324,5 @@ async fn a_record_expired_in_the_local_queue_keeps_its_router() {
     assert_eq!(routers.router(BOUND).as_deref(), Some(&STATION[..]));
     link.gate.add_permits(1 << 20);
     blocker.complete().await.result.unwrap();
-    let mut link = link;
     link.session.stop().await.unwrap();
 }
